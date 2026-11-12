@@ -6,5 +6,8 @@ pub mod console_agents;
 pub mod copies;
 pub mod environment;
 pub mod home_privacy;
+pub(crate) mod install;
+pub(crate) mod service;
 pub mod setup;
+pub(crate) mod shared;
 pub mod switch;

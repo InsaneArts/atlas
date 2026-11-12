@@ -11,18 +11,6 @@ use atlas_core::{
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-/// Whether a process exists, whoever owns it (EPERM still means it exists).
-pub(crate) fn process_exists(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-
-    matches!(
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
-        Ok(()) | Err(nix::errno::Errno::EPERM)
-    )
-}
-
 /// The process a launch printed, the only one that may satisfy readiness.
 /// Any other answer may still have started something.
 fn launched_pid(reply: &Value) -> Result<u32> {
@@ -212,18 +200,8 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(5);
 
         loop {
-            // Gone once nothing listens on its socket and its process has
-            // ended, both as this Mac sees them.
             let exited = match self.desktop().kind() {
-                Kind::User(_) => {
-                    matches!(
-                        tokio::net::UnixStream::connect(&self.config.input_socket).await,
-                        Err(error) if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                        )
-                    ) && !process_exists(pid)
-                }
+                Kind::User(login) => self.input_exited_in(login, pid).await,
             };
             if exited {
                 return Ok(());
@@ -302,7 +280,3 @@ impl Client {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "service_tests.rs"]
-mod tests;

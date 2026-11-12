@@ -213,15 +213,10 @@ impl Client {
     }
 
     /// Whether the input service has a Stop saved, as it keeps one across
-    /// its restarts: for a second login, a file beside its socket on this
-    /// disk.
+    /// its restarts.
     fn service_stop_saved(&self) -> std::io::Result<bool> {
         match self.desktop().kind() {
-            Kind::User(_) => self
-                .config
-                .input_socket
-                .with_extension("stopped")
-                .try_exists(),
+            Kind::User(login) => self.service_stop_saved_in(login),
         }
     }
 }

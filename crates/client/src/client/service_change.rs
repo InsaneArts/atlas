@@ -74,14 +74,7 @@ impl Client {
         }
 
         let first_setup = match self.desktop().kind() {
-            // The daemon creates its directory before accepting jobs and
-            // keeps it across shutdowns. Only an absent directory establishes
-            // a first setup; a missing socket can leave background jobs
-            // running.
-            Kind::User(_) => self.transport.path.parent().is_some_and(|directory| {
-                std::fs::symlink_metadata(directory)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-            }),
+            Kind::User(login) => self.first_setup_in(login),
         };
         if first_setup {
             return Ok(());

@@ -730,7 +730,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
 /// to it does not prove it keeps no jobs.
 pub(crate) fn daemon_listens(client: &Client) -> bool {
     match client.desktop().kind() {
-        Kind::User(_) => client.transport.path.exists(),
+        Kind::User(login) => crate::user::service::daemon_listens_in(client, login),
     }
 }
 

@@ -438,16 +438,7 @@ impl Client {
         atlas_core::files::probe_write(self.output_dir()?)?;
 
         match self.desktop().kind() {
-            // Builds and environment plans are staged beside the shared Atlas
-            // command for the second login to read; a missing folder is
-            // setup's concern, not this check's.
-            Kind::User(_) => {
-                if let Some(shared) = self.config.identity_probe.parent()
-                    && shared.is_dir()
-                {
-                    atlas_core::files::probe_write(shared)?;
-                }
-            }
+            Kind::User(login) => self.staging_writable_in(login)?,
         }
 
         Ok(())
