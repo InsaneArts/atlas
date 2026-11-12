@@ -284,10 +284,7 @@ async fn frame(
     cancelled: oneshot::Receiver<()>,
 ) -> Result<Raw> {
     let mut socket = connect_socket(&transport.path, tokio::time::Instant::now() + WAIT).await?;
-    let peer = socket.peer_cred()?;
-    if peer.uid() != transport.peer_uid
-        || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(daemon)
-    {
+    if !transport.served_by(&socket, daemon)? {
         return Err(Error::new(
             Code::Identity,
             "The picture did not come from the verified helper daemon",

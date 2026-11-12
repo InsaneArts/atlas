@@ -846,3 +846,107 @@ async fn events_are_handed_on_as_they_arrive() {
     assert_eq!(reply["ok"], true);
     assert!(reply.get("events").is_none());
 }
+
+/// A request under way over an in-memory stream, and the peer's end of it.
+fn in_memory() -> (
+    super::Pending<tokio::io::DuplexStream>,
+    tokio::io::DuplexStream,
+) {
+    let (near, far) = tokio::io::duplex(4096);
+    let started = Instant::now();
+    let pending = super::Pending {
+        stream: near,
+        deadline: started + Duration::from_secs(10),
+        started,
+    };
+
+    (pending, far)
+}
+
+#[tokio::test]
+async fn a_request_and_its_reply_need_no_socket() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let (pending, far) = in_memory();
+    let peer = tokio::spawn(async move {
+        let mut far = BufReader::new(far);
+        let mut request = String::new();
+        assert!(far.read_line(&mut request).await.unwrap() > 0);
+        far.write_all(b"{\"event\":\"step\"}\n{\"ok\":true,\"value\":7}\n")
+            .await
+            .unwrap();
+        request
+    });
+
+    let reply = pending
+        .dispatch(&json!({"op": "hello"}))
+        .await
+        .unwrap()
+        .finish()
+        .await
+        .unwrap();
+
+    assert_eq!(peer.await.unwrap(), "{\"op\":\"hello\"}\n");
+    assert_eq!(reply["ok"], true);
+    assert_eq!(reply["value"], 7);
+    assert_eq!(reply["events"], json!([{"event": "step"}]));
+}
+
+#[tokio::test]
+async fn a_reply_cut_short_on_any_stream_is_an_unknown_outcome() {
+    use tokio::io::AsyncWriteExt;
+
+    let (pending, mut far) = in_memory();
+    let sent = pending.dispatch(&json!({"op": "run"})).await.unwrap();
+    far.write_all(b"{\"event\":\"step\"}\n").await.unwrap();
+    drop(far);
+
+    let error = sent.finish().await.unwrap_err();
+    assert_eq!(error.code, Code::Protocol);
+    assert_eq!(error.error, "Connection ended without a final reply");
+    assert!(error.uncertain);
+}
+
+/// Names the socket a rerun of the test below connects to, as the peer in
+/// another process.
+const PEER_SOCKET: &str = "ATLAS_TRANSPORT_PEER_SOCKET";
+
+#[tokio::test]
+async fn a_lane_trusts_only_the_expected_account_and_process() {
+    use std::io::Read;
+
+    // The peer: connect, then stay until the other end closes.
+    if let Some(socket) = std::env::var_os(PEER_SOCKET) {
+        let mut stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
+        stream.read_to_end(&mut Vec::new()).unwrap();
+        return;
+    }
+
+    let (_dir, listener, transport) = listening();
+    let mut child = crate::test_support::TestChild::spawn(
+        crate::test_support::rerun(
+            "transport::tests::a_lane_trusts_only_the_expected_account_and_process",
+        )
+        .env(PEER_SOCKET, &transport.path),
+    );
+    let peer = child.process.id();
+    let (stream, _) = timeout(Duration::from_secs(30), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(transport.served_by(&stream, peer).unwrap());
+    assert!(
+        !transport.served_by(&stream, std::process::id()).unwrap(),
+        "this process is not the peer"
+    );
+
+    let other = Transport {
+        peer_uid: transport.peer_uid + 1,
+        ..transport.clone()
+    };
+    assert!(!other.served_by(&stream, peer).unwrap(), "another account");
+
+    drop(stream);
+    assert!(child.wait().success());
+}

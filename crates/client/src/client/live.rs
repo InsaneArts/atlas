@@ -196,10 +196,7 @@ impl LiveStream {
         let socket = tokio::time::timeout(DEADLINE, connect_socket(&client.transport.path, setup))
             .await
             .map_err(|_| invalid("Preview connection timed out"))??;
-        let peer = socket.peer_cred()?;
-        if peer.uid() != client.transport.peer_uid
-            || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(epoch.capture_pid)
-        {
+        if !client.transport.served_by(&socket, epoch.capture_pid)? {
             return Err(Error::new(
                 Code::Identity,
                 "The preview peer is not the verified helper daemon",
@@ -682,10 +679,7 @@ async fn drain_query(
     until: tokio::time::Instant,
 ) -> Result<Value> {
     let mut socket = connect_socket(&client.transport.path, until).await?;
-    let peer = socket.peer_cred()?;
-    if peer.uid() != client.transport.peer_uid
-        || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(daemon)
-    {
+    if !client.transport.served_by(&socket, daemon)? {
         return Err(Error::new(
             Code::Identity,
             "The drain answer did not come from the helper daemon that ran the stream",

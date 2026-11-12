@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UnixStream,
     time::{Instant, sleep, sleep_until, timeout_at},
 };
@@ -46,8 +46,11 @@ pub struct Transport {
     pub peer_uid: u32,
 }
 
-pub struct Pending {
-    stream: UnixStream,
+/// A request under way on a verified connection: sent with
+/// [`Pending::dispatch`], answered by [`Pending::finish`]. It works over any
+/// stream of bytes; [`Transport::connect`] gives one over a Unix socket.
+pub struct Pending<S = UnixStream> {
+    stream: S,
     deadline: Instant,
     started: Instant,
 }
@@ -136,6 +139,19 @@ impl Transport {
         }
     }
 
+    /// Whether the kernel says the peer of `stream` is this transport's
+    /// account, and process `pid` of it: what a lane that reads its own
+    /// reply checks before it trusts one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to read the peer.
+    pub fn served_by(&self, stream: &UnixStream, pid: u32) -> io::Result<bool> {
+        let peer = stream.peer_cred()?;
+        Ok(peer.uid() == self.peer_uid
+            && peer.pid().and_then(|pid| u32::try_from(pid).ok()) == Some(pid))
+    }
+
     /// Exchange one request with the verified socket peer within this transport's deadline.
     ///
     /// # Errors
@@ -215,7 +231,7 @@ fn refused(path: &Path, error: io::Error) -> Error {
     .with_source(error)
 }
 
-impl Pending {
+impl<S: AsyncRead + AsyncWrite + Unpin> Pending<S> {
     /// # Errors
     ///
     /// Returns an error for an oversized request, or the failure to send it in
@@ -248,7 +264,9 @@ impl Pending {
 
         Err(self.waiting_refusal().await.unwrap_or(failed))
     }
+}
 
+impl<S: AsyncRead + Unpin> Pending<S> {
     /// A definite refusal the peer sent before it hung up, if one is waiting.
     async fn waiting_refusal(mut self) -> Option<Error> {
         self.deadline = self.deadline.min(Instant::now() + WAITING);
