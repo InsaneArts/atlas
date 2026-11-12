@@ -347,7 +347,7 @@ impl Migration {
             program: self.log.plan.program.clone(),
             uid: self.log.plan.uid,
             controller_uid: self.log.plan.controller_uid,
-            socket: self.layout().socket(),
+            socket: self.layout().paths().socket(),
         }
     }
 
@@ -521,7 +521,7 @@ impl Migration {
         })
         .await?;
         let job = JobReport::from(&observed["jobs"][&plan.label]);
-        let expected = self.agent().plist_sha256(&self.layout().logs());
+        let expected = self.agent().plist_sha256(&self.layout().paths().logs());
         let expected_definition = match job.definition {
             Definition::Absent => true,
             Definition::Regular => job.sha256.as_deref() == Some(expected.as_str()),
@@ -601,7 +601,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     let base = basis(config_path)?;
     let config = &base.config;
 
-    if config.socket_path != base.layout.socket() {
+    if config.socket_path != base.layout.paths().socket() {
         return Err(problem(
             "The configuration does not use the managed private layout",
         ));
@@ -635,7 +635,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
 fn unplanned(config_path: &Path) -> Error {
     match basis(config_path) {
         Err(error) => error,
-        Ok(base) if base.config.socket_path == base.layout.socket() => {
+        Ok(base) if base.config.socket_path == base.layout.paths().socket() => {
             problem("The configuration already uses the managed private layout")
         }
         Ok(_) => problem("The configuration does not use the managed private layout"),

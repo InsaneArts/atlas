@@ -202,7 +202,7 @@ impl Sound {
     /// Start the mute's thread for the helper `uid`, with the wish kept in
     /// `home`, applied before this returns.
     pub(crate) fn start(uid: u32, home: Option<PathBuf>) -> Self {
-        let note = home.map(|home| home.join(crate::helper_setup::ROOT).join(NOTE));
+        let note = home.map(|home| home.join(crate::helper_paths::ROOT).join(NOTE));
         let muted = note.as_deref().is_none_or(wanted);
         let supported = CoreAudio::new(uid, Arc::default()).is_some();
         let (sender, receiver) = mpsc::channel();

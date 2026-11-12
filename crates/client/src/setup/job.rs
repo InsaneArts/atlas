@@ -274,7 +274,7 @@ async fn replace_job(
     let exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
     let (controller, looking) = (client.controller.clone(), client.clone());
-    let logs = layout.logs();
+    let logs = layout.paths().logs();
     let (_exclusion, pending, answered) = on_worker(move || {
         let pending = controller.quarantine()?;
         {
@@ -291,7 +291,7 @@ async fn replace_job(
         return Err(problem(format!(
             "The helper's background job was replaced but the helper did not start again. Its \
              log is {} in {}'s account; run atlas init again after checking it.",
-            layout.logs().join(format!("{LABEL}.log")).display(),
+            layout.paths().logs().join(format!("{LABEL}.log")).display(),
             helper.name
         ))
         .uncertain());
@@ -318,7 +318,7 @@ pub async fn refresh_helper(
 ) -> Result<Option<Value>> {
     let executable = Path::new(app_bundle::EXECUTABLE);
     let (agent, layout) = helper_agent(helper, executable)?;
-    let expected_hash = agent.plist_sha256(&layout.logs());
+    let expected_hash = agent.plist_sha256(&layout.paths().logs());
     let job = setup::migrate::managed_job(client).await?;
 
     if job.outdated(&expected_hash) {
@@ -379,11 +379,11 @@ pub async fn prepare_helper(
         client,
         &controller.name,
         agent,
-        &layout.logs(),
+        &layout.paths().logs(),
         helper_runner(executable, helper, expected),
     )
     .await?;
-    Ok(layout.logs().join(format!("{LABEL}.log")))
+    Ok(layout.paths().logs().join(format!("{LABEL}.log")))
 }
 
 /// Ready first-login preferences only while the chosen helper is logged out.

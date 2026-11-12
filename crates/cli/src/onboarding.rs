@@ -107,7 +107,7 @@ impl Asked {
 fn prepared(helper: &account::Account) -> bool {
     let layout = Layout::new(helper.uid, helper.home.clone());
 
-    fs::metadata(layout.daemon()).is_ok_and(|metadata| metadata.is_dir())
+    fs::metadata(layout.paths().daemon()).is_ok_and(|metadata| metadata.is_dir())
 }
 
 /// Whether something answers at the helper socket `config` names. Checked
@@ -991,7 +991,7 @@ fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
 pub fn window(open: bool) -> Result<Value> {
     let path = this_account()?
         .home
-        .join(helper_setup::ROOT)
+        .join(atlas_daemon::helper_paths::ROOT)
         .join(WINDOW_MARKER);
 
     if open {

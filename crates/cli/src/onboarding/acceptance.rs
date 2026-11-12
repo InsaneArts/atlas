@@ -310,7 +310,7 @@ pub(super) async fn resume(config: &atlas_core::config::Config, pairing: Pairing
                 verify(&pairing)
             },
             agent,
-            &layout.logs(),
+            &layout.paths().logs(),
         )
     })
     .await

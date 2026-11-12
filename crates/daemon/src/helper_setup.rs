@@ -4,12 +4,14 @@
 //! directory, never deleted, and only when their bytes are the expected ones.
 //!
 //! Nothing here reaches the controller's client: the helper's daemon shares
-//! this layout, and the controller's setup drives these actions from the other side.
+//! its paths ([`crate::helper_paths`]), and the controller's setup drives
+//! these actions from the other side.
 pub mod first_login;
 pub mod identity;
 mod launchd;
 pub mod pairing;
 
+use crate::helper_paths::HelperPaths;
 use atlas_core::{
     account::{Account, account_named, account_with_uid},
     acl::{acl_lines, acl_policy},
@@ -33,12 +35,7 @@ pub fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Setup, message)
 }
 
-/// Private Atlas directory in the helper home and its entries.
-pub const ROOT: &str = ".atlas";
-/// Where the helper daemon's socket lives.
-const DAEMON: &str = "helper";
-const INPUT: &str = "input";
-const LOGS: &str = "logs";
+/// Where retired LaunchAgent definitions are kept, in the helper's root.
 const BACKUP: &str = "backup";
 /// Label of the managed LaunchAgent running Atlas's own helper daemon.
 pub const LABEL: &str = "com.insanearts.atlas.helper";
@@ -61,7 +58,7 @@ impl Agent {
             program,
             uid: layout.uid,
             controller_uid,
-            socket: layout.socket(),
+            socket: layout.paths().socket(),
         }
     }
 
@@ -320,30 +317,9 @@ impl Layout {
         Ok(())
     }
 
-    pub fn root(&self) -> PathBuf {
-        self.home.join(ROOT)
-    }
-
-    pub fn logs(&self) -> PathBuf {
-        self.root().join(LOGS)
-    }
-
-    pub fn daemon(&self) -> PathBuf {
-        self.root().join(DAEMON)
-    }
-
-    pub fn input_socket(&self) -> PathBuf {
-        self.root().join(INPUT).join("input.sock")
-    }
-
-    /// The input service's saved stop, beside its socket: present while the
-    /// person has stopped agents.
-    pub(crate) fn stop_marker(&self) -> PathBuf {
-        self.input_socket().with_extension("stopped")
-    }
-
-    pub fn socket(&self) -> PathBuf {
-        self.daemon().join(format!("{}.sock", self.uid))
+    /// The helper home's own paths, which its daemon and input service use.
+    pub fn paths(&self) -> HelperPaths {
+        HelperPaths::new(self.uid, self.home.clone())
     }
 
     pub fn agent_plist(&self, label: &str) -> PathBuf {
@@ -353,7 +329,8 @@ impl Layout {
     }
 
     fn backup(&self, label: &str, sha256: &str) -> PathBuf {
-        self.root()
+        self.paths()
+            .root()
             .join(BACKUP)
             .join(format!("{label}-{}.plist", &sha256[..16]))
     }
@@ -571,12 +548,13 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
         return Err(problem("The controller must be a different account"));
     }
 
-    let root = layout.root();
+    let paths = layout.paths();
+    let root = paths.root();
     let directories = [
         (root.clone(), true),
-        (root.join(DAEMON), true),
-        (root.join(INPUT), true),
-        (root.join(LOGS), false),
+        (paths.daemon(), true),
+        (paths.input(), true),
+        (paths.logs(), false),
         (root.join(BACKUP), false),
     ];
 
@@ -645,7 +623,7 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
 /// Write the managed agent's plist (or find identical bytes) and load it. A
 /// refusal before anything is written says it changed nothing.
 fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
-    if agent.label != LABEL || agent.uid != layout.uid || agent.socket != layout.socket() {
+    if agent.label != LABEL || agent.uid != layout.uid || agent.socket != layout.paths().socket() {
         return Ok(refused(
             "Only the managed helper daemon in the private layout can be installed",
         ));
@@ -659,7 +637,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
         ));
     }
 
-    let text = plist(agent, &layout.logs());
+    let text = plist(agent, &layout.paths().logs());
     let path = layout.agent_plist(LABEL);
     match file(&path)? {
         File::Regular(sha256) if sha256 == text_sha256(&text) => {}

@@ -42,15 +42,18 @@ async fn helper_installation_and_restarts_defer_before_dispatching_active_work()
         program: directory.path().join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
-        socket: layout.socket(),
+        socket: layout.paths().socket(),
     };
     let checked = async {
-        let error =
-            prepare_and_install(&client, "controller", agent.clone(), &layout.logs(), |_| {
-                panic!("dispatched setup while active")
-            })
-            .await
-            .unwrap_err();
+        let error = prepare_and_install(
+            &client,
+            "controller",
+            agent.clone(),
+            &layout.paths().logs(),
+            |_| panic!("dispatched setup while active"),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.error, "worker is active in the helper.");
         let error = replace_job(&client, &helper, agent, &layout, |_| {
             panic!("replaced a job while active")
@@ -99,7 +102,7 @@ async fn a_job_installation_test_caller() {
         program: directory.join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
-        socket: layout.socket(),
+        socket: layout.paths().socket(),
     };
     let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
     let paused = mode.clone();
@@ -120,7 +123,8 @@ async fn a_job_installation_test_caller() {
         Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
     };
     if matches!(mode.as_str(), "prepare" | "fresh-install") {
-        let _ = prepare_and_install(&client, "controller", agent, &layout.logs(), run).await;
+        let _ =
+            prepare_and_install(&client, "controller", agent, &layout.paths().logs(), run).await;
     } else {
         let _ = replace_job(&client, &helper, agent, &layout, run).await;
     }
@@ -245,7 +249,7 @@ fn test_agent(directory: &Path) -> (atlas_core::account::Account, Agent, Layout)
         program: directory.join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
-        socket: layout.socket(),
+        socket: layout.paths().socket(),
     };
     (helper, agent, layout)
 }
@@ -377,7 +381,7 @@ fn a_blocked_helper_installation_leaves_the_runtime_responsive_and_retains_exclu
         let (release, released) = std::sync::mpsc::channel();
         let run = held_at(phase, false, &actions, entered, released);
         let requester = Requester::start(move || async move {
-            prepare_and_install(&client, "controller", agent, &layout.logs(), run).await
+            prepare_and_install(&client, "controller", agent, &layout.paths().logs(), run).await
         });
 
         entry.recv_timeout(WATCHDOG).unwrap();
@@ -492,7 +496,7 @@ fn a_helper_installation_is_settled_only_for_a_requester_that_hears_it_succeed()
         let (release, released) = std::sync::mpsc::channel();
         let run = held_at("install", true, &actions, entered, released);
         let requester = Requester::start(move || async move {
-            prepare_and_install(&client, "controller", agent, &layout.logs(), run).await
+            prepare_and_install(&client, "controller", agent, &layout.paths().logs(), run).await
         });
 
         entry.recv_timeout(WATCHDOG).unwrap();

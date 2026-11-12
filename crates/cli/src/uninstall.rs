@@ -134,7 +134,8 @@ fn retire_helper_job(
         .unwrap_or_else(|| {
             let layout = Layout::new(helper.uid, account.home.clone());
             let controller = nix::unistd::getuid().as_raw();
-            Agent::managed(&layout, executable.to_owned(), controller).plist_sha256(&layout.logs())
+            Agent::managed(&layout, executable.to_owned(), controller)
+                .plist_sha256(&layout.paths().logs())
         });
 
     let opener = ask(

@@ -94,7 +94,7 @@ fn every_worker_request_without_an_identity_refuses_before_dispatch() {
                 program: "/bin/sh".into(),
                 uid,
                 controller_uid: uid + 1,
-                socket: layout.socket(),
+                socket: layout.paths().socket(),
             },
         },
         Request::Retire {
@@ -445,9 +445,12 @@ fn install_accepts_only_the_managed_agent() {
         socket,
     };
     for agent in [
-        agent("other.label", layout.socket()),
-        agent(LABEL, layout.root().join("helper/../elsewhere.sock")),
-        agent(LABEL, layout.daemon().join("other.sock")),
+        agent("other.label", layout.paths().socket()),
+        agent(
+            LABEL,
+            layout.paths().root().join("helper/../elsewhere.sock"),
+        ),
+        agent(LABEL, layout.paths().daemon().join("other.sock")),
         agent(LABEL, "/tmp/x".into()),
     ] {
         let reply = install(&layout, &agent).unwrap();
@@ -469,7 +472,7 @@ fn install_refuses_another_definition_without_changing_it() {
         program: "/bin/sh".into(),
         uid: layout.uid,
         controller_uid: 0,
-        socket: layout.socket(),
+        socket: layout.paths().socket(),
     };
 
     let path = layout.agent_plist(LABEL);
@@ -600,11 +603,11 @@ fn retire_and_restore_never_touch_symlinks_or_other_contents() {
 fn prepare_creates_repairs_and_refuses_foreign_access() {
     let (_dir, layout, _) = sandbox();
     prepare(&layout, "root").unwrap();
-    let capture = layout.daemon();
+    let capture = layout.paths().daemon();
     let mode = |path: &Path| fs::metadata(path).unwrap().mode() & 0o777;
     assert_eq!(mode(&capture), 0o700);
     assert_eq!(acl_policy(&acl_lines(&capture).unwrap(), Some(0)), Ok(true));
-    assert!(acl_lines(&layout.logs()).unwrap().is_empty());
+    assert!(acl_lines(&layout.paths().logs()).unwrap().is_empty());
 
     fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
     let repaired = prepare(&layout, "root").unwrap();
@@ -620,7 +623,7 @@ fn prepare_creates_repairs_and_refuses_foreign_access() {
     atlas_core::spawn::status(
         Command::new("/bin/chmod")
             .args(["+a", &format!("user:{user} allow list")])
-            .arg(layout.logs()),
+            .arg(layout.paths().logs()),
     )
     .unwrap();
     fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
@@ -653,7 +656,7 @@ fn only_another_versions_definition_is_replaced() {
 #[test]
 fn the_window_marker_names_a_living_window() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join(ROOT);
+    let root = dir.path().join(crate::helper_paths::ROOT);
     fs::create_dir_all(&root).unwrap();
 
     // A living process that is not Atlas's window does not count.

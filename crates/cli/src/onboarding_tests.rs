@@ -386,10 +386,10 @@ fn a_helper_prepared_for_this_account_is_recognised() {
     assert!(!prepared(&helper), "nothing prepared");
 
     let layout = Layout::new(helper.uid, helper.home.clone());
-    fs::create_dir_all(layout.root()).unwrap();
+    fs::create_dir_all(layout.paths().root()).unwrap();
     assert!(!prepared(&helper), "only its root");
 
-    fs::create_dir_all(layout.daemon()).unwrap();
+    fs::create_dir_all(layout.paths().daemon()).unwrap();
     assert!(prepared(&helper));
 }
 

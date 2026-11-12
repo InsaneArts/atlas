@@ -22,7 +22,7 @@ fn silent(command: &mut Command) -> &mut Command {
 /// Where the note `name` is kept, which outlives this process.
 fn note(name: &str) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    Some(home.join(crate::helper_setup::ROOT).join(name))
+    Some(home.join(crate::helper_paths::ROOT).join(name))
 }
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
@@ -502,7 +502,7 @@ fn switch_back(title: &str) -> String {
 /// Where the login a notice was last shown in is kept: a daemon restarted
 /// to pick up Screen Recording never repeats what its predecessor showed.
 fn notice_record(home: &Path) -> PathBuf {
-    home.join(crate::helper_setup::ROOT).join("notice-shown")
+    home.join(crate::helper_paths::ROOT).join("notice-shown")
 }
 
 /// Whether a notice was shown already in the login with this loginwindow.

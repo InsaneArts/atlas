@@ -167,7 +167,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
             (None, _) => false,
             (Some(_), None) => true,
             (Some(text), Some(pairing)) => expected_agent(layout, pairing.controller_uid)
-                .is_ok_and(|agent| text == helper_setup::plist(&agent, &layout.logs())),
+                .is_ok_and(|agent| text == helper_setup::plist(&agent, &layout.paths().logs())),
         }
     });
     let accepted = pairing.is_some_and(acceptance::accepted);
@@ -190,7 +190,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     let hello = match &layout {
         Ok(layout) if running => {
             let transport = atlas_core::transport::Transport {
-                path: layout.socket(),
+                path: layout.paths().socket(),
                 timeout: Duration::from_secs(3),
                 peer_uid: uid,
             };

@@ -60,7 +60,7 @@ async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
     migration.log.state = State::Applied;
     migration.log.plan.home = dir.path().join("helper");
     let layout = migration.layout();
-    let defined = migration.agent().plist_sha256(&layout.logs());
+    let defined = migration.agent().plist_sha256(&layout.paths().logs());
     let plist = layout.agent_plist(LABEL).to_string_lossy().into_owned();
     let shown = std::cell::RefCell::new(json!({"loaded": false, "plistKind": "absent"}));
     let inspect = async |request| match request {

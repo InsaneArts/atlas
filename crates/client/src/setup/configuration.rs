@@ -18,9 +18,9 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
 
     Ok(Config {
         helper_uid: helper.uid,
-        socket_path: layout.socket(),
+        socket_path: layout.paths().socket(),
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
-        input_socket: layout.input_socket(),
+        input_socket: layout.paths().input_socket(),
         output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
         activity: config::Activity::default(),
     })
@@ -28,8 +28,8 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
 
 pub(crate) fn managed(config: &Config, layout: &Layout) -> Config {
     Config {
-        socket_path: layout.socket(),
-        input_socket: layout.input_socket(),
+        socket_path: layout.paths().socket(),
+        input_socket: layout.paths().input_socket(),
         ..config.clone()
     }
 }

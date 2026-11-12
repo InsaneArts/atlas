@@ -270,7 +270,8 @@ impl Daemon {
         // overlaps the input service's input, told beside its socket.
         let mut recorder = Recorder::new(recorder::System::real(), Some(uid));
         if let Some(home) = std::env::var_os("HOME") {
-            let input = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).input_socket();
+            let input =
+                crate::helper_paths::HelperPaths::new(uid, PathBuf::from(home)).input_socket();
             recorder = recorder.beside_input(atlas_native::native::activity::beside(&input));
         }
         // A recorder grown under an earlier version is restarted once, early;
@@ -315,7 +316,7 @@ impl Daemon {
         // where the helper's layout puts it: the configuration's input socket
         // comes from the same layout.
         let home = std::env::var_os("HOME")?;
-        let marker = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).stop_marker();
+        let marker = crate::helper_paths::HelperPaths::new(uid, PathBuf::from(home)).stop_marker();
         Some(tokio::spawn(job::supervise(
             self.jobs.clone()?,
             marker,
