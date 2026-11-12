@@ -146,6 +146,8 @@
       needsYouCommand.status.overview.commands = 1
       var serviceNote = try snapshot("observing", state: "idle")
       serviceNote.status.restartingService = .restarting
+      var idleNoteQuit = try snapshot("observing", state: "idle")
+      idleNoteQuit.status.idleTime = ViewerStatus.IdleTime(state: .held, app: "Terminal")
       var wrongAccount = try snapshot("observing", state: "idle")
       wrongAccount.status.consoleName = ViewerStatus.ConsoleName(state: .another, name: "atlas")
       var accounts = try snapshot("observing", state: "idle")
@@ -186,6 +188,7 @@
         "You have control, a command runs": controlCommand,
         "Needs you, a command runs": needsYouCommand,
         "Service note": serviceNote,
+        "Idle note, quit an app": idleNoteQuit,
         "Wrong account": wrongAccount,
         "Accounts": accounts,
         "Waiting, a message": try asking(Self.ask("a1", kind: .sendKey, message: message)),

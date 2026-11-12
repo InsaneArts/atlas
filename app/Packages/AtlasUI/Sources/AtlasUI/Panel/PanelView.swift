@@ -22,7 +22,7 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the service note while it shows, the question Atlas asks the person and what they allowed while
+  /// The header, the service note and the idle note while they show, the question Atlas asks the person and what they allowed while
   /// there are any, the picture, Sessions while there are any, else Recent when there is any, the accounts line while
   /// Atlas lists any, then the buttons. A question comes and goes in one move (``AskMotion``).
   public var body: some View {
@@ -30,6 +30,9 @@ public struct PanelView: View {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       if state.showsServiceNote {
         PanelServiceNote(send: send)
+      }
+      if let fix = state.idleNote {
+        PanelIdleNote(fix: fix, send: send)
       }
       if let name = state.wrongAccount {
         PanelWrongAccountNote(name: name, send: send)

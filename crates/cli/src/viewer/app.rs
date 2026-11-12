@@ -60,6 +60,7 @@ pub async fn serve(
     // One menu bar keeps its record in a folder, on whatever port, until
     // the record is gone; another is refused before it launches or records.
     *unpoisoned(&viewer.alone) = Some(crate::menubar::alone(&output)?);
+    viewer.idle_leave.give();
 
     // Stopping it any of these ways releases control and removes its record.
     let mut terminated = signal(SignalKind::terminate())?;
@@ -106,6 +107,11 @@ pub async fn serve(
             () = app.exited() => {}
         }
 
+        // No restart of the person's idle time begins from here; one under
+        // way, a moment's work, is waited for off the runtime.
+        let leave = shutdown_view.idle_leave.clone();
+        let _ = tokio::task::spawn_blocking(move || leave.take_back()).await;
+
         shutdown_view.close().await;
         let _ = shutdown_view.release(None).await;
     })
@@ -122,6 +128,7 @@ pub async fn serve(
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
         remove_record(&path);
     }
+    viewer.idle_leave.take_back();
     unpoisoned(&viewer.alone).take();
 
     Ok(Value::Null)

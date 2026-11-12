@@ -5,6 +5,7 @@ use atlas_client::{
     console_agents::{self, Restarting},
     console_user::Named,
     host_session::{Asker, Recovery},
+    idle_time::{IdleTime, Look},
 };
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
@@ -24,9 +25,12 @@ const SLOWING: &str = "A macOS service in the helper restarted over and over, an
 
 const GIGABYTE: u64 = 1 << 30;
 
-/// How long macOS may take to say which account it names at the screen
+/// How long macOS may take to say which account it names at the screen,
 /// before doctor goes on without the answer.
-const NAMED_LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
+const LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
+/// How long doctor waits on the idle time apps read: one look, and a second
+/// a second later when the first looks stopped.
+const IDLE_LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(1_500);
 
 /// Warn once the helper has found its screen recorder too large this many
 /// times in a row, a minute or more apart, and could not restart it.
@@ -152,8 +156,13 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let asking = asker(client.actor, session, ui::interactive());
     recorder_report(&mut report, asking);
     restarting_report(&mut report, restarts.as_deref(), asking, verbose);
-    let named = named_within(NAMED_LIMIT, Named::now).await;
+    let named = answer_within(LOOK_LIMIT, Named::Unknown, Named::now).await;
     named_report(&mut report, &named, asking);
+    let idle_time = answer_within(IDLE_LOOK_LIMIT, IdleTime::Unknown, || {
+        IdleTime::now(Look::Only)
+    })
+    .await;
+    idle_time_report(&mut report, &idle_time, asking);
     pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
         // What the helper can open in the person's home folder: for the
@@ -239,30 +248,58 @@ fn restarting_report(
     }
 }
 
-/// What `look` finds of the account macOS names, or unknown once `limit`
+/// What `look` finds of something macOS keeps, or `unknown` once `limit`
 /// has passed without an answer. macOS sets no limit of its own, so the
 /// look runs on a thread of its own that is left behind if a system service
 /// never answers. It is not a blocking task of the runtime, which would
 /// wait for it to end.
-async fn named_within(
+async fn answer_within<T: Send + 'static>(
     limit: std::time::Duration,
-    look: impl FnOnce() -> Named + Send + 'static,
-) -> Named {
+    unknown: T,
+    look: impl FnOnce() -> T + Send + 'static,
+) -> T {
     let (answer, answered) = tokio::sync::oneshot::channel();
     let looking = std::thread::Builder::new()
-        .name("console-user".to_owned())
+        .name("doctor-look".to_owned())
         .spawn(move || {
             // Nobody is waiting once the limit has passed.
             let _ = answer.send(look());
         });
     if looking.is_err() {
-        return Named::Unknown;
+        return unknown;
     }
     tokio::time::timeout(limit, answered)
         .await
         .ok()
         .and_then(Result::ok)
-        .unwrap_or(Named::Unknown)
+        .unwrap_or(unknown)
+}
+
+/// Doctor's warning while the idle time the person's apps read has stopped:
+/// what the person sees, and the app to quit when one keeps it stopped.
+/// Only the person can quit an app, so an agent is not told.
+fn idle_time_report(report: &mut Value, idle_time: &IdleTime, asking: Asker<'_>) {
+    if asking != Asker::Person {
+        return;
+    }
+    let fix = match idle_time {
+        IdleTime::Live | IdleTime::Unknown => return,
+        IdleTime::Stuck => "Atlas tries to restart it while Atlas.app is open.".to_owned(),
+        IdleTime::Held { app: Some(app) } => format!(
+            "{app} is keeping secure keyboard entry on, which keeps it stopped. Quit {app} to \
+             fix it."
+        ),
+        IdleTime::Held { app: None } => "An app is keeping secure keyboard entry on, which keeps \
+                                         it stopped, and Atlas couldn't tell which. Quitting that \
+                                         app fixes it."
+            .to_owned(),
+    };
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        warnings.push(json!(format!(
+            "Apps on your Mac think you're away, so ones like 1Password lock on their own: macOS \
+             stopped counting your typing, as can happen after a switch between logins. {fix}"
+        )));
+    }
 }
 
 /// Doctor's warning while macOS names another account as the one at the

@@ -271,3 +271,24 @@ fn screenshot_rows_keep_the_folder_they_were_listed_from() {
         );
     });
 }
+
+#[tokio::test]
+async fn only_the_menu_bar_service_may_restart_the_idle_time_and_only_while_it_serves() {
+    use atlas_client::idle_time::Look;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let settings = base.join("u.toml");
+    let (viewer, _) = followed(&base, &settings).await;
+    assert_eq!(viewer.idle_look(), Look::Only, "a viewer made to render");
+    viewer.idle_leave.give();
+    let look = viewer.idle_look();
+    assert_eq!(look, Look::AndRestart(viewer.idle_leave.clone()));
+    viewer.idle_leave.take_back();
+    let Look::AndRestart(leave) = look else {
+        unreachable!()
+    };
+    assert!(
+        !leave.holds(),
+        "a look under way loses it as the service stops"
+    );
+}

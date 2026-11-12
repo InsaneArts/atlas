@@ -42,6 +42,7 @@ objc2-core-media = { workspace = true, features = ["std", "CMFormatDescription",
 objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVPixelBuffer", "CVImageBuffer", "CVReturn"] }
 objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSObject", "NSString", "NSUUID", "NSValue"] }
 objc2-image-io = { workspace = true, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
+objc2-io-kit = { workspace = true, features = ["libc"] }
 objc2-screen-capture-kit = { workspace = true, features = ["std", "SCStream", "SCShareableContent", "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media"] }
 objc2-security = { workspace = true, features = ["std", "AuthSession", "Authorization"] }
 objc2-system-configuration = { workspace = true, features = ["SCDynamicStore", "SCDynamicStoreCopySpecific", "libc"] }

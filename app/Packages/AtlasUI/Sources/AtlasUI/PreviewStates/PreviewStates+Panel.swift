@@ -26,6 +26,7 @@
         PreviewState(name: "You have control, a command runs", value: panelControlCommandRuns),
         PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
         PreviewState(name: "Service note", value: panelServiceNote),
+        PreviewState(name: "Idle note, quit an app", value: panelIdleNoteQuit),
         PreviewState(name: "Wrong account", value: panelWrongAccount),
         PreviewState(name: "Accounts", value: panelAccounts),
         PreviewState(name: "Waiting, a message", value: panelAskTyped),
@@ -89,6 +90,16 @@
     @MainActor static let panelServiceNote = PanelState(
       status: panelIdle.status,
       showsServiceNote: true,
+      picture: screen(.live),
+      recent: earlier,
+      controls: PanelControls(main: openAtlas)
+    )
+
+    /// Nothing happens in the helper, and the note says the person's apps think they are away while an app keeps secure
+    /// keyboard entry on.
+    @MainActor static let panelIdleNoteQuit = PanelState(
+      status: panelIdle.status,
+      idleNote: PanelIdleFix(app: "Terminal"),
       picture: screen(.live),
       recent: earlier,
       controls: PanelControls(main: openAtlas)

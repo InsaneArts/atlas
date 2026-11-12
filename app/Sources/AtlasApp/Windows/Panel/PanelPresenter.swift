@@ -24,6 +24,7 @@ enum PanelPresenter {
       status: status,
       notice: snapshot.session.notice,
       showsServiceNote: SlowServiceNote.shows(snapshot.status, dismissed: snapshot.serviceNoteDismissed),
+      idleNote: idleNote(snapshot),
       wrongAccount: WrongAccountNote.name(snapshot.status, dismissed: snapshot.wrongAccountDismissed),
       isMoreOpen: snapshot.session.moreOpen,
       ask: mode.kind == .connecting
@@ -43,6 +44,15 @@ enum PanelPresenter {
       controls: controls(snapshot, mode: mode),
       announcement: snapshot.session.announcement
     )
+  }
+
+  /// The note that the person's apps think they are away, by the step that fixes it, while it shows.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The fix, or nil while the note does not show.
+  static func idleNote(_ snapshot: PanelSnapshot) -> PanelIdleFix? {
+    IdleTimeNote.shown(snapshot.status, dismissed: snapshot.idleNoteDismissed)
+      .map { PanelIdleFix(app: $0.app) }
   }
 
   /// The helper's mode as the panel and the menu bar glyph show it: connecting while no answer stands, You have

@@ -25,6 +25,10 @@
         var next = state
         next.showsServiceNote = false
         return next
+      case .dismissIdleNote:
+        var next = state
+        next.idleNote = nil
+        return next
       case .dismissWrongAccountNote:
         var next = state
         next.wrongAccount = nil

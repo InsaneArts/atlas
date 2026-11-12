@@ -57,18 +57,18 @@ impl Named {
 
 /// The login a process runs in, as the window server records it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Login {
+pub(crate) struct Login {
     /// The account it belongs to.
-    uid: u32,
+    pub(crate) uid: u32,
     /// Whether it is the one on the screen.
-    on_screen: bool,
+    pub(crate) on_screen: bool,
 }
 
 impl Login {
     /// The one this process runs in, or `None` when it runs in none, as in
     /// a remote shell, or the window server leaves out whose it is or
     /// whether it is on the screen.
-    fn this() -> Option<Self> {
+    pub(crate) fn this() -> Option<Self> {
         let record = cf::session()?;
         Some(Self {
             uid: u32::try_from(cf::integer(&record, "kCGSSessionUserIDKey")?).ok()?,

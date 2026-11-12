@@ -44,6 +44,8 @@ public enum PanelEvent: Equatable, Sendable {
   case toggleSound
   /// OK on the note that a macOS service in the helper slowly slows the Mac: never show it again.
   case dismissServiceNote
+  /// OK on the note that the person's apps think they are away: hide it until it happens again.
+  case dismissIdleNote
   /// Lock Screen on the wrong account note: lock so the person can switch back to their login.
   case lockForWrongAccount
   /// OK on the wrong account note: hide it until macOS names the person again.

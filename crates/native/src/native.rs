@@ -115,6 +115,8 @@ mod events;
 #[cfg(target_os = "macos")]
 pub mod focus;
 #[cfg(target_os = "macos")]
+pub mod idle;
+#[cfg(target_os = "macos")]
 #[cfg(target_os = "macos")]
 mod journal;
 #[cfg(target_os = "macos")]
