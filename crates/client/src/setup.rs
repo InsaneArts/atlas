@@ -375,10 +375,10 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
     match (helper, config) {
         (Some(name), _) => account_named(name)?
             .ok_or_else(|| problem(format!("No account named {name} exists on this Mac"))),
-        (None, Some(config)) => account_with_uid(config.helper_uid)?.ok_or_else(|| {
+        (None, Some(config)) => account_with_uid(config.desktop().hidden().uid)?.ok_or_else(|| {
             problem(format!(
                 "Configured helper UID {} has no account",
-                config.helper_uid
+                config.desktop().hidden().uid
             ))
         }),
         (None, None) => Err(Error::new(
@@ -403,7 +403,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
 
     let conflict = config
         .as_ref()
-        .is_some_and(|config| config.helper_uid != account.uid);
+        .is_some_and(|config| config.desktop().hidden().uid != account.uid);
 
     // Otherwise the configuration atlas init would write; shown, never
     // written, by preview.

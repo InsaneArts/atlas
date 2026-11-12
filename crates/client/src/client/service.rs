@@ -4,7 +4,7 @@
 use super::Client;
 use atlas_core::{
     error::{Code, Error, Result},
-    session::{Observation, SHUTDOWN, input_current, require_hidden},
+    session::{Observation, SHUTDOWN},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -72,7 +72,7 @@ impl Client {
         self.identity().await?;
         let status = self.status().await;
         let observation = Observation::decode(&status);
-        observation.require_hidden(self.config.helper_uid)?;
+        self.desktop().prove(&observation)?;
 
         if observation.native.ok && !observation.input_build_current() {
             return self.upgrade_input_for(&status, false).await;
@@ -88,7 +88,7 @@ impl Client {
         &self,
         observation: &Observation,
     ) -> Result<(u32, &'static str)> {
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(observation)?;
         if session.input {
             return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
@@ -163,7 +163,10 @@ impl Client {
 
         let pid = self.spawn_input().await?;
         let state = self.status().await;
-        if !input_current(&state, self.config.helper_uid, pid) {
+        if !self
+            .desktop()
+            .input_current(&Observation::decode(&state), pid)
+        {
             return Err(Error::new(
                 Code::Uncertain,
                 "The replacement input service is not confirmed current with nothing held",
@@ -245,7 +248,7 @@ impl Client {
             "argv": [
                 "/bin/sh", "-c", script, "sh",
                 self.config.identity_probe,
-                self.config.helper_uid.to_string(),
+                self.desktop().hidden().uid.to_string(),
                 controller_uid.to_string(),
                 self.config.input_socket,
             ],
@@ -257,7 +260,9 @@ impl Client {
 
         loop {
             let state = self.status().await;
-            if require_hidden(&state, self.config.helper_uid)
+            if self
+                .desktop()
+                .prove(&Observation::decode(&state))
                 .is_ok_and(|session| session.input && session.epoch.input_pid == child)
             {
                 return Ok(child);

@@ -2799,11 +2799,8 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             assert_eq!(outcome["ok"], true);
             assert_eq!(outcome["inputReplaced"], true);
             assert_eq!(outcome["session"]["daemon"]["pid"], 124);
-            assert!(atlas_core::session::input_current(
-                &outcome["session"],
-                client.config.helper_uid,
-                456,
-            ));
+            let observation = atlas_core::session::Observation::decode(&outcome["session"]);
+            assert!(client.desktop().input_current(&observation, 456));
             assert_eq!(changes, ["reset", "restart", "shutdown", "spawn"]);
             assert!(client.controller.pending().unwrap().is_empty());
             assert!(client.controller.holder_note().is_none());

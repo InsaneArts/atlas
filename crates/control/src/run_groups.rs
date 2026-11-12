@@ -101,9 +101,10 @@ impl Controller {
             };
             let mut settled = Vec::new();
             let mut left = BTreeMap::new();
+            let helper = self.desktop.hidden().uid;
             for (generation, group) in unrecorded {
-                let kept = !left_may_run(&[], Some(group), self.helper)
-                    || self.keep_run_group(group, self.helper).is_ok();
+                let kept = !left_may_run(&[], Some(group), helper)
+                    || self.keep_run_group(group, helper).is_ok();
                 if kept {
                     settled.push(generation);
                 } else {

@@ -36,6 +36,7 @@ use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
+    desktop::Desktop,
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
@@ -163,13 +164,15 @@ impl Client {
     /// Rejects an invalid or non-distinct helper UID and failures creating the local controller
     /// identity. Construction does not verify a running helper session.
     pub fn new(config: Config) -> Result<Self> {
-        atlas_core::session::validate_uid(config.helper_uid)?;
+        let desktop = config.desktop();
+        let helper = desktop.hidden().uid;
+        atlas_core::session::validate_uid(helper)?;
         Ok(Self {
-            controller: Controller::new(config.helper_uid)?,
+            controller: Controller::new(&desktop)?,
             transport: Transport {
                 path: config.socket_path.clone(),
                 timeout: Duration::from_secs(30),
-                peer_uid: config.helper_uid,
+                peer_uid: helper,
             },
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
@@ -190,6 +193,11 @@ impl Client {
             ask_shown: None,
             config,
         })
+    }
+
+    /// The desktop this client acts on, as its configuration names it.
+    pub fn desktop(&self) -> Desktop {
+        self.config.desktop()
     }
 
     /// What the person allowed this command once, for its next attempt.
@@ -290,7 +298,7 @@ impl Client {
 
         // Do not launch the probe into an unverified UID or the visible desktop.
         if hello["ok"] != true
-            || hello["user"]["uid"].as_u64() != Some(self.config.helper_uid.into())
+            || hello["user"]["uid"].as_u64() != Some(self.desktop().hidden().uid.into())
             || hello["session"]["onConsole"] != false
         {
             return Ok(hello);
@@ -379,7 +387,7 @@ impl Client {
     /// [`Client::identity`] does.
     pub(crate) async fn verify(&self) -> Result<Verified> {
         let observation = self.observed().await;
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(&observation)?;
         Ok(Verified {
             session,
             observation,

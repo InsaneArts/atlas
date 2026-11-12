@@ -386,7 +386,7 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
         return error;
     };
 
-    match atlas_core::session::absence(config.helper_uid) {
+    match atlas_core::session::absence(config.desktop().hidden().uid) {
         Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
             Code::LoggedOut,
             "The helper is logged out (after a restart or a log-out)",
@@ -426,8 +426,8 @@ fn open_app(config: &std::path::Path) -> ExitCode {
         .is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| {
-            atlas_client::setup::migrate::settled(config.helper_uid)
-                && atlas_core::account::account_with_uid(config.helper_uid)
+            atlas_client::setup::migrate::settled(config.desktop().hidden().uid)
+                && atlas_core::account::account_with_uid(config.desktop().hidden().uid)
                     .is_ok_and(|account| account.is_some())
         });
     let error = if finished {

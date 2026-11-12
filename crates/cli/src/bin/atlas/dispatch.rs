@@ -927,7 +927,9 @@ fn settings(
 fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     use atlas_client::switch;
 
-    let helper = Config::load(config).ok().map(|config| config.helper_uid);
+    let helper = Config::load(config)
+        .ok()
+        .map(|config| config.desktop().hidden().uid);
     let accounts = switch::accounts(helper)?;
 
     if args.list {

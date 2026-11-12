@@ -30,6 +30,7 @@ use atlas_core::{
     account, app_bundle,
     app_bundle::signed_executable,
     config::{self, Config},
+    desktop::{Desktop, Hidden},
     error::{Code, Error, Result},
 };
 use atlas_daemon::{
@@ -123,7 +124,7 @@ fn answers(config: &Config) -> bool {
 /// (an `atlas init` stopped earlier), give way, as the window offers the
 /// choice again then.
 fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
-    match account::account_with_uid(previous.helper_uid)? {
+    match account::account_with_uid(previous.desktop().hidden().uid)? {
         Some(other) if asked(uid, &other) || answers(previous) || prepared(&other) => {
             Err(problem(format!(
                 "Atlas already uses {} as its helper; choose {} again",
@@ -156,7 +157,7 @@ fn check_choice(
     previous: &Config,
     keep: impl FnOnce(u32, &Config) -> Result<()>,
 ) -> Result<()> {
-    if selected == Some(previous.helper_uid) {
+    if selected == Some(previous.desktop().hidden().uid) {
         Ok(())
     } else {
         keep(controller, previous)
@@ -273,7 +274,7 @@ fn use_helper(
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
     let config = match &previous {
-        Some(previous) if previous.helper_uid == helper.uid => {
+        Some(previous) if previous.desktop().hidden().uid == helper.uid => {
             setup::configuration::in_home(previous, helper)
         }
         Some(previous) => {
@@ -303,7 +304,7 @@ fn use_helper(
     // settings that point at a helper that was never asked.
     Client::new(config.clone())?.bootstrap_probe()?;
 
-    let _ownership = Controller::new(helper.uid)?.acquire(true)?;
+    let _ownership = controller_of(helper.uid)?.acquire(true)?;
     write_request(
         Path::new(REQUEST),
         &Pairing {
@@ -349,7 +350,7 @@ fn closing_first(
     act: impl FnOnce() -> std::result::Result<(), as_root::Unclosed>,
 ) -> Result<std::result::Result<(), Refusal>> {
     let gone = || orphans.is_empty() || atlas_core::session::confirm_gone(orphans);
-    closing_first_using(helper_uid, orphans, Controller::new, act, gone)
+    closing_first_using(helper_uid, orphans, controller_of, act, gone)
 }
 
 fn closing_first_using(
@@ -488,7 +489,7 @@ fn close_all(
 ) -> Result<Vec<u32>> {
     let uids: Vec<u32> = targets.iter().map(Target::uid).collect();
     close_batch(
-        &controllers_of(&uids, Controller::new)?,
+        &controllers_of(&uids, controller_of)?,
         targets,
         |targets| as_root::close(targets, via),
         atlas_core::session::confirm_gone,
@@ -506,6 +507,11 @@ fn controllers_of(
     uids.sort_unstable();
     uids.dedup();
     uids.into_iter().map(controller).collect()
+}
+
+/// The controller of the hidden login of user ID `uid`.
+fn controller_of(uid: u32) -> Result<Controller> {
+    Controller::new(&Desktop::from(Hidden { uid }))
 }
 
 /// Create the selected standard account under claims for every affected UID.
@@ -577,7 +583,7 @@ pub fn close_attended(
 /// Returns account-identity or leftover-cleanup failures. Unrelated or unverifiable
 /// resources are not removed.
 pub fn close_leftovers(config_path: &Path) -> Result<Value> {
-    let helper = settings(config_path)?.map(|config| config.helper_uid);
+    let helper = settings(config_path)?.map(|config| config.desktop().hidden().uid);
     let sessions = atlas_core::session::sessions(helper)
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
     let identity = helper.and_then(helper_setup::identity::verified);
@@ -609,7 +615,7 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
 pub fn close_helper(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
-    let uid = config.helper_uid;
+    let uid = config.desktop().hidden().uid;
     let me = nix::unistd::getuid().as_raw();
     let prompt = "Atlas will log out its helper, where Atlas isn't answering.";
 
@@ -817,8 +823,8 @@ fn not_closed(refusal: Refusal, uids: &[u32]) -> Error {
 pub fn forget(config_path: &Path) -> Result<Value> {
     let uid = this_account()?.uid;
     let config = Config::load(config_path)?;
-    let _ownership = Controller::new(config.helper_uid)?.acquire(true)?;
-    let helper = account::account_with_uid(config.helper_uid)?
+    let _ownership = Controller::new(&config.desktop())?.acquire(true)?;
+    let helper = account::account_with_uid(config.desktop().hidden().uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
     let set_up = setup::migrate::in_effect_for(helper.uid, &helper.home)
@@ -893,7 +899,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     let account = match made {
         Ok(()) => created(name)?,
         // Looked at again: a login may have been left open since.
-        Err(Refusal::Unavailable) => setup_transaction(&Controller::new(next_uid)?, || {
+        Err(Refusal::Unavailable) => setup_transaction(&controller_of(next_uid)?, || {
             without_approval(&orphans_now()?, || {
                 readied = false;
                 let mut args = setup::account::add_user_args(name, full_name, next_uid);
@@ -1017,17 +1023,17 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
     client.bootstrap_probe()?;
-    ready_to_finish(&client.status().await, config.helper_uid)?;
+    ready_to_finish(&client.status().await, config.desktop().hidden().uid)?;
     atlas_client::switch::until_back(BACK_WITHIN).await?;
     // Places this check against the switch in a report's unified log.
     atlas_core::login_log::mark("onboarding.finish");
-    ready_to_finish(&client.status().await, config.helper_uid)?;
+    ready_to_finish(&client.status().await, config.desktop().hidden().uid)?;
 
     if !client.controller.pending()?.is_empty() {
         client.restart().await?;
     }
 
-    if let Some(helper) = account::account_with_uid(config.helper_uid)? {
+    if let Some(helper) = account::account_with_uid(config.desktop().hidden().uid)? {
         setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 
@@ -1104,7 +1110,7 @@ pub enum HomeChange {
 pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) -> Result<Value> {
     use atlas_client::home_privacy;
 
-    let uid = Config::load(config_path)?.helper_uid;
+    let uid = Config::load(config_path)?.desktop().hidden().uid;
     let files = match change {
         None => home_privacy::status(uid)?,
         Some(HomeChange::Private) => home_privacy::make_private(uid)?,

@@ -121,7 +121,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 /// Rejects an unavailable or incompatible plan, changed identity or unsafe destinations.
 /// Unacknowledged worker effects retain their transaction and pending ownership.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     tidy(client);
     apply_frozen(client, &helper, plan_id).await
 }
@@ -134,7 +134,7 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
 /// kept, and unknown restoration stays pending.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     tidy(client);
     let (lock, created) = open_stage(&stage, &helper)?;
     let result = dispatch(
@@ -170,7 +170,7 @@ pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Resul
     runner::validate_argv(&argv)?;
 
     let stage = request_stage(client)?;
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     tidy(client);
     create_stage(&stage, &helper)?;
 

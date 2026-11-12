@@ -58,7 +58,7 @@ static ABSENCE: Shared<Option<atlas_core::session::Absence>> = Shared::new(ABSEN
 /// The doctor report for the helper as it answers now, with why a silent
 /// helper is down. It waits on the helper until `until` at most.
 pub async fn report(client: &Client, until: Instant) -> crate::capability::Doctor {
-    let uid = client.config.helper_uid;
+    let uid = client.desktop().hidden().uid;
     let reply = tokio::time::timeout_at(until, client.status())
         .await
         .unwrap_or_else(|_| json!(late()));

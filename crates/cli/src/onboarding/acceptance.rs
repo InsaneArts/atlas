@@ -291,8 +291,8 @@ pub(super) async fn resume(config: &atlas_core::config::Config, pairing: Pairing
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(60)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let controller = Controller::new(config.helper_uid)?;
-    let helper = account::account_with_uid(config.helper_uid)?
+    let controller = Controller::new(&config.desktop())?;
+    let helper = account::account_with_uid(config.desktop().hidden().uid)?
         .ok_or_else(|| problem("The helper no longer exists"))?;
     let layout = helper_setup::Layout::new(helper.uid, helper.home);
     let mut agent = super::expected_agent(&layout, pairing.controller_uid)?;
@@ -403,7 +403,7 @@ pub(super) async fn observe(config: &atlas_core::config::Config, pairing: Pairin
             setup::migrate::managed_job(&client).await
         },
         async |pairing| resume(config, pairing).await,
-        || Controller::new(config.helper_uid)?.pending(),
+        || Controller::new(&config.desktop())?.pending(),
     )
     .await
 }

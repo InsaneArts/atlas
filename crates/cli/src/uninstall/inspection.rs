@@ -44,8 +44,11 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
     };
 
     let config = client.as_ref().map(|client| &client.config);
-    let account =
-        config.and_then(|config| account::account_with_uid(config.helper_uid).ok().flatten());
+    let account = config.and_then(|config| {
+        account::account_with_uid(config.desktop().hidden().uid)
+            .ok()
+            .flatten()
+    });
     let known = account.as_ref().map(helper_setup::identity::standing_of);
     let helper = account
         .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))

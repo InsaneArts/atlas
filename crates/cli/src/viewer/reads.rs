@@ -370,7 +370,7 @@ impl Viewer {
             && native.held_input != Some(true)
             && session.accessibility == Some(true);
         let hidden = starts
-            .then(|| session.require_hidden(client.config.helper_uid).ok())
+            .then(|| client.desktop().prove(session).ok())
             .flatten()
             .filter(|hidden| !hidden.input);
         let (Some(hidden), Some(daemon)) = (hidden, session.capture_pid) else {

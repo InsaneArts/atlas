@@ -421,7 +421,7 @@ pub(crate) async fn inspect(
     selection(tools, apps, environment, references)?;
 
     let status = Observation::decode(&client.status().await);
-    let session = status.require_hidden(client.config.helper_uid)?;
+    let session = client.desktop().prove(&status)?;
     let helper_home = status.helper_home()?.to_owned();
     let home = atlas_core::config::home()?;
     let mut selections = candidates(tools, apps, &home, &helper_home);

@@ -4,8 +4,9 @@ use atlas_core::screen::{frame::Size, png::png_dimensions};
 use atlas_core::{
     actions,
     config::Config,
+    desktop::{Desktop, Hidden},
     error::Code,
-    session::{Display, InputEpoch, Observation, diagnosis, input_current, require_hidden},
+    session::{Display, InputEpoch, Observation, diagnosis, require_hidden},
     transport::Transport,
 };
 use serde_json::{Value, json};
@@ -1046,6 +1047,12 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
     assert_eq!(warnings(Value::Null, Value::Null), 1);
 }
 
+/// Whether `status` shows input service `pid` current in the hidden login
+/// of user ID 502.
+fn input_current(status: &Value, pid: u32) -> bool {
+    Desktop::from(Hidden { uid: 502 }).input_current(&Observation::decode(status), pid)
+}
+
 #[test]
 fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
     let current = || {
@@ -1057,8 +1064,8 @@ fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
         state
     };
 
-    assert!(input_current(&current(), 502, 77));
-    assert!(!input_current(&current(), 502, 78), "another PID");
+    assert!(input_current(&current(), 77));
+    assert!(!input_current(&current(), 78), "another PID");
 
     for (field, value) in [
         ("heldInput", json!(true)),
@@ -1068,12 +1075,12 @@ fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
     ] {
         let mut state = current();
         state["inputService"][field] = value;
-        assert!(!input_current(&state, 502, 77), "{field}");
+        assert!(!input_current(&state, 77), "{field}");
     }
 
     let mut state = current();
     state["sessionProof"]["onConsole"] = json!(true);
-    assert!(!input_current(&state, 502, 77), "visible helper");
+    assert!(!input_current(&state, 77), "visible helper");
 }
 
 #[test]
@@ -1137,7 +1144,7 @@ fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
     state["inputService"]["build"] = json!("old");
     state["installedBuild"] = json!("new");
     assert!(settled(&state, 77));
-    assert!(!input_current(&state, 502, 77));
+    assert!(!input_current(&state, 77));
 
     state["inputService"]["heldInput"] = json!(true);
     assert!(!settled(&state, 77));

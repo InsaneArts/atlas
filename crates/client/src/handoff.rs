@@ -361,7 +361,7 @@ pub(crate) async fn hand_over(
         .collect();
     let answers = readable(client, ownership, &checks).await?;
 
-    let helper = client.config.helper_uid;
+    let helper = client.desktop().hidden().uid;
     Handing {
         targets,
         answers,

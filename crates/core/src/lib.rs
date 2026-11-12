@@ -14,6 +14,7 @@ pub mod bounded;
 pub mod buffer;
 pub mod config;
 pub mod context;
+pub mod desktop;
 pub mod digest;
 pub mod error;
 pub mod files;

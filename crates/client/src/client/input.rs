@@ -89,7 +89,7 @@ fn native_refusal(result: &Value) -> Error {
 
 impl Client {
     pub(crate) fn input_transport(&self) -> Transport {
-        let peer_uid = self.config.helper_uid;
+        let peer_uid = self.desktop().hidden().uid;
         #[cfg(any(test, feature = "test-support"))]
         let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
         Transport {
@@ -335,7 +335,7 @@ impl Client {
         check: Option<Expect>,
     ) -> Result<Value> {
         let observation = Observation::decode(status);
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(&observation)?;
         // An input service older than this one may call a password field a
         // plain one: no text typed through it is kept.
         if !observation.native.has_capability(TYPED_FIELDS)

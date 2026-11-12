@@ -46,11 +46,11 @@ use marker::{Unsettled, pending};
 use crate::interrupt::{Hold, Interrupt};
 use atlas_core::{
     config::home,
+    desktop::Desktop,
     error::{Code, Error, Result},
     files::{LockFile, open_lock, probe_write},
     host::{HostSession, Key, Label},
 };
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     os::unix::fs::MetadataExt,
@@ -187,8 +187,8 @@ pub struct Cause {
     pub session: Option<Key>,
 }
 
-/// Controller exclusion and pending-mutation state for one helper account,
-/// keyed by helper UID so a changed socket path cannot admit a second
+/// Controller exclusion and pending-mutation state for one desktop, keyed
+/// by the desktop's own name so a changed socket path cannot admit a second
 /// controller or hide a pending mutation.
 #[derive(Clone)]
 pub struct Controller {
@@ -214,8 +214,8 @@ pub struct Controller {
     /// The groups of agents' finished commands that could not be recorded
     /// there, by the generation of the claim kept for each.
     unrecorded_runs: PathBuf,
-    /// The helper account this controller is for.
-    helper: u32,
+    /// The desktop this controller is for.
+    desktop: Desktop,
     name: String,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
@@ -265,14 +265,27 @@ impl Controller {
     /// # Errors
     ///
     /// Returns an error when this account's home is unavailable.
-    pub fn new(uid: u32) -> Result<Self> {
-        Ok(Self::at(uid, &home()?.join("Library/Caches/Atlas")))
+    pub fn new(desktop: &Desktop) -> Result<Self> {
+        Ok(Self::in_directory(
+            desktop,
+            &home()?.join("Library/Caches/Atlas"),
+        ))
+    }
+
+    /// The controller of the hidden login `uid`, with its state in
+    /// `directory`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn at(uid: u32, directory: &Path) -> Self {
+        Self::in_directory(
+            &Desktop::from(atlas_core::desktop::Hidden { uid }),
+            directory,
+        )
     }
 
     /// Locating state is read-only; the directory appears with the first lock.
-    pub fn at(uid: u32, directory: &Path) -> Self {
-        let digest = format!("{:x}", Sha256::digest(format!("helper:{uid}").as_bytes()));
-        let name = &digest[..24];
+    fn in_directory(desktop: &Desktop, directory: &Path) -> Self {
+        let id = desktop.id();
+        let name = id.as_str();
         Self {
             directory: directory.to_owned(),
             lock: directory.join(format!("{name}.lock")),
@@ -284,7 +297,7 @@ impl Controller {
             private_generation: directory.join(format!("{name}.private-gen")),
             run_groups: directory.join(format!("{name}.run-groups.json")),
             unrecorded_runs: directory.join(format!("{name}.run-unrecorded.json")),
-            helper: uid,
+            desktop: desktop.clone(),
             name: name.to_owned(),
             wait: Duration::ZERO,
             until: None,

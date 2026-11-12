@@ -66,8 +66,8 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let helper = helper_name(client.config.helper_uid)?;
-    let here = frozen(shared_folder(client)?, client.config.helper_uid);
+    let helper = helper_name(client.desktop().hidden().uid)?;
+    let here = frozen(shared_folder(client)?, client.desktop().hidden().uid);
     let mut transactions: Vec<TransactionSummary> = Vec::new();
     for batch in ids.chunks(list::ASKED) {
         let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
@@ -143,7 +143,7 @@ pub(crate) async fn undo_plan(
     ownership: &Ownership,
     id: &Token,
 ) -> Result<Undone> {
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     let stage = stage_path(client, id.as_str())?;
     let (lock, created) = open_stage(&stage, &helper)?;
 

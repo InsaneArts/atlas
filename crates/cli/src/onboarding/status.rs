@@ -59,10 +59,10 @@ fn choosing(
 
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load(config_path)?;
-    let (leftovers, blockers) = logins(Some(config.helper_uid));
-    let Some(helper) = account::account_with_uid(config.helper_uid)? else {
+    let (leftovers, blockers) = logins(Some(config.desktop().hidden().uid));
+    let Some(helper) = account::account_with_uid(config.desktop().hidden().uid)? else {
         let mut reply = choosing(me, app, true, (leftovers, blockers))?;
-        reply["helper"] = json!({"exists": false, "uid": config.helper_uid});
+        reply["helper"] = json!({"exists": false, "uid": config.desktop().hidden().uid});
         return Ok(reply);
     };
 
@@ -84,8 +84,9 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let reply = client.status().await;
     let atlas_core::session::Diagnosis {
         observation, ready, ..
-    } = atlas_client::capability::doctor_report(reply.clone(), config.helper_uid).diagnosis;
-    let hidden = observation.require_hidden(config.helper_uid).is_ok();
+    } = atlas_client::capability::doctor_report(reply.clone(), config.desktop().hidden().uid)
+        .diagnosis;
+    let hidden = config.desktop().prove(&observation).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
     let finished =
         ready && setup::migrate::settled(helper.uid) && observation.input_build_current();

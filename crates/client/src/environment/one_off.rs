@@ -63,7 +63,7 @@ pub(crate) async fn install_app(
     source: &Path,
     name: &str,
 ) -> Result<Value> {
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     let request = Request::InstallApp {
         id: id.as_str().to_owned(),
         source: source.to_owned(),
@@ -98,7 +98,7 @@ pub(crate) async fn remove_app(
     ownership: &Ownership,
     id: &Token,
 ) -> Result<Value> {
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     let request = Request::RemoveApp {
         id: id.as_str().to_owned(),
     };
@@ -119,7 +119,7 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
         return Ok(Vec::new());
     }
 
-    let helper = helper_name(client.config.helper_uid)?;
+    let helper = helper_name(client.desktop().hidden().uid)?;
     let mut listed = Vec::new();
     for batch in unique.chunks(ASKED) {
         let request = Request::Installs {
