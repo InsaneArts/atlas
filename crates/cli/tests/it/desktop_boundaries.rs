@@ -86,7 +86,7 @@ const ALLOWED: &[(&str, &str)] = &[
         "owner: where the inspection tool it runs is",
     ),
     (
-        "crates/client/src/agent/quit.rs",
+        "crates/client/src/app_selection.rs",
         "owner: which of its apps is Atlas, left running when apps are closed",
     ),
     (

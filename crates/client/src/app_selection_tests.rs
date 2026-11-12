@@ -122,7 +122,10 @@ fn closing_everything_spares_macos_and_atlas() {
     assert_eq!(names(Closing::All), ["Calendar", "Safari", "Opie QA"]);
     let open = json!({"apps": [apps["apps"][0], apps["apps"][7], apps["apps"][8]]});
     assert_eq!(
-        left_open(&app_list(open)),
+        left_open(
+            &app_list(open),
+            &atlas_core::desktop::Desktop::from(atlas_core::desktop::SecondLogin { uid: 502 })
+        ),
         ["Safari", "Opie QA"],
         "a held log-out names what close --all would quit"
     );

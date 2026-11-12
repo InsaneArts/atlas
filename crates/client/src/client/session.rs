@@ -271,7 +271,7 @@ impl Client {
         let open = self
             .running_apps()
             .await
-            .map(|reply| crate::app_selection::left_open(&reply))
+            .map(|reply| crate::app_selection::left_open(&reply, &self.desktop()))
             .unwrap_or_default();
         let still = if open.is_empty() {
             String::new()
