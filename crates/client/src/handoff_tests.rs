@@ -403,11 +403,20 @@ fn a_copy_folder_is_named_by_its_token_and_its_app_never_its_file() {
     assert!(!copy_exists(dir.path(), &Token::new()));
 
     let path = format!("{ROOT}/{token}/Quarterly Plan.txt");
-    assert_eq!(token_of(&path), Some(token.clone()));
-    assert_eq!(token_of(&format!("{ROOT}/{token}")), Some(token));
-    assert_eq!(token_of("/tmp/Quarterly Plan.txt"), None);
-    assert_eq!(token_of(&format!("{ROOT}/not-a-token/x")), None);
-    assert_eq!(token_of(&format!("{ROOT}/../{}", Token::new())), None);
+    assert_eq!(token_of(&path, Path::new(ROOT)), Some(token.clone()));
+    assert_eq!(
+        token_of(&format!("{ROOT}/{token}"), Path::new(ROOT)),
+        Some(token)
+    );
+    assert_eq!(token_of("/tmp/Quarterly Plan.txt", Path::new(ROOT)), None);
+    assert_eq!(
+        token_of(&format!("{ROOT}/not-a-token/x"), Path::new(ROOT)),
+        None
+    );
+    assert_eq!(
+        token_of(&format!("{ROOT}/../{}", Token::new()), Path::new(ROOT)),
+        None
+    );
 }
 
 /// A private copy root and an output folder under `dir`, and the claims

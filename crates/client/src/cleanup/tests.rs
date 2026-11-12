@@ -95,6 +95,10 @@ impl Hands for Fake {
         &self.root
     }
 
+    fn copy_node(&self, token: &Token, session: &Key) -> Option<String> {
+        crate::handoff::copy_node(&self.root, token, session)
+    }
+
     async fn apps(&self) -> Result<AppList> {
         self.app_reads.set(self.app_reads.get() + 1);
         let apps: Vec<Value> = self

@@ -3,6 +3,7 @@
 //! it changes.
 use super::Client;
 use atlas_core::{
+    desktop::Kind,
     digest::file_sha256,
     error::{Code, Error, Result},
 };
@@ -72,6 +73,14 @@ impl Client {
     }
 
     fn install_probe(&self, recovery: bool) -> Result<Value> {
+        match self.desktop().kind() {
+            Kind::SecondLogin(_) => self.install_on_this_disk(recovery),
+        }
+    }
+
+    /// [`Client::install_probe`] for a second login, which runs the shared
+    /// Atlas command from this disk.
+    fn install_on_this_disk(&self, recovery: bool) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
 
@@ -148,6 +157,14 @@ impl Client {
     /// SHA-256 of the installed shared executable, rehashed only when its
     /// device, inode, size or modification time changes.
     pub fn installed_build(&self) -> Option<String> {
+        match self.desktop().kind() {
+            Kind::SecondLogin(_) => self.build_on_this_disk(),
+        }
+    }
+
+    /// [`Client::installed_build`] for a second login, whose shared Atlas
+    /// command is a file on this disk.
+    fn build_on_this_disk(&self) -> Option<String> {
         let path = &self.config.identity_probe;
         // The executable itself (through a link to the app), not the link.
         let metadata = fs::metadata(path).ok()?;

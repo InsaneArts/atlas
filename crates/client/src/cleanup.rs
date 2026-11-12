@@ -208,7 +208,7 @@ impl Preview {
             Step::Quit { bundles } => {
                 let empty = AppList::empty();
                 let found = targets(
-                    copies,
+                    hands,
                     &scope.session,
                     bundles,
                     &self.installs,

@@ -338,9 +338,13 @@ impl Client {
                 .await?;
             return Self::challenged_proof(&reply, &challenge);
         }
+        // A second login runs the shared Atlas command from this disk.
+        let command = match self.desktop().kind() {
+            Kind::SecondLogin(_) => &self.config.identity_probe,
+        };
         let request = json!({
             "op": "run",
-            "argv": [self.config.identity_probe, "session-info"],
+            "argv": [command, "session-info"],
             "timeoutMs": 3000,
         });
         let reply = self.transport.call(&request).await?;
@@ -428,13 +432,17 @@ impl Client {
         self.controller.writable()?;
         atlas_core::files::probe_write(self.output_dir()?)?;
 
-        // Builds and environment plans are staged beside the shared Atlas
-        // command for the helper to read; a missing folder is setup's
-        // concern, not this check's.
-        if let Some(shared) = self.config.identity_probe.parent()
-            && shared.is_dir()
-        {
-            atlas_core::files::probe_write(shared)?;
+        match self.desktop().kind() {
+            // Builds and environment plans are staged beside the shared Atlas
+            // command for the second login to read; a missing folder is
+            // setup's concern, not this check's.
+            Kind::SecondLogin(_) => {
+                if let Some(shared) = self.config.identity_probe.parent()
+                    && shared.is_dir()
+                {
+                    atlas_core::files::probe_write(shared)?;
+                }
+            }
         }
 
         Ok(())

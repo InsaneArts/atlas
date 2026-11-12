@@ -57,7 +57,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
         client,
         session,
         Some(&Doing::new(verb)),
-        &ReplyFacts::new(kind, &Ok(reply)),
+        &ReplyFacts::new(kind, &Ok(reply), Path::new(crate::handoff::ROOT)),
         || now,
     )
     .unwrap();
@@ -68,7 +68,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
 fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
     let kind = Kind::Environment { changes };
     let result = Ok(reply);
-    let facts = ReplyFacts::new(kind, &result);
+    let facts = ReplyFacts::new(kind, &result, Path::new(crate::handoff::ROOT));
     note_at(client, session, None, &facts, || TEST_NOW).unwrap();
     forget_rolled_back_facts(client, &facts).unwrap();
 }
@@ -270,11 +270,16 @@ fn an_absent_reply_leaves_existing_copy_labels_intact() {
     let facts = ReplyFacts::new(
         Kind::Open,
         &Err(Error::new(Code::Transport, "No reply").uncertain()),
+        Path::new(crate::handoff::ROOT),
     );
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
 
-    let facts = ReplyFacts::new(Kind::Open, &Ok(Value::Null));
+    let facts = ReplyFacts::new(
+        Kind::Open,
+        &Ok(Value::Null),
+        Path::new(crate::handoff::ROOT),
+    );
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     record.copies.truncate(64);
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
@@ -394,7 +399,7 @@ fn settlement_uses_decoded_facts_even_when_its_projection_changes() {
     let kind = Kind::Environment { changes: true };
     let mut projection = Ok(json!({"ok": true, "phase": "rolledBack", "planId": plan,
         "keptTargets": ["private target"], "retainedDirectories": []}));
-    let facts = ReplyFacts::new(kind, &projection);
+    let facts = ReplyFacts::new(kind, &projection, Path::new(crate::handoff::ROOT));
     projection.as_mut().unwrap()["phase"] = json!("future");
     projection.as_mut().unwrap()["planId"] = json!("private token");
     projection.as_mut().unwrap()["keptTargets"] = json!([]);

@@ -38,7 +38,7 @@ pub const ROOT: &str = "/Users/Shared/Atlas/Open";
 /// The folder on this disk that `desktop` opens copies of files from, and
 /// where they are found, checked and removed again. A desktop has one only
 /// when it shares this disk.
-pub(crate) fn copies_folder(desktop: &Desktop) -> PathBuf {
+pub fn copies_folder(desktop: &Desktop) -> PathBuf {
     match desktop.kind() {
         Kind::SecondLogin(_) => PathBuf::from(ROOT),
     }
@@ -742,9 +742,9 @@ fn labelled(folder: &Path) -> Label {
 }
 
 /// The token of the copy folder `path` lies in, when it lies in one under
-/// ROOT: the folder's own name, never the copy's.
-pub(crate) fn token_of(path: &str) -> Option<Token> {
-    let rest = Path::new(path).strip_prefix(ROOT).ok()?;
+/// `copies`: the folder's own name, never the copy's.
+pub(crate) fn token_of(path: &str, copies: &Path) -> Option<Token> {
+    let rest = Path::new(path).strip_prefix(copies).ok()?;
     Token::parse(rest.components().next()?.as_os_str().to_str()?)
 }
 

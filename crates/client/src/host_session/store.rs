@@ -91,7 +91,9 @@ enum Left {
 
 impl ReplyFacts {
     /// Decode only Atlas names and settlement facts, never private reply text.
-    pub fn new(kind: Kind, result: &Result<Value>) -> Self {
+    /// Copies are known by their place in `copies`, the folder the desktop
+    /// the reply came from opens copies from.
+    pub fn new(kind: Kind, result: &Result<Value>, copies: &Path) -> Self {
         let refused_code = |code: &str| matches!(code, "busy" | "stopped" | "uncertain");
         let reply = match result {
             Err(error) => {
@@ -108,8 +110,10 @@ impl ReplyFacts {
             Kind::Screenshot if success => {
                 capture_named(&reply["path"]).map_or(Left::None, Left::Capture)
             }
-            Kind::Open => Left::Copied(tokens(&reply["copied"], "to").collect()),
-            Kind::Close if success => Left::Removed(tokens(&reply["removed"], "").collect()),
+            Kind::Open => Left::Copied(tokens(&reply["copied"], "to", copies).collect()),
+            Kind::Close if success => {
+                Left::Removed(tokens(&reply["removed"], "", copies).collect())
+            }
             Kind::Environment { changes: true } if reply["preview"] != true => {
                 let plan = reply["planId"]
                     .as_str()
@@ -560,7 +564,13 @@ pub fn note(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) -> Result<()> {
-    note_facts(client, session, doing, &ReplyFacts::new(kind, result))
+    let copies = handoff::copies_folder(&client.desktop());
+    note_facts(
+        client,
+        session,
+        doing,
+        &ReplyFacts::new(kind, result, &copies),
+    )
 }
 
 /// Record the facts decoded by `dispatch::note_outcome`.
@@ -628,7 +638,8 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 /// session or this one. It decides nothing about the rollback itself.
 #[cfg(test)]
 fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
-    forget_rolled_back_facts(client, &ReplyFacts::new(kind, result))
+    let copies = handoff::copies_folder(&client.desktop());
+    forget_rolled_back_facts(client, &ReplyFacts::new(kind, result, &copies))
 }
 
 /// Forget the rollback decoded by `dispatch::note_outcome`.
@@ -652,9 +663,13 @@ fn capture_named(path: &Value) -> Option<Capture> {
         .and_then(Capture::parse)
 }
 
-/// The copy folder tokens of the paths `listed` names, each one's `field`
-/// (or the entry itself when `field` is empty).
-fn tokens<'a>(listed: &'a Value, field: &'a str) -> impl Iterator<Item = Token> + 'a {
+/// The copy folder tokens of the paths `listed` names under `copies`, each
+/// one's `field` (or the entry itself when `field` is empty).
+fn tokens<'a>(
+    listed: &'a Value,
+    field: &'a str,
+    copies: &'a Path,
+) -> impl Iterator<Item = Token> + 'a {
     listed
         .as_array()
         .into_iter()
@@ -665,7 +680,7 @@ fn tokens<'a>(listed: &'a Value, field: &'a str) -> impl Iterator<Item = Token> 
             } else {
                 &entry[field]
             };
-            handoff::token_of(path.as_str()?)
+            handoff::token_of(path.as_str()?, copies)
         })
 }
 

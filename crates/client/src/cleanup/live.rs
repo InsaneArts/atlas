@@ -16,6 +16,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     files::Token,
     protocol::{JobId, Shown},
@@ -64,6 +65,14 @@ impl<'a> Live<'a> {
 impl Hands for Live<'_> {
     fn copies(&self) -> &Path {
         &self.copies
+    }
+
+    fn copy_node(&self, token: &Token, session: &Key) -> Option<String> {
+        match self.client.desktop().kind() {
+            // The second login sees the copy in this disk's folder, so its
+            // identity is the one this Mac reads.
+            Kind::SecondLogin(_) => crate::handoff::copy_node(&self.copies, token, session),
+        }
     }
 
     async fn apps(&self) -> Result<AppList> {

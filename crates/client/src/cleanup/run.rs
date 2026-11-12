@@ -71,6 +71,10 @@ impl JobEnd {
 pub(super) trait Hands {
     /// Where `open`'s copy folders are.
     fn copies(&self) -> &Path;
+    /// The identity of the copy folder `token` names, as the helper sees
+    /// it, when a cleanup of `session`'s work may treat it as its own: what
+    /// quitting what runs from it is checked against.
+    fn copy_node(&self, token: &Token, session: &Key) -> Option<String>;
     /// The helper's running apps, from a list it gave.
     async fn apps(&self) -> Result<AppList>;
     /// How far each of `ids` got, read without control.
@@ -610,7 +614,7 @@ pub(super) async fn installs_answer(
 async fn quit(hands: &impl Hands, bundles: &[Bundle], session: &Key) -> Result<Outcome> {
     let installs = installs_answer(hands, bundles).await?;
     let apps = hands.apps().await?;
-    let targets = targets(hands.copies(), session, bundles, &installs, &apps);
+    let targets = targets(hands, session, bundles, &installs, &apps);
     let left = CameTo {
         untraced: targets.untraced.clone(),
         ..CameTo::default()

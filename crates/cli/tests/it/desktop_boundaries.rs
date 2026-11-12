@@ -74,6 +74,10 @@ const ALLOWED: &[(&str, &str)] = &[
         "second login: logging it out before removal",
     ),
     (
+        "crates/client/src/agent/elements.rs",
+        "owner: where the inspection tool it runs is",
+    ),
+    (
         "crates/client/src/capability.rs",
         "second login: its readiness, and the native-dialog evidence kept for it on this disk",
     ),
@@ -82,12 +86,20 @@ const ALLOWED: &[(&str, &str)] = &[
         "second login: establishing native capability evidence",
     ),
     (
+        "crates/client/src/cleanup/live.rs",
+        "owner: a copy's identity as it sees it, for a cleanup",
+    ),
+    (
         "crates/client/src/client.rs",
         "owner: its connections, and getting an observation of it",
     ),
     (
         "crates/client/src/client/input.rs",
         "owner: the input connection",
+    ),
+    (
+        "crates/client/src/client/install.rs",
+        "owner: installing the shared Atlas command it runs, and which build that is",
     ),
     (
         "crates/client/src/client/service.rs",
