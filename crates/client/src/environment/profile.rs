@@ -1,7 +1,7 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
 use super::{
-    Selection, discovery, freeze, problem,
+    Kind, Selection, discovery, freeze, problem,
     runner::{ENVIRONMENT_TARGET, Environment},
     selectable_variable,
 };
@@ -201,7 +201,9 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
             executable: false,
         });
 
-        let mut result = freeze(client, &path, selections, apply).await?;
+        let mut result = match client.desktop().kind() {
+            Kind::SecondLogin(login) => freeze(client, login, &path, selections, apply).await?,
+        };
         result["profileVersion"] = json!(2);
         result["environmentNames"] = json!(profile.environment);
         result["readinessBeforeApply"] = readiness;

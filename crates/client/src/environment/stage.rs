@@ -126,7 +126,7 @@ pub(super) fn sweep(shared: &Path) {
 /// retained request (a step whose outcome is unknown), one the helper
 /// started, or one it cannot answer for, stays. A plan removed is settled
 /// gone wherever a task claimed it.
-pub(super) async fn prune(client: &Client, helper: &str) {
+pub(super) async fn prune(client: &Client, login: &SecondLogin, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
@@ -141,7 +141,7 @@ pub(super) async fn prune(client: &Client, helper: &str) {
             continue;
         };
 
-        if !prunable(&stage, &id, super::account(client)) {
+        if !prunable(&stage, &id, login.uid) {
             continue;
         }
 
@@ -345,6 +345,7 @@ pub(super) const READ: &str = "read-";
 
 pub(super) async fn freeze(
     client: &Client,
+    login: &SecondLogin,
     manifest: &Path,
     selections: Vec<Selection>,
     apply_now: bool,
@@ -363,8 +364,8 @@ pub(super) async fn freeze(
     crate::credential_files::refuse(given.iter().map(PathBuf::as_path))?;
     client.identity().await?;
 
-    let helper = helper_name(super::account(client))?;
-    freeze_as(client, &helper, manifest, selections, apply_now).await
+    let helper = helper_name(login.uid)?;
+    freeze_as(client, login, &helper, manifest, selections, apply_now).await
 }
 
 /// Where a selection's `source` is: as given when absolute, else beside `manifest`.
@@ -378,15 +379,17 @@ fn source_path(manifest: &Path, source: &Path) -> Result<PathBuf> {
         .join(source))
 }
 
-/// [`freeze`] for the helper account `helper`, once the helper is verified.
+/// [`freeze`] for the second login `login`, whose account ACLs name
+/// `helper`, once the helper is verified.
 pub(super) async fn freeze_as(
     client: &Client,
+    login: &SecondLogin,
     helper: &str,
     manifest: &Path,
     selections: Vec<Selection>,
     apply_now: bool,
 ) -> Result<Value> {
-    prune(client, helper).await;
+    prune(client, login, helper).await;
 
     let id = atlas_core::files::token();
     let stage = stage_path(client, &id)?;
@@ -443,7 +446,7 @@ pub(super) async fn freeze_as(
             .unwrap_or(Value::Null);
         let plan: Plan = serde_json::from_value(plan)
             .map_err(|cause| problem("Invalid environment record or schema").with_source(cause))?;
-        if plan.id != id || plan.uid != super::account(client) {
+        if plan.id != id || plan.uid != login.uid {
             return Err(problem("Preview returned a different plan identity"));
         }
 
@@ -470,7 +473,7 @@ pub(super) async fn freeze_as(
     drop(lock);
     match result {
         Ok(result) if apply_now && WorkerReply::read(&result).ok == Some(true) => {
-            apply_frozen(client, helper, &id).await
+            apply_frozen(client, login, helper, &id).await
         }
         result => result,
     }
@@ -493,7 +496,12 @@ pub(super) fn planned(stage: &Path) -> bool {
     stage.join("plan.json").try_exists().unwrap_or(true)
 }
 
-pub(super) async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Value> {
+pub(super) async fn apply_frozen(
+    client: &Client,
+    login: &SecondLogin,
+    helper: &str,
+    plan_id: &str,
+) -> Result<Value> {
     let stage = stage_path(client, plan_id)?;
     if directory(&stage, false)?.is_none() {
         return Err(problem(format!(
@@ -504,7 +512,7 @@ pub(super) async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -
 
     let lock = lock_stage(&stage)?;
     let plan: Plan = decode(&read_limited(&stage.join("plan.json"), MAX_RECORD)?)?;
-    if plan.id != plan_id || plan.uid != super::account(client) {
+    if plan.id != plan_id || plan.uid != login.uid {
         return Err(problem(
             "Frozen plan belongs to a different helper or plan ID",
         ));

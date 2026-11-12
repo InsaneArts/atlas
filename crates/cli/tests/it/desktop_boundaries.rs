@@ -99,15 +99,35 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/environment.rs",
-        "owner: the account an environment is given to",
+        "owner: syncing, applying, rolling back and running an environment in it",
     ),
     (
         "crates/client/src/environment/discovery.rs",
         "second login: what environment discovery says of its account",
     ),
     (
+        "crates/client/src/environment/list.rs",
+        "owner: listing the environments copied into it",
+    ),
+    (
+        "crates/client/src/environment/one_off.rs",
+        "owner: installing and removing an app in it, and how its installs stand",
+    ),
+    (
+        "crates/client/src/environment/profile.rs",
+        "owner: freezing an environment profile for it",
+    ),
+    (
+        "crates/client/src/environment/stage.rs",
+        "second login: staging an environment on this disk for its account",
+    ),
+    (
+        "crates/client/src/environment/undo.rs",
+        "owner: how its environment plans stand, and undoing one",
+    ),
+    (
         "crates/client/src/handoff.rs",
-        "owner: opening a copy of a file in it",
+        "owner: opening a file in it, and the second login's way of doing so",
     ),
     (
         "crates/client/src/home_privacy.rs",

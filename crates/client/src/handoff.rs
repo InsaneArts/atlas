@@ -10,7 +10,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::Kind,
+    desktop::{Kind, SecondLogin},
     error::{Code, Error, Result},
     files::Token,
     name::same_text,
@@ -351,8 +351,23 @@ pub(crate) async fn hand_over(
     targets: Vec<Target>,
     running: &[AppRow],
 ) -> Result<Handed> {
-    let root_path = PathBuf::from(ROOT);
     refuse_targets(&targets)?;
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => hand_over_to(client, login, ownership, targets, running).await,
+    }
+}
+
+/// [`hand_over`] to the second login `login`, which shares this disk: it
+/// opens in place what its account can read, and a copy, made in a folder
+/// here that its account may read, of what it cannot.
+async fn hand_over_to(
+    client: &Client,
+    login: &SecondLogin,
+    ownership: &Arc<Ownership>,
+    targets: Vec<Target>,
+    running: &[AppRow],
+) -> Result<Handed> {
+    let root_path = PathBuf::from(ROOT);
     let checks: Vec<PathBuf> = targets
         .iter()
         .filter_map(|target| match target {
@@ -362,14 +377,7 @@ pub(crate) async fn hand_over(
         .collect();
     let answers = readable(client, ownership, &checks).await?;
 
-    // Where copies are made for this desktop: a folder on this disk its
-    // account may read, readied only when one is needed.
-    let prepare = match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            let helper = login.uid;
-            move || root(helper)
-        }
-    };
+    let helper = login.uid;
     Handing {
         targets,
         answers,
@@ -377,7 +385,7 @@ pub(crate) async fn hand_over(
         session: client.host_session.as_ref().map(HostSession::key).cloned(),
         claims: Claims::of(client),
     }
-    .on_worker(ownership, prepare, copy)
+    .on_worker(ownership, move || root(helper), copy)
     .await
 }
 
