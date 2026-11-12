@@ -7,7 +7,10 @@ use crate::{
     handoff, task,
 };
 use atlas_control::Ownership;
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::{
+    desktop::Kind,
+    error::{Code, Error, Result},
+};
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -197,7 +200,10 @@ pub(super) async fn close_in(
 
     let ownership = client.controller.acquire_beside_commands()?;
     let started = Instant::now();
-    let atlas = atlas_bundle();
+    // A second login runs Atlas from the same app as this Mac.
+    let atlas = match client.desktop().kind() {
+        Kind::SecondLogin(_) => atlas_bundle(),
+    };
     let apps = client.running_apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
     // Keep only identity, before the app disappears from the running list.

@@ -11,7 +11,10 @@ use super::{LEASE_SECONDS, Viewer};
 use crate::menubar::Line;
 use atlas_client::{agent, client::Client, jobs};
 use atlas_control::{ActionPermit, Beside, HoldKind, PrivateHold};
-use atlas_core::error::{Code, Error, Holder, Result};
+use atlas_core::{
+    desktop::Kind,
+    error::{Code, Error, Holder, Result},
+};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 
@@ -111,7 +114,11 @@ impl Viewer {
             Some(bundle) => Browser::of(bundle).ok_or_else(|| {
                 Error::new(Code::Input, "Atlas opens Google Chrome or Firefox for this")
             })?,
-            None => Browser::installed_in(Path::new(APPLICATIONS)).ok_or_else(|| {
+            // A second login shares this Mac's Applications folder.
+            None => match self.client().desktop().kind() {
+                Kind::SecondLogin(_) => Browser::installed_in(Path::new(APPLICATIONS)),
+            }
+            .ok_or_else(|| {
                 Error::new(
                     Code::Apps,
                     "Install Google Chrome or Firefox to sign the helper in to a site",

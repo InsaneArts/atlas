@@ -74,8 +74,20 @@ const ALLOWED: &[(&str, &str)] = &[
         "second login: logging it out before removal",
     ),
     (
+        "crates/cli/src/viewer/reads.rs",
+        "owner: the name its account goes by",
+    ),
+    (
+        "crates/cli/src/viewer/sign_in.rs",
+        "owner: which browser it has for signing in",
+    ),
+    (
         "crates/client/src/agent/elements.rs",
         "owner: where the inspection tool it runs is",
+    ),
+    (
+        "crates/client/src/agent/quit.rs",
+        "owner: which of its apps is Atlas, left running when apps are closed",
     ),
     (
         "crates/client/src/capability.rs",
@@ -118,6 +130,10 @@ const ALLOWED: &[(&str, &str)] = &[
         "owner: the Stop its input service keeps, and ending its jobs on a Stop",
     ),
     (
+        "crates/client/src/collect.rs",
+        "owner: which paths are the person's own rather than its",
+    ),
+    (
         "crates/client/src/environment.rs",
         "owner: syncing, applying, rolling back and running an environment in it",
     ),
@@ -152,6 +168,10 @@ const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/client/src/home_privacy.rs",
         "second login: what its account may reach of the person's home",
+    ),
+    (
+        "crates/client/src/host_session.rs",
+        "owner: who proves which agent host a command came from",
     ),
     (
         "crates/client/src/jobs.rs",
