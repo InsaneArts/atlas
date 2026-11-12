@@ -21,6 +21,7 @@ use atlas_client::{
 };
 use atlas_core::{
     config::Config,
+    desktop,
     error::{Code, Error, Result},
     transport::with_output,
 };
@@ -929,7 +930,9 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
 
     let helper = Config::load(config)
         .ok()
-        .map(|config| config.desktop().second_login().uid);
+        .map(|config| match config.desktop().kind() {
+            desktop::Kind::SecondLogin(login) => login.uid,
+        });
     let accounts = switch::accounts(helper)?;
 
     if args.list {

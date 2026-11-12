@@ -27,15 +27,15 @@ const NAMES: [&str; 3] = ["SecondLogin", "second_login", "helper_uid"];
 const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/agents/src/lib.rs",
-        "until it has an owner: the readiness an agent's brief reports",
+        "owner: the readiness an agent's brief reports",
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
-        "until it has an owner: showing the person this desktop",
+        "owner: showing the person this desktop",
     ),
     (
         "crates/cli/src/bin/atlas/doctor.rs",
-        "until it has an owner: what doctor reports",
+        "owner: what doctor reports",
     ),
     (
         "crates/cli/src/bin/atlas/init.rs",
@@ -43,7 +43,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
-        "until it has an owner: why it is silent, and whether setup is complete",
+        "owner: why it is silent, and whether setup is complete",
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
@@ -51,7 +51,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/mcp.rs",
-        "until it has an owner: showing the person this desktop",
+        "owner: showing the person this desktop",
     ),
     (
         "crates/cli/src/onboarding.rs",
@@ -83,19 +83,19 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/client.rs",
-        "until it has an owner: its connections, and getting an observation of it",
+        "owner: its connections, and getting an observation of it",
     ),
     (
         "crates/client/src/client/input.rs",
-        "until it has an owner: the input connection",
+        "owner: the input connection",
     ),
     (
         "crates/client/src/client/service.rs",
-        "until it has an owner: starting its input service",
+        "owner: starting its input service",
     ),
     (
         "crates/client/src/client/session.rs",
-        "until it has an owner: whether its session has ended",
+        "owner: whether its session has ended",
     ),
     (
         "crates/client/src/environment.rs",
@@ -131,11 +131,11 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/jobs.rs",
-        "until it has an owner: that a started job is the one asked for",
+        "owner: that a started job is the one asked for",
     ),
     (
         "crates/client/src/overview.rs",
-        "until it has an owner: the report of its readiness",
+        "owner: the report of its readiness",
     ),
     (
         "crates/client/src/setup.rs",
@@ -365,14 +365,42 @@ fn renames_second_login(tokens: &[Token]) -> Option<&'static str> {
     {
         return Some("renames it with `as`");
     }
-    let globbed = |from: usize| match tokens.get(from) {
-        Some(Token::Punctuation('*')) => true,
-        // A group of imports, which may hold a glob among them.
-        Some(Token::Punctuation('{')) => tokens[from..]
-            .iter()
-            .take_while(|token| !punctuation(token, '}'))
-            .any(|token| punctuation(token, '*')),
-        _ => false,
+    // What follows `desktop::` brings in items it does not name when it is a
+    // glob, of the module or of one of its items (`Kind::*`), or a group
+    // holding one at any depth. The desktop module has no modules of its
+    // own, so every glob under it is one of these.
+    let globbed = |from: usize| {
+        // Along a path such as `Kind::`, to where it ends.
+        let mut at = from;
+        while matches!(
+            (tokens.get(at), tokens.get(at + 1), tokens.get(at + 2)),
+            (
+                Some(Token::Identifier(_)),
+                Some(Token::Punctuation(':')),
+                Some(Token::Punctuation(':'))
+            )
+        ) {
+            at += 3;
+        }
+        match tokens.get(at) {
+            Some(Token::Punctuation('*')) => true,
+            Some(Token::Punctuation('{')) => {
+                let mut depth = 0_usize;
+                for token in &tokens[at..] {
+                    match token {
+                        Token::Punctuation('*') => return true,
+                        Token::Punctuation('{') => depth += 1,
+                        Token::Punctuation('}') => match depth.checked_sub(1) {
+                            Some(0) | None => return false,
+                            Some(outer) => depth = outer,
+                        },
+                        Token::Identifier(_) | Token::Punctuation(_) => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
     };
     if tokens.windows(3).enumerate().any(|(at, path)| {
         word(&path[0], "desktop")
@@ -583,6 +611,18 @@ fn the_second_login_cannot_leave_under_another_name() {
             "imports the desktop module's items with a glob",
         ),
         (
+            "use atlas_core::desktop::{Kind::{self}, *};",
+            "imports the desktop module's items with a glob",
+        ),
+        (
+            "use atlas_core::desktop::Kind::*;",
+            "imports the desktop module's items with a glob",
+        ),
+        (
+            "use atlas_core::desktop::{Desktop, Kind::{*}};",
+            "imports the desktop module's items with a glob",
+        ),
+        (
             "type Login = atlas_core::desktop::SecondLogin;",
             "hides it behind a type alias",
         ),
@@ -598,6 +638,9 @@ fn the_second_login_cannot_leave_under_another_name() {
         "let uid = login.uid as u64; let login: SecondLogin = made;",
         "type Reply = Result<Value>; fn of(login: &SecondLogin) {}",
         "use crate::desktop::Desktop;",
+        "use atlas_core::{desktop::{Desktop, Kind}, error::{*}};",
+        "use atlas_core::{desktop::Desktop, session::*};",
+        "let area = desktop::width * 2;",
         "let type_of = kind; let login = SecondLogin { uid };",
     ] {
         assert_eq!(renames_second_login(&tokens(source)), None, "{source}");

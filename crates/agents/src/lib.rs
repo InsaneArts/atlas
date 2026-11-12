@@ -8,6 +8,7 @@ use atlas_client::{
 };
 use atlas_core::{
     config::Config,
+    desktop::Kind,
     error::{Code, Error, Result},
     host::{Host, HostSession},
 };
@@ -865,9 +866,10 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    if atlas_client::capability::doctor(status, config.desktop().second_login().uid)["ready"]
-        == true
-    {
+    let helper = match config.desktop().kind() {
+        Kind::SecondLogin(login) => login.uid,
+    };
+    if atlas_client::capability::doctor(status, helper)["ready"] == true {
         let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."

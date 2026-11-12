@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use atlas_core::{
-    desktop::Desktop,
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     host::Key,
     lenient::Lenient,
@@ -109,7 +109,9 @@ async fn started(
             task: client.task.as_ref().map(|task| task.key().clone()),
             session: client.task.as_ref().map(|task| task.session().clone()),
         },
-        uid: client.desktop().second_login().uid,
+        uid: match client.desktop().kind() {
+            Kind::SecondLogin(login) => login.uid,
+        },
         pin,
     };
     let reply = mutate(client, mutation).await?;

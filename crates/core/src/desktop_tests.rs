@@ -53,13 +53,26 @@ fn a_full_look_finds_work_whose_group_leader_is_gone() {
 
 #[test]
 fn a_second_login_is_asked_about_its_own_account_alone() {
-    let me = login(nix::unistd::getuid().as_raw());
-    let own_group = nix::unistd::getpgrp().as_raw();
-    assert!(
-        me.left_may_run(&[], Some(own_group)),
-        "this test runs in a group of its own account"
+    use std::os::unix::process::CommandExt;
+
+    let uid = nix::unistd::getuid().as_raw();
+    // A process that waits on its input, alone in a group of its own.
+    let mut child = crate::test_support::TestChild::spawn(
+        std::process::Command::new("/bin/cat").process_group(0),
     );
-    assert!(!me.left_may_run(&[], None), "nothing was left");
-    // Another account has no process in this group.
-    assert!(!login(crate::test_support::UID).left_may_run(&[], Some(own_group)));
+    let group = i32::try_from(child.process.id()).unwrap();
+
+    assert!(
+        login(uid).left_may_run(&[], Some(group)),
+        "its own account's process runs there"
+    );
+    assert!(
+        !login(uid ^ 1).left_may_run(&[], Some(group)),
+        "another account has no process in that group"
+    );
+    assert!(!login(uid).left_may_run(&[], None), "nothing was left");
+
+    drop(child.process.stdin.take());
+    assert!(child.wait().success());
+    assert!(!login(uid).left_may_run(&[], Some(group)), "it ended");
 }

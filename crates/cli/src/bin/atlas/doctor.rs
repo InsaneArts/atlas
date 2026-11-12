@@ -7,6 +7,7 @@ use atlas_client::{
     host_session::{Asker, Recovery},
     idle_time::{IdleTime, Look},
 };
+use atlas_core::desktop::Kind;
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
 use std::io::IsTerminal;
@@ -38,7 +39,9 @@ const RECORDER_TRIES: u64 = 3;
 
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
-    let uid = client.desktop().second_login().uid;
+    let uid = match client.desktop().kind() {
+        Kind::SecondLogin(login) => login.uid,
+    };
     let status = client.status().await;
     let account = atlas_core::account::account_with_uid(uid).ok().flatten();
 

@@ -16,6 +16,7 @@ use crate::{
 };
 use atlas_control::Controller;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error},
     single_flight::Shared,
 };
@@ -76,7 +77,9 @@ pub async fn report(
     until: Instant,
     idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
-    let uid = client.desktop().second_login().uid;
+    let uid = match client.desktop().kind() {
+        Kind::SecondLogin(login) => login.uid,
+    };
     let reply = tokio::time::timeout_at(until, client.status())
         .await
         .unwrap_or_else(|_| json!(late()));

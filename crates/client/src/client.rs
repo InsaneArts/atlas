@@ -36,7 +36,7 @@ use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
-    desktop::Desktop,
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
@@ -165,15 +165,21 @@ impl Client {
     /// identity. Construction does not verify a running helper session.
     pub fn new(config: Config) -> Result<Self> {
         let desktop = config.desktop();
-        let helper = desktop.second_login().uid;
-        atlas_core::session::validate_uid(helper)?;
+        // The command service: where it listens, and the account the
+        // kernel must name at its end.
+        let transport = match desktop.kind() {
+            Kind::SecondLogin(login) => {
+                atlas_core::session::validate_uid(login.uid)?;
+                Transport {
+                    path: config.socket_path.clone(),
+                    timeout: Duration::from_secs(30),
+                    peer_uid: login.uid,
+                }
+            }
+        };
         Ok(Self {
             controller: Controller::new(&desktop)?,
-            transport: Transport {
-                path: config.socket_path.clone(),
-                timeout: Duration::from_secs(30),
-                peer_uid: helper,
-            },
+            transport,
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -297,9 +303,10 @@ impl Client {
         let mut hello = self.transport.call(&json!({"op": "hello"})).await?;
 
         // Do not launch the probe into an unverified UID or the visible desktop.
-        if hello["ok"] != true
-            || hello["user"]["uid"].as_u64() != Some(self.desktop().second_login().uid.into())
-            || hello["session"]["onConsole"] != false
+        let answered_as_configured = match self.desktop().kind() {
+            Kind::SecondLogin(login) => hello["user"]["uid"].as_u64() == Some(login.uid.into()),
+        };
+        if hello["ok"] != true || !answered_as_configured || hello["session"]["onConsole"] != false
         {
             return Ok(hello);
         }

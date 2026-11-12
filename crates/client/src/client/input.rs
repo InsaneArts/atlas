@@ -7,6 +7,7 @@ use super::{Actor, Client, Mutation, Verified, service::require_accessibility};
 use atlas_control::{Beside, Ownership, SharedLease};
 use atlas_core::{
     actions::{self, Expect},
+    desktop::Kind,
     error::{Code, Error, Holder, Result},
     session::{
         ASKS, ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
@@ -88,8 +89,12 @@ fn native_refusal(result: &Value) -> Error {
 }
 
 impl Client {
+    /// The input service: where it listens, and the account the kernel must
+    /// name at its end.
     pub(crate) fn input_transport(&self) -> Transport {
-        let peer_uid = self.desktop().second_login().uid;
+        let peer_uid = match self.desktop().kind() {
+            Kind::SecondLogin(login) => login.uid,
+        };
         #[cfg(any(test, feature = "test-support"))]
         let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
         Transport {

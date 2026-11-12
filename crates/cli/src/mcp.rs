@@ -14,6 +14,7 @@ use atlas_client::{
     client::{Actor, Client},
     screen_tiles::Tiles,
 };
+use atlas_core::desktop::Kind;
 use atlas_core::error::{Code, Error, Result};
 use atlas_core::host::HostSession;
 use serde_json::{Value, json};
@@ -473,7 +474,9 @@ impl Server {
     /// refused (`not-ready`), with nothing locked, while a new login could
     /// hang.
     async fn switch_helper(&self) -> Result<Value> {
-        let helper = self.client.desktop().second_login().uid;
+        let helper = match self.client.desktop().kind() {
+            Kind::SecondLogin(login) => login.uid,
+        };
         tokio::task::spawn_blocking(move || {
             let account = atlas_client::switch::accounts(Some(helper))?
                 .into_iter()
