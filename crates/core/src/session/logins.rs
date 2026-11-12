@@ -520,3 +520,7 @@ pub(super) fn running_for(elapsed: &str) -> Option<Duration> {
 
     Some(Duration::from_secs(days * 86_400 + seconds))
 }
+
+#[cfg(test)]
+#[path = "logins_tests.rs"]
+mod tests;

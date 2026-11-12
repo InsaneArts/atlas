@@ -17,8 +17,6 @@ pub use logins::{
     login, setup_assistant, stale,
 };
 pub use logins::{Kind, Sessions, absence, logged_in, sessions};
-#[cfg(test)]
-pub(crate) use logins::{Record, classify};
 
 use crate::account::FIRST_USER_UID;
 use crate::error::{Code, Error, Result};
