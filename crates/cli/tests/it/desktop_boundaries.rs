@@ -1224,12 +1224,22 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
-        &["main", "open_app"],
+        &["open_app"],
+        "owner: whether Atlas is set up here, by the desktop it names",
+    ),
+    (
+        "crates/cli/src/bin/atlas/main.rs",
+        &["chosen_as_helper", "first_login_opener", "set_up_in"],
         "pending: whether the user's setup is complete, and its first-login opener",
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
         &["preflight", "update_finish_using"],
+        "owner: what moving the desktop onto a new build takes",
+    ),
+    (
+        "crates/cli/src/bin/atlas/update.rs",
+        &["helper_steps_in", "preflight_in"],
         "pending: finishing an update in the user",
     ),
     (

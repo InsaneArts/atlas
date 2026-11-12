@@ -4,6 +4,7 @@ use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
     config::Config,
+    desktop::Kind,
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
@@ -226,10 +227,10 @@ async fn preflight(
     program: &std::path::Path,
     client: Option<&Client>,
 ) -> Result<()> {
-    if let Some(loaded) = set_up(config)?
-        && atlas_client::user::setup::migrate::in_effect(loaded.desktop().user().uid)
-    {
-        atlas_client::user::setup::migrate::preflight_apply(config, program).await?;
+    if let Some(loaded) = set_up(config)? {
+        match loaded.desktop().kind() {
+            Kind::User(login) => preflight_in(config, program, login).await?,
+        }
     }
     if let Some(client) = client {
         client.require_service_idle().await?;
@@ -268,20 +269,10 @@ async fn update_finish_using(
     client.require_service_idle().await?;
     let daemon = client.status().await["daemon"]["pid"].is_number();
     let executable = std::env::current_exe()?;
-    let finished = if has_helper_job(
-        atlas_client::user::setup::migrate::recorded(loaded.desktop().user().uid),
-        daemon,
-    ) {
-        // The daemon restarts first: a daemon whose app was swapped under it
-        // can no longer vouch (to TCC) for a new input service it starts,
-        // while the input service it already runs is cleaned up by the
-        // restart itself.
-        let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
-
-        if atlas_client::user::setup::migrate::in_effect(loaded.desktop().user().uid) {
-            steps.push(&["setup", "--apply"]);
-        }
-
+    let steps = match loaded.desktop().kind() {
+        Kind::User(login) => helper_steps_in(login, daemon),
+    };
+    let finished = if let Some(steps) = steps {
         let done = match run_steps(&steps, |step| {
             let mut command = std::process::Command::new(&executable);
             command.args(step);
@@ -307,6 +298,45 @@ async fn update_finish_using(
         || atlas_cli::menubar::stop_located(client.output_dir().map(std::path::Path::to_path_buf)),
         |port| restart_menubar(&executable, config, port),
     ))
+}
+
+/// [`preflight`] for the second login `login`: a setup still being moved
+/// onto a new build checks the staged app first.
+async fn preflight_in(
+    config: &std::path::Path,
+    program: &std::path::Path,
+    login: &atlas_core::user::User,
+) -> Result<()> {
+    if atlas_client::user::setup::migrate::in_effect(login.uid) {
+        atlas_client::user::setup::migrate::preflight_apply(config, program).await?;
+    }
+    Ok(())
+}
+
+/// The `atlas` steps that move the second login `login` onto this
+/// executable, when it has a helper job (`daemon`: its daemon answers);
+/// none when there is nothing to move.
+fn helper_steps_in(
+    login: &atlas_core::user::User,
+    daemon: bool,
+) -> Option<Vec<&'static [&'static str]>> {
+    if !has_helper_job(
+        atlas_client::user::setup::migrate::recorded(login.uid),
+        daemon,
+    ) {
+        return None;
+    }
+    // The daemon restarts first: a daemon whose app was swapped under it
+    // can no longer vouch (to TCC) for a new input service it starts,
+    // while the input service it already runs is cleaned up by the
+    // restart itself.
+    let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
+
+    if atlas_client::user::setup::migrate::in_effect(login.uid) {
+        steps.push(&["setup", "--apply"]);
+    }
+
+    Some(steps)
 }
 
 /// Run `steps` in order through `run`, stopping at the first that fails:
