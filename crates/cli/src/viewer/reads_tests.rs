@@ -193,3 +193,35 @@ async fn an_account_with_no_full_name_is_asked_once() {
     assert_eq!(account_title(&known, "atlas", ask).await, None);
     assert_eq!(ASKED.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn only_the_persons_app_is_told_which_app_keeps_their_idle_time_stopped() {
+    let stuck =
+        json!({"ready": true, "idleTime": {"state": "stuck", "fix": "quit", "app": "Terminal"}});
+
+    let mut person = stuck.clone();
+    keep_idle_time_for(&mut person, true);
+    assert_eq!(person, stuck);
+
+    let mut agent = stuck;
+    keep_idle_time_for(&mut agent, false);
+    assert_eq!(agent, json!({"ready": true}));
+}
+
+#[tokio::test]
+async fn only_the_persons_status_carries_the_console_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, helper, _) = verified(dir.path());
+    helper
+        .serve(
+            async {
+                let person = viewer.status_for(true).await;
+                assert!(person["consoleName"]["state"].is_string());
+                let agent = viewer.status_for(false).await;
+                assert!(agent.get("consoleName").is_none());
+                viewer.close().await;
+            },
+            |_| None,
+        )
+        .await;
+}

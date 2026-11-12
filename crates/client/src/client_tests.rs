@@ -1725,6 +1725,8 @@ async fn a_status_read_without_a_viewer_says_no_viewer_has_control() {
 
     let status = crate::overview::read(&client).await.value;
     assert_eq!(status["controlActive"], false);
+    assert!(status.get("consoleName").is_none());
+    assert!(status.get("idleTime").is_none());
     assert_eq!(status["overview"]["state"], "notReady", "no helper answers");
     assert_eq!(status["overview"]["label"], "Not ready");
     assert!(

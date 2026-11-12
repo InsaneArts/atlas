@@ -20,6 +20,15 @@
 //! Nothing is written down: a paused agent is itself the record. A daemon
 //! that starts takes over one it finds paused, keeps it while the helper is
 //! hidden and lets it run on screen.
+//!
+//! The same keeper holds the helper's `rapportd` paused while the helper is
+//! hidden. macOS hands each nearby-device request any process makes, the
+//! person's own included, to every login's `rapportd`, so a hidden helper's
+//! copy answers for the person's Continuity services; and the person's
+//! Universal Control was reported to stop while the helper is logged in.
+//! Unlike the agent it runs for as long as its login does, so it is paused
+//! whenever found running while the helper is hidden, at any age, and runs
+//! again on screen and when the daemon stops, as the agent does.
 use atlas_core::process::{self, Info, Instance};
 use atlas_native::native::{
     process_token::Token,
@@ -44,6 +53,10 @@ use std::{
 /// The agent's program: launchd's `com.apple.BTServer.cloudpairing`, the
 /// one `atlas doctor` warns of while it keeps restarting.
 const PROGRAM: &str = "/System/Library/CoreServices/audioaccessoryd";
+
+/// The helper's nearby-device service, launchd's `com.apple.rapportd`, kept
+/// paused while the helper is hidden.
+const QUIET: &str = "/usr/libexec/rapportd";
 
 /// launchd, which starts every agent.
 const LAUNCHD: i32 = 1;
@@ -101,6 +114,10 @@ pub(crate) struct Report {
     pauses: u64,
     /// Starts that were seen too late to pause, or would not pause.
     misses: u64,
+    /// Whether the helper's `rapportd` is held paused now.
+    quiet: bool,
+    /// Times the helper's `rapportd` was paused since this daemon began.
+    quiet_pauses: u64,
 }
 
 impl Report {
@@ -108,6 +125,8 @@ impl Report {
         state: State::Off,
         pauses: 0,
         misses: 0,
+        quiet: false,
+        quiet_pauses: 0,
     };
 
     /// The hello's fields.
@@ -119,7 +138,12 @@ impl Report {
             State::Paused => "paused",
             State::Unavailable => "unavailable",
         };
-        json!({"state": state, "pauses": self.pauses, "misses": self.misses})
+        json!({
+            "state": state,
+            "pauses": self.pauses,
+            "misses": self.misses,
+            "rapportd": {"paused": self.quiet, "pauses": self.quiet_pauses},
+        })
     }
 }
 
@@ -634,6 +658,8 @@ struct Keeper<S: System> {
     /// Whether the helper's processes were looked through for an agent an
     /// earlier daemon left paused, and each one that might be it was read.
     looked_for_one_left: bool,
+    /// The same for a `rapportd` an earlier daemon left paused.
+    looked_for_quiet_left: bool,
     /// Processes this keeper stopped and then continued that were not yet
     /// seen to run again, or gone: each is continued again at every look.
     owed: Vec<Kept>,
@@ -645,6 +671,9 @@ struct Keeper<S: System> {
     /// Whether the kernel refused, at the last try, to tell launchd's
     /// starts.
     blind: bool,
+    /// The helper's `rapportd` while this keeper holds it paused.
+    quiet: Option<Kept>,
+    quiet_pauses: u64,
 }
 
 impl<S: System> Keeper<S> {
@@ -657,12 +686,15 @@ impl<S: System> Keeper<S> {
             session,
             phase: Phase::OnScreen,
             looked_for_one_left: false,
+            looked_for_quiet_left: false,
             owed: Vec::new(),
             known: HashSet::new(),
             report,
             pauses: 0,
             misses: 0,
             blind: false,
+            quiet: None,
+            quiet_pauses: 0,
         }
     }
 
@@ -671,6 +703,9 @@ impl<S: System> Keeper<S> {
         self.continue_owed();
         if !self.looked_for_one_left {
             self.looked_for_one_left = self.take_over_one_left();
+        }
+        if !self.looked_for_quiet_left {
+            self.looked_for_quiet_left = self.take_over_quiet_left();
         }
         let hidden = self.system.hidden();
         match (&self.phase, hidden) {
@@ -683,7 +718,123 @@ impl<S: System> Keeper<S> {
             }
             (_, false) => self.let_go(),
         }
+        if hidden {
+            self.quiet_down();
+        } else {
+            self.let_quiet_go();
+        }
         self.tell();
+    }
+
+    /// While the helper is hidden, hold its `rapportd` paused. One already
+    /// held is looked at; one gone, or continued by someone else, gives way
+    /// to the next found running, which is paused at any age. A list or a
+    /// process the kernel does not give is asked for again at the next look.
+    fn quiet_down(&mut self) {
+        if let Some(kept) = self.quiet {
+            match self.system.process(kept.process.pid) {
+                Seen::Unknown => return,
+                Seen::Found(found)
+                    if found.instance == kept.process && found.stopped && !found.zombie =>
+                {
+                    return;
+                }
+                Seen::Found(_) | Seen::Gone => self.quiet = None,
+            }
+        }
+        let Some(processes) = self.system.processes(self.uid) else {
+            return;
+        };
+        let named = Path::new(QUIET).file_name().and_then(|name| name.to_str());
+        for found in processes {
+            // Its name is read first, so only it is read through a token.
+            if found.ppid != LAUNCHD || found.zombie || Some(found.name.as_str()) != named {
+                continue;
+            }
+            if let Is::Agent(found, exact) = self.identify(found.instance.pid, QUIET) {
+                self.hold_quiet(&found, &exact);
+                return;
+            }
+        }
+    }
+
+    /// Pause the helper's `rapportd`, `found`, while the helper is still
+    /// hidden. One found paused already, as an earlier daemon leaves it, is
+    /// held as it is.
+    fn hold_quiet(&mut self, found: &Info, exact: &Exact) {
+        let kept = Kept {
+            process: found.instance,
+            token: exact.token,
+        };
+        if found.stopped {
+            self.hold_stopped_quiet(kept);
+            return;
+        }
+        if !self.system.hidden() {
+            return;
+        }
+        // Owed its run from before the stop is sent until it is held or seen
+        // to run again, as the agent is.
+        self.owe(kept);
+        let sent = self.system.signal(&kept.token, Signal::SIGSTOP);
+        if sent && self.settled(&kept, true) && self.system.hidden() {
+            self.quiet_pauses += 1;
+            self.quiet = Some(kept);
+            self.owed.retain(|owed| *owed != kept);
+            return;
+        }
+        if sent {
+            self.release(kept);
+        } else {
+            self.owed.retain(|owed| *owed != kept);
+        }
+    }
+
+    /// Hold `kept`, a `rapportd` found paused: from here it is this keeper's,
+    /// so a continue still owed to it is not sent.
+    fn hold_stopped_quiet(&mut self, kept: Kept) {
+        self.owed.retain(|owed| *owed != kept);
+        self.quiet = Some(kept);
+    }
+
+    /// Take over a `rapportd` an earlier daemon left paused, wherever the
+    /// helper is: hidden it stays paused, on screen it runs again at this
+    /// look. Whether the look was complete, as for the agent.
+    fn take_over_quiet_left(&mut self) -> bool {
+        let Some(processes) = self.system.processes(self.uid) else {
+            return false;
+        };
+        let named = Path::new(QUIET).file_name().and_then(|name| name.to_str());
+        let mut complete = true;
+        for found in processes {
+            if !found.stopped
+                || found.ppid != LAUNCHD
+                || found.zombie
+                || Some(found.name.as_str()) != named
+            {
+                continue;
+            }
+            match self.identify(found.instance.pid, QUIET) {
+                Is::Agent(found, exact) => {
+                    self.hold_stopped_quiet(Kept {
+                        process: found.instance,
+                        token: exact.token,
+                    });
+                    return true;
+                }
+                Is::Other => {}
+                Is::Unknown => complete = false,
+            }
+        }
+        complete
+    }
+
+    /// The helper is on screen, or the keeper is going: its `rapportd` runs
+    /// again.
+    fn let_quiet_go(&mut self) {
+        if let Some(kept) = self.quiet.take() {
+            self.release(kept);
+        }
     }
 
     /// Take in one of the kernel's notices.
@@ -710,7 +861,7 @@ impl<S: System> Keeper<S> {
             if !found.stopped || found.ppid != LAUNCHD || found.zombie {
                 continue;
             }
-            match self.identify(found.instance.pid) {
+            match self.identify(found.instance.pid, PROGRAM) {
                 Is::Agent(found, exact) => {
                     self.keep(Kept {
                         process: found.instance,
@@ -795,7 +946,7 @@ impl<S: System> Keeper<S> {
             return;
         };
         let process = start.process;
-        if let Is::Agent(found, exact) = self.identify(pid)
+        if let Is::Agent(found, exact) = self.identify(pid, PROGRAM)
             && found.instance == process
         {
             self.pause(&found, &exact);
@@ -812,11 +963,11 @@ impl<S: System> Keeper<S> {
         }
     }
 
-    /// What `pid` is now. The agent in this login is launchd's own child,
-    /// this account's, in this login's session, running the agent's
-    /// program. It is read before and after its token, so a PID reused in
-    /// between is not taken for it.
-    fn identify(&self, pid: i32) -> Is {
+    /// What `pid` is now, as `program`. The one in this login is launchd's
+    /// own child, this account's, in this login's session, running `program`.
+    /// It is read before and after its token, so a PID reused in between is
+    /// not taken for it.
+    fn identify(&self, pid: i32, program: &str) -> Is {
         let ours = |found: &Info| {
             found.uid == self.uid
                 && found.ruid == self.uid
@@ -839,7 +990,7 @@ impl<S: System> Keeper<S> {
         let named = exact.token.pid() == pid
             && exact.token.uid() == self.uid
             && exact.token.session() == self.session
-            && exact.program == Path::new(PROGRAM);
+            && exact.program == Path::new(program);
         if named {
             Is::Agent(after, exact)
         } else {
@@ -1042,6 +1193,7 @@ impl<S: System> Keeper<S> {
     /// not seen to run at once. Whether nothing is left paused.
     fn end(mut self) -> bool {
         self.let_go();
+        self.let_quiet_go();
         for _ in 0..LAST_TRIES {
             if self.owed.is_empty() {
                 break;
@@ -1097,6 +1249,8 @@ impl<S: System> Keeper<S> {
                 state,
                 pauses: self.pauses,
                 misses: self.misses,
+                quiet: self.quiet.is_some(),
+                quiet_pauses: self.quiet_pauses,
             };
         }
     }
@@ -1105,6 +1259,7 @@ impl<S: System> Keeper<S> {
 impl<S: System> Drop for Keeper<S> {
     fn drop(&mut self) {
         self.let_go();
+        self.let_quiet_go();
         self.continue_owed();
         self.say(State::Off);
     }

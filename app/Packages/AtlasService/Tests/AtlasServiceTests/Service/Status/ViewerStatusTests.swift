@@ -6,6 +6,31 @@ import Testing
 
 @Suite("ViewerStatus")
 struct ViewerStatusTests {
+  @Test("the console account decodes known states and keeps safe defaults for other values")
+  func theConsoleAccountDecodesTolerantly() throws {
+    for word in ["this", "another", "unknown"] {
+      let reading = try status(["consoleName": ["state": word, "name": "atlas"]])
+      #expect(reading.consoleName.state.rawValue == word)
+      #expect(reading.consoleName.name == "atlas")
+    }
+    #expect(ViewerStatus().consoleName == ViewerStatus.ConsoleName())
+    #expect(try status([:]).consoleName == ViewerStatus.ConsoleName())
+    for value: Any in [NSNull(), 1, "another", [], [:]] {
+      #expect(try status(["consoleName": value]).consoleName == ViewerStatus.ConsoleName())
+    }
+    for value: Any in [NSNull(), 1, "future", ""] {
+      let reading = try status(["consoleName": ["state": value, "name": "atlas"]])
+      #expect(reading.consoleName.state == .unknown)
+      #expect(reading.consoleName.name == "atlas")
+    }
+    for value: Any in [NSNull(), 1, []] {
+      let reading = try status(["consoleName": ["state": "another", "name": value]])
+      #expect(reading.consoleName.state == .another)
+      #expect(reading.consoleName.name == nil)
+    }
+    #expect(try status(["consoleName": ["state": "another"]]).consoleName.name == nil)
+  }
+
   @Test("nonfinite status ages are read as unknown without dropping their rows")
   func nonfiniteAges() throws {
     let decoder = JSONDecoder()
@@ -88,6 +113,19 @@ struct ViewerStatusTests {
     #expect(try status(["restartingService": "later"]).restartingService == .unknown)
     #expect(try status(["restartingService": 1]).restartingService == .unknown)
     #expect(try status(["ready": true]).restartingService == .unknown)
+  }
+
+  @Test("a stopped idle time is read with the app keeping it stopped, and unknown when missing or unexpected")
+  func idleTime() throws {
+    let held = try status(["idleTime": ["state": "held", "app": "Terminal"]]).idleTime
+    #expect(held == ViewerStatus.IdleTime(state: .held, app: "Terminal"))
+    let unnamed = try status(["idleTime": ["state": "held", "app": NSNull()]]).idleTime
+    #expect(unnamed == ViewerStatus.IdleTime(state: .held))
+    #expect(try status(["idleTime": ["state": "stuck"]]).idleTime.state == .stuck)
+    #expect(try status(["idleTime": ["state": "live"]]).idleTime.state == .live)
+    #expect(try status(["idleTime": ["state": "later"]]).idleTime.state == .unknown)
+    #expect(try status(["idleTime": "stuck"]).idleTime.state == .unknown)
+    #expect(try status(["ready": true]).idleTime == ViewerStatus.IdleTime())
   }
 
   @Test("a status report decodes the session, the mode, the helper's names, its display and what it did")

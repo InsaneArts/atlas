@@ -11,6 +11,70 @@ import Testing
 
 @Suite("PanelController")
 struct PanelControllerTests {
+  @Test("OK hides the wrong account note until a status names the person again")
+  func okHidesTheWrongAccountUntilThePersonIsNamedAgain() async {
+    let service = ScriptedService()
+    service.reply = ["consoleName": ["state": "another", "name": "atlas"]]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.wrongAccount == "atlas")
+    controller.send(.dismissWrongAccountNote)
+    #expect(controller.state.wrongAccount == nil)
+    await controller.readStatus()
+    #expect(controller.state.wrongAccount == nil)
+    service.reply = ["consoleName": ["state": "unknown"]]
+    await controller.readStatus()
+    #expect(controller.wrongAccountDismissed)
+    service.fail = ["status"]
+    await controller.readStatus()
+    #expect(controller.wrongAccountDismissed)
+    service.fail = []
+    service.reply = ["consoleName": ["state": "this"]]
+    await controller.readStatus()
+    #expect(!controller.wrongAccountDismissed)
+    #expect(controller.state.wrongAccount == nil)
+    service.reply = ["consoleName": ["state": "another", "name": "atlas"]]
+    await controller.readStatus()
+    #expect(controller.state.wrongAccount == "atlas")
+  }
+
+  @Test("a new controller forgets the wrong account dismissal")
+  func aNewControllerForgetsTheWrongAccountDismissal() async {
+    let service = ScriptedService()
+    service.reply = ["consoleName": ["state": "another", "name": "atlas"]]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    controller.send(.dismissWrongAccountNote)
+    let reopened = PanelController.scripted(service)
+    await reopened.readStatus()
+    #expect(reopened.state.wrongAccount == "atlas")
+  }
+
+  @Test("Lock Screen runs the lock action and closes the panel once the screen locks")
+  func lockScreenRunsTheLockActionAndThenClosesThePanel() async throws {
+    let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
+    var closed = false
+    commands.whileRunning { _ in #expect(!closed) }
+    let controller = PanelController.scripted(commands: commands, links: PanelLinks(closePanel: { closed = true }))
+    controller.send(.lockForWrongAccount)
+    try await settle("the lock action never finished") { !commands.ran.isEmpty && !controller.actions.isBusy }
+    #expect(commands.ran == [Action.lockScreen.arguments])
+    #expect(controller.session.notice == nil)
+    #expect(closed)
+  }
+
+  @Test("a Lock Screen that fails keeps the panel open and says why")
+  func aFailedLockScreenKeepsThePanelOpenAndSaysWhy() async throws {
+    let refused = #"{"ok": false, "code": "switch", "error": "This macOS cannot lock the screen from here"}"#
+    let commands = ScriptedCommands(["switch": refused])
+    var closed = false
+    let controller = PanelController.scripted(commands: commands, links: PanelLinks(closePanel: { closed = true }))
+    controller.send(.lockForWrongAccount)
+    try await settle("the lock action never finished") { !commands.ran.isEmpty && !controller.actions.isBusy }
+    try await settle("no notice") { controller.session.notice != nil }
+    #expect(!closed)
+  }
+
   @Test("the panel shows the service's status, and no picture when capture fails")
   func showsTheServiceStatus() async {
     let service = ScriptedService()
@@ -97,6 +161,29 @@ struct PanelControllerTests {
     service.reply = ["overview": ["mode": "observing", "state": "idle"], "restartingService": "none"]
     await controller.readStatus()
     #expect(!controller.state.showsServiceNote)
+  }
+
+  @Test("OK hides the idle note while the idle time stays stopped, and it comes back after it was live again")
+  func theIdleNoteComesBackTheNextTimeItStops() async {
+    let service = ScriptedService()
+    let stuck: [String: Any] = [
+      "overview": ["mode": "observing", "state": "idle"],
+      "idleTime": ["state": "held", "app": "Terminal"],
+    ]
+    service.reply = stuck
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.idleNote == PanelIdleFix(app: "Terminal"))
+    controller.send(.dismissIdleNote)
+    #expect(controller.state.idleNote == nil)
+    await controller.readStatus()
+    #expect(controller.state.idleNote == nil)
+    service.reply = ["overview": ["mode": "observing", "state": "idle"], "idleTime": ["state": "live"]]
+    await controller.readStatus()
+    #expect(controller.state.idleNote == nil)
+    service.reply = stuck
+    await controller.readStatus()
+    #expect(controller.state.idleNote == PanelIdleFix(app: "Terminal"))
   }
 
   @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")

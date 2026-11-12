@@ -30,6 +30,7 @@ pub mod handoff;
 pub mod helper_info;
 pub mod home_privacy;
 pub mod host_session;
+pub mod idle_time;
 pub mod install_app;
 pub mod jobs;
 mod last_capture;

@@ -5,6 +5,19 @@ import Testing
 
 @Suite("PanelRenderOverrides")
 struct PanelRenderOverridesTests {
+  @Test("the wrong account render names the account even after dismissal")
+  func theWrongAccountRenderNamesTheAccount() {
+    let snapshot = PanelSnapshot(wrongAccountDismissed: true)
+    let shown = PanelRenderOverrides(environment: ["ATLAS_RENDER_WRONG_ACCOUNT": "atlas"])
+      .applied(to: snapshot)
+    #expect(PanelPresenter.state(shown).wrongAccount == "atlas")
+    for environment in [[:], ["ATLAS_RENDER_WRONG_ACCOUNT": ""]] {
+      let plain = PanelRenderOverrides(environment: environment)
+        .applied(to: PanelSnapshot())
+      #expect(PanelPresenter.state(plain).wrongAccount == nil)
+    }
+  }
+
   @Test("with nothing to change, the live panel is drawn as it is")
   func nothingChangesTheLivePanel() {
     var observing = PanelSnapshot()
@@ -56,5 +69,15 @@ struct PanelRenderOverridesTests {
     let plain = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
       .applied(to: PanelSnapshot())
     #expect(!PanelPresenter.state(plain).showsServiceNote)
+  }
+
+  @Test("the idle note render names its app, and no other render shows it")
+  func theIdleNoteRenderShowsTheNote() {
+    let quit = PanelRenderOverrides(environment: ["ATLAS_RENDER_IDLE_NOTE": "Terminal", "ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(PanelPresenter.state(quit).idleNote == PanelIdleFix(app: "Terminal"))
+    let plain = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(PanelPresenter.state(plain).idleNote == nil)
   }
 }

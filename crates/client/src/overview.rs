@@ -12,6 +12,7 @@ pub use sessions::{add_host_sessions, add_sessions_for};
 use crate::{
     activity_log::{self, Op, Row},
     client::Client,
+    console_user::Named,
 };
 use atlas_control::Controller;
 use atlas_core::{
@@ -48,16 +49,33 @@ const ABSENCE_REUSE: Duration = Duration::from_secs(5);
 /// and what it says changes over hours.
 const RESTARTS_REUSE: Duration = Duration::from_secs(10 * 60);
 
+/// How long one look at the idle time apps read is reused: the person's
+/// apps lock only after minutes of it stopped.
+const IDLE_TIME_REUSE: Duration = Duration::from_secs(15);
+/// How long the account named at the person's screen is reused.
+const CONSOLE_NAME_REUSE: Duration = Duration::from_secs(15);
+
+/// The account macOS names at the person's screen.
+static CONSOLE_NAME: Shared<Named> = Shared::new(CONSOLE_NAME_REUSE);
+
 /// The logins Atlas can close, and whether the helper's login is stale.
 static LOGINS: Shared<(Vec<u32>, bool)> = Shared::new(REUSE);
 /// The Apple jobs restarting in the helper, from launchd's log.
 static RESTARTS: Shared<Option<Vec<crate::console_agents::Restart>>> = Shared::new(RESTARTS_REUSE);
 /// Why the silent helper is down.
 static ABSENCE: Shared<Option<atlas_core::session::Absence>> = Shared::new(ABSENCE_REUSE);
+/// Whether the idle time apps read has stopped in this login.
+static IDLE_TIME: Shared<crate::idle_time::IdleTime> = Shared::new(IDLE_TIME_REUSE);
 
 /// The doctor report for the helper as it answers now, with why a silent
-/// helper is down. It waits on the helper until `until` at most.
-pub async fn report(client: &Client, until: Instant) -> crate::capability::Doctor {
+/// helper is down. It waits on the helper until `until` at most. `idle` says
+/// whether the look at the person's idle time may restart it: only the
+/// viewer service's may.
+pub async fn report(
+    client: &Client,
+    until: Instant,
+    idle: crate::idle_time::Look,
+) -> crate::capability::Doctor {
     let uid = client.desktop().hidden().uid;
     let reply = tokio::time::timeout_at(until, client.status())
         .await
@@ -105,6 +123,21 @@ pub async fn report(client: &Client, until: Instant) -> crate::capability::Docto
             .flatten()
     };
     status["restartingService"] = json!(crate::console_agents::Restarting::of(restarts.as_deref()));
+
+    // Whether the idle time the person's apps read has stopped while they
+    // type, as a switch to or from the helper can leave it, restarted when
+    // `idle` allows. This process runs in the person's login.
+    let idle_time = IDLE_TIME
+        .get(uid, until, move || crate::idle_time::IdleTime::now(idle))
+        .await
+        .unwrap_or(crate::idle_time::IdleTime::Unknown);
+    status["idleTime"] = json!(idle_time);
+    status["consoleName"] = json!(
+        CONSOLE_NAME
+            .get(nix::unistd::getuid().as_raw(), until, Named::now)
+            .await
+            .unwrap_or(Named::Unknown)
+    );
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
@@ -155,7 +188,12 @@ pub fn pending(controller: &Controller) -> (Pending, usize) {
 /// The helper's status and overview as an agent app shows them, read
 /// without a viewer: no viewer of this process holds control.
 pub async fn read(client: &Client) -> Reading {
-    let doctor = report(client, Instant::now() + READ_DEADLINE).await;
+    let doctor = report(
+        client,
+        Instant::now() + READ_DEADLINE,
+        crate::idle_time::Look::Only,
+    )
+    .await;
     let (pending, _) = pending(&client.controller);
     let activity = client
         .output_dir()
@@ -165,6 +203,10 @@ pub async fn read(client: &Client) -> Reading {
     let now = atlas_core::time::timestamp();
     let overview = overview(&doctor, false, pending, &activity, now);
     let mut reading = Reading::new(doctor, overview, false, now);
+    if let Some(fields) = reading.value.as_object_mut() {
+        fields.remove("consoleName");
+        fields.remove("idleTime");
+    }
     add_host_sessions(&mut reading, client, now).await;
     reading
 }

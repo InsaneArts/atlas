@@ -17,6 +17,7 @@ import AtlasUI
 /// - `ATLAS_RENDER_SESSIONS` (`one`, `two`, `waiting`, `needsYou` or `more`) shows that many agents at work, each in
 ///   its own host session (``PanelRenderSessions``), in place of the live sessions and rows.
 /// - `ATLAS_RENDER_SERVICE_NOTE=1` shows the note that a macOS service in the helper slowly slows the Mac.
+/// - `ATLAS_RENDER_WRONG_ACCOUNT=<name>` shows the account macOS names at the screen.
 /// - `ATLAS_RENDER_ACCOUNTS=1` lists two accounts, so the panel shows its accounts line.
 /// - `ATLAS_RENDER_PREVIEW=1` shows a set-up Mac: the helper's names and display, three recent actions, Open at Login
 ///   and, in a debug build, the sample screen when the live one gives none.
@@ -47,6 +48,10 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var sessions: PanelRenderSessions?
   /// Whether the note that a macOS service in the helper slowly slows the Mac shows.
   var serviceNote: Bool
+  /// The note that the person's apps think they are away, naming this word as the app to quit; nil hides the note.
+  var idleNote: String?
+  /// The other account to show in the wrong account note; nil keeps the live status.
+  var wrongAccount: String?
   /// Whether two accounts are listed, so the accounts line shows.
   var accounts: Bool
 
@@ -79,6 +84,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
     showsEverything = environment["ATLAS_RENDER_PREVIEW"] == "1"
     sessions = environment["ATLAS_RENDER_SESSIONS"].flatMap(PanelRenderSessions.init(rawValue:))
     serviceNote = environment["ATLAS_RENDER_SERVICE_NOTE"] == "1"
+    idleNote = environment["ATLAS_RENDER_IDLE_NOTE"]
+    wrongAccount = environment["ATLAS_RENDER_WRONG_ACCOUNT"].flatMap { $0.isEmpty ? nil : $0 }
     accounts = environment["ATLAS_RENDER_ACCOUNTS"] == "1"
   }
 
@@ -128,6 +135,14 @@ struct PanelRenderOverrides: Equatable, Sendable {
     if serviceNote {
       shown.status.restartingService = .restarting
       shown.serviceNoteDismissed = false
+    }
+    if let idleNote {
+      shown.status.idleTime = ViewerStatus.IdleTime(state: .held, app: idleNote)
+      shown.idleNoteDismissed = false
+    }
+    if let wrongAccount {
+      shown.status.consoleName = ViewerStatus.ConsoleName(state: .another, name: wrongAccount)
+      shown.wrongAccountDismissed = false
     }
     if accounts {
       shown.status.overview.accounts = [

@@ -1040,7 +1040,12 @@ async fn replies_keep_their_shapes() {
     );
     assert_eq!(
         hello["consoleAgent"],
-        json!({"state": "off", "pauses": 0, "misses": 0})
+        json!({
+            "state": "off",
+            "pauses": 0,
+            "misses": 0,
+            "rapportd": {"paused": false, "pauses": 0},
+        })
     );
     assert_eq!(
         keys(&hello["daemon"]["pictureStats"]),

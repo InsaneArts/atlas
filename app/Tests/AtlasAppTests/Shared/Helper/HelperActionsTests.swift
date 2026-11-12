@@ -9,8 +9,8 @@ import Testing
 
 @Suite("HelperActions")
 struct HelperActionsTests {
-  @Test("a switch refuses when the graphical session leaves the console while control cleanup is pending")
-  func switchingRechecksAfterCleanup() async throws {
+  @Test("a lock or switch refuses when the login leaves the screen during control cleanup", arguments: [false, true])
+  func lockingRechecksAfterCleanup(lockOnly: Bool) async throws {
     var onConsole = true
     let console = SessionConsole(read: { onConsole })
     let service = ScriptedService()
@@ -20,7 +20,7 @@ struct HelperActionsTests {
     let gate = ReleaseSignal()
     let cleanup = Task { await barrier.tracking { await gate.wait() } }
     try await settle("cleanup never started") { barrier.isBusy }
-    let switching = Task { await actions.switchTo("helper") }
+    let switching = Task { await (lockOnly ? actions.lockScreen() : actions.switchTo("helper")) }
     try await settle("the switch never waited for cleanup") { barrier.waiters == 1 }
     onConsole = false
     gate.open()
@@ -30,7 +30,7 @@ struct HelperActionsTests {
     #expect(refused?.message == SessionConsole.refusal)
     #expect(commands.ran.isEmpty)
     #expect(!console.isOnConsole)
-    #expect(await actions.switchTo("helper")?.ok == false)
+    #expect(await (lockOnly ? actions.lockScreen() : actions.switchTo("helper"))?.ok == false)
     #expect(commands.ran.isEmpty)
   }
 

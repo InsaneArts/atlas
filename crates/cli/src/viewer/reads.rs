@@ -1,6 +1,7 @@
-//! What the viewer reads for the app without changing anything: the
-//! status and overview, recent activity, host sessions and the screenshots
-//! agents took, and what a cleanup would do.
+//! What the viewer reads for the app: the status and overview, recent
+//! activity, host sessions and the screenshots agents took, and what a
+//! cleanup would do. Reading changes nothing, except that the menu bar
+//! service's status read may restart the person's idle time.
 use super::{
     Viewer,
     control::cleanup_session,
@@ -80,12 +81,28 @@ impl Viewer {
         self.status_for(false).await
     }
 
+    /// How this viewer's status read looks at the person's idle time. Only the
+    /// menu bar service, while it holds its folder alone, may restart it, and
+    /// a look under way loses that leave the moment the service stops; any
+    /// other viewer, as one made to render pictures, only looks. Every
+    /// restart shares one allowance for the whole account.
+    pub(super) fn idle_look(&self) -> atlas_client::idle_time::Look {
+        if self.idle_leave.holds() {
+            atlas_client::idle_time::Look::AndRestart(self.idle_leave.clone())
+        } else {
+            atlas_client::idle_time::Look::Only
+        }
+    }
+
     /// The helper's status and overview as the app shows them, with
     /// whether control is held: its recent rows as the person's own app
     /// shows them when the caller is that app (`person`), with the account
     /// each acted in and a browser's action said on its site. Any other
     /// caller, as `atlas watch`, a chat app's view or a script, is shown
     /// them as an agent is.
+    ///
+    /// The look at the person's idle time may restart it (see
+    /// [`Viewer::idle_look`]); nothing else is changed.
     pub(super) async fn status_for(self: &Arc<Self>, person: bool) -> Value {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
@@ -93,7 +110,7 @@ impl Viewer {
         self.follow_settings().await;
 
         let client = self.client();
-        let doctor = atlas_client::overview::report(&client, until).await;
+        let doctor = atlas_client::overview::report(&client, until, self.idle_look()).await;
 
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
@@ -150,6 +167,7 @@ impl Viewer {
             status.value["overview"]["accounts"] = accounts;
             status.value["overview"]["accountNote"] = note;
         }
+        keep_idle_time_for(&mut status.value, person);
         let (asks, allowed) = super::accounts::asks_for_status(&client);
         status.value["overview"]["asks"] = asks;
         status.value["overview"]["allowed"] = allowed;
@@ -160,6 +178,9 @@ impl Viewer {
             .private_hold()
             .map_or(Value::Null, |hold| json!(hold));
 
+        if !person && let Some(fields) = status.value.as_object_mut() {
+            fields.remove("consoleName");
+        }
         status.value
     }
 
@@ -650,6 +671,15 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
         }
     }
     taken_by
+}
+
+/// Keep whether the person's apps think they are away, which can name the
+/// app they type a password in, for the person's own app (`person`) alone:
+/// any other caller's status goes without it.
+fn keep_idle_time_for(status: &mut Value, person: bool) {
+    if !person && let Some(fields) = status.as_object_mut() {
+        fields.remove("idleTime");
+    }
 }
 
 #[cfg(test)]
