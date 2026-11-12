@@ -41,6 +41,9 @@ final class PanelController {
   var icons: [String: IconImage] = [:]
   /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac, as saved.
   var serviceNoteDismissed: Bool
+  /// Whether the person said OK to the note that their apps think they are away, since the idle time last stopped:
+  /// cleared once the service finds it live again, so the note comes back the next time it stops.
+  var idleNoteDismissed = false
   /// Counts the seconds while the panel is open and a question waits, so how long it has waited moves on.
   var askTick = 0
   /// The count of those seconds, while it runs.
@@ -116,6 +119,7 @@ final class PanelController {
       date: now,
       icons: icons,
       serviceNoteDismissed: serviceNoteDismissed,
+      idleNoteDismissed: idleNoteDismissed,
       asks: actions.asks.list,
       askPictures: actions.asks.pictures
     )
@@ -191,6 +195,7 @@ final class PanelController {
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
     case .dismissServiceNote: dismissServiceNote()
+    case .dismissIdleNote: idleNoteDismissed = true
     case .showMore: break
     }
   }

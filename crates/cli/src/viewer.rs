@@ -117,6 +117,9 @@ struct Viewer {
     /// The menu bar's hold on the folder its record is kept in, while it
     /// serves: taken before the record moves into another, after `record`.
     alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,
+    /// Leave to restart the person's idle time, given while the menu bar
+    /// holds its folder alone and taken back as it stops.
+    idle_leave: atlas_client::idle_time::Leave,
 }
 
 impl Viewer {

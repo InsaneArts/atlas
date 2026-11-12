@@ -109,6 +109,7 @@ extension PanelController {
     }
     guard number == statusReading, !Task.isCancelled else { return }
     status = latest ?? ViewerStatus()
+    if status.idleTime.state == .live { idleNoteDismissed = false }
     answered = latest != nil
     actions.sound.adopt(latest?.overview.sound.flatMap(HelperSound.init), asked: soundAsked)
     links.read(latest)

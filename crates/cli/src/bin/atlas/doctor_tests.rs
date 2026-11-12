@@ -369,7 +369,7 @@ fn an_agent_is_not_told_to_switch_to_the_login_window() {
 
 #[tokio::test]
 async fn what_macos_answers_in_time_is_what_doctor_goes_by() {
-    let named = named_within(std::time::Duration::from_secs(60), || {
+    let named = answer_within(std::time::Duration::from_secs(60), Named::Unknown, || {
         Named::Another("atlas".to_owned())
     })
     .await;
@@ -380,7 +380,7 @@ async fn what_macos_answers_in_time_is_what_doctor_goes_by() {
 #[tokio::test(start_paused = true)]
 async fn a_look_macos_never_answers_is_unknown_once_the_limit_has_passed() {
     let (release, held) = std::sync::mpsc::channel::<()>();
-    let named = named_within(NAMED_LIMIT, move || {
+    let named = answer_within(LOOK_LIMIT, Named::Unknown, move || {
         // Held until the test lets go, as by a system service that never
         // answers.
         let _ = held.recv();
@@ -390,4 +390,54 @@ async fn a_look_macos_never_answers_is_unknown_once_the_limit_has_passed() {
 
     assert_eq!(named, Named::Unknown);
     drop(release);
+}
+
+fn warned_for(idle_time: IdleTime) -> String {
+    let mut report = warned();
+    idle_time_report(&mut report, &idle_time, Asker::Person);
+    assert_eq!(report["ready"], true);
+    let warning = report["warnings"][0].as_str().unwrap().to_owned();
+    assert!(warning.starts_with("Apps on your Mac think you're away"));
+    warning
+}
+
+#[test]
+fn a_stopped_idle_time_tells_the_person_which_app_to_quit_when_one_holds_it() {
+    assert!(
+        warned_for(IdleTime::Held {
+            app: Some("Terminal".to_owned())
+        })
+        .ends_with("Quit Terminal to fix it.")
+    );
+    assert!(
+        warned_for(IdleTime::Held { app: None })
+            .ends_with("and Atlas couldn't tell which. Quitting that app fixes it.")
+    );
+    assert!(
+        warned_for(IdleTime::Stuck)
+            .ends_with("logins. Atlas tries to restart it while Atlas.app is open.")
+    );
+}
+
+#[test]
+fn a_live_or_unknown_idle_time_says_nothing() {
+    for idle_time in [IdleTime::Live, IdleTime::Unknown] {
+        let mut report = warned();
+        idle_time_report(&mut report, &idle_time, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{idle_time:?}");
+    }
+}
+
+#[test]
+fn an_agent_is_not_told_to_quit_an_app() {
+    let own = Key::of(Host::Claude, "own");
+    let mut report = warned();
+    idle_time_report(
+        &mut report,
+        &IdleTime::Held {
+            app: Some("Terminal".to_owned()),
+        },
+        asker(Actor::Agent, Some(&own), true),
+    );
+    assert_eq!(report["warnings"], json!([]));
 }

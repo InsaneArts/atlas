@@ -90,6 +90,19 @@ struct ViewerStatusTests {
     #expect(try status(["ready": true]).restartingService == .unknown)
   }
 
+  @Test("a stopped idle time is read with the app keeping it stopped, and unknown when missing or unexpected")
+  func idleTime() throws {
+    let held = try status(["idleTime": ["state": "held", "app": "Terminal"]]).idleTime
+    #expect(held == ViewerStatus.IdleTime(state: .held, app: "Terminal"))
+    let unnamed = try status(["idleTime": ["state": "held", "app": NSNull()]]).idleTime
+    #expect(unnamed == ViewerStatus.IdleTime(state: .held))
+    #expect(try status(["idleTime": ["state": "stuck"]]).idleTime.state == .stuck)
+    #expect(try status(["idleTime": ["state": "live"]]).idleTime.state == .live)
+    #expect(try status(["idleTime": ["state": "later"]]).idleTime.state == .unknown)
+    #expect(try status(["idleTime": "stuck"]).idleTime.state == .unknown)
+    #expect(try status(["ready": true]).idleTime == ViewerStatus.IdleTime())
+  }
+
   @Test("a status report decodes the session, the mode, the helper's names, its display and what it did")
   func decodes() throws {
     let reading = try status([

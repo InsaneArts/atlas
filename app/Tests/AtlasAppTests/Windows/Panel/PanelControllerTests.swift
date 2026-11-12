@@ -99,6 +99,29 @@ struct PanelControllerTests {
     #expect(!controller.state.showsServiceNote)
   }
 
+  @Test("OK hides the idle note while the idle time stays stopped, and it comes back after it was live again")
+  func theIdleNoteComesBackTheNextTimeItStops() async {
+    let service = ScriptedService()
+    let stuck: [String: Any] = [
+      "overview": ["mode": "observing", "state": "idle"],
+      "idleTime": ["state": "held", "app": "Terminal"],
+    ]
+    service.reply = stuck
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.idleNote == PanelIdleFix(app: "Terminal"))
+    controller.send(.dismissIdleNote)
+    #expect(controller.state.idleNote == nil)
+    await controller.readStatus()
+    #expect(controller.state.idleNote == nil)
+    service.reply = ["overview": ["mode": "observing", "state": "idle"], "idleTime": ["state": "live"]]
+    await controller.readStatus()
+    #expect(controller.state.idleNote == nil)
+    service.reply = stuck
+    await controller.readStatus()
+    #expect(controller.state.idleNote == PanelIdleFix(app: "Terminal"))
+  }
+
   @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
     var opened: [ViewerPlace?] = []

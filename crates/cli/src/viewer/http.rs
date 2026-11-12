@@ -112,6 +112,7 @@ pub(super) fn configured(
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         alone: std::sync::Mutex::new(None),
+        idle_leave: atlas_client::idle_time::Leave::default(),
     })
 }
 

@@ -138,6 +138,8 @@
       needsYouCommand.status.overview.commands = 1
       var serviceNote = try snapshot("observing", state: "idle")
       serviceNote.status.restartingService = .restarting
+      var idleNoteQuit = try snapshot("observing", state: "idle")
+      idleNoteQuit.status.idleTime = ViewerStatus.IdleTime(state: .held, app: "Terminal")
       var accounts = try snapshot("observing", state: "idle")
       accounts.status.overview.accounts = [
         ViewerStatus.Account(kind: .site, key: "github.com", name: "github.com", added: 1),
@@ -176,6 +178,7 @@
         "You have control, a command runs": controlCommand,
         "Needs you, a command runs": needsYouCommand,
         "Service note": serviceNote,
+        "Idle note, quit an app": idleNoteQuit,
         "Accounts": accounts,
         "Waiting, a message": try asking(Self.ask("a1", kind: .sendKey, message: message)),
         "Waiting, a click": try asking(Self.ask("a2", kind: .click, element: "Send", frame: send), picture: "ask-a2"),

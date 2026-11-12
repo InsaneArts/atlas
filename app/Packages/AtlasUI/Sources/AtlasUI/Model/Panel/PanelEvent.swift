@@ -44,6 +44,8 @@ public enum PanelEvent: Equatable, Sendable {
   case toggleSound
   /// OK on the note that a macOS service in the helper slowly slows the Mac: never show it again.
   case dismissServiceNote
+  /// OK on the note that the person's apps think they are away: hide it until it happens again.
+  case dismissIdleNote
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

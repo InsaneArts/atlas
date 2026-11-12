@@ -57,4 +57,14 @@ struct PanelRenderOverridesTests {
       .applied(to: PanelSnapshot())
     #expect(!PanelPresenter.state(plain).showsServiceNote)
   }
+
+  @Test("the idle note render names its app, and no other render shows it")
+  func theIdleNoteRenderShowsTheNote() {
+    let quit = PanelRenderOverrides(environment: ["ATLAS_RENDER_IDLE_NOTE": "Terminal", "ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(PanelPresenter.state(quit).idleNote == PanelIdleFix(app: "Terminal"))
+    let plain = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(PanelPresenter.state(plain).idleNote == nil)
+  }
 }
