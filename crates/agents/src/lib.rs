@@ -866,10 +866,12 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    let helper = match config.desktop().kind() {
-        Kind::SecondLogin(login) => login.uid,
+    let ready = match config.desktop().kind() {
+        Kind::SecondLogin(login) => {
+            atlas_client::capability::doctor(status, login)["ready"] == true
+        }
     };
-    if atlas_client::capability::doctor(status, helper)["ready"] == true {
+    if ready {
         let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."

@@ -16,7 +16,7 @@ use crate::{
 };
 use atlas_control::Controller;
 use atlas_core::{
-    desktop::Kind,
+    desktop::{Kind, SecondLogin},
     error::{Code, Error},
     single_flight::Shared,
 };
@@ -77,13 +77,48 @@ pub async fn report(
     until: Instant,
     idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
-    let uid = match client.desktop().kind() {
-        Kind::SecondLogin(login) => login.uid,
-    };
     let reply = tokio::time::timeout_at(until, client.status())
         .await
         .unwrap_or_else(|_| json!(late()));
+    let mut doctor = match client.desktop().kind() {
+        Kind::SecondLogin(login) => second_login_report(login, reply, until).await,
+    };
+    let status = &mut doctor.diagnosis.value;
 
+    // Whether the idle time the person's apps read has stopped while they
+    // type, as a switch to or from the helper can leave it, restarted when
+    // `idle` allows. This process runs in the person's login.
+    let person = nix::unistd::getuid().as_raw();
+    let idle_time = IDLE_TIME
+        .get(person, until, move || crate::idle_time::IdleTime::now(idle))
+        .await
+        .unwrap_or(crate::idle_time::IdleTime::Unknown);
+    status["idleTime"] = json!(idle_time);
+    status["consoleName"] = json!(
+        CONSOLE_NAME
+            .get(person, until, Named::now)
+            .await
+            .unwrap_or(Named::Unknown)
+    );
+
+    // A Stop kept on the person's side counts as one the helper holds.
+    if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
+        status["session"]["inputService"]["held"] = json!(true);
+        doctor.diagnosis.observation.native.held = true;
+    }
+
+    doctor
+}
+
+/// The doctor report for the second login `login` from its status `reply`,
+/// with what this Mac can tell of it: why it is silent, the logins Atlas
+/// can close, and whether an Apple agent keeps restarting in it.
+async fn second_login_report(
+    login: &SecondLogin,
+    reply: Value,
+    until: Instant,
+) -> crate::capability::Doctor {
+    let uid = login.uid;
     // Why a silent helper is down, asked off the runtime (and only then).
     let silent = atlas_core::session::silent(&reply);
     let absence = if silent {
@@ -96,7 +131,7 @@ pub async fn report(
     };
 
     let answered = crate::console_agents::answered(&reply);
-    let mut doctor = crate::capability::doctor_report(reply, uid);
+    let mut doctor = crate::capability::doctor_report(reply, login);
     let status = &mut doctor.diagnosis.value;
     if let Some(absence) = &absence {
         absence.explain(status);
@@ -126,27 +161,6 @@ pub async fn report(
             .flatten()
     };
     status["restartingService"] = json!(crate::console_agents::Restarting::of(restarts.as_deref()));
-
-    // Whether the idle time the person's apps read has stopped while they
-    // type, as a switch to or from the helper can leave it, restarted when
-    // `idle` allows. This process runs in the person's login.
-    let idle_time = IDLE_TIME
-        .get(uid, until, move || crate::idle_time::IdleTime::now(idle))
-        .await
-        .unwrap_or(crate::idle_time::IdleTime::Unknown);
-    status["idleTime"] = json!(idle_time);
-    status["consoleName"] = json!(
-        CONSOLE_NAME
-            .get(nix::unistd::getuid().as_raw(), until, Named::now)
-            .await
-            .unwrap_or(Named::Unknown)
-    );
-
-    // A Stop kept on the person's side counts as one the helper holds.
-    if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
-        status["session"]["inputService"]["held"] = json!(true);
-        doctor.diagnosis.observation.native.held = true;
-    }
 
     doctor.absence = absence;
     doctor

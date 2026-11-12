@@ -74,6 +74,10 @@ const ALLOWED: &[(&str, &str)] = &[
         "second login: logging it out before removal",
     ),
     (
+        "crates/client/src/capability.rs",
+        "second login: its readiness, and the native-dialog evidence kept for it on this disk",
+    ),
+    (
         "crates/client/src/capability/canary.rs",
         "second login: establishing native capability evidence",
     ),

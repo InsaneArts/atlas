@@ -92,15 +92,18 @@ impl Client {
     /// The input service: where it listens, and the account the kernel must
     /// name at its end.
     pub(crate) fn input_transport(&self) -> Transport {
-        let peer_uid = match self.desktop().kind() {
-            Kind::SecondLogin(login) => login.uid,
-        };
-        #[cfg(any(test, feature = "test-support"))]
-        let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
-        Transport {
-            path: self.config.input_socket.clone(),
-            timeout: Duration::from_secs(5),
-            peer_uid,
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => {
+                #[cfg(any(test, feature = "test-support"))]
+                let peer_uid = self.input_peer_uid.unwrap_or(login.uid);
+                #[cfg(not(any(test, feature = "test-support")))]
+                let peer_uid = login.uid;
+                Transport {
+                    path: self.config.input_socket.clone(),
+                    timeout: Duration::from_secs(5),
+                    peer_uid,
+                }
+            }
         }
     }
 

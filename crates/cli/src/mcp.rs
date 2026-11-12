@@ -14,7 +14,7 @@ use atlas_client::{
     client::{Actor, Client},
     screen_tiles::Tiles,
 };
-use atlas_core::desktop::Kind;
+use atlas_core::desktop::{Kind, SecondLogin};
 use atlas_core::error::{Code, Error, Result};
 use atlas_core::host::HostSession;
 use serde_json::{Value, json};
@@ -474,11 +474,16 @@ impl Server {
     /// refused (`not-ready`), with nothing locked, while a new login could
     /// hang.
     async fn switch_helper(&self) -> Result<Value> {
-        let helper = match self.client.desktop().kind() {
-            Kind::SecondLogin(login) => login.uid,
-        };
+        match self.client.desktop().kind() {
+            Kind::SecondLogin(login) => Self::switch_to_second_login(*login).await,
+        }
+    }
+
+    /// Lock this Mac to its login window, for the person to choose the
+    /// second login `login` there.
+    async fn switch_to_second_login(login: SecondLogin) -> Result<Value> {
         tokio::task::spawn_blocking(move || {
-            let account = atlas_client::switch::accounts(Some(helper))?
+            let account = atlas_client::switch::accounts(Some(login.uid))?
                 .into_iter()
                 .find(|account| account.helper)
                 .ok_or_else(|| Error::new(Code::Switch, "The helper's account wasn't found"))?;

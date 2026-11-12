@@ -3,7 +3,7 @@
 //! authenticated shutdown when its build is stale.
 use super::Client;
 use atlas_core::{
-    desktop::Kind,
+    desktop::{Kind, SecondLogin},
     error::{Code, Error, Result},
     session::{Observation, SHUTDOWN},
     transport::run_output,
@@ -241,9 +241,10 @@ impl Client {
         }
     }
 
-    /// Start the installed executable as the helper's input service. The caller
-    /// records the launch as a pending mutation and settles it on success.
-    async fn spawn_input(&self) -> Result<u32> {
+    /// Launch the shared Atlas command, installed on this disk, as the input
+    /// service of the second login `login`, for this account: its process
+    /// ID, before it is known to be ready.
+    async fn launch_input_in(&self, login: &SecondLogin) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
@@ -255,15 +256,21 @@ impl Client {
             "argv": [
                 "/bin/sh", "-c", script, "sh",
                 self.config.identity_probe,
-                match self.desktop().kind() {
-                    Kind::SecondLogin(login) => login.uid.to_string(),
-                },
+                login.uid.to_string(),
                 controller_uid.to_string(),
                 self.config.input_socket,
             ],
             "timeoutMs": 3000,
         });
-        let child = launched_pid(&self.transport.call(&request).await?)?;
+        launched_pid(&self.transport.call(&request).await?)
+    }
+
+    /// Start the installed executable as the helper's input service. The caller
+    /// records the launch as a pending mutation and settles it on success.
+    async fn spawn_input(&self) -> Result<u32> {
+        let child = match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.launch_input_in(login).await?,
+        };
 
         let deadline = Instant::now() + Duration::from_secs(6);
 

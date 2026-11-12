@@ -3,7 +3,7 @@
 use super::{Client, Mutation, service::require_accessibility};
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::Kind,
+    desktop::{Kind, SecondLogin},
     error::{Code, Error, Result},
     session::{Observation, Session},
 };
@@ -291,9 +291,15 @@ impl Client {
     /// apart (a Dock alone can restart in a login that lives on), and its
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
-        let uid = match self.desktop().kind() {
-            Kind::SecondLogin(login) => login.uid,
-        };
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.second_login_gone(login, seconds).await,
+        }
+    }
+
+    /// [`Client::desktop_gone`] for the second login `login`, whose
+    /// processes this Mac can see.
+    async fn second_login_gone(&self, login: &SecondLogin, seconds: u64) -> bool {
+        let uid = login.uid;
         let looked = move || async move {
             tokio::task::spawn_blocking(move || atlas_core::session::logged_out(uid))
                 .await

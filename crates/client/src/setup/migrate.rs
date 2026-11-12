@@ -794,7 +794,7 @@ pub async fn finalize(config_path: &Path, client: &Client, code: Code) -> Result
     }
 
     let status = client.status().await;
-    Ok(doctor_report(status, client.desktop().second_login().uid).diagnosis)
+    Ok(doctor_report(status, client.desktop().second_login()).diagnosis)
 }
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
