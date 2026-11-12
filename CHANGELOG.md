@@ -2,7 +2,7 @@
 
 All notable changes to **Atlas** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section summarizes the changes in that version.
 
-## [0.1.3] - 2026-11-11
+## [0.1.3] - 2026-11-13
 
 Keep your files and accounts safe from agents, see the helper sharply in your agent's app, and keep your Mac fast for days. The helper can no longer open your home folder, your sign-ins are never copied into it, and agents ask you before they send from an account you listed. Atlas also stops the macOS service that slowly made the whole Mac lag while the helper ran, and tells you when macOS names the helper at your screen or stops counting your typing. The live view in agent apps is sharp and far cheaper, Settings is rebuilt as a sidebar of pages, and setup no longer checks the Mac every second and a half. Update with `atlas update`.
 
