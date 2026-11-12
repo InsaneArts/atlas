@@ -212,14 +212,20 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(5);
 
         loop {
-            let closed = matches!(
-                tokio::net::UnixStream::connect(&self.config.input_socket).await,
-                Err(error) if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                )
-            );
-            if closed && !process_exists(pid) {
+            // Gone once nothing listens on its socket and its process has
+            // ended, both as this Mac sees them.
+            let exited = match self.desktop().kind() {
+                Kind::SecondLogin(_) => {
+                    matches!(
+                        tokio::net::UnixStream::connect(&self.config.input_socket).await,
+                        Err(error) if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                        )
+                    ) && !process_exists(pid)
+                }
+            };
+            if exited {
                 return Ok(());
             }
 

@@ -726,6 +726,14 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     stopped_every(client, client.transport.call(&request)).await
 }
 
+/// Whether the desktop's daemon may be listening, so a failed connection
+/// to it does not prove it keeps no jobs.
+fn daemon_listens(client: &Client) -> bool {
+    match client.desktop().kind() {
+        Kind::SecondLogin(_) => client.transport.path.exists(),
+    }
+}
+
 /// [`stop_every`] once `asked` brings the helper's reply to its request.
 async fn stopped_every(
     client: &Client,
@@ -735,9 +743,7 @@ async fn stopped_every(
         Ok(reply) if reply["ok"] == true => reply,
         // A helper with no daemon running keeps none. A removed socket does
         // not acknowledge a request already sent.
-        Err(error)
-            if error.code == Code::Io && !error.uncertain && !client.transport.path.exists() =>
-        {
+        Err(error) if error.code == Code::Io && !error.uncertain && !daemon_listens(client) => {
             return Everyone::default();
         }
         Ok(reply) => return Everyone::failed(refused(&reply).error),
