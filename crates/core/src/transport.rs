@@ -140,9 +140,10 @@ impl Transport {
     }
 
     /// A connection of its own to this transport's service, for a lane that
-    /// reads its own reply, made by `until`, when the kernel says process
-    /// `pid` of this transport's account is at its other end; none when
-    /// another process is.
+    /// reads its own reply, when the kernel says process `pid` of this
+    /// transport's account is at its other end; none when another process
+    /// is. A denied connection is tried again only until `until`; the
+    /// caller bounds the whole wait.
     ///
     /// # Errors
     ///
