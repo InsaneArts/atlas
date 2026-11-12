@@ -1,20 +1,20 @@
 use super::*;
 
 /// What uninstall finds before it asks.
-pub(super) struct Found {
+pub(crate) struct Found {
     pub(super) app: PathBuf,
-    pub(super) executable: PathBuf,
+    pub(crate) executable: PathBuf,
     /// For the settings, when they load.
-    pub(super) client: Option<Client>,
+    pub(crate) client: Option<Client>,
     /// Why settings that exist do not load: they name no helper, so its
     /// job stays.
     pub(super) unloaded: Option<String>,
     /// The helper account's name, when it still exists and is not known
     /// to be another account.
-    pub(super) helper: Option<String>,
+    pub(crate) helper: Option<String>,
     /// Whether the account with the helper's user ID is the one recorded;
     /// `None` without settings or an account.
-    pub(super) known: Option<Standing>,
+    pub(crate) known: Option<Standing>,
     pub(super) data: PathBuf,
     pub(super) leftovers: Vec<PathBuf>,
 }
@@ -31,22 +31,6 @@ impl Found {
     }
 }
 
-/// The account of the helper `config` names: its name, when it still exists
-/// and is not known to be another account, and whether it is the one
-/// recorded (`None` without an account).
-fn helper_account(config: &Config) -> (Option<String>, Option<Standing>) {
-    let account = account::account_with_uid(config.desktop().user().uid)
-        .ok()
-        .flatten();
-    let known = account
-        .as_ref()
-        .map(atlas_daemon::user::setup::identity::standing_of);
-    let helper = account
-        .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
-        .map(|account| account.name);
-    (helper, known)
-}
-
 /// Find what uninstall would remove and what it keeps, changing nothing.
 pub(super) fn survey(config_path: &Path) -> Result<Found> {
     let app = atlas_core::app_bundle::installed_app()?;
@@ -60,10 +44,10 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
     };
 
     let config = client.as_ref().map(|client| &client.config);
-    let (helper, known) = config.map_or((None, None), helper_account);
+    let (helper, known) = config.map_or((None, None), crate::user::uninstall::helper_account);
     let data = config::home()?.join("Library/Application Support/Atlas");
     let leftovers = config
-        .map(|config| handed_over(&config.identity_probe))
+        .map(|config| crate::user::uninstall::handed_over(&config.identity_probe))
         .unwrap_or_default();
 
     Ok(Found {

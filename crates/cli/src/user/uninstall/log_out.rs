@@ -1,9 +1,9 @@
 //! Logging the helper out for uninstall, gentlest way first, until its login
 //! is known to be gone.
-use super::{Progress, Question};
+use crate::uninstall::{Progress, Question, still_logged_in};
 use atlas_client::client::Client;
 use atlas_control::Ownership;
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::error::{Code, Result};
 use atlas_daemon::identity::{Identity, Standing};
 
 /// One way of logging the helper out, gentlest first.
@@ -124,22 +124,6 @@ pub(super) fn retiring(known: Option<&Standing>) -> Option<&Identity> {
         Some(Standing::Same(identity)) => Some(identity),
         Some(Standing::Replaced | Standing::Unknown | Standing::Unrecorded(_)) | None => None,
     }
-}
-
-pub(super) fn unrecorded_message(name: &str) -> String {
-    format!(
-        "The account {name} and its background job are left alone because Atlas has no recorded \
-         identity for it. To remove the account and its files, log it out yourself, then delete \
-         {name} in System Settings > Users & Groups."
-    )
-}
-
-pub(super) fn still_logged_in() -> Error {
-    Error::new(
-        Code::Logout,
-        "The helper is still logged in, so Atlas stopped before removing anything. Log it out \
-         (atlas logout), then run atlas uninstall again.",
-    )
 }
 
 /// Whether the helper's user ID `uid` has no loginwindow and no Dock, seen

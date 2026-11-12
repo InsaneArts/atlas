@@ -1260,30 +1260,21 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     (
         "crates/cli/src/uninstall.rs",
         &[
-            "forget_requested_opener",
-            "handed_over",
-            "home_note",
-            "log_out",
-            "logged_out",
-            "observed",
-            "remove_account",
-            "remove_pairing_leftovers",
-            "retire",
-            "retire_helper_job",
-            "retirement_request",
+            "<Live<'_> as Teardown>::keep_helper",
+            "<Live<'_> as Teardown>::log_out",
+            "<Live<'_> as Teardown>::logged_out",
+            "<Live<'_> as Teardown>::remove_helper",
+            "<Live<'_> as Teardown>::retire",
+            "Live<'_>::forget_requested_opener",
+            "Live<'_>::trash",
             "run",
         ],
-        "pending: removing the user's account and job",
+        "exception: the way in for the user's own removal: its account steps, in uninstall's order",
     ),
     (
         "crates/cli/src/uninstall/inspection.rs",
-        &["helper_account"],
-        "pending: what removing the user would take",
-    ),
-    (
-        "crates/cli/src/uninstall/log_out.rs",
-        &["log_out_helper", "logged_out_twice", "root_log_out"],
-        "pending: logging the user out before removal",
+        &["survey"],
+        "exception: the way in for the user's own removal: its account, and what Atlas left it",
     ),
     (
         "crates/cli/src/viewer/reads.rs",
@@ -1610,7 +1601,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 9;
+const PENDING_LIMIT: usize = 6;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.
