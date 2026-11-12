@@ -1353,16 +1353,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: which apps the desktop has installed, and which is Atlas",
     ),
     (
-        "crates/client/src/capability.rs",
-        &["doctor", "doctor_report"],
-        "pending: the user's readiness evidence",
-    ),
-    (
-        "crates/client/src/capability/canary.rs",
-        &["verify"],
-        "pending: establishing the user's native evidence",
-    ),
-    (
         "crates/client/src/client.rs",
         &[
             "Client::session_proof",
@@ -1721,7 +1711,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 29;
+const PENDING_LIMIT: usize = 27;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

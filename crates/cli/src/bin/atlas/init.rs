@@ -349,7 +349,8 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 
     // Ready now, set up before, and running this very build throughout.
     let status = client.status().await;
-    if atlas_client::capability::doctor(status.clone(), config.desktop().user())["ready"] == true
+    if atlas_client::user::capability::doctor(status.clone(), config.desktop().user())["ready"]
+        == true
         && settled_before
         && atlas_core::session::input_build_current(&status)
     {

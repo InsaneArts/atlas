@@ -297,7 +297,7 @@ async fn carry_out(
         Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
         Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
         Command::VerifyNative { fixture } => {
-            atlas_client::capability::verify(&client()?, &fixture).await
+            atlas_client::user::capability::verify(&client()?, &fixture).await
         }
         Command::Environment(args) => provision(client, args).await,
         Command::Install => client()?.install(),

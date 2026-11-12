@@ -7,8 +7,8 @@
 //! a durable log, so an interrupted pass resumes without blind replays.
 use super::{endpoint, reported_pid};
 use crate::{
-    capability::doctor_report,
     client::{Client, Run, timestamp},
+    user::capability::doctor_report,
 };
 use atlas_control::Ownership;
 use atlas_core::{

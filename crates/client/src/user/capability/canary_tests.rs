@@ -23,7 +23,7 @@ fn launcher_output_must_name_a_canary_directory() {
 #[test]
 fn canary_texts_match_the_fixture_bytes() {
     // tests/live/DesktopFixture.swift writes this exact Open text.
-    let fixture = include_str!("../../../../tests/live/DesktopFixture.swift");
+    let fixture = include_str!("../../../../../tests/live/DesktopFixture.swift");
     assert!(fixture.contains(&OPEN_TEXT.replace('\n', "\\n")));
     assert!(SAVE_TEXT.ends_with('\u{e9}') && OPEN_TEXT.ends_with("e\u{301}\n"));
 }

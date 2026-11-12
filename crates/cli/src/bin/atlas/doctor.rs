@@ -70,12 +70,14 @@ async fn user_report(client: &Client, login: &atlas_core::user::User, verbose: b
     let restarts = if !console_agents::answered(&status) {
         None
     } else {
-        tokio::task::spawn_blocking(move || console_agents::read_restarting(uid))
-            .await
-            .ok()
-            .flatten()
+        tokio::task::spawn_blocking(move || {
+            atlas_client::user::console_agents::read_restarting(uid)
+        })
+        .await
+        .ok()
+        .flatten()
     };
-    let mut report = atlas_client::capability::doctor(status, login);
+    let mut report = atlas_client::user::capability::doctor(status, login);
     if let Some(warning) = sound
         && let Some(warnings) = report["warnings"].as_array_mut()
     {

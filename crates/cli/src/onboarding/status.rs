@@ -85,7 +85,8 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let reply = client.status().await;
     let atlas_core::session::Diagnosis {
         observation, ready, ..
-    } = atlas_client::capability::doctor_report(reply.clone(), config.desktop().user()).diagnosis;
+    } = atlas_client::user::capability::doctor_report(reply.clone(), config.desktop().user())
+        .diagnosis;
     let hidden = config.desktop().prove(&observation).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
     let finished = ready

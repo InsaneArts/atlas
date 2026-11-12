@@ -125,7 +125,7 @@ async fn user_report(
     };
 
     let answered = crate::console_agents::answered(&reply);
-    let mut doctor = crate::capability::doctor_report(reply, login);
+    let mut doctor = crate::user::capability::doctor_report(reply, login);
     let status = &mut doctor.diagnosis.value;
     if let Some(absence) = &absence {
         absence.explain(status);
@@ -149,7 +149,7 @@ async fn user_report(
     } else {
         RESTARTS
             .get(uid, until, move || {
-                crate::console_agents::read_restarting(uid)
+                crate::user::console_agents::read_restarting(uid)
             })
             .await
             .flatten()
