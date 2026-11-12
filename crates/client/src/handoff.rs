@@ -10,7 +10,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Kind, SecondLogin},
+    desktop::{Desktop, Kind, SecondLogin},
     error::{Code, Error, Result},
     files::Token,
     name::same_text,
@@ -34,6 +34,15 @@ use std::{
 
 /// Where the copies live.
 pub const ROOT: &str = "/Users/Shared/Atlas/Open";
+
+/// The folder on this disk that `desktop` opens copies of files from, and
+/// where they are found, checked and removed again. A desktop has one only
+/// when it shares this disk.
+pub(crate) fn copies_folder(desktop: &Desktop) -> PathBuf {
+    match desktop.kind() {
+        Kind::SecondLogin(_) => PathBuf::from(ROOT),
+    }
+}
 
 /// How long a copy is kept once nothing of its name runs in the helper.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);

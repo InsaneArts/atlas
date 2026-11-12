@@ -92,7 +92,12 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     if let Some(token) = transport {
         let session = task.session().clone();
         let gone = matches!(
-            handoff::remove_copy(Path::new(handoff::ROOT), &token, &session, running),
+            handoff::remove_copy(
+                &handoff::copies_folder(&client.desktop()),
+                &token,
+                &session,
+                running,
+            ),
             handoff::CopyRemoval::Removed | handoff::CopyRemoval::AlreadyGone
         );
         if gone {

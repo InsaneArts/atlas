@@ -41,7 +41,7 @@ impl<'a> Live<'a> {
         Self {
             client,
             ownership: None,
-            copies: PathBuf::from(crate::handoff::ROOT),
+            copies: crate::handoff::copies_folder(&client.desktop()),
             unknown: false,
         }
     }

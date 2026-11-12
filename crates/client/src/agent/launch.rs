@@ -42,7 +42,14 @@ pub async fn open(
     targets: &[String],
     environment: &[String],
 ) -> Result<Value> {
-    open_in(client, app, targets, environment, Path::new(handoff::ROOT)).await
+    open_in(
+        client,
+        app,
+        targets,
+        environment,
+        &handoff::copies_folder(&client.desktop()),
+    )
+    .await
 }
 
 /// Open `url` in the browser `app` (by its name) for the person, under the
