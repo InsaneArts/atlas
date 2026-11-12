@@ -11,7 +11,7 @@
 //! with why. What it cannot see: an allowed function that returns the
 //! account under another name, a struct that keeps it as `uid`, and an
 //! assumption that never names the second login at all, such as a file
-//! kept beside a socket. Those are for review.
+//! kept beside a socket. Those assumptions are outside this check.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -78,10 +78,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "until it has an owner: logging it out before removal",
     ),
     (
-        "crates/cli/src/viewer/sign_in.rs",
-        "until it has an owner: whether a finished command left work running",
-    ),
-    (
         "crates/client/src/capability/canary.rs",
         "until it has an owner: establishing native capability evidence",
     ),
@@ -92,10 +88,6 @@ const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/client/src/client/input.rs",
         "until it has an owner: the input connection",
-    ),
-    (
-        "crates/client/src/client/mutate.rs",
-        "until it has an owner: whether a finished command left work running",
     ),
     (
         "crates/client/src/client/service.rs",
@@ -139,7 +131,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/jobs.rs",
-        "until it has an owner: whether an ended job left work running, and that a started job is the one asked for",
+        "until it has an owner: that a started job is the one asked for",
     ),
     (
         "crates/client/src/overview.rs",
@@ -168,10 +160,6 @@ const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/control/src/lib.rs",
         "second login: the controller of one, built for the tests of the crates above",
-    ),
-    (
-        "crates/control/src/run_groups.rs",
-        "until it has an owner: whether a finished command left work running",
     ),
     (
         "crates/core/src/config.rs",
@@ -377,11 +365,20 @@ fn renames_second_login(tokens: &[Token]) -> Option<&'static str> {
     {
         return Some("renames it with `as`");
     }
-    if tokens.windows(4).any(|path| {
+    let globbed = |from: usize| match tokens.get(from) {
+        Some(Token::Punctuation('*')) => true,
+        // A group of imports, which may hold a glob among them.
+        Some(Token::Punctuation('{')) => tokens[from..]
+            .iter()
+            .take_while(|token| !punctuation(token, '}'))
+            .any(|token| punctuation(token, '*')),
+        _ => false,
+    };
+    if tokens.windows(3).enumerate().any(|(at, path)| {
         word(&path[0], "desktop")
             && punctuation(&path[1], ':')
             && punctuation(&path[2], ':')
-            && punctuation(&path[3], '*')
+            && globbed(at + 3)
     }) {
         return Some("imports the desktop module's items with a glob");
     }
@@ -575,6 +572,14 @@ fn the_second_login_cannot_leave_under_another_name() {
         ),
         (
             "use atlas_core::desktop::*;",
+            "imports the desktop module's items with a glob",
+        ),
+        (
+            "use atlas_core::desktop::{*};",
+            "imports the desktop module's items with a glob",
+        ),
+        (
+            "use atlas_core::{desktop::{Desktop, *}, error::Result};",
             "imports the desktop module's items with a glob",
         ),
         (

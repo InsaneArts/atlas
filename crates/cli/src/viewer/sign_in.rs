@@ -190,7 +190,7 @@ impl Viewer {
     async fn held(&self, client: &Client, signing: &SignIn, page: &str) -> Result<()> {
         client
             .controller
-            .require_no_run_left(client.desktop().second_login().uid)
+            .require_no_run_left()
             .map_err(command_running)?;
         jobs::require_none(client).await?;
         self.lease

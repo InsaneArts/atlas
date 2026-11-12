@@ -669,12 +669,13 @@ async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone
     let controller = viewer.client().controller.clone();
     // What `atlas run sh -c '(sleep 30; open …) &'` leaves: its shell is
     // gone, and the work it handed on runs in its group. It runs as this
-    // account, which the stand-in helper's is not, so it is checked as this
-    // account's, in the person's words.
+    // account, which the stand-in helper's is not, so it is checked by a
+    // controller of this account's, in the person's words.
     let group = atlas_client::test_support::leftover_group();
     let me = nix::unistd::getuid().as_raw();
-    controller.note_run_group(group, me).unwrap();
-    let refused = command_running(controller.require_no_run_left(me).unwrap_err());
+    let own = atlas_control::Controller::at(me, &directory.path().join("own"));
+    own.note_run_group(group).unwrap();
+    let refused = command_running(own.require_no_run_left().unwrap_err());
     assert_eq!(refused.code, Code::Busy);
     assert_eq!(
         refused.error,

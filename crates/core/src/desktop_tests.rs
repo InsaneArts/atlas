@@ -32,3 +32,34 @@ fn a_second_login_is_proved_by_the_second_login_check() {
         assert!(!login(502).input_current(&observation, 1), "{value}");
     }
 }
+
+#[test]
+fn a_full_look_finds_work_whose_group_leader_is_gone() {
+    let process = |pid, pgid| Info {
+        instance: process::Instance::new(pid, [1, 0]),
+        ppid: 1,
+        pgid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie: false,
+        stopped: false,
+        name: "sleep".to_owned(),
+    };
+    assert!(!orphaned(&[process(10, 10), process(11, 10)]));
+    assert!(orphaned(&[process(10, 10), process(12, 99)]));
+    assert!(!orphaned(&[]));
+}
+
+#[test]
+fn a_second_login_is_asked_about_its_own_account_alone() {
+    let me = login(nix::unistd::getuid().as_raw());
+    let own_group = nix::unistd::getpgrp().as_raw();
+    assert!(
+        me.left_may_run(&[], Some(own_group)),
+        "this test runs in a group of its own account"
+    );
+    assert!(!me.left_may_run(&[], None), "nothing was left");
+    // Another account has no process in this group.
+    assert!(!login(crate::test_support::UID).left_may_run(&[], Some(own_group)));
+}

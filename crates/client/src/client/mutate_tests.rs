@@ -781,6 +781,7 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
     let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
     client.config.helper_uid = me;
+    client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let reply = finished(group);
     assert_eq!(started_group(&reply), Some(group));
 
@@ -789,11 +790,11 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
         .await
         .unwrap();
 
-    let refused = client.controller.require_no_run_left(me).unwrap_err();
+    let refused = client.controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.details["running"], "command");
     end_group(group);
     for _ in 0..200 {
-        if client.controller.require_no_run_left(me).is_ok() {
+        if client.controller.require_no_run_left().is_ok() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -840,11 +841,7 @@ async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_i
     std::fs::remove_dir(client.controller.run_groups_path()).unwrap();
     let token = lease.acquire(&client.controller).unwrap();
     assert_eq!(
-        client
-            .controller
-            .require_no_run_left(me)
-            .unwrap_err()
-            .details["running"],
+        client.controller.require_no_run_left().unwrap_err().details["running"],
         "command",
         "noted at last, the work still keeps a sign-in out"
     );
@@ -879,7 +876,7 @@ async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
         .unwrap();
 
     assert!(client.controller.pending().unwrap().is_empty());
-    let refused = client.controller.require_no_run_left(me).unwrap_err();
+    let refused = client.controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.details["running"], "command");
 
     // When it can't be noted, the environment's claim stays unknown.

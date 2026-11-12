@@ -43,19 +43,18 @@ fn end(pid: i32) {
 fn a_group_a_finished_command_left_running_refuses_until_it_ends() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(nix::unistd::getuid().as_raw(), directory.path());
-    let helper = nix::unistd::getuid().as_raw();
-    controller.require_no_run_left(helper).unwrap();
+    controller.require_no_run_left().unwrap();
     let (group, _) = handed_on();
 
-    controller.note_run_group(group, helper).unwrap();
+    controller.note_run_group(group).unwrap();
 
-    let refused = controller.require_no_run_left(helper).unwrap_err();
+    let refused = controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.code, "busy");
     assert_eq!(refused.holder, Some(atlas_core::error::Holder::Agent));
     assert_eq!(refused.details["running"], "command");
 
     end(group);
-    controller.require_no_run_left(helper).unwrap();
+    controller.require_no_run_left().unwrap();
     assert!(
         !controller.run_groups.exists(),
         "an ended group is forgotten"
@@ -66,17 +65,16 @@ fn a_group_a_finished_command_left_running_refuses_until_it_ends() {
 fn a_group_with_nothing_left_is_never_kept() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(nix::unistd::getuid().as_raw(), directory.path());
-    let helper = nix::unistd::getuid().as_raw();
     let mut done =
         atlas_core::spawn::spawn(std::process::Command::new("/usr/bin/true").process_group(0))
             .unwrap();
     let group = i32::try_from(done.id()).unwrap();
     done.wait().unwrap();
 
-    controller.note_run_group(group, helper).unwrap();
+    controller.note_run_group(group).unwrap();
 
     assert!(!controller.run_groups.exists());
-    controller.require_no_run_left(helper).unwrap();
+    controller.require_no_run_left().unwrap();
 }
 
 #[test]
@@ -85,9 +83,7 @@ fn a_record_that_cant_be_read_refuses() {
     let controller = Controller::at(nix::unistd::getuid().as_raw(), directory.path());
     fs::create_dir_all(directory.path()).unwrap();
     fs::write(&controller.run_groups, b"[not groups").unwrap();
-    let refused = controller
-        .require_no_run_left(nix::unistd::getuid().as_raw())
-        .unwrap_err();
+    let refused = controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.code, "state");
 }
 
@@ -98,7 +94,7 @@ fn past_the_cap_no_running_group_is_let_go_and_the_record_refuses_until_none_is_
     let controller = Controller::at(helper, directory.path());
     let groups: Vec<i32> = (0..=KEPT).map(|_| handed_on().0).collect();
     for group in &groups {
-        controller.note_run_group(*group, helper).unwrap();
+        controller.note_run_group(*group).unwrap();
     }
     let record: Record = read(&controller.run_groups).unwrap().unwrap();
     assert_eq!(record.groups, groups[..KEPT]);
@@ -108,7 +104,7 @@ fn past_the_cap_no_running_group_is_let_go_and_the_record_refuses_until_none_is_
     for group in &groups[..KEPT] {
         end(*group);
     }
-    let refused = controller.require_no_run_left(helper).unwrap_err();
+    let refused = controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.details["running"], "command");
     let record: Record = read(&controller.run_groups).unwrap().unwrap();
     assert!(record.groups.is_empty());
@@ -120,24 +116,6 @@ fn past_the_cap_no_running_group_is_let_go_and_the_record_refuses_until_none_is_
 }
 
 #[test]
-fn a_full_look_finds_work_whose_group_leader_is_gone() {
-    let process = |pid, pgid| atlas_core::process::Info {
-        instance: atlas_core::process::Instance::new(pid, [1, 0]),
-        ppid: 1,
-        pgid,
-        uid: 501,
-        ruid: 501,
-        svuid: 501,
-        zombie: false,
-        stopped: false,
-        name: "sleep".to_owned(),
-    };
-    assert!(!orphaned(&[process(10, 10), process(11, 10)]));
-    assert!(orphaned(&[process(10, 10), process(12, 99)]));
-    assert!(!orphaned(&[]));
-}
-
-#[test]
 fn a_command_whose_work_could_not_be_recorded_stays_unknown_until_it_is() {
     let directory = tempfile::tempdir().unwrap();
     let helper = nix::unistd::getuid().as_raw();
@@ -146,7 +124,7 @@ fn a_command_whose_work_could_not_be_recorded_stays_unknown_until_it_is() {
     let claim = controller.quarantine_command().unwrap();
     // The record can't be written: a folder stands where it goes.
     fs::create_dir_all(&controller.run_groups).unwrap();
-    assert!(controller.note_run_group(group, helper).is_err());
+    assert!(controller.note_run_group(group).is_err());
 
     controller.keep_unrecorded_run(claim, group);
 
@@ -161,8 +139,8 @@ fn a_command_whose_work_could_not_be_recorded_stays_unknown_until_it_is() {
     fs::remove_dir(&controller.run_groups).unwrap();
     drop(controller.acquire(false).unwrap());
     assert!(controller.pending().unwrap().is_empty());
-    let refused = controller.require_no_run_left(helper).unwrap_err();
+    let refused = controller.require_no_run_left().unwrap_err();
     assert_eq!(refused.details["running"], "command");
     end(group);
-    controller.require_no_run_left(helper).unwrap();
+    controller.require_no_run_left().unwrap();
 }

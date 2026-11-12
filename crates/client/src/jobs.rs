@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use atlas_core::{
+    desktop::Desktop,
     error::{Code, Error, Result},
     host::Key,
     lenient::Lenient,
@@ -516,10 +517,7 @@ pub async fn require_none(client: &Client) -> Result<()> {
         )
         .with_source(cause)
     })?;
-    if jobs
-        .iter()
-        .any(|job| may_run(job, client.desktop().second_login().uid))
-    {
+    if jobs.iter().any(|job| may_run(job, &client.desktop())) {
         return Err(Error::new(Code::Busy, JOB_RUNNING)
             .held_by(atlas_core::error::Holder::Agent)
             .with("running", json!("job")));
@@ -527,17 +525,15 @@ pub async fn require_none(client: &Client) -> Result<()> {
     Ok(())
 }
 
-/// Whether the job `shown` may still have processes in helper account
-/// `helper`. Only a job that ended, with every process it left gone or now
-/// another account's, has none.
-fn may_run(shown: &Shown, helper: u32) -> bool {
+/// Whether the job `shown` may still have processes in `desktop`. Only a
+/// job that ended, with every process it left gone or no longer the
+/// desktop's, has none.
+fn may_run(shown: &Shown, desktop: &Desktop) -> bool {
     let Some(job) = shown.job() else {
         return true;
     };
     match (job.state, job.ended()) {
-        (JobState::Ended, Some(ended)) => {
-            atlas_core::protocol::left_may_run(&ended.left, job.pgid, helper)
-        }
+        (JobState::Ended, Some(ended)) => desktop.left_may_run(&ended.left, job.pgid),
         _ => true,
     }
 }

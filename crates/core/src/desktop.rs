@@ -3,8 +3,11 @@
 use crate::{
     digest::bytes_sha256,
     error::Result,
+    process::{self, Info},
+    protocol::{self, Left},
     session::{Observation, Session},
 };
+use std::collections::HashSet;
 
 /// A desktop agents act on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +87,42 @@ impl Desktop {
             Kind::SecondLogin(login) => observation.input_current(login.uid, pid),
         }
     }
+
+    /// Whether anything an ended job or a finished command left may still
+    /// run in this desktop: a process it listed in `left`, or any process in
+    /// its own group `group` or in a group a listed one was in. What cannot
+    /// be read or listed may run.
+    pub fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
+        match &self.kind {
+            Kind::SecondLogin(login) => protocol::left_may_run(left, group, login.uid),
+        }
+    }
+
+    /// Whether a process of this desktop runs in a group whose leader is
+    /// gone, as work a finished command left does: an app the desktop
+    /// opened leads its own group.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to list the desktop's processes: work that
+    /// cannot be looked for may run.
+    pub fn orphans_run(&self) -> Result<bool> {
+        match &self.kind {
+            Kind::SecondLogin(login) => Ok(orphaned(&process::of_user(login.uid)?)),
+        }
+    }
+}
+
+/// Whether one of `processes` runs in a group whose leader isn't among them.
+fn orphaned(processes: &[Info]) -> bool {
+    let alive: HashSet<i32> = processes
+        .iter()
+        .filter(|process| !process.zombie)
+        .map(|process| process.instance.pid)
+        .collect();
+    processes
+        .iter()
+        .any(|process| !process.zombie && process.pgid > 0 && !alive.contains(&process.pgid))
 }
 
 impl DesktopId {

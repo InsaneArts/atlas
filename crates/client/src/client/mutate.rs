@@ -628,9 +628,7 @@ impl Client {
         if request["op"] == "run"
             && reply["uncertain"] != true
             && let Some(group) = started_group(&reply)
-            && let Err(error) = self
-                .controller
-                .note_run_group(group, self.desktop().second_login().uid)
+            && let Err(error) = self.controller.note_run_group(group)
         {
             if let Some(claim) = claim.take() {
                 self.controller.keep_unrecorded_run(claim, group);
