@@ -67,6 +67,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         activity: marker.with_extension("activity"),
         seen: Arc::default(),
         look: Arc::new(super::LiveLook),
+        outcomes: Arc::default(),
     }
 }
 
@@ -1325,7 +1326,7 @@ async fn an_abandoned_read_does_not_degrade_the_service() {
         let task = tasks.spawn(async move {
             let _slot = slot;
             let result = match read_request(&mut server).await {
-                Ok(request) => {
+                Ok((request, _)) => {
                     assert!(matches!(request, Request::Hello));
                     phase.send_replace(super::ConnectionPhase::Read);
                     Ok(json!({"ok": true}))
@@ -1363,7 +1364,7 @@ async fn a_failed_refusal_reply_does_not_degrade_the_service()
     let mut tasks = super::JoinSet::new();
     let serving = service.clone();
     let task = tasks.spawn(async move {
-        let request = read_request(&mut server).await?;
+        let (request, _) = read_request(&mut server).await?;
         let refusal = serving.dispatch(request, &phase).await;
         let Err(error) = &refusal else {
             panic!("expected a hold refusal");
@@ -1416,7 +1417,7 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
         let mut tasks = super::JoinSet::new();
         let task = tasks.spawn(async move {
             let _phase = phase;
-            let request = read_request(&mut server).await?;
+            let (request, _) = read_request(&mut server).await?;
             let refusal = match request {
                 Request::Renew { owner } => refused.renew(&owner).unwrap_err(),
                 Request::Release { owner } => refused.cancel(Some(&owner)).unwrap_err(),
@@ -1502,7 +1503,7 @@ async fn a_lost_mutation_reply_keeps_recovery_pending() {
     let granted = grant.clone();
     let working = operations.clone();
     let task = tasks.spawn(async move {
-        let request = read_request(&mut server).await?;
+        let (request, _) = read_request(&mut server).await?;
         assert!(matches!(request, Request::Input { .. }));
         phase.send_replace(super::ConnectionPhase::Mutation("input"));
         let work = working
@@ -2836,7 +2837,7 @@ async fn deliver(line: Vec<u8>, chunk: usize) -> Result<Request> {
         }
     });
 
-    let result = read_request(&mut server).await;
+    let result = read_request(&mut server).await.map(|(request, _)| request);
     writer.abort();
     result
 }
@@ -3956,6 +3957,7 @@ fn looking_service(
         activity: directory.join("input.activity"),
         seen: Arc::default(),
         look,
+        outcomes: Arc::default(),
     })
 }
 
@@ -4051,6 +4053,142 @@ fn blocking_tap(
 fn pending<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> bool {
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     future.poll(&mut context).is_pending()
+}
+
+/// A name input may give itself.
+const CHANGE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// What `service` says the input named [`CHANGE`] came to.
+async fn outcome(service: &super::Service) -> Value {
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let request =
+        Request::decode(format!(r#"{{"op":"outcome","change":"{CHANGE}"}}"#).as_bytes()).unwrap();
+    service.dispatch(request, &phase).await.unwrap()
+}
+
+/// One pointer move by `owner`, named [`CHANGE`].
+async fn named_move(service: &super::Service, owner: &str) -> Result<Value> {
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let actions = vec![serde_json::from_value(json!({"type": "move", "x": 10, "y": 20})).unwrap()];
+    let input = service.input(
+        owner.to_owned(),
+        Ok(display_epoch()),
+        Ok(actions),
+        Ok(None),
+        false,
+        &phase,
+    );
+    service
+        .remembered(Ok(atlas_core::files::Token::parse(CHANGE)), input)
+        .await
+}
+
+#[tokio::test]
+async fn input_that_named_itself_is_remembered_and_never_sent_twice() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    let owner = "a".repeat(48);
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    assert_eq!(
+        outcome(&service).await,
+        json!({"ok": true, "outcome": "unknown"})
+    );
+
+    let reply = named_move(&service, &owner).await.unwrap();
+    assert_eq!(reply["performed"], 1);
+    assert_eq!(
+        outcome(&service).await,
+        json!({"ok": true, "outcome": "done", "reply": reply})
+    );
+
+    let sent = posts(&seen).len();
+    let repeated = service
+        .remembering(Ok(atlas_core::files::Token::parse(CHANGE)))
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(repeated.code, Code::Input);
+    assert_eq!(
+        repeated.error,
+        "The input service was already asked for this change; ask for its outcome"
+    );
+    assert!(!repeated.uncertain);
+    assert!(named_move(&service, &owner).await.is_err());
+    assert_eq!(posts(&seen).len(), sent, "nothing more was sent");
+    assert_eq!(outcome(&service).await["reply"], reply);
+}
+
+#[tokio::test]
+async fn the_services_own_refusal_precedes_one_for_the_name_input_gave_itself() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    let named = || Ok(atlas_core::files::Token::parse(CHANGE));
+    drop(service.remembering(named()).unwrap());
+    let remembered = service.remembering(named()).unwrap();
+    service.operations.set_failed(true);
+
+    let badly = Err(Error::new(Code::Input, "named badly"));
+    for change in [badly, named()] {
+        let refusal = service
+            .remembered(change, async { panic!("it was sent") })
+            .await
+            .unwrap_err();
+        assert_eq!(json!(refusal), json!(super::worker_failed()));
+    }
+    assert!(posts(&seen).is_empty());
+    drop(remembered);
+}
+
+#[tokio::test]
+async fn refused_input_that_named_itself_is_remembered_as_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+
+    // Nobody holds control: the input is refused before its first event.
+    let refusal = named_move(&service, &"a".repeat(48)).await.unwrap_err();
+    assert!(posts(&seen).is_empty());
+    assert_eq!(
+        outcome(&service).await,
+        json!({"ok": true, "outcome": "done", "reply": refusal})
+    );
+}
+
+#[tokio::test]
+async fn input_named_badly_is_refused_unsent_and_an_outcome_needs_its_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    for name in ["7", r#""""#, r#""0123""#, r#"["a"]"#] {
+        let body = input_body(&format!(r#""actions":[],"change":{name}"#));
+        let (request, change) = Request::decode_named(body.as_bytes()).unwrap();
+        assert!(matches!(request, Request::Input { .. }), "{name}");
+        let refusal = service.remembering(change).map(drop).unwrap_err();
+        assert_eq!(refusal.code, Code::Input, "{name}");
+        assert_eq!(
+            refusal.error, "A change is named by 48 lowercase hex digits",
+            "{name}"
+        );
+        let (_, change) = Request::decode_named(body.as_bytes()).unwrap();
+        let unsent = service
+            .remembered(change, async { panic!("{name} was sent") })
+            .await;
+        assert!(unsent.is_err(), "{name}");
+    }
+    for absent in ["", r#","change":null"#] {
+        let body = input_body(&format!(r#""actions":[]{absent}"#));
+        let (_, change) = Request::decode_named(body.as_bytes()).unwrap();
+        assert!(matches!(change, Ok(None)), "{absent}");
+    }
+
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let request = Request::decode(br#"{"op":"outcome"}"#).unwrap();
+    let refusal = service.dispatch(request, &phase).await.unwrap_err();
+    assert_eq!(refusal.error, "An outcome is asked of the change it names");
 }
 
 #[tokio::test]

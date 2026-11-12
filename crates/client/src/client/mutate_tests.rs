@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     activity_log,
     client::tests::{
-        GRACE, SOON, another, answer, command, dispatched, native_client,
+        GRACE, SOON, another, answer, command, dispatched, native_client, received,
         recovery_settles_the_abandoned_claim, run_of, running, waits,
     },
     doing::Doing,
@@ -38,6 +38,109 @@ fn epoch() -> InputEpoch {
         height: 982.0,
         process_id: 41,
     }
+}
+
+/// Whether nothing more was asked of `helper`: a connection made before
+/// now would be waiting for it.
+async fn asked_nothing_more(helper: &tokio::net::UnixListener) -> bool {
+    tokio::time::timeout(Duration::ZERO, helper.accept())
+        .await
+        .is_err()
+}
+
+#[tokio::test]
+async fn a_change_is_sent_under_the_name_of_its_own_claim() {
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let _ownership = acting.controller.acquire(false).unwrap();
+    let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));
+    let (mut peer, request) = received(&mut caller, &helper, "run").await;
+    assert_eq!(
+        json!(acting.controller.pending().unwrap()),
+        json!([request["change"]])
+    );
+
+    answer(
+        &mut peer,
+        json!({"ok": true, "exitCode": 0, "timedOut": false}),
+    )
+    .await;
+    caller.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_stop_cuts_the_question_about_a_lost_reply() {
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, interrupt) = running(dir.path(), client);
+    let logout = Mutation::Logout { force: false };
+    let sent = acting
+        .connect(&logout)
+        .await
+        .unwrap()
+        .dispatch(&logout.request())
+        .await
+        .unwrap();
+    drop(helper.accept().await.unwrap());
+
+    let change = Token::new();
+    let mut asking = Box::pin(acting.answer_or_ask(sent, &logout, &change, Instant::now()));
+    let asked = dispatched(&mut asking, &helper, "outcome").await;
+    tokio::time::pause();
+    let stopped = tokio::time::Instant::now();
+    interrupt.ask_for_test(Signal::SIGTERM);
+
+    // The question is never answered: the stop's grace ends the wait for
+    // it, well before the question's own limit would.
+    let error = asking.await.unwrap_err();
+    assert_eq!(error.code, "interrupted");
+    assert!(error.uncertain);
+    assert!(stopped.elapsed() < OUTCOME_WAIT / 2);
+    drop(asked);
+}
+
+#[tokio::test]
+async fn a_lost_reply_the_daemon_remembers_settles_its_change() {
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let _ownership = acting.controller.acquire(false).unwrap();
+    let start = Mutation::JobStart {
+        start: JobStart {
+            argv: vec!["true".to_owned()],
+            lifetime: Duration::from_secs(1),
+            name: None,
+            task: None,
+            session: None,
+        },
+        uid: 60001,
+        pin: SessionPin {
+            security_session_id: 1,
+            display_id: 1,
+        },
+    };
+    let mut caller = Box::pin(acting.mutate(start, None, None, None));
+    let (peer, request) = received(&mut caller, &helper, "job").await;
+    assert_eq!(
+        json!(acting.controller.pending().unwrap()),
+        json!([request["change"]])
+    );
+    drop(peer);
+
+    let (mut asked, question) = received(&mut caller, &helper, "outcome").await;
+    assert_eq!(question["change"], request["change"]);
+    let job = json!({"id": "0123456789ab", "name": "web", "task": null, "session": null,
+        "uid": 60001, "boot": "B", "pid": 4312, "start": [1761650000, 123456], "pgid": 4312,
+        "state": "running", "startedAt": 10, "endsAt": 20, "logResets": 0});
+    let started = json!({"ok": true, "op": "job", "action": "start", "job": job});
+    answer(
+        &mut asked,
+        json!({"ok": true, "outcome": "done", "reply": started}),
+    )
+    .await;
+    assert_eq!(caller.await.unwrap()["job"]["pid"], 4312);
+    assert!(acting.controller.pending().unwrap().is_empty());
 }
 
 #[test]
@@ -404,6 +507,10 @@ async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() 
             let error = result.unwrap_err();
             assert_eq!(error.code, Code::Protocol);
             assert!(error.uncertain);
+            assert!(
+                asked_nothing_more(&helper).await,
+                "a reply that arrived wrong is not asked for again"
+            );
             if is_run {
                 let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE))
                     .unwrap();
@@ -469,6 +576,10 @@ async fn a_lost_run_reply_blocks_every_agent() {
     drop(peer);
     let error = caller.await.unwrap_err();
     assert!(error.uncertain, "{error:?}");
+    assert!(
+        asked_nothing_more(&helper).await,
+        "a command's lost reply is its output: the helper is not asked for it"
+    );
     for refused in [
         other.controller.acquire_beside_commands(),
         other.controller.acquire_for_person_for_test(),

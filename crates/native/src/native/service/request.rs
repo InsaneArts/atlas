@@ -3,6 +3,7 @@ use crate::native::lease::Who;
 use atlas_core::{
     actions::{Action, Expect},
     error::{Code, Error, Result},
+    files::Token,
     session::InputEpoch,
 };
 use serde::Deserialize;
@@ -25,6 +26,18 @@ fn asking(value: &Value) -> Result<Option<crate::native::asking::Asking>> {
 
 fn epoch(value: &Value) -> Result<InputEpoch> {
     InputEpoch::deserialize(&value["epoch"]).map_err(Error::from)
+}
+
+/// The name a request gives the change it asks for, when it brings one.
+fn change(value: &Value) -> Result<Option<Token>> {
+    match &value["change"] {
+        Value::Null => Ok(None),
+        named => named
+            .as_str()
+            .and_then(Token::parse)
+            .map(Some)
+            .ok_or_else(|| Error::new(Code::Input, "A change is named by 48 lowercase hex digits")),
+    }
 }
 
 /// Each operation's shape, wire word and decoder are one row, so a declared
@@ -97,16 +110,29 @@ requests! { value =>
         epoch: epoch(value),
         expect: Expect::from_request(&value["expect"]),
     },
+    "outcome" Outcome { change: Result<Token> } = Self::Outcome {
+        change: change(value).and_then(|change| {
+            change.ok_or_else(|| Error::new(Code::Input, "An outcome is asked of the change it names"))
+        }),
+    },
 }
 
 impl Request {
-    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
+    /// The request in `bytes`, and the name it gives the change it asks
+    /// for: one named badly keeps its refusal until the request is served.
+    pub(super) fn decode_named(bytes: &[u8]) -> Result<(Self, Result<Option<Token>>)> {
         // Materialize once: duplicate members use their last value, and nested
         // serde refusals follow sorted member order rather than source order.
         let value: Value = serde_json::from_slice(bytes)?;
         let operation = value["op"]
             .as_str()
             .ok_or_else(|| Error::new(Code::Input, "Native operation requires a string op"))?;
-        Ok(Self::named(operation, &value))
+        Ok((Self::named(operation, &value), change(&value)))
+    }
+
+    /// The request in `bytes`, whatever name it gives its change.
+    #[cfg(test)]
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
+        Self::decode_named(bytes).map(|(request, _)| request)
     }
 }

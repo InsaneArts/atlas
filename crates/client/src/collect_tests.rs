@@ -69,7 +69,8 @@ impl Place {
                     let (reader, mut writer) = stream.into_split();
                     let mut line = String::new();
                     BufReader::new(reader).read_line(&mut line).await.unwrap();
-                    let Ok(Request::Read(request)) = protocol::parse(line.trim_end().as_bytes())
+                    let Ok(Request::Read(request)) =
+                        protocol::parse(line.trim_end().as_bytes()).map(|asked| asked.request)
                     else {
                         panic!("only reads are asked for: {line}");
                     };

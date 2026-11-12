@@ -25,6 +25,7 @@ pub mod host;
 pub mod lenient;
 pub mod login_log;
 pub mod name;
+pub mod outcomes;
 pub mod process;
 pub mod protocol;
 pub mod record_folder;

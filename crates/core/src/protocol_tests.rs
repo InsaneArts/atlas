@@ -1,7 +1,75 @@
 use super::*;
 
+/// What `line` asks, whatever name it gives its change.
+fn parse(line: &[u8]) -> Result<Request, Value> {
+    super::parse(line).map(|asked| asked.request)
+}
+
 fn refused(line: &str) -> Value {
     parse(line.as_bytes()).unwrap_err()
+}
+
+/// A name a change may give itself.
+const CHANGE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[test]
+fn a_request_may_name_the_change_it_asks_for() {
+    let named = |request: Value| super::parse(request.to_string().as_bytes());
+    let change = Token::parse(CHANGE);
+    assert_eq!(
+        named(json!({"op": "restart", "change": CHANGE})),
+        Ok(Asked {
+            request: Request::Restart,
+            change: change.clone(),
+        })
+    );
+    for absent in [
+        json!({"op": "restart"}),
+        json!({"op": "restart", "change": null}),
+    ] {
+        assert_eq!(
+            named(absent),
+            Ok(Asked {
+                request: Request::Restart,
+                change: None,
+            })
+        );
+    }
+    assert_eq!(
+        named(json!({"op": "outcome", "change": CHANGE})).map(|asked| asked.request),
+        Ok(Request::Outcome {
+            change: change.unwrap()
+        })
+    );
+}
+
+#[test]
+fn a_change_badly_named_is_refused_after_the_requests_own_fields() {
+    let badly = "\"change\" must be 48 lowercase hex digits";
+    for name in [
+        json!(7),
+        json!(""),
+        json!(CHANGE.to_uppercase()),
+        json!(&CHANGE[1..]),
+        json!(format!("{CHANGE}0")),
+        json!([CHANGE]),
+    ] {
+        for op in ["restart", "outcome", "hello"] {
+            let request = json!({"op": op, "change": name});
+            assert_eq!(refused(&request.to_string())["error"], badly, "{request}");
+        }
+        // What the request itself lacks is said first.
+        let request = json!({"op": "run", "change": name});
+        assert_eq!(
+            refused(&request.to_string())["error"],
+            "run requires a non-empty \"argv\" array",
+            "{request}"
+        );
+    }
+    assert_eq!(
+        refused(r#"{"op":"outcome"}"#)["error"],
+        "outcome requires the \"change\" it asks about"
+    );
 }
 
 #[test]
@@ -235,6 +303,13 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
             false,
             true,
             "sound",
+        ),
+        (
+            json!({"op": "outcome", "change": CHANGE}),
+            false,
+            false,
+            false,
+            "outcome",
         ),
     ] {
         request["session"] = pin.clone();

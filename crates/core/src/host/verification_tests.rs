@@ -154,7 +154,10 @@ fn host_claims_are_bounded_and_validated_before_the_daemon_reads_processes() {
     let valid = json!({"op": "host-session", "claims": claim()});
     assert!(matches!(
         protocol::parse(&serde_json::to_vec(&valid).unwrap()),
-        Ok(protocol::Request::HostSession(_))
+        Ok(protocol::Asked {
+            request: protocol::Request::HostSession(_),
+            change: None,
+        })
     ));
     for invalid in [
         json!([]),

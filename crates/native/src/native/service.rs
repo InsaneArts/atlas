@@ -12,6 +12,8 @@ use super::{
 use atlas_core::{
     actions::{self, Action, Expect},
     error::{Code, Error, Holder, Result},
+    files::Token,
+    outcomes::{Outcomes, Remembering},
     session::{Display, InputEpoch},
 };
 use serde_json::{Value, json};
@@ -46,9 +48,10 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// What this service can do beyond plain input, as its hello lists it:
 /// authenticated shutdown, the person's Stop, checking an agent's target
 /// app, with the Dock covering where it takes clicks, and the window and
-/// field it names, reading an app's elements as looks a click can name, and
-/// acting on an element of a look through Accessibility.
-const CAPABILITIES: [&str; 10] = [
+/// field it names, reading an app's elements as looks a click can name,
+/// acting on an element of a look through Accessibility, and remembering
+/// what input that named itself came to.
+const CAPABILITIES: [&str; 11] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -59,6 +62,7 @@ const CAPABILITIES: [&str; 10] = [
     atlas_core::session::ELEMENT_ACTIONS,
     atlas_core::session::TYPED_FIELDS,
     atlas_core::session::ASKS,
+    atlas_core::outcomes::OUTCOMES,
 ];
 
 struct Service {
@@ -91,6 +95,9 @@ struct Service {
     /// How a password field is looked for: the Mac's Accessibility, or a
     /// test's script.
     look: Arc<dyn PasswordLook>,
+    /// What the input that named itself came to, for whoever lost the
+    /// reply to it.
+    outcomes: Arc<Outcomes>,
 }
 
 /// A file by path and (device, inode).
@@ -165,7 +172,8 @@ impl Service {
             | Request::Hold { .. }
             | Request::Release { .. }
             | Request::Reset { .. }
-            | Request::Elements { .. } => {}
+            | Request::Elements { .. }
+            | Request::Outcome { .. } => {}
         }
 
         match request {
@@ -189,7 +197,47 @@ impl Service {
                     .await
             }
             Request::Elements { epoch, expect } => self.look(epoch, expect).await,
+            Request::Outcome { change } => Ok(self.outcomes.of(&change?).answer()),
         }
+    }
+
+    /// The memory of input that named itself as `change`. Input named
+    /// badly is refused, as the service could not remember it, and so is
+    /// input it still remembers being asked for: it is never sent twice.
+    fn remembering(&self, change: Result<Option<Token>>) -> Result<Option<Remembering>> {
+        let Some(change) = change? else {
+            return Ok(None);
+        };
+        self.outcomes.begin(change).map(Some).ok_or_else(|| {
+            Error::new(
+                Code::Input,
+                "The input service was already asked for this change; ask for its outcome",
+            )
+        })
+    }
+
+    /// What `input` comes to, remembered when it named itself as `change`,
+    /// as it is about to be answered: a reply lost on its way can then be
+    /// asked for. Input refused for its name is never sent, and the
+    /// service's own guard is said first, as it is before every field's
+    /// refusal.
+    async fn remembered(
+        &self,
+        change: Result<Option<Token>>,
+        input: impl Future<Output = Result<Value>>,
+    ) -> Result<Value> {
+        let remembering = match self.remembering(change) {
+            Ok(remembering) => remembering,
+            Err(refusal) => return Err(self.check().err().unwrap_or(refusal)),
+        };
+        let result = input.await;
+        if let Some(remembering) = remembering {
+            remembering.done(&match &result {
+                Ok(reply) => reply.clone(),
+                Err(refusal) => json!(refusal),
+            });
+        }
+        result
     }
 
     /// One look at the elements of the app `expect` names, in the session
@@ -955,6 +1003,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         activity,
         seen: Arc::default(),
         look: Arc::new(LiveLook),
+        outcomes: Arc::default(),
     });
     service.listen(&listener, controller_uid).await
 }
@@ -1105,10 +1154,13 @@ fn admitted(stream: &UnixStream, controller_uid: u32) -> bool {
         .is_ok_and(|peer| peer.uid() == controller_uid)
 }
 
-/// One JSON request of at most `MAX_REQUEST` bytes.
-async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Request> {
+/// One JSON request of at most `MAX_REQUEST` bytes, and the name it gives
+/// the change it asks for.
+async fn read_request<R: AsyncRead + Unpin>(
+    stream: &mut R,
+) -> Result<(Request, Result<Option<Token>>)> {
     let line = super::endpoint::read_line(stream, MAX_REQUEST).await?;
-    Request::decode(&line)
+    Request::decode_named(&line)
 }
 
 async fn handle(
@@ -1118,13 +1170,15 @@ async fn handle(
 ) -> Result<()> {
     // Nothing was dispatched yet, so answer definitively. A silent hang-up
     // would look like an unacknowledged mutation to the controller.
-    let request = match read_request(&mut stream).await {
-        Ok(request) => request,
+    let (request, change) = match read_request(&mut stream).await {
+        Ok(read) => read,
         Err(error) => return reply(&mut stream, Err(error)).await,
     };
 
     let (initial, owner, shutdown) = match &request {
-        Request::Hello | Request::Elements { .. } => (ConnectionPhase::Read, None, false),
+        Request::Hello | Request::Elements { .. } | Request::Outcome { .. } => {
+            (ConnectionPhase::Read, None, false)
+        }
         Request::Shutdown { .. } => (ConnectionPhase::Refusal, None, true),
         Request::Input { owner, .. } => (ConnectionPhase::Refusal, Some(owner.clone()), false),
         Request::Hold { .. }
@@ -1136,7 +1190,9 @@ async fn handle(
     };
     phase.send_replace(initial);
     let result = if let Some(owner) = owner {
-        let mut dispatch = std::pin::pin!(service.dispatch(request, &phase));
+        // Only input is remembered, whatever it is answered.
+        let dispatch = service.dispatch(request, &phase);
+        let mut dispatch = std::pin::pin!(service.remembered(change, dispatch));
         let mut extra = [0; 1];
         tokio::select! {
             reply = &mut dispatch => reply,

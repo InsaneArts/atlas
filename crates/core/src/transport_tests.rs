@@ -907,6 +907,46 @@ async fn a_reply_cut_short_on_any_stream_is_an_unknown_outcome() {
     assert!(error.uncertain);
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_reply_that_never_arrived_is_told_from_one_that_arrived_wrong() {
+    use tokio::io::AsyncWriteExt;
+
+    // Its connection ended first.
+    let (pending, far) = in_memory();
+    let sent = pending.dispatch(&json!({"op": "run"})).await.unwrap();
+    drop(far);
+    let ended = sent.finish().await.unwrap_err();
+    assert!(super::reply_lost(&ended));
+
+    // Its connection stalled until the deadline.
+    let (pending, _far) = in_memory();
+    let sent = pending.dispatch(&json!({"op": "run"})).await.unwrap();
+    let stalled = sent.finish().await.unwrap_err();
+    assert_eq!(stalled.error, "Helper exceeded the request deadline");
+    assert!(super::reply_lost(&stalled));
+
+    // Each of these arrived, and was wrong.
+    for wrong in [
+        "{\"ok\":\"yes\"}\n",
+        "{\"ok\":true,\"uncertain\":\"no\"}\n",
+        "[]\n",
+        "{\"note\":1}\n",
+        "not json\n",
+    ] {
+        let (pending, mut far) = in_memory();
+        let sent = pending.dispatch(&json!({"op": "run"})).await.unwrap();
+        far.write_all(wrong.as_bytes()).await.unwrap();
+        let arrived = sent.finish().await.unwrap_err();
+        assert!(!super::reply_lost(&arrived), "{wrong}");
+        assert!(arrived.uncertain, "{wrong}");
+    }
+
+    for lost in [ended, stalled] {
+        assert!(lost.uncertain);
+        assert!(!json!(lost).to_string().contains("did not arrive"));
+    }
+}
+
 /// Names the socket a rerun of the test below connects to, as the peer in
 /// another process.
 const PEER_SOCKET: &str = "ATLAS_TRANSPORT_PEER_SOCKET";

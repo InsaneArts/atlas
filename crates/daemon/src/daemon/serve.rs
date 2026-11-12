@@ -13,9 +13,10 @@ use crate::daemon::{
 };
 use atlas_core::{
     error::{Code, Error, Result},
+    outcomes::{Outcomes, Remembering},
     protocol::{
-        self, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure, interrupted,
-        refused,
+        self, Asked, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure,
+        interrupted, refused,
     },
     session::validate_target_uid,
 };
@@ -200,6 +201,9 @@ pub struct Daemon {
     /// The screen recorder, as each hello reports it; restarted only in the
     /// helper.
     recorder: Arc<Recorder>,
+    /// What the changes that named themselves came to, for whoever lost
+    /// the reply to one.
+    outcomes: Arc<Outcomes>,
 }
 
 impl Daemon {
@@ -231,6 +235,7 @@ impl Daemon {
             sound: Sound::detached(),
             agent: ConsoleAgent::detached(),
             recorder: Arc::new(Recorder::new(recorder::System::real(), None)),
+            outcomes: Arc::default(),
         }
     }
 
@@ -719,9 +724,9 @@ pub(crate) async fn handle(
     phase.send_replace(
         admitted
             .as_ref()
-            .map_or(ConnectionPhase::Refusal, |(_, policy)| policy.phase),
+            .map_or(ConnectionPhase::Refusal, |(_, policy, _)| policy.phase),
     );
-    let (request, policy) = match admitted {
+    let (request, policy, remembering) = match admitted {
         Ok(admitted) => admitted,
         Err((refusal, true)) => return stream::write_header(&mut writer, &refusal).await,
         Err((refusal, false)) => return write(&mut writer, &refusal).await,
@@ -792,14 +797,18 @@ pub(crate) async fn handle(
             .await
         }
         Request::Run { argv, timeout, .. } => {
-            return serve_run(daemon, argv, timeout, policy, (reader, writer), phase).await;
+            let connection = (reader, writer, remembering);
+            return serve_run(daemon, argv, timeout, policy, connection, phase).await;
         }
         Request::Restart => {
-            return acknowledge(&mut writer, "restart", || daemon.restarting.notify_one()).await;
+            return acknowledge(&mut writer, "restart", remembering, || {
+                daemon.restarting.notify_one();
+            })
+            .await;
         }
         // Answered before the log-out ends this process with the session.
         Request::Logout { force: true } => {
-            return acknowledge(&mut writer, "logout", force_log_out).await;
+            return acknowledge(&mut writer, "logout", remembering, force_log_out).await;
         }
         Request::Logout { force: false } => ask_to_log_out().await,
         Request::Job(request) => match &daemon.jobs {
@@ -842,24 +851,36 @@ pub(crate) async fn handle(
             .await
             .unwrap_or_else(|_| interrupted(Code::Daemon, "The helper's sound could not be set"))
         }
+        Request::Outcome { change } => daemon.outcomes.of(&change).answer(),
     };
 
+    remember(remembering, &reply);
     write(&mut writer, &reply).await
 }
 
-/// The connection's one request and its policy, or the reply refusing it and
-/// whether that reply is framed as a stream's, in the order of refusal:
-/// unreadable, malformed, from the helper's own account, then the policy's
-/// own checks.
+/// Remember `reply` as what a change that named itself came to: one lost
+/// on its way can then be asked for.
+fn remember(remembering: Option<Remembering>, reply: &Value) {
+    if let Some(remembering) = remembering {
+        remembering.done(reply);
+    }
+}
+
+/// The connection's one request, its policy and, for a change that named
+/// itself, the memory of it; or the reply refusing it and whether that
+/// reply is framed as a stream's, in the order of refusal: unreadable,
+/// malformed, from the helper's own account, a change this daemon already
+/// took, then the policy's own checks. A change those checks refuse is
+/// remembered as refused.
 async fn admit(
     reader: &mut OwnedReadHalf,
     daemon: &Daemon,
     controller: bool,
-) -> std::result::Result<(Request, Policy), (Value, bool)> {
+) -> std::result::Result<(Request, Policy, Option<Remembering>), (Value, bool)> {
     let line = endpoint::read_line(reader, MAX_REQUEST)
         .await
         .map_err(|error| (refused(error), false))?;
-    let request = protocol::parse(&line).map_err(|refusal| (refusal, false))?;
+    let Asked { request, change } = protocol::parse(&line).map_err(|refusal| (refusal, false))?;
     let framed = matches!(request, Request::Stream { .. } | Request::Frame { .. });
     let policy = request.policy();
     if !controller && !policy.open_to_helper() {
@@ -872,16 +893,48 @@ async fn admit(
         ));
     }
 
+    // Only a change is remembered: a read may be asked again.
+    let remembering = match change {
+        Some(change) if matches!(policy.phase, ConnectionPhase::Mutation(_)) => Some(
+            daemon
+                .outcomes
+                .begin(change)
+                .ok_or_else(|| (already_asked(), framed))?,
+        ),
+        Some(_) | None => None,
+    };
+
     match policy.check(daemon.screen.on_console, daemon.screen.session) {
-        Some(refusal) => Err((refusal, framed)),
-        None => Ok((request, policy)),
+        Some(refusal) => {
+            remember(remembering, &refusal);
+            Err((refusal, framed))
+        }
+        None => Ok((request, policy, remembering)),
     }
 }
 
+/// The refusal of a change this daemon was already asked for: it is never
+/// carried out twice, and `outcome` says what the first came to.
+fn already_asked() -> Value {
+    failure(
+        Code::BadRequest,
+        "The helper was already asked for this change; ask for its outcome",
+    )
+}
+
 /// Reply that `op` is done, then do it, whether or not the reply got through.
-async fn acknowledge(writer: &mut OwnedWriteHalf, op: &str, effect: impl FnOnce()) -> Result<()> {
-    let written = write(writer, &json!({"ok": true, "op": op})).await;
+/// It is remembered as done only once it is: a handler cut while it writes
+/// did nothing, and remembers nothing.
+async fn acknowledge(
+    writer: &mut OwnedWriteHalf,
+    op: &str,
+    remembering: Option<Remembering>,
+    effect: impl FnOnce(),
+) -> Result<()> {
+    let reply = json!({"ok": true, "op": op});
+    let written = write(writer, &reply).await;
     effect();
+    remember(remembering, &reply);
     written
 }
 
@@ -917,7 +970,7 @@ async fn serve_run(
     argv: Vec<String>,
     timeout: Duration,
     policy: Policy,
-    connection: (OwnedReadHalf, OwnedWriteHalf),
+    connection: (OwnedReadHalf, OwnedWriteHalf, Option<Remembering>),
     phase: watch::Sender<ConnectionPhase>,
 ) -> Result<()> {
     let (mut handler, outcome) = oneshot::channel();
@@ -928,13 +981,13 @@ async fn serve_run(
         if registered.await.is_err() {
             return Ok(());
         }
-        let (mut reader, writer) = connection;
+        let (mut reader, writer, remembering) = connection;
         let result = run_registered(
             &runner,
             &argv,
             timeout,
             policy,
-            (&mut reader, writer),
+            (&mut reader, writer, remembering),
             &phase,
             &mut handler,
         )
@@ -957,18 +1010,21 @@ async fn serve_run(
 }
 
 /// Admission a queued command must pass again, its execution, and the replies
-/// that report it to `handler`, which losing cancels the command.
+/// that report it to `handler`, which losing cancels the command. What it
+/// came to is remembered, for a command that named itself, before its final
+/// reply is written.
 async fn run_registered(
     daemon: &Daemon,
     argv: &[String],
     timeout: Duration,
     policy: Policy,
-    (reader, mut writer): (&mut OwnedReadHalf, OwnedWriteHalf),
+    (reader, mut writer, remembering): (&mut OwnedReadHalf, OwnedWriteHalf, Option<Remembering>),
     phase: &watch::Sender<ConnectionPhase>,
     handler: &mut oneshot::Sender<Result<()>>,
 ) -> Result<()> {
     if let Some(refusal) = policy.check(daemon.screen.on_console, daemon.screen.session) {
         phase.send_replace(ConnectionPhase::Refusal);
+        remember(remembering, &refusal);
         return write(&mut writer, &refusal).await;
     }
     // Events reach the client through their own writer, so a slow
@@ -987,6 +1043,7 @@ async fn run_registered(
         }
     };
     let reply = run::run(argv, timeout, events, cancel).await;
+    remember(remembering, &reply);
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,
         () = handler.closed() => {
