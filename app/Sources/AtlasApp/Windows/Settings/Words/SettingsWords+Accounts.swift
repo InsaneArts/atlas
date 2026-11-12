@@ -42,6 +42,7 @@ extension SettingsWords {
         .day()
       style.calendar = calendar
       style.timeZone = calendar.timeZone
+      style.locale = calendar.locale ?? .autoupdatingCurrent
       day = added.formatted(style)
     }
     return "added \(day)"

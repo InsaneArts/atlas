@@ -28,12 +28,13 @@ struct SettingsAccountsTests {
     ["kind": kind, "id": id, "name": name, "added": added, "how": how]
   }
 
-  /// The snapshot `controller` draws, told on a fixed day in UTC.
+  /// The snapshot `controller` draws, told on a fixed day in UTC and in US English.
   @MainActor static func pane(_ controller: SettingsController) -> SettingsAccountsState {
     var snapshot = controller.snapshot
     snapshot.now = Date(timeIntervalSince1970: today / 1000)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+    calendar.locale = Locale(identifier: "en_US")
     snapshot.calendar = calendar
     return SettingsPresenter.accounts(snapshot)
   }
