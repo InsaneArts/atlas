@@ -20,6 +20,10 @@ If the helper is currently on screen, return to your own account. Atlas refuses 
 
 A `not-ready` message during switching can mean an old login has not closed or another login is still starting. Read the message and let that transition finish. For a deleted account whose login remains open, Atlas's **Settings > Helper** offers the supported close step with your approval. Do not retry account switching in a loop.
 
+## macOS names another account at your screen
+
+The menu bar panel warns when macOS thinks another account is at your screen. A service in your login may keep restarting and slowly slow the Mac. Choose **Lock Screen**, then **Switch User**, and log back in as yourself. **OK** hides the note for this app session, until Atlas sees macOS name your account again.
+
 ## Screen Recording or Accessibility is denied
 
 Open Atlas in the helper account and follow its instructions for **System Settings > Privacy & Security**. Allow Screen Recording for pictures and Accessibility for input, then switch back to your own account and check readiness.

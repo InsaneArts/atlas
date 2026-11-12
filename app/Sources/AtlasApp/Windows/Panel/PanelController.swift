@@ -41,6 +41,8 @@ final class PanelController {
   var icons: [String: IconImage] = [:]
   /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac, as saved.
   var serviceNoteDismissed: Bool
+  /// The wrong account note is dismissed only until macOS names the person again.
+  var wrongAccountDismissed = false
   /// Counts the seconds while the panel is open and a question waits, so how long it has waited moves on.
   var askTick = 0
   /// The count of those seconds, while it runs.
@@ -116,6 +118,7 @@ final class PanelController {
       date: now,
       icons: icons,
       serviceNoteDismissed: serviceNoteDismissed,
+      wrongAccountDismissed: wrongAccountDismissed,
       asks: actions.asks.list,
       askPictures: actions.asks.pictures
     )
@@ -191,6 +194,8 @@ final class PanelController {
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
     case .dismissServiceNote: dismissServiceNote()
+    case .dismissWrongAccountNote: wrongAccountDismissed = true
+    case .lockForWrongAccount: Task { await lockForWrongAccount() }
     case .showMore: break
     }
   }

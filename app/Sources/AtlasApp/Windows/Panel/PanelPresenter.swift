@@ -24,6 +24,7 @@ enum PanelPresenter {
       status: status,
       notice: snapshot.session.notice,
       showsServiceNote: SlowServiceNote.shows(snapshot.status, dismissed: snapshot.serviceNoteDismissed),
+      wrongAccount: WrongAccountNote.name(snapshot.status, dismissed: snapshot.wrongAccountDismissed),
       isMoreOpen: snapshot.session.moreOpen,
       ask: mode.kind == .connecting
         ? nil

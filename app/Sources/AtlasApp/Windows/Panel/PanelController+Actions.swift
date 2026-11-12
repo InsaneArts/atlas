@@ -47,6 +47,17 @@ extension PanelController {
     if isOpen { watch(open: true) }
   }
 
+  /// Locks the screen so the person can switch back to their own login. The panel closes once the screen locks, and
+  /// stays open with why when it does not.
+  func lockForWrongAccount() async {
+    guard let outcome = await actions.lockScreen() else { return }
+    guard outcome.ok else {
+      session.notice = Words.sentence(outcome.message)
+      return
+    }
+    links.closePanel()
+  }
+
   /// Switches this Mac's screen to the helper, finding the helper first if it is not known, ending this app's control
   /// first through the shared commands.
   ///

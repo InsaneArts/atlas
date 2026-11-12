@@ -15,6 +15,8 @@ struct PanelLinks {
   var openAccounts: @MainActor () -> Void = {}
   /// Asks before one of the helper's commands runs: in the main window when it is open, else in the alert window.
   var showAlert: @MainActor (HelperAlert) -> Void = { _ in }
+  /// Closes the menu bar panel.
+  var closePanel: @MainActor () -> Void = {}
   /// Whether Atlas's main window holds control now.
   var holdingControl: @MainActor () -> Bool = { false }
   /// Ends the control Atlas's main window holds.

@@ -193,3 +193,21 @@ async fn an_account_with_no_full_name_is_asked_once() {
     assert_eq!(account_title(&known, "atlas", ask).await, None);
     assert_eq!(ASKED.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn only_the_persons_status_carries_the_console_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, helper, _) = verified(dir.path());
+    helper
+        .serve(
+            async {
+                let person = viewer.status_for(true).await;
+                assert!(person["consoleName"]["state"].is_string());
+                let agent = viewer.status_for(false).await;
+                assert!(agent.get("consoleName").is_none());
+                viewer.close().await;
+            },
+            |_| None,
+        )
+        .await;
+}

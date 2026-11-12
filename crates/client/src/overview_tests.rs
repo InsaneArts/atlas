@@ -1674,3 +1674,8 @@ fn typing_in_a_listed_site_is_said_on_the_site_to_the_person_alone() {
         "stopped typing in Google Chrome"
     );
 }
+
+#[test]
+fn the_console_name_is_reused_for_fifteen_seconds() {
+    assert_eq!(CONSOLE_NAME.fresh_for(), Duration::from_secs(15));
+}

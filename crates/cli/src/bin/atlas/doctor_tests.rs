@@ -330,7 +330,9 @@ fn another_account_named_at_the_persons_screen_warns_with_its_name_and_the_way_b
     let mut report = warned();
     named_report(
         &mut report,
-        &Named::Another("atlas".to_owned()),
+        &Named::Another {
+            name: "atlas".to_owned(),
+        },
         Asker::Person,
     );
 
@@ -362,19 +364,30 @@ fn an_agent_is_not_told_to_switch_to_the_login_window() {
         asker(Actor::Agent, None, false),
     ] {
         let mut report = warned();
-        named_report(&mut report, &Named::Another("atlas".to_owned()), asking);
+        named_report(
+            &mut report,
+            &Named::Another {
+                name: "atlas".to_owned(),
+            },
+            asking,
+        );
         assert_eq!(report["warnings"], json!([]), "{asking:?}");
     }
 }
 
 #[tokio::test]
 async fn what_macos_answers_in_time_is_what_doctor_goes_by() {
-    let named = named_within(std::time::Duration::from_secs(60), || {
-        Named::Another("atlas".to_owned())
+    let named = named_within(std::time::Duration::from_secs(60), || Named::Another {
+        name: "atlas".to_owned(),
     })
     .await;
 
-    assert_eq!(named, Named::Another("atlas".to_owned()));
+    assert_eq!(
+        named,
+        Named::Another {
+            name: "atlas".to_owned()
+        }
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -384,7 +397,9 @@ async fn a_look_macos_never_answers_is_unknown_once_the_limit_has_passed() {
         // Held until the test lets go, as by a system service that never
         // answers.
         let _ = held.recv();
-        Named::Another("atlas".to_owned())
+        Named::Another {
+            name: "atlas".to_owned(),
+        }
     })
     .await;
 

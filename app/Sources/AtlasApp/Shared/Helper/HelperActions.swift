@@ -122,12 +122,27 @@ final class HelperActions {
   /// - Parameter helper: The helper's account.
   /// - Returns: Its outcome, a refused release included, or nil when a switch already runs.
   func switchTo(_ helper: String) async -> Outcome? {
+    await lockScreen(with: .switchTo(helper))
+  }
+
+  /// Locks the screen after ending this app's control.
+  ///
+  /// - Returns: Its outcome, or nil when a switch already runs.
+  func lockScreen() async -> Outcome? {
+    await lockScreen(with: .lockScreen)
+  }
+
+  /// Runs a lock action while this login is on the screen and control has ended.
+  ///
+  /// - Parameter action: The lock or switch to run.
+  /// - Returns: Its outcome, or nil when a switch already runs.
+  private func lockScreen(with action: Action) async -> Outcome? {
     guard console.refresh() else { return Self.refusal(SessionConsole.refusal) }
     guard begin(.switchToHelper) else { return nil }
     defer { running.remove(.switchToHelper) }
     if let refused = await freeHelper(.switchToHelper) { return Self.refusal(refused) }
     guard console.refresh() else { return Self.refusal(SessionConsole.refusal) }
-    return await commands.run(.switchTo(helper))
+    return await commands.run(action)
   }
 
   /// Logs the helper out, ending this app's control first and, from a controlled helper, every viewer's; with

@@ -271,7 +271,7 @@ async fn named_within(
 /// agent is not told.
 fn named_report(report: &mut Value, named: &Named, asking: Asker<'_>) {
     if asking == Asker::Person
-        && let Named::Another(name) = named
+        && let Named::Another { name } = named
         && let Some(warnings) = report["warnings"].as_array_mut()
     {
         warnings.push(json!(format!(

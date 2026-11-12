@@ -12,6 +12,7 @@ pub use sessions::{add_host_sessions, add_sessions_for};
 use crate::{
     activity_log::{self, Op, Row},
     client::Client,
+    console_user::Named,
 };
 use atlas_control::Controller;
 use atlas_core::{
@@ -47,6 +48,12 @@ const ABSENCE_REUSE: Duration = Duration::from_secs(5);
 /// How long one read of launchd's log is reused: reading it takes a moment,
 /// and what it says changes over hours.
 const RESTARTS_REUSE: Duration = Duration::from_secs(10 * 60);
+
+/// How long the account named at the person's screen is reused.
+const CONSOLE_NAME_REUSE: Duration = Duration::from_secs(15);
+
+/// The account macOS names at the person's screen.
+static CONSOLE_NAME: Shared<Named> = Shared::new(CONSOLE_NAME_REUSE);
 
 /// The logins Atlas can close, and whether the helper's login is stale.
 static LOGINS: Shared<(Vec<u32>, bool)> = Shared::new(REUSE);
@@ -105,6 +112,13 @@ pub async fn report(client: &Client, until: Instant) -> crate::capability::Docto
             .flatten()
     };
     status["restartingService"] = json!(crate::console_agents::Restarting::of(restarts.as_deref()));
+
+    status["consoleName"] = json!(
+        CONSOLE_NAME
+            .get(nix::unistd::getuid().as_raw(), until, Named::now)
+            .await
+            .unwrap_or(Named::Unknown)
+    );
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
@@ -165,6 +179,9 @@ pub async fn read(client: &Client) -> Reading {
     let now = atlas_core::time::timestamp();
     let overview = overview(&doctor, false, pending, &activity, now);
     let mut reading = Reading::new(doctor, overview, false, now);
+    if let Some(fields) = reading.value.as_object_mut() {
+        fields.remove("consoleName");
+    }
     add_host_sessions(&mut reading, client, now).await;
     reading
 }

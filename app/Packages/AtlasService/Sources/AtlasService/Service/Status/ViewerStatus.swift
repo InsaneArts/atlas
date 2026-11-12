@@ -28,6 +28,9 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
   /// Whether a macOS service that slows the Mac restarted often in the helper in the last hour of launchd's log.
   public var restartingService = RestartingService.unknown
 
+  /// The account macOS names at the person's screen.
+  public var consoleName = ConsoleName()
+
   /// Creates a status with every field at its safe default.
   public init() {}
 
@@ -35,7 +38,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
     case ready, canObserve, checks, nextSteps, error, controlActive, session, capabilities, overview, leftoverLogins,
-      helperStale, restartingService
+      helperStale, restartingService, consoleName
   }
 
   /// Decodes a status, keeping the default of every field that is missing or of the wrong type.
@@ -55,6 +58,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
     overview = (try? container.decodeIfPresent(Overview.self, forKey: .overview)) ?? Overview()
     leftoverLogins = (try? container.decodeIfPresent([Int].self, forKey: .leftoverLogins)) ?? []
     helperStale = (try? container.decodeIfPresent(Bool.self, forKey: .helperStale)) == true
+    consoleName = (try? container.decodeIfPresent(ConsoleName.self, forKey: .consoleName)) ?? ConsoleName()
     restartingService =
       (try? container.decodeIfPresent(RestartingService.self, forKey: .restartingService)) ?? .unknown
   }
