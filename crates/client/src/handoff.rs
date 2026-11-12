@@ -10,6 +10,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     files::Token,
     name::same_text,
@@ -361,7 +362,14 @@ pub(crate) async fn hand_over(
         .collect();
     let answers = readable(client, ownership, &checks).await?;
 
-    let helper = client.desktop().second_login().uid;
+    // Where copies are made for this desktop: a folder on this disk its
+    // account may read, readied only when one is needed.
+    let prepare = match client.desktop().kind() {
+        Kind::SecondLogin(login) => {
+            let helper = login.uid;
+            move || root(helper)
+        }
+    };
     Handing {
         targets,
         answers,
@@ -369,7 +377,7 @@ pub(crate) async fn hand_over(
         session: client.host_session.as_ref().map(HostSession::key).cloned(),
         claims: Claims::of(client),
     }
-    .on_worker(ownership, move || root(helper), copy)
+    .on_worker(ownership, prepare, copy)
     .await
 }
 
