@@ -76,7 +76,7 @@ pub async fn report(
     until: Instant,
     idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
-    let uid = client.desktop().hidden().uid;
+    let uid = client.desktop().second_login().uid;
     let reply = tokio::time::timeout_at(until, client.status())
         .await
         .unwrap_or_else(|_| json!(late()));

@@ -579,11 +579,11 @@ fn basis(config_path: &Path) -> Result<Basis> {
     let config_path = fs::canonicalize(config_path)?;
     let config = Config::load(&config_path)?;
     let text = fs::read_to_string(&config_path)?;
-    let account = account_with_uid(config.desktop().hidden().uid)?
+    let account = account_with_uid(config.desktop().second_login().uid)?
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
     let controller = account_with_uid(nix::unistd::getuid().as_raw())?
         .ok_or_else(|| problem("The controller account cannot be resolved"))?;
-    let layout = Layout::new(config.desktop().hidden().uid, account.home.clone());
+    let layout = Layout::new(config.desktop().second_login().uid, account.home.clone());
 
     Ok(Basis {
         config_path,
@@ -608,13 +608,13 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     }
 
     let status = Client::new(config.clone())?.status().await;
-    require_background(&status, config.desktop().hidden().uid)?;
+    require_background(&status, config.desktop().second_login().uid)?;
 
     let program = atlas_core::app_bundle::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
     Ok(Plan {
-        uid: config.desktop().hidden().uid,
+        uid: config.desktop().second_login().uid,
         controller: base.controller.name,
         home: base.account.home,
         old_label: String::new(),
@@ -719,7 +719,7 @@ fn fresh_start(log: Option<Log>, path: &Path) -> Result<Start> {
 /// The setup log for the configuration at `config_path`: where it is
 /// recorded, and what is recorded there.
 fn recorded_log(config_path: &Path) -> Result<(PathBuf, Option<Log>)> {
-    let path = log_path(Config::load(config_path)?.desktop().hidden().uid)?;
+    let path = log_path(Config::load(config_path)?.desktop().second_login().uid)?;
     let log = load_log(&path)?;
     Ok((path, log))
 }
@@ -794,7 +794,7 @@ pub async fn finalize(config_path: &Path, client: &Client, code: Code) -> Result
     }
 
     let status = client.status().await;
-    Ok(doctor_report(status, client.desktop().hidden().uid).diagnosis)
+    Ok(doctor_report(status, client.desktop().second_login().uid).diagnosis)
 }
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
@@ -830,10 +830,10 @@ pub(crate) async fn fresh_pass(
 /// daemon.
 pub async fn managed_job(client: &Client) -> Result<JobReport> {
     let request = Request::Inspect {
-        uid: client.desktop().hidden().uid,
+        uid: client.desktop().second_login().uid,
         labels: vec![LABEL.to_owned()],
     };
-    let expected = setup_identity(client.desktop().hidden().uid)?;
+    let expected = setup_identity(client.desktop().second_login().uid)?;
 
     Ok(JobReport::from(
         &inspect(client, &request, &expected).await?["jobs"][LABEL],

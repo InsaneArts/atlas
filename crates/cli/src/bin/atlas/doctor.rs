@@ -38,7 +38,7 @@ const RECORDER_TRIES: u64 = 3;
 
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
-    let uid = client.desktop().hidden().uid;
+    let uid = client.desktop().second_login().uid;
     let status = client.status().await;
     let account = atlas_core::account::account_with_uid(uid).ok().flatten();
 

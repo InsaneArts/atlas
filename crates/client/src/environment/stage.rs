@@ -141,7 +141,7 @@ pub(super) async fn prune(client: &Client, helper: &str) {
             continue;
         };
 
-        if !prunable(&stage, &id, client.desktop().hidden().uid) {
+        if !prunable(&stage, &id, client.desktop().second_login().uid) {
             continue;
         }
 
@@ -363,7 +363,7 @@ pub(super) async fn freeze(
     crate::credential_files::refuse(given.iter().map(PathBuf::as_path))?;
     client.identity().await?;
 
-    let helper = helper_name(client.desktop().hidden().uid)?;
+    let helper = helper_name(client.desktop().second_login().uid)?;
     freeze_as(client, &helper, manifest, selections, apply_now).await
 }
 
@@ -443,7 +443,7 @@ pub(super) async fn freeze_as(
             .unwrap_or(Value::Null);
         let plan: Plan = serde_json::from_value(plan)
             .map_err(|cause| problem("Invalid environment record or schema").with_source(cause))?;
-        if plan.id != id || plan.uid != client.desktop().hidden().uid {
+        if plan.id != id || plan.uid != client.desktop().second_login().uid {
             return Err(problem("Preview returned a different plan identity"));
         }
 
@@ -504,7 +504,7 @@ pub(super) async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -
 
     let lock = lock_stage(&stage)?;
     let plan: Plan = decode(&read_limited(&stage.join("plan.json"), MAX_RECORD)?)?;
-    if plan.id != plan_id || plan.uid != client.desktop().hidden().uid {
+    if plan.id != plan_id || plan.uid != client.desktop().second_login().uid {
         return Err(problem(
             "Frozen plan belongs to a different helper or plan ID",
         ));

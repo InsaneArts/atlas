@@ -70,7 +70,7 @@ pub(super) async fn log_out_helper(
     ask: &dyn Fn(Question) -> Result<bool>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
-    let uid = client.desktop().hidden().uid;
+    let uid = client.desktop().second_login().uid;
     let before = client.controller.pending()?;
     let mut way = Way::Ask;
 
@@ -174,7 +174,7 @@ fn root_log_out(
     target: Option<Target>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Came {
-    let uid = client.desktop().hidden().uid;
+    let uid = client.desktop().second_login().uid;
     let me = nix::unistd::getuid().as_raw();
     let Some(target) = target else {
         progress(Progress::Say(

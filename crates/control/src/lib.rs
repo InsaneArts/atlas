@@ -277,7 +277,7 @@ impl Controller {
     #[cfg(any(test, feature = "test-support"))]
     pub fn at(uid: u32, directory: &Path) -> Self {
         Self::in_directory(
-            &Desktop::from(atlas_core::desktop::Hidden { uid }),
+            &Desktop::from(atlas_core::desktop::SecondLogin { uid }),
             directory,
         )
     }

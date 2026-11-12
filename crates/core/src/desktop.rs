@@ -12,16 +12,18 @@ pub struct Desktop {
     kind: Kind,
 }
 
-/// Why a desktop cannot touch the person's screen.
+/// What a desktop is. Each thing that differs between kinds has one owner
+/// that matches on this, so a new kind cannot be added without an answer
+/// from every one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Kind {
+pub enum Kind {
     /// A second login on this Mac, kept off the console.
-    Hidden(Hidden),
+    SecondLogin(SecondLogin),
 }
 
-/// A hidden login, by its account.
+/// A second login on this Mac, by its account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Hidden {
+pub struct SecondLogin {
     pub uid: u32,
 }
 
@@ -29,29 +31,36 @@ pub struct Hidden {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopId(String);
 
-impl From<Hidden> for Desktop {
-    fn from(hidden: Hidden) -> Self {
+impl From<SecondLogin> for Desktop {
+    fn from(login: SecondLogin) -> Self {
         Self {
-            kind: Kind::Hidden(hidden),
+            kind: Kind::SecondLogin(login),
         }
     }
 }
 
 impl Desktop {
-    /// The hidden login this desktop is. Whoever asks relies on a second
-    /// login on this Mac: its account, its processes in this kernel, its
-    /// files on this disk.
-    pub fn hidden(&self) -> &Hidden {
-        let Kind::Hidden(hidden) = &self.kind;
-        hidden
+    /// What kind of desktop this is, for an owner to match on.
+    pub fn kind(&self) -> &Kind {
+        &self.kind
     }
 
-    /// The name this desktop's locks and records carry. A hidden login's
+    /// The second login this desktop is. Whoever asks relies on a second
+    /// login on this Mac: its account, its processes in this kernel, its
+    /// files on this disk.
+    pub fn second_login(&self) -> &SecondLogin {
+        let Kind::SecondLogin(login) = &self.kind;
+        login
+    }
+
+    /// The name this desktop's locks and records carry. A second login's
     /// comes from its account alone, so a changed socket path names the
     /// same desktop.
     pub fn id(&self) -> DesktopId {
-        let Kind::Hidden(hidden) = &self.kind;
-        let digest = bytes_sha256(format!("helper:{}", hidden.uid).as_bytes());
+        let named = match &self.kind {
+            Kind::SecondLogin(login) => format!("helper:{}", login.uid),
+        };
+        let digest = bytes_sha256(named.as_bytes());
         DesktopId(digest[..DesktopId::LENGTH].to_owned())
     }
 
@@ -60,18 +69,20 @@ impl Desktop {
     ///
     /// # Errors
     ///
-    /// For a hidden login, what [`Observation::require_hidden`] refuses.
+    /// For a second login, what [`Observation::require_hidden`] refuses.
     pub fn prove(&self, observation: &Observation) -> Result<Session> {
-        let Kind::Hidden(hidden) = &self.kind;
-        observation.require_hidden(hidden.uid)
+        match &self.kind {
+            Kind::SecondLogin(login) => observation.require_hidden(login.uid),
+        }
     }
 
     /// Whether `observation` shows input service `pid` ready in this
     /// desktop with no controller and nothing held, running the installed
     /// build.
     pub fn input_current(&self, observation: &Observation, pid: u32) -> bool {
-        let Kind::Hidden(hidden) = &self.kind;
-        observation.input_current(hidden.uid, pid)
+        match &self.kind {
+            Kind::SecondLogin(login) => observation.input_current(login.uid, pid),
+        }
     }
 }
 

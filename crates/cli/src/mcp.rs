@@ -473,7 +473,7 @@ impl Server {
     /// refused (`not-ready`), with nothing locked, while a new login could
     /// hang.
     async fn switch_helper(&self) -> Result<Value> {
-        let helper = self.client.desktop().hidden().uid;
+        let helper = self.client.desktop().second_login().uid;
         tokio::task::spawn_blocking(move || {
             let account = atlas_client::switch::accounts(Some(helper))?
                 .into_iter()

@@ -290,7 +290,7 @@ impl Client {
     /// apart (a Dock alone can restart in a login that lives on), and its
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
-        let uid = self.desktop().hidden().uid;
+        let uid = self.desktop().second_login().uid;
         let looked = move || async move {
             tokio::task::spawn_blocking(move || atlas_core::session::logged_out(uid))
                 .await

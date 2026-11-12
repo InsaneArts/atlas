@@ -59,10 +59,10 @@ fn choosing(
 
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load(config_path)?;
-    let (leftovers, blockers) = logins(Some(config.desktop().hidden().uid));
-    let Some(helper) = account::account_with_uid(config.desktop().hidden().uid)? else {
+    let (leftovers, blockers) = logins(Some(config.desktop().second_login().uid));
+    let Some(helper) = account::account_with_uid(config.desktop().second_login().uid)? else {
         let mut reply = choosing(me, app, true, (leftovers, blockers))?;
-        reply["helper"] = json!({"exists": false, "uid": config.desktop().hidden().uid});
+        reply["helper"] = json!({"exists": false, "uid": config.desktop().second_login().uid});
         return Ok(reply);
     };
 
@@ -84,7 +84,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let reply = client.status().await;
     let atlas_core::session::Diagnosis {
         observation, ready, ..
-    } = atlas_client::capability::doctor_report(reply.clone(), config.desktop().hidden().uid)
+    } = atlas_client::capability::doctor_report(reply.clone(), config.desktop().second_login().uid)
         .diagnosis;
     let hidden = config.desktop().prove(&observation).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();

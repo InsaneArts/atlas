@@ -165,7 +165,7 @@ impl Client {
     /// identity. Construction does not verify a running helper session.
     pub fn new(config: Config) -> Result<Self> {
         let desktop = config.desktop();
-        let helper = desktop.hidden().uid;
+        let helper = desktop.second_login().uid;
         atlas_core::session::validate_uid(helper)?;
         Ok(Self {
             controller: Controller::new(&desktop)?,
@@ -298,7 +298,7 @@ impl Client {
 
         // Do not launch the probe into an unverified UID or the visible desktop.
         if hello["ok"] != true
-            || hello["user"]["uid"].as_u64() != Some(self.desktop().hidden().uid.into())
+            || hello["user"]["uid"].as_u64() != Some(self.desktop().second_login().uid.into())
             || hello["session"]["onConsole"] != false
         {
             return Ok(hello);

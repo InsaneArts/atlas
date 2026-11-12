@@ -108,7 +108,7 @@ async fn started(
             task: client.task.as_ref().map(|task| task.key().clone()),
             session: client.task.as_ref().map(|task| task.session().clone()),
         },
-        uid: client.desktop().hidden().uid,
+        uid: client.desktop().second_login().uid,
         pin,
     };
     let reply = mutate(client, mutation).await?;
@@ -518,7 +518,7 @@ pub async fn require_none(client: &Client) -> Result<()> {
     })?;
     if jobs
         .iter()
-        .any(|job| may_run(job, client.desktop().hidden().uid))
+        .any(|job| may_run(job, client.desktop().second_login().uid))
     {
         return Err(Error::new(Code::Busy, JOB_RUNNING)
             .held_by(atlas_core::error::Holder::Agent)

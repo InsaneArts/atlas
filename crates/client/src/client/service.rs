@@ -248,7 +248,7 @@ impl Client {
             "argv": [
                 "/bin/sh", "-c", script, "sh",
                 self.config.identity_probe,
-                self.desktop().hidden().uid.to_string(),
+                self.desktop().second_login().uid.to_string(),
                 controller_uid.to_string(),
                 self.config.input_socket,
             ],

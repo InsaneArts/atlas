@@ -89,7 +89,7 @@ fn native_refusal(result: &Value) -> Error {
 
 impl Client {
     pub(crate) fn input_transport(&self) -> Transport {
-        let peer_uid = self.desktop().hidden().uid;
+        let peer_uid = self.desktop().second_login().uid;
         #[cfg(any(test, feature = "test-support"))]
         let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
         Transport {

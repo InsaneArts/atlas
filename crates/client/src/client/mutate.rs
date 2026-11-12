@@ -630,7 +630,7 @@ impl Client {
             && let Some(group) = started_group(&reply)
             && let Err(error) = self
                 .controller
-                .note_run_group(group, self.desktop().hidden().uid)
+                .note_run_group(group, self.desktop().second_login().uid)
         {
             if let Some(claim) = claim.take() {
                 self.controller.keep_unrecorded_run(claim, group);

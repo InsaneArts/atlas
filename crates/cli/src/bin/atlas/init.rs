@@ -354,7 +354,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 
     // Ready now, set up before, and running this very build throughout.
     let status = client.status().await;
-    if atlas_client::capability::doctor(status.clone(), config.desktop().hidden().uid)["ready"]
+    if atlas_client::capability::doctor(status.clone(), config.desktop().second_login().uid)["ready"]
         == true
         && settled_before
         && atlas_core::session::input_build_current(&status)
@@ -369,7 +369,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 
     done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
-    if !daemon_answers(&client, config.desktop().hidden().uid).await {
+    if !daemon_answers(&client, config.desktop().second_login().uid).await {
         start_helper(
             &client,
             &config,
@@ -515,7 +515,7 @@ async fn start_helper(
         let _spinner = Spinner::new("Waiting for the helper to start…");
         started = daemon_answers_within(
             client,
-            config.desktop().hidden().uid,
+            config.desktop().second_login().uid,
             Duration::from_secs(2),
         )
         .await;
@@ -609,7 +609,7 @@ async fn install_job(
     spinner.set("Starting the helper…");
     let answered = daemon_answers_within(
         client,
-        config.desktop().hidden().uid,
+        config.desktop().second_login().uid,
         Duration::from_secs(1),
     )
     .await;
@@ -657,7 +657,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             "Permissions",
             "Screen Recording · Accessibility already allowed",
         );
-        wait_until_back(client, config.desktop().hidden().uid, &status).await?;
+        wait_until_back(client, config.desktop().second_login().uid, &status).await?;
     } else {
         heading(&format!("Allow Atlas in {name}'s account"));
 
@@ -675,7 +675,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         loop {
             // The person is here, in their own account: offer the way over.
             if client.status().await["session"]["onConsole"] != true {
-                offer_lock(name, config.desktop().hidden().uid)?;
+                offer_lock(name, config.desktop().second_login().uid)?;
             }
 
             // Done once the helper has been on screen and is hidden again (or
@@ -708,7 +708,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             if !missing(&client.status().await).is_empty() {
                 wait_until_back(
                     client,
-                    config.desktop().hidden().uid,
+                    config.desktop().second_login().uid,
                     &client.status().await,
                 )
                 .await?;
@@ -745,7 +745,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         // below need it in the background again.
         wait_until_back(
             client,
-            config.desktop().hidden().uid,
+            config.desktop().second_login().uid,
             &client.status().await,
         )
         .await?;

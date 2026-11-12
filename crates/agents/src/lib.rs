@@ -865,7 +865,9 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    if atlas_client::capability::doctor(status, config.desktop().hidden().uid)["ready"] == true {
+    if atlas_client::capability::doctor(status, config.desktop().second_login().uid)["ready"]
+        == true
+    {
         let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."

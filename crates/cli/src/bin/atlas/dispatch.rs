@@ -929,7 +929,7 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
 
     let helper = Config::load(config)
         .ok()
-        .map(|config| config.desktop().hidden().uid);
+        .map(|config| config.desktop().second_login().uid);
     let accounts = switch::accounts(helper)?;
 
     if args.list {
