@@ -36,7 +36,7 @@ fn verify(pairing: &Pairing) -> Result<()> {
     let helper = account::account_with_uid(pairing.helper_uid)?
         .ok_or_else(|| problem("The chosen helper no longer exists"))?;
     if helper_setup::identity::current(&helper).as_ref() != Some(&pairing.helper_identity)
-        || account::administrator(&helper.name) != Some(false)
+        || atlas_core::user::account::administrator(&helper.name) != Some(false)
     {
         return Err(problem("The chosen helper account changed before setup"));
     }

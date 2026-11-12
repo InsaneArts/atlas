@@ -7,7 +7,7 @@ use atlas_client::{
     host_session::{Asker, Recovery},
     idle_time::{IdleTime, Look},
 };
-use atlas_core::desktop::{Kind, User};
+use atlas_core::desktop::Kind;
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
 use std::io::IsTerminal;
@@ -47,7 +47,7 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
 /// [`report`] for the second login `login`, with what this Mac can tell of
 /// it: its account, why it is silent, the logins Atlas can close, the Apple
 /// agents restarting in it and the home folder it may read.
-async fn user_report(client: &Client, login: &User, verbose: bool) -> Value {
+async fn user_report(client: &Client, login: &atlas_core::user::User, verbose: bool) -> Value {
     let uid = login.uid;
     let status = client.status().await;
     let account = atlas_core::account::account_with_uid(uid).ok().flatten();
@@ -55,7 +55,7 @@ async fn user_report(client: &Client, login: &User, verbose: bool) -> Value {
     // Not answering because the helper is logged out or gone: only the
     // person can log it in again.
     let absence = if atlas_core::session::silent(&status) {
-        tokio::task::spawn_blocking(move || atlas_core::session::absence(uid))
+        tokio::task::spawn_blocking(move || atlas_core::user::logins::absence(uid))
             .await
             .ok()
             .flatten()
@@ -91,15 +91,16 @@ async fn user_report(client: &Client, login: &User, verbose: bool) -> Value {
 
     // A deleted account's login left running can stall the next login, or
     // be mistaken for the helper's.
-    let sessions = tokio::task::spawn_blocking(move || atlas_core::session::sessions(Some(uid)))
-        .await
-        .ok()
-        .flatten();
+    let sessions =
+        tokio::task::spawn_blocking(move || atlas_core::user::logins::sessions(Some(uid)))
+            .await
+            .ok()
+            .flatten();
     let leftover = sessions.as_ref().map(|sessions| {
         sessions
-            .leftover_uids(atlas_core::session::Kind::Orphan)
+            .leftover_uids(atlas_core::user::logins::Kind::Orphan)
             .into_iter()
-            .chain(sessions.leftover_uids(atlas_core::session::Kind::HelperLeftover))
+            .chain(sessions.leftover_uids(atlas_core::user::logins::Kind::HelperLeftover))
             .next()
     });
     let left = leftover.flatten().map(|uid| {
@@ -120,7 +121,7 @@ async fn user_report(client: &Client, login: &User, verbose: bool) -> Value {
     }
 
     if let Some(account) = &account {
-        match atlas_core::account::administrator(&account.name) {
+        match atlas_core::user::account::administrator(&account.name) {
             Some(false) => {}
             Some(true) => first_steps.push(format!(
                 "{} must be a standard account, not an administrator: change it in System \

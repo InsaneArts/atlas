@@ -34,7 +34,7 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 /// [`list`] for the second login `login`, whose account ACLs name `helper`.
 pub(super) async fn list_as(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     helper: &str,
     all: bool,
 ) -> Result<Value> {

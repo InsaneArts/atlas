@@ -3,11 +3,10 @@
 use crate::{
     digest::bytes_sha256,
     error::Result,
-    process::{self, Info, Instance},
-    protocol::{self, Left},
+    process::Instance,
+    protocol::Left,
     session::{Observation, Session},
 };
-use std::collections::HashSet;
 
 /// A desktop agents act on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,21 +21,15 @@ pub struct Desktop {
 pub enum Kind {
     /// A hidden user on this Mac, kept off the console: what people know
     /// as Second Login.
-    User(User),
-}
-
-/// A hidden user on this Mac, by its account.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct User {
-    pub uid: u32,
+    User(crate::user::User),
 }
 
 /// The name a desktop's locks and records carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopId(String);
 
-impl From<User> for Desktop {
-    fn from(user: User) -> Self {
+impl From<crate::user::User> for Desktop {
+    fn from(user: crate::user::User) -> Self {
         Self {
             kind: Kind::User(user),
         }
@@ -53,7 +46,7 @@ impl Desktop {
     /// setup, update and removal, which work on its account, its processes
     /// in this kernel and its files on this disk. Anything that
     /// differs between kinds matches on [`Desktop::kind`] instead.
-    pub fn user(&self) -> &User {
+    pub fn user(&self) -> &crate::user::User {
         let Kind::User(user) = &self.kind;
         user
     }
@@ -118,7 +111,7 @@ impl Desktop {
     /// the same number; none when it cannot be looked at.
     pub fn instance(&self, pid: u32) -> Option<Instance> {
         match &self.kind {
-            Kind::User(_) => User::instance(pid),
+            Kind::User(_) => crate::user::User::instance(pid),
         }
     }
 
@@ -126,55 +119,9 @@ impl Desktop {
     /// zombie, or another process's. Unknown is not exited.
     pub fn exited(&self, instance: Instance) -> bool {
         match &self.kind {
-            Kind::User(_) => User::exited(instance),
+            Kind::User(_) => crate::user::User::exited(instance),
         }
     }
-}
-
-impl User {
-    /// What its records' name is made from: its account alone.
-    fn record_name(&self) -> String {
-        format!("helper:{}", self.uid)
-    }
-
-    /// [`Desktop::left_may_run`] for this user: its processes in this kernel.
-    fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
-        protocol::left_may_run(left, group, self.uid)
-    }
-
-    /// [`Desktop::orphans_run`] for this user: its processes in this kernel.
-    fn orphans_run(&self) -> Result<bool> {
-        Ok(orphaned(&process::of_user(self.uid)?))
-    }
-
-    /// [`Desktop::instance`] for this user: a process of this kernel.
-    fn instance(pid: u32) -> Option<Instance> {
-        i32::try_from(pid)
-            .ok()
-            .and_then(|pid| process::info(pid).ok().flatten())
-            .map(|info| info.instance)
-    }
-
-    /// [`Desktop::exited`] for this user: a process of this kernel.
-    fn exited(instance: Instance) -> bool {
-        match process::info(instance.pid) {
-            Ok(None) => true,
-            Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
-            Err(_) => false,
-        }
-    }
-}
-
-/// Whether one of `processes` runs in a group whose leader isn't among them.
-fn orphaned(processes: &[Info]) -> bool {
-    let alive: HashSet<i32> = processes
-        .iter()
-        .filter(|process| !process.zombie)
-        .map(|process| process.instance.pid)
-        .collect();
-    processes
-        .iter()
-        .any(|process| !process.zombie && process.pgid > 0 && !alive.contains(&process.pgid))
 }
 
 impl DesktopId {

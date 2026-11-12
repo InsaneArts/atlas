@@ -23,7 +23,7 @@ use atlas_client::{
 };
 use atlas_core::host::Key;
 use atlas_core::{
-    account::{Title, asked_real_name},
+    account::Title,
     desktop::Kind,
     error::{Code, Error, Result},
 };
@@ -159,7 +159,14 @@ impl Viewer {
         if let Some(name) = status.value["overview"]["account"].as_str() {
             // A second login's account is one of this Mac's, named here.
             let title = match client.desktop().kind() {
-                Kind::User(_) => account_title(&self.account_name, name, asked_real_name).await,
+                Kind::User(_) => {
+                    account_title(
+                        &self.account_name,
+                        name,
+                        atlas_core::user::account::asked_real_name,
+                    )
+                    .await
+                }
             };
             status.value["overview"]["accountName"] = json!(title);
         }

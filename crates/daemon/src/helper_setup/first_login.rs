@@ -330,7 +330,7 @@ fn ready_with(
 /// loaded its LaunchAgents when it began. Run through `launchctl asuser`
 /// for that, so launchctl reaches the login.
 pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
-    let logged_in = atlas_core::session::login(layout.uid).is_some();
+    let logged_in = atlas_core::user::logins::login(layout.uid).is_some();
     let program = if opener {
         Some(atlas_core::app_bundle::signed_executable()?)
     } else {
@@ -444,11 +444,9 @@ fn wanted_here(layout: &Layout) -> bool {
 ///
 /// Returns failures locating or opening Atlas in the current account's login session.
 pub fn open_at_login() -> Result<()> {
-    use atlas_core::login_log::{mark, seconds};
-
     let uid = nix::unistd::getuid().as_raw();
     let layout = Layout::new(uid, atlas_core::config::home()?);
-    mark(&format!("opener.start uid={uid}"));
+    atlas_core::user::login_log::mark(&format!("opener.start uid={uid}"));
 
     let deadline = Instant::now() + REQUEST_PATIENCE;
     while !wanted_here(&layout) {
@@ -462,8 +460,8 @@ pub fn open_at_login() -> Result<()> {
     let waiting = Instant::now();
     let deadline = waiting + DESKTOP_PATIENCE;
     let mut assistant = false;
-    while wanted_here(&layout) && atlas_core::session::desktop_up(uid) != Some(true) {
-        assistant |= atlas_core::session::setup_assistant(uid) == Some(true);
+    while wanted_here(&layout) && atlas_core::user::logins::desktop_up(uid) != Some(true) {
+        assistant |= atlas_core::user::logins::setup_assistant(uid) == Some(true);
         if Instant::now() >= deadline {
             return Err(problem(
                 "The desktop never came up; Atlas opens at the next login",
@@ -471,9 +469,9 @@ pub fn open_at_login() -> Result<()> {
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    mark(&format!(
+    atlas_core::user::login_log::mark(&format!(
         "opener.desktop waited={} setupAssistant={assistant}",
-        seconds(waiting.elapsed())
+        atlas_core::user::login_log::seconds(waiting.elapsed())
     ));
 
     // Asked again once the desktop is up: the choice may have changed while
@@ -486,7 +484,7 @@ pub fn open_at_login() -> Result<()> {
     // The Dock and the Finder are up; give the login a moment to settle.
     std::thread::sleep(Duration::from_secs(2));
     let app = atlas_core::app_bundle::installed_app()?;
-    mark("opener.open");
+    atlas_core::user::login_log::mark("opener.open");
     let status =
         atlas_core::spawn::status(Command::new("/usr/bin/open").args(["-n", "-a"]).arg(&app))?;
     if !status.success() {
@@ -503,9 +501,9 @@ pub fn open_at_login() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    mark(&format!(
+    atlas_core::user::login_log::mark(&format!(
         "opener.window waited={}",
-        seconds(opening.elapsed())
+        atlas_core::user::login_log::seconds(opening.elapsed())
     ));
 
     forget_opener(&layout)?;

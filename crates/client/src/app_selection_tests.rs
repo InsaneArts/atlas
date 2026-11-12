@@ -124,7 +124,7 @@ fn closing_everything_spares_macos_and_atlas() {
     assert_eq!(
         left_open(
             &app_list(open),
-            &atlas_core::desktop::Desktop::from(atlas_core::desktop::User { uid: 502 })
+            &atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 })
         ),
         ["Safari", "Opie QA"],
         "a held log-out names what close --all would quit"

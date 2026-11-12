@@ -13,7 +13,6 @@ pub use canary::verify;
 
 use atlas_core::{
     config::home,
-    desktop::User,
     error::{Code, Error, Result},
     session::{Display, Epoch, Observation},
 };
@@ -252,7 +251,7 @@ fn read_record(path: Result<PathBuf>) -> Evidence {
 
 /// Doctor's report of the second login `login` from its `status`, with the
 /// recorded native-dialog observation in place of the default unknown.
-pub fn doctor(status: Value, login: &User) -> Value {
+pub fn doctor(status: Value, login: &atlas_core::user::User) -> Value {
     doctor_report(status, login).diagnosis.value
 }
 
@@ -265,7 +264,7 @@ pub struct Doctor {
 /// [`doctor`], with what the native-dialog evidence came to. The evidence
 /// is kept on this disk by the second login's account, and judged against
 /// this Mac's boot.
-pub fn doctor_report(status: Value, login: &User) -> Doctor {
+pub fn doctor_report(status: Value, login: &atlas_core::user::User) -> Doctor {
     let uid = login.uid;
     let evidence = read_record(record_path(uid));
     let observation = Observation::decode(&status);

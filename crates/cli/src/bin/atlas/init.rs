@@ -297,9 +297,9 @@ static LOCKED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::ne
 /// `hidden`) this long after init locked the screen for it.
 fn mark_since_lock(step: &str) {
     if let Some(locked) = LOCKED.get() {
-        atlas_core::login_log::mark(&format!(
+        atlas_core::user::login_log::mark(&format!(
             "helper.{step} after={}",
-            atlas_core::login_log::seconds(locked.elapsed())
+            atlas_core::user::login_log::seconds(locked.elapsed())
         ));
     }
 }
@@ -504,7 +504,7 @@ async fn start_helper(
         job_rights(rights, &mut granted)?;
     }
 
-    if atlas_core::session::logged_in(helper.uid) != Some(true) {
+    if atlas_core::user::logins::logged_in(helper.uid) != Some(true) {
         log_in_once(client, helper, expected, installed, done_steps).await?;
     }
 
@@ -573,7 +573,7 @@ async fn log_in_once(
             "Waiting for {name} to log in… (Ctrl-C to stop; run atlas init again later)"
         ));
         wait_for("the helper to log in", async || {
-            (atlas_core::session::logged_in(helper.uid) == Some(true)).then_some(())
+            (atlas_core::user::logins::logged_in(helper.uid) == Some(true)).then_some(())
         })
         .await?;
     }

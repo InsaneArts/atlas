@@ -102,7 +102,7 @@ const FRESH_LOGIN: Duration = Duration::from_secs(90);
 /// runtime).
 async fn just_logged_in() -> bool {
     let uid = nix::unistd::getuid().as_raw();
-    tokio::task::spawn_blocking(move || atlas_core::session::login(uid))
+    tokio::task::spawn_blocking(move || atlas_core::user::logins::login(uid))
         .await
         .ok()
         .flatten()
@@ -467,7 +467,7 @@ fn arrival_notice(controller: u32, arrival: Arrival) {
         .ok()
         .flatten();
     let title = account.as_ref().map(|account| {
-        atlas_core::account::real_name(&account.name).unwrap_or_else(|| account.name.clone())
+        atlas_core::user::account::real_name(&account.name).unwrap_or_else(|| account.name.clone())
     });
     let (heading, message) = match arrival {
         Arrival::SetUp => ("Atlas is set up", done_message(title.as_deref())),
@@ -520,7 +520,8 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
         return;
     };
 
-    let login = atlas_core::session::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
+    let login =
+        atlas_core::user::logins::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
     if crate::helper_setup::pairing::window_open(&home)
         || login.is_some_and(|pid| shown_in(&home, pid))

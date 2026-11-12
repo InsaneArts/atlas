@@ -23,7 +23,6 @@ pub mod frame_pipe;
 pub mod fs_move;
 pub mod host;
 pub mod lenient;
-pub mod login_log;
 pub mod name;
 pub mod outcomes;
 pub mod process;
@@ -37,6 +36,7 @@ pub mod spawn;
 pub mod test_support;
 pub mod time;
 pub mod transport;
+pub mod user;
 
 /// This build's version, as released.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

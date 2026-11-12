@@ -5,10 +5,7 @@
 //! The login framework's per-account switch takes an undocumented
 //! dictionary, and its login-window call does nothing from a command-line
 //! process, so the screen lock (confirmed by the window server) is used.
-use atlas_core::{
-    error::{Code, Error, Result},
-    session::Blocker,
-};
+use atlas_core::error::{Code, Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::process::Command;
@@ -77,7 +74,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
             .map_err(|_| Error::new(Code::Switch, "Could not read the accounts"))?,
         me,
         helper,
-        atlas_core::account::real_name,
+        atlas_core::user::account::real_name,
     )
 }
 
@@ -113,7 +110,7 @@ fn listed(
 pub fn standard_accounts() -> Result<Vec<Account>> {
     Ok(accounts(None)?
         .into_iter()
-        .filter(|account| atlas_core::account::administrator(&account.name) == Some(false))
+        .filter(|account| atlas_core::user::account::administrator(&account.name) == Some(false))
         .collect())
 }
 
@@ -310,14 +307,20 @@ fn not_ready(why: &str) -> Error {
 /// is never kept in the helper; even then a deleted account's login under
 /// the helper's user ID, or anything about the person's own login, stops
 /// it.
-pub(crate) fn ready_to_switch(target: &Target, blockers: Option<&[Blocker]>) -> Result<()> {
+pub(crate) fn ready_to_switch(
+    target: &Target,
+    blockers: Option<&[atlas_core::user::logins::Blocker]>,
+) -> Result<()> {
     let Some(blockers) = blockers else {
         return Err(not_ready("macOS didn't list its logins. Try again."));
     };
     let back = target.back && !target.helper && target.logged_in && target.exists;
-    let holds = |blocker: &Blocker| {
+    let holds = |blocker: &atlas_core::user::logins::Blocker| {
         !back
-            || matches!(blocker, Blocker::HelperLeftover { .. })
+            || matches!(
+                blocker,
+                atlas_core::user::logins::Blocker::HelperLeftover { .. }
+            )
             || blocker.uid() == Some(target.uid)
     };
     if let Some(blocker) = blockers.iter().find(|blocker| holds(blocker)) {
@@ -396,11 +399,11 @@ fn target(account: &Account) -> Target {
         uid: account.uid,
         helper: account.helper,
         back: !account.helper && person_of_this_helper() == Some(account.uid),
-        logged_in: atlas_core::session::desktop_runs(account.uid) == Some(true),
+        logged_in: atlas_core::user::logins::desktop_runs(account.uid) == Some(true),
         exists: found.is_some(),
         home_owned,
-        administrator: atlas_core::account::administrator(&account.name),
-        on_console: atlas_core::session::console_owner() == Some(account.uid),
+        administrator: atlas_core::user::account::administrator(&account.name),
+        on_console: atlas_core::user::logins::console_owner() == Some(account.uid),
     }
 }
 
@@ -412,8 +415,8 @@ fn target(account: &Account) -> Target {
 /// Rejects a changed, missing or unsuitable account before switching can be requested.
 pub fn check(account: &Account) -> Result<()> {
     let helper = account.helper.then_some(account.uid);
-    let blockers = atlas_core::session::blockers_now(helper);
-    atlas_core::login_log::mark(&format!(
+    let blockers = atlas_core::user::logins::blockers_now(helper);
+    atlas_core::user::login_log::mark(&format!(
         "switch.check blockers={}",
         blockers.as_ref().map_or(-1, |found| found.len() as i64)
     ));
@@ -432,7 +435,7 @@ pub fn to(account: &Account) -> Result<Value> {
     check(account)?;
     let mut reply = lock_screen()?;
     if account.helper {
-        atlas_core::login_log::mark(&format!("switch.locked helper={}", account.uid));
+        atlas_core::user::login_log::mark(&format!("switch.locked helper={}", account.uid));
     }
     let name = account.real_name.as_deref().unwrap_or(&account.name);
     reply["choose"] = json!(name);

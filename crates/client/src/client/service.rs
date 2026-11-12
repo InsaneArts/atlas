@@ -3,7 +3,7 @@
 //! authenticated shutdown when its build is stale.
 use super::Client;
 use atlas_core::{
-    desktop::{Kind, User},
+    desktop::Kind,
     error::{Code, Error, Result},
     session::{Observation, SHUTDOWN},
     transport::run_output,
@@ -244,7 +244,7 @@ impl Client {
     /// Launch the shared Atlas command, installed on this disk, as the input
     /// service of the second login `login`, for this account: its process
     /// ID, before it is known to be ready.
-    async fn launch_input_in(&self, login: &User) -> Result<u32> {
+    async fn launch_input_in(&self, login: &atlas_core::user::User) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
@@ -275,7 +275,7 @@ impl Client {
 
     /// [`Client::spawn_input`] in the second login `login`: launched, then
     /// waited for until it is ready.
-    async fn spawn_input_in(&self, login: &User) -> Result<u32> {
+    async fn spawn_input_in(&self, login: &atlas_core::user::User) -> Result<u32> {
         let child = self.launch_input_in(login).await?;
         let deadline = Instant::now() + Duration::from_secs(6);
 

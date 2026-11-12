@@ -1181,8 +1181,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
-        &["switch_on_this_mac"],
-        "pending: switching this Mac to the user",
+        &["carry_out", "switch_on_this_mac"],
+        "pending: switching this Mac to the user, and its login timing",
     ),
     (
         "crates/cli/src/bin/atlas/doctor.rs",
@@ -1191,12 +1191,19 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/doctor.rs",
-        &["use atlas_core::desktop::User", "user_report"],
+        &["user_report"],
         "pending: what doctor reports of the user",
     ),
     (
         "crates/cli/src/bin/atlas/init.rs",
-        &["install_job", "permissions_step", "run", "start_helper"],
+        &[
+            "install_job",
+            "log_in_once",
+            "mark_since_lock",
+            "permissions_step",
+            "run",
+            "start_helper",
+        ],
         "pending: setting the user up from the terminal",
     ),
     (
@@ -1221,24 +1228,32 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/mcp.rs",
-        &["Server::switch_to_user", "use atlas_core::desktop::User"],
+        &["Server::switch_to_user"],
         "pending: switching this Mac to the user",
     ),
     (
         "crates/cli/src/onboarding.rs",
         &[
+            "accept",
             "check_choice",
+            "choosable",
+            "close_all",
+            "close_attended",
             "close_helper",
             "close_leftovers",
             "closing_first",
             "closing_first_using",
             "controller_of",
+            "create_helper",
+            "created",
             "files",
             "finish",
             "forget",
             "keep_other_helper",
+            "leftover_logins",
+            "leftover_targets",
+            "orphans_now",
             "requested",
-            "use atlas_core::desktop::User",
             "use_helper",
         ],
         "pending: choosing and preparing the user's account",
@@ -1259,7 +1274,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/onboarding/status.rs",
-        &["configured", "status"],
+        &["configured", "helper_side", "logins", "status"],
         "pending: how far the user's setup has come",
     ),
     (
@@ -1267,11 +1282,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         &[
             "<Live<'_> as Teardown>::log_out",
             "<Live<'_> as Teardown>::logged_out",
+            "<Live<'_> as Teardown>::remove_helper",
             "<Live<'_> as Teardown>::retire",
             "Live<'_>::forget_requested_opener",
             "run",
             "settle",
-            "use atlas_core::desktop::User",
         ],
         "pending: removing the user's account and job",
     ),
@@ -1282,7 +1297,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/uninstall/log_out.rs",
-        &["log_out_helper", "root_log_out"],
+        &["log_out_helper", "logged_out_twice", "root_log_out"],
         "pending: logging the user out before removal",
     ),
     (
@@ -1297,7 +1312,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/agent/elements.rs",
-        &["probe_in", "use atlas_core::desktop::User"],
+        &["probe_in"],
         "pending: the user's inspection tool",
     ),
     (
@@ -1307,7 +1322,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/capability.rs",
-        &["doctor", "doctor_report", "use atlas_core::desktop::User"],
+        &["doctor", "doctor_report"],
         "pending: the user's readiness evidence",
     ),
     (
@@ -1331,10 +1346,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/client.rs",
-        &[
-            "Client::session_proof_by_command",
-            "use atlas_core::desktop::User",
-        ],
+        &["Client::session_proof_by_command"],
         "pending: the user's legacy session proof",
     ),
     (
@@ -1349,11 +1361,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/client/install.rs",
-        &[
-            "Client::build_on_this_disk",
-            "Client::install_on_this_disk",
-            "use atlas_core::desktop::User",
-        ],
+        &["Client::build_on_this_disk", "Client::install_on_this_disk"],
         "pending: the user's shared Atlas command on this disk",
     ),
     (
@@ -1363,11 +1371,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/client/service.rs",
-        &[
-            "Client::launch_input_in",
-            "Client::spawn_input_in",
-            "use atlas_core::desktop::User",
-        ],
+        &["Client::launch_input_in", "Client::spawn_input_in"],
         "pending: starting the user's input service",
     ),
     (
@@ -1382,7 +1386,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/client/session.rs",
-        &["Client::user_gone", "use atlas_core::desktop::User"],
+        &["Client::user_gone"],
         "pending: whether the user's session has ended",
     ),
     (
@@ -1402,7 +1406,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/environment.rs",
-        &["rollback_in", "run_in", "use atlas_core::desktop::User"],
+        &["rollback_in", "run_in"],
         "pending: the user's environment staging",
     ),
     (
@@ -1432,7 +1436,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/environment/profile.rs",
-        &["sync_in", "use super::User"],
+        &["sync_in"],
         "pending: the user's environment staging",
     ),
     (
@@ -1457,7 +1461,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/handoff.rs",
-        &["hand_over_to", "use atlas_core::desktop::User"],
+        &["hand_over_to"],
         "pending: the user's shared copies folder",
     ),
     (
@@ -1481,7 +1485,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/host_session.rs",
-        &["use atlas_core::desktop::User", "verified_by_user"],
+        &["verified_by_user"],
         "pending: proving an agent host to the user",
     ),
     (
@@ -1496,12 +1500,12 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/overview.rs",
-        &["use atlas_core::desktop::User", "user_report"],
+        &["logins", "user_report"],
         "pending: the report of the user's readiness",
     ),
     (
         "crates/client/src/setup.rs",
-        &["preview", "preview_account"],
+        &["observe", "preview", "preview_account"],
         "pending: the user's setup, as the controller sees it",
     ),
     (
@@ -1527,7 +1531,15 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/switch.rs",
-        &["person_of_this_helper"],
+        &[
+            "accounts",
+            "check",
+            "person_of_this_helper",
+            "ready_to_switch",
+            "standard_accounts",
+            "target",
+            "to",
+        ],
         "pending: the account to come back to",
     ),
     (
@@ -1537,13 +1549,13 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "Config::desktop",
             "Config::parse",
             "Config::same_helper",
-            "use crate::desktop::User",
         ],
         "exception: the flat settings file, which names one user",
     ),
     (
         "crates/core/src/desktop.rs",
         &[
+            "<Desktop as From<crate::user::User>>::from",
             "Desktop::exited",
             "Desktop::id",
             "Desktop::input_current",
@@ -1552,6 +1564,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "Desktop::orphans_run",
             "Desktop::prove",
             "Kind",
+            "impl From<crate::user::User> for Desktop",
         ],
         "owner: the kinds of desktop, and the identity, proof, readiness and processes of each",
     ),
@@ -1561,18 +1574,28 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "exception: the way in for the user's own setup, update and removal",
     ),
     (
-        "crates/core/src/desktop.rs",
-        &[
-            "<Desktop as From<User>>::from",
-            "User",
-            "impl From<User> for Desktop",
-            "impl User",
-        ],
-        "pending: the user desktop's type",
+        "crates/core/src/lib.rs",
+        &["mod user"],
+        "declares: the user desktop's module",
+    ),
+    (
+        "crates/daemon/src/daemon/consent.rs",
+        &["arrival_notice", "just_logged_in", "notice"],
+        "exception: the daemon serves a user: its switch-back notice and setup guidance",
+    ),
+    (
+        "crates/daemon/src/daemon/serve.rs",
+        &["Daemon::hello", "Daemon::installed"],
+        "exception: the daemon serves a user: its login timing and console agent",
+    ),
+    (
+        "crates/daemon/src/helper_setup.rs",
+        &["Layout::check", "run_guarded"],
+        "pending: the user's setup inside it",
     ),
     (
         "crates/daemon/src/helper_setup/first_login.rs",
-        &["wanted_here"],
+        &["first_login", "open_at_login", "wanted_here"],
         "pending: the user's first login",
     ),
     (

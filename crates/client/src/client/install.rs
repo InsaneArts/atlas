@@ -3,7 +3,7 @@
 //! it changes.
 use super::Client;
 use atlas_core::{
-    desktop::{Kind, User},
+    desktop::Kind,
     digest::file_sha256,
     error::{Code, Error, Result},
 };
@@ -80,7 +80,11 @@ impl Client {
 
     /// [`Client::install_probe`] for a second login, which runs the shared
     /// Atlas command from this disk.
-    fn install_on_this_disk(&self, _login: &User, recovery: bool) -> Result<Value> {
+    fn install_on_this_disk(
+        &self,
+        _login: &atlas_core::user::User,
+        recovery: bool,
+    ) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
 
@@ -164,7 +168,7 @@ impl Client {
 
     /// [`Client::installed_build`] for a second login, whose shared Atlas
     /// command is a file on this disk.
-    fn build_on_this_disk(&self, _login: &User) -> Option<String> {
+    fn build_on_this_disk(&self, _login: &atlas_core::user::User) -> Option<String> {
         let path = &self.config.identity_probe;
         // The executable itself (through a link to the app), not the link.
         let metadata = fs::metadata(path).ok()?;

@@ -308,8 +308,8 @@ impl Layout {
             let account = checked_account(
                 guard,
                 || observe(self.uid),
-                || atlas_core::session::confirm_gone(&[self.uid]),
-                || atlas_core::session::logged_out(self.uid) == Some(true),
+                || atlas_core::user::logins::confirm_gone(&[self.uid]),
+                || atlas_core::user::logins::logged_out(self.uid) == Some(true),
             )?;
             if account.home != self.home {
                 return Err(problem(
@@ -440,8 +440,8 @@ pub fn run_guarded(request: Request, guard: &Guard) -> Result<Value> {
         request,
         guard,
         || observe(uid),
-        || atlas_core::session::confirm_gone(&[uid]),
-        || atlas_core::session::logged_out(uid) == Some(true),
+        || atlas_core::user::logins::confirm_gone(&[uid]),
+        || atlas_core::user::logins::logged_out(uid) == Some(true),
         execute,
     )
 }

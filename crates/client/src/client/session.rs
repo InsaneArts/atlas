@@ -3,7 +3,7 @@
 use super::{Client, Mutation, service::require_accessibility};
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Kind, User},
+    desktop::Kind,
     error::{Code, Error, Result},
     session::{Observation, Session},
 };
@@ -298,10 +298,10 @@ impl Client {
 
     /// [`Client::desktop_gone`] for the second login `login`, whose
     /// processes this Mac can see.
-    async fn user_gone(&self, login: &User, seconds: u64) -> bool {
+    async fn user_gone(&self, login: &atlas_core::user::User, seconds: u64) -> bool {
         let uid = login.uid;
         let looked = move || async move {
-            tokio::task::spawn_blocking(move || atlas_core::session::logged_out(uid))
+            tokio::task::spawn_blocking(move || atlas_core::user::logins::logged_out(uid))
                 .await
                 .ok()
                 .flatten()

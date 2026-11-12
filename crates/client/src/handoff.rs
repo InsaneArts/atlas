@@ -10,7 +10,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Desktop, Kind, User},
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     files::Token,
     name::same_text,
@@ -476,7 +476,7 @@ pub(crate) async fn hand_over(
 /// here that its account may read, of what it cannot.
 async fn hand_over_to(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     ownership: &Arc<Ownership>,
     targets: Vec<Target>,
     running: &[AppRow],

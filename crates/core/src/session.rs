@@ -3,20 +3,12 @@
 //! hidden graphical login it must be, and the doctor report built from it.
 pub mod diagnosis;
 mod epoch;
-mod logins;
 
 pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
 #[cfg(any(test, feature = "test-support"))]
 pub use diagnosis::{START_INPUT, diagnosis};
 pub use epoch::{Display, Epoch, InputEpoch};
-#[cfg(any(test, feature = "test-support"))]
-pub use logins::Window;
-pub use logins::{
-    Blocker, blockers_now, confirm_gone, console_owner, desktop_runs, desktop_up, logged_out,
-    login, setup_assistant, stale,
-};
-pub use logins::{Kind, Sessions, absence, logged_in, sessions};
 
 use crate::account::FIRST_USER_UID;
 use crate::error::{Code, Error, Result};

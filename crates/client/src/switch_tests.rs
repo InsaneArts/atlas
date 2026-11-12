@@ -1,4 +1,5 @@
 use super::*;
+use atlas_core::user::logins::Blocker;
 
 fn console_proof() -> Value {
     json!({"uid": 503, "hasGraphicAccess": true, "onConsole": true})

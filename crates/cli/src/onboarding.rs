@@ -30,7 +30,7 @@ use atlas_core::{
     account, app_bundle,
     app_bundle::signed_executable,
     config::{self, Config},
-    desktop::{Desktop, User},
+    desktop::Desktop,
     error::{Code, Error, Result},
 };
 use atlas_daemon::{
@@ -174,7 +174,7 @@ fn choosable(name: &str, controller: u32) -> Result<account::Account> {
         return Err(problem("The helper must be another account than yours"));
     }
 
-    match account::administrator(&helper.name) {
+    match atlas_core::user::account::administrator(&helper.name) {
         Some(false) => {}
         Some(true) => {
             return Err(problem(format!(
@@ -188,9 +188,9 @@ fn choosable(name: &str, controller: u32) -> Result<account::Account> {
         }
     }
 
-    if atlas_core::session::sessions(Some(helper.uid)).is_some_and(|sessions| {
+    if atlas_core::user::logins::sessions(Some(helper.uid)).is_some_and(|sessions| {
         !sessions
-            .leftover_uids(atlas_core::session::Kind::HelperLeftover)
+            .leftover_uids(atlas_core::user::logins::Kind::HelperLeftover)
             .is_empty()
     }) {
         return Err(problem(format!(
@@ -335,8 +335,8 @@ fn use_helper(
 /// creating or readying a helper closes first. Logins that cannot be listed
 /// are never taken for none.
 fn orphans_now() -> Result<Vec<u32>> {
-    atlas_core::session::sessions(None)
-        .map(|sessions| sessions.leftover_uids(atlas_core::session::Kind::Orphan))
+    atlas_core::user::logins::sessions(None)
+        .map(|sessions| sessions.leftover_uids(atlas_core::user::logins::Kind::Orphan))
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))
 }
 
@@ -349,7 +349,7 @@ fn closing_first(
     orphans: &[u32],
     act: impl FnOnce() -> std::result::Result<(), as_root::Unclosed>,
 ) -> Result<std::result::Result<(), Refusal>> {
-    let gone = || orphans.is_empty() || atlas_core::session::confirm_gone(orphans);
+    let gone = || orphans.is_empty() || atlas_core::user::logins::confirm_gone(orphans);
     closing_first_using(helper_uid, orphans, controller_of, act, gone)
 }
 
@@ -419,18 +419,16 @@ const CLOSE_PROMPT: &str = "Atlas will close a login left open by a deleted acco
 /// it. Without a verified record of the helper, a login under its user ID
 /// is never closed.
 fn leftover_logins(
-    sessions: &atlas_core::session::Sessions,
+    sessions: &atlas_core::user::logins::Sessions,
     helper: Option<&Identity>,
 ) -> Vec<(u32, std::result::Result<Target, Refusal>)> {
-    use atlas_core::session::Kind;
-
     sessions
         .logins
         .iter()
         .filter_map(|(window, kind)| {
             let target = match kind {
-                Kind::Orphan => Ok(Target::Orphan(window.uid)),
-                Kind::HelperLeftover => match helper {
+                atlas_core::user::logins::Kind::Orphan => Ok(Target::Orphan(window.uid)),
+                atlas_core::user::logins::Kind::HelperLeftover => match helper {
                     Some(helper) if helper.uid == window.uid => Ok(Target::Leftover {
                         helper: helper.clone(),
                         pid: window.pid,
@@ -441,7 +439,10 @@ fn leftover_logins(
                             .into(),
                     )),
                 },
-                Kind::Mine | Kind::OtherPerson | Kind::Helper | Kind::Picker => return None,
+                atlas_core::user::logins::Kind::Mine
+                | atlas_core::user::logins::Kind::OtherPerson
+                | atlas_core::user::logins::Kind::Helper
+                | atlas_core::user::logins::Kind::Picker => return None,
             };
             Some((window.uid, target))
         })
@@ -449,7 +450,7 @@ fn leftover_logins(
 }
 
 fn leftover_targets(
-    sessions: &atlas_core::session::Sessions,
+    sessions: &atlas_core::user::logins::Sessions,
     helper: Option<&Identity>,
 ) -> std::result::Result<Vec<Target>, Refusal> {
     leftover_logins(sessions, helper)
@@ -492,7 +493,7 @@ fn close_all(
         &controllers_of(&uids, controller_of)?,
         targets,
         |targets| as_root::close(targets, via),
-        atlas_core::session::confirm_gone,
+        atlas_core::user::logins::confirm_gone,
     )
     .map_err(|held| held.into_error(refused))
 }
@@ -511,7 +512,7 @@ fn controllers_of(
 
 /// The controller of the hidden login of user ID `uid`.
 fn controller_of(uid: u32) -> Result<Controller> {
-    Controller::new(&Desktop::from(User { uid }))
+    Controller::new(&Desktop::from(atlas_core::user::User { uid }))
 }
 
 /// Create the selected standard account under claims for every affected UID.
@@ -522,8 +523,8 @@ fn controller_of(uid: u32) -> Result<Controller> {
 /// Rejects an invalid or conflicting account name and returns privilege, account-creation
 /// or verification failures. Never retries an unknown creation outcome blindly.
 pub fn create_helper(name: &str, full_name: &str) -> Result<account::Account> {
-    let orphans = atlas_core::session::sessions(None)
-        .map(|sessions| sessions.leftover_uids(atlas_core::session::Kind::Orphan))
+    let orphans = atlas_core::user::logins::sessions(None)
+        .map(|sessions| sessions.leftover_uids(atlas_core::user::logins::Kind::Orphan))
         .ok_or_else(|| init_problem("macOS could not list its logins, so no account was made"))?;
     let uid = setup::account::free_uid()?;
     closing_first(uid, &orphans, || {
@@ -553,7 +554,7 @@ pub fn close_attended(
     helper: Option<&Identity>,
     approve: impl FnOnce() -> Result<()>,
 ) -> Result<bool> {
-    let Some(sessions) = atlas_core::session::sessions(Some(uid)) else {
+    let Some(sessions) = atlas_core::user::logins::sessions(Some(uid)) else {
         return Ok(false);
     };
     let still_open =
@@ -584,7 +585,7 @@ pub fn close_attended(
 /// resources are not removed.
 pub fn close_leftovers(config_path: &Path) -> Result<Value> {
     let helper = settings(config_path)?.map(|config| config.desktop().user().uid);
-    let sessions = atlas_core::session::sessions(helper)
+    let sessions = atlas_core::user::logins::sessions(helper)
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
     let identity = helper.and_then(helper_setup::identity::verified);
     let all: Vec<u32> = leftover_logins(&sessions, identity.as_ref())
@@ -620,7 +621,7 @@ pub fn close_helper(config_path: &Path) -> Result<Value> {
     let prompt = "Atlas will log out its helper, where Atlas isn't answering.";
 
     let checks = || {
-        if uid == me || atlas_core::session::console_owner() == Some(uid) {
+        if uid == me || atlas_core::user::logins::console_owner() == Some(uid) {
             return Err(problem(
                 "The helper is on screen. Switch back to your own account first.",
             ));
@@ -630,7 +631,7 @@ pub fn close_helper(config_path: &Path) -> Result<Value> {
                 "Atlas answers in the helper, so log it out with Log Out instead.",
             ));
         }
-        if atlas_core::session::stale(uid) != Some(true) {
+        if atlas_core::user::logins::stale(uid) != Some(true) {
             return Err(problem(
                 "The helper isn't logged in, or is still logging in. Try again in a minute.",
             ));
@@ -648,7 +649,7 @@ pub fn close_helper(config_path: &Path) -> Result<Value> {
         &client.controller,
         checks,
         |helper| as_root::close(&[Target::Helper(helper)], as_root::Via::Approval(prompt)),
-        || atlas_core::session::confirm_gone(&[uid]),
+        || atlas_core::user::logins::confirm_gone(&[uid]),
     )
     .map_err(|held| held.into_error(|refusal| not_closed(refusal, &[uid])))?;
 
@@ -852,7 +853,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 
     // Forgetting deletes no account. One whose login is still open must be
     // logged out before anyone deletes it, or its login lives on.
-    let logged_in = atlas_core::session::login(helper.uid).is_some();
+    let logged_in = atlas_core::user::logins::login(helper.uid).is_some();
     Ok(json!({"ok": true, "forgotten": helper.name, "loggedIn": logged_in}))
 }
 
@@ -945,7 +946,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
 fn created(name: &str) -> Result<account::Account> {
     let account = account::account_named(name)?.ok_or_else(|| problem(NOT_CREATED))?;
 
-    if account::administrator(&account.name) != Some(false) {
+    if atlas_core::user::account::administrator(&account.name) != Some(false) {
         return Err(problem(format!(
             "{name} was created, but not as a standard account"
         )));
@@ -970,7 +971,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
         (controller_uid, controller_name),
         (me.uid, &me.name),
         config::installed_path().is_ok_and(|path| path.exists()),
-        account::administrator(&me.name),
+        atlas_core::user::account::administrator(&me.name),
         request(),
         acceptance::signal,
     )
@@ -1026,7 +1027,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     ready_to_finish(&client.status().await, config.desktop().user().uid)?;
     atlas_client::switch::until_back(BACK_WITHIN).await?;
     // Places this check against the switch in a report's unified log.
-    atlas_core::login_log::mark("onboarding.finish");
+    atlas_core::user::login_log::mark("onboarding.finish");
     ready_to_finish(&client.status().await, config.desktop().user().uid)?;
 
     if !client.controller.pending()?.is_empty() {

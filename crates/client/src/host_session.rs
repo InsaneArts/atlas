@@ -16,7 +16,7 @@ pub(crate) use atlas_core::process::Instance;
 pub use recovery::{Asker, Recovery};
 
 use crate::client::Client;
-use atlas_core::desktop::{Kind, User};
+use atlas_core::desktop::Kind;
 use serde_json::json;
 
 /// The host session of this process's command, resolved locally, asking the
@@ -35,7 +35,7 @@ pub async fn from_env_verified(client: &Client) -> Option<HostSession> {
 /// `local` lacks.
 async fn verified_by_user(
     client: &Client,
-    _login: &User,
+    _login: &atlas_core::user::User,
     local: Option<HostSession>,
 ) -> Option<HostSession> {
     let mut claims = atlas_core::host::verification::from_env();

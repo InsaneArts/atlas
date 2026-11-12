@@ -14,7 +14,7 @@ use atlas_client::{
     client::{Actor, Client},
     screen_tiles::Tiles,
 };
-use atlas_core::desktop::{Kind, User};
+use atlas_core::desktop::Kind;
 use atlas_core::error::{Code, Error, Result};
 use atlas_core::host::HostSession;
 use serde_json::{Value, json};
@@ -481,7 +481,7 @@ impl Server {
 
     /// Lock this Mac to its login window, for the person to choose the
     /// second login `login` there.
-    async fn switch_to_user(login: User) -> Result<Value> {
+    async fn switch_to_user(login: atlas_core::user::User) -> Result<Value> {
         tokio::task::spawn_blocking(move || {
             let account = atlas_client::switch::accounts(Some(login.uid))?
                 .into_iter()

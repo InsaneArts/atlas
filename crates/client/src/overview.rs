@@ -16,7 +16,7 @@ use crate::{
 };
 use atlas_control::Controller;
 use atlas_core::{
-    desktop::{Kind, User},
+    desktop::Kind,
     error::{Code, Error},
     single_flight::Shared,
 };
@@ -107,7 +107,7 @@ pub async fn report(
 /// switching to and from it has stopped the idle time the person's apps
 /// read, which `idle` says may be restarted.
 async fn user_report(
-    login: &User,
+    login: &atlas_core::user::User,
     reply: Value,
     until: Instant,
     idle: crate::idle_time::Look,
@@ -117,7 +117,7 @@ async fn user_report(
     let silent = atlas_core::session::silent(&reply);
     let absence = if silent {
         ABSENCE
-            .get(uid, until, move || atlas_core::session::absence(uid))
+            .get(uid, until, move || atlas_core::user::logins::absence(uid))
             .await
             .flatten()
     } else {
@@ -172,19 +172,19 @@ async fn user_report(
 /// The logins of deleted accounts, and, when `silent`, whether helper
 /// `uid`'s own login is stale.
 fn logins(uid: u32, silent: bool) -> (Vec<u32>, bool) {
-    let leftovers = atlas_core::session::sessions(Some(uid))
+    let leftovers = atlas_core::user::logins::sessions(Some(uid))
         .map(|sessions| {
             sessions
-                .leftover_uids(atlas_core::session::Kind::Orphan)
+                .leftover_uids(atlas_core::user::logins::Kind::Orphan)
                 .into_iter()
-                .chain(sessions.leftover_uids(atlas_core::session::Kind::HelperLeftover))
+                .chain(sessions.leftover_uids(atlas_core::user::logins::Kind::HelperLeftover))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
     (
         leftovers,
-        silent && atlas_core::session::stale(uid) == Some(true),
+        silent && atlas_core::user::logins::stale(uid) == Some(true),
     )
 }
 

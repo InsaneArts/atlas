@@ -134,7 +134,7 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
 /// [`install_states`] of the installs `unique` in the second login `login`.
 async fn install_states_in(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     unique: &[String],
 ) -> Result<Vec<InstallState>> {
     let helper = helper_name(login.uid)?;

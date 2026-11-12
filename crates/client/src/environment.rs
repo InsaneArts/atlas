@@ -30,7 +30,7 @@ use atlas_control::Ownership;
 use atlas_core::{
     account::helper_search_path,
     config::parse_toml,
-    desktop::{Kind, User},
+    desktop::Kind,
     error::{Code, Error, Result},
     files::LockFile,
     transport::{OutputError, run_output},
@@ -148,7 +148,7 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
 /// [`rollback`] in the second login `login`.
 async fn rollback_in(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     transaction_id: &str,
     apply: bool,
 ) -> Result<Value> {
@@ -195,7 +195,7 @@ pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Resul
 /// [`run`] in the second login `login`, once its arguments are valid.
 async fn run_in(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     argv: Vec<String>,
     timeout: Duration,
 ) -> Result<Value> {

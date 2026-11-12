@@ -294,7 +294,7 @@ async fn carry_out(
             atlas_client::sound::set(&client()?, state == cli::OnOff::Off).await
         }
         Command::Activity(args) => activity(&client()?, host, &args),
-        Command::Doctor(args) if args.login_timing => atlas_core::login_log::timing(),
+        Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
         Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
         Command::VerifyNative { fixture } => {
             atlas_client::capability::verify(&client()?, &fixture).await
@@ -938,7 +938,7 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
 
 /// [`switch`] among this Mac's accounts, the second login `login` among
 /// them when there is one, and the one chosen when none is named.
-fn switch_on_this_mac(login: Option<&desktop::User>, args: cli::Switch) -> Result<Value> {
+fn switch_on_this_mac(login: Option<&atlas_core::user::User>, args: cli::Switch) -> Result<Value> {
     use atlas_client::switch;
 
     let accounts = switch::accounts(login.map(|login| login.uid))?;

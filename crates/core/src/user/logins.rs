@@ -1,4 +1,4 @@
-use super::{Absence, FIRST_USER_UID};
+use crate::{account::FIRST_USER_UID, session::Absence};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

@@ -251,7 +251,7 @@ impl Daemon {
 
         let manager = facts::manager_name();
         require_graphical_session(uid, &manager)?;
-        atlas_core::login_log::mark(&format!("daemon.start uid={uid}"));
+        atlas_core::user::login_log::mark(&format!("daemon.start uid={uid}"));
         preferences::type_exactly();
         preferences::keep_desktop()?;
 
@@ -295,7 +295,7 @@ impl Daemon {
         // The first hello of this login: Atlas answers in the helper.
         static GREETED: AtomicBool = AtomicBool::new(false);
         if !GREETED.swap(true, Ordering::Relaxed) {
-            atlas_core::login_log::mark("daemon.firstHello");
+            atlas_core::user::login_log::mark("daemon.firstHello");
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
             Ok(census) => {

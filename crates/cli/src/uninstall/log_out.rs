@@ -148,7 +148,7 @@ pub(super) fn still_logged_in() -> Error {
 pub(super) fn logged_out_twice(uid: u32) -> bool {
     (0..2).all(|_| {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        atlas_core::session::logged_out(uid) == Some(true)
+        atlas_core::user::logins::logged_out(uid) == Some(true)
     })
 }
 
@@ -182,7 +182,7 @@ fn root_log_out(
         ));
         return Came::Stayed;
     };
-    if uid == me || atlas_core::session::console_owner() == Some(uid) {
+    if uid == me || atlas_core::user::logins::console_owner() == Some(uid) {
         return Came::Stayed;
     }
 

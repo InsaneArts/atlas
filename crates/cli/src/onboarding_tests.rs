@@ -428,12 +428,14 @@ fn opie() -> Identity {
     }
 }
 
-fn sessions(logins: &[(u32, u32, atlas_core::session::Kind)]) -> atlas_core::session::Sessions {
-    atlas_core::session::Sessions {
+fn sessions(
+    logins: &[(u32, u32, atlas_core::user::logins::Kind)],
+) -> atlas_core::user::logins::Sessions {
+    atlas_core::user::logins::Sessions {
         logins: logins
             .iter()
             .map(|(uid, pid, kind)| {
-                let window = atlas_core::session::Window {
+                let window = atlas_core::user::logins::Window {
                     uid: *uid,
                     pid: *pid,
                     age: Duration::from_secs(600),
@@ -447,7 +449,7 @@ fn sessions(logins: &[(u32, u32, atlas_core::session::Kind)]) -> atlas_core::ses
 
 #[test]
 fn a_login_under_the_helpers_user_id_is_closed_only_as_the_recorded_helpers() {
-    use atlas_core::session::Kind;
+    use atlas_core::user::logins::Kind;
 
     let found = sessions(&[
         (7001, 11, Kind::Orphan),

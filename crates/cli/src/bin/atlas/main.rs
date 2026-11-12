@@ -389,7 +389,7 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
 
     match config.desktop().kind() {
         // This Mac can see whether the second login is logged out.
-        Kind::User(login) => match atlas_core::session::absence(login.uid) {
+        Kind::User(login) => match atlas_core::user::logins::absence(login.uid) {
             Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
                 Code::LoggedOut,
                 "The helper is logged out (after a restart or a log-out)",

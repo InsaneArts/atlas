@@ -15,7 +15,7 @@ use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account,
     config::{self, Config},
-    desktop::{Desktop, User},
+    desktop::Desktop,
     error::{Code, Error, Result},
 };
 use atlas_daemon::{
@@ -332,8 +332,8 @@ pub async fn run(
         settings: uid.is_some(),
         account: found.helper.is_some(),
         other,
-        logged_in: uid.is_some_and(|uid| atlas_core::session::logged_out(uid) != Some(true)),
-        on_screen: uid.is_some() && atlas_core::session::console_owner() == uid,
+        logged_in: uid.is_some_and(|uid| atlas_core::user::logins::logged_out(uid) != Some(true)),
+        on_screen: uid.is_some() && atlas_core::user::logins::console_owner() == uid,
         remove_helper,
     };
     let steps = plan(&facts)?;
@@ -560,7 +560,7 @@ impl Teardown for Live<'_> {
         };
         let uid = identity.uid;
         if uid == nix::unistd::getuid().as_raw()
-            || atlas_core::session::console_owner() == Some(uid)
+            || atlas_core::user::logins::console_owner() == Some(uid)
         {
             self.keep_helper();
             return;
@@ -781,7 +781,7 @@ impl Live<'_> {
             self.warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
             return;
         };
-        let desktop = Desktop::from(User { uid: account.uid });
+        let desktop = Desktop::from(atlas_core::user::User { uid: account.uid });
         let outcome = Controller::new(&desktop).and_then(|controller| {
             setup::executor::setup_transaction(&controller, || {
                 setup::request_as_helper(
@@ -1041,7 +1041,7 @@ async fn settle(
             let exists = account::account_with_uid(uid)?.is_some();
             let status = client.status().await;
             let pid = setup::reported_pid(&status["inputService"]["pid"]);
-            Ok((exists, atlas_core::session::logged_in(uid), pid))
+            Ok((exists, atlas_core::user::logins::logged_in(uid), pid))
         },
         |pid| client.stop_input(pid),
         progress,

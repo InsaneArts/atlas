@@ -221,7 +221,7 @@ pub fn configure_helper(
     }
 
     let name = &helper.name;
-    match account::administrator(name) {
+    match atlas_core::user::account::administrator(name) {
         Some(false) => {}
         Some(true) => {
             return Err(problem(format!(

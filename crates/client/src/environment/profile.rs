@@ -1,7 +1,7 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
 use super::{
-    Kind, Selection, User, discovery, freeze, problem,
+    Kind, Selection, discovery, freeze, problem,
     runner::{ENVIRONMENT_TARGET, Environment},
     selectable_variable,
 };
@@ -185,7 +185,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
 /// `bytes`, in the second login `login`.
 async fn sync_in(
     client: &Client,
-    login: &User,
+    login: &atlas_core::user::User,
     path: PathBuf,
     profile: Profile,
     bytes: Vec<u8>,

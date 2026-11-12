@@ -12,7 +12,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let me = json!({
         "uid": uid,
         "name": account.name,
-        "realName": account::real_name(&account.name),
+        "realName": atlas_core::user::account::real_name(&account.name),
     });
     let app = app();
 
@@ -66,12 +66,12 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
         return Ok(reply);
     };
 
-    let admin = account::administrator(&helper.name);
+    let admin = atlas_core::user::account::administrator(&helper.name);
 
     // This account asked this helper: its request names it (the window), or
     // a setup with it is recorded (`atlas init`, or the window's finish).
     let paired = asked(uid, &helper);
-    let signed_in = atlas_core::session::logged_in(helper.uid) == Some(true);
+    let signed_in = atlas_core::user::logins::logged_in(helper.uid) == Some(true);
 
     let client = Client::new(config.clone())?;
     let acceptance = if let Some(pairing) = request()
@@ -123,7 +123,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
             "exists": true,
             "uid": helper.uid,
             "name": helper.name,
-            "realName": account::real_name(&helper.name),
+            "realName": atlas_core::user::account::real_name(&helper.name),
             "administrator": admin,
             "paired": paired,
             "forgettable": forgettable,
@@ -147,7 +147,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
 /// up a new login now, as the window reads them; `helper` is the configured
 /// helper. Both are empty when the process list could not be read.
 fn logins(helper: Option<u32>) -> (Value, Value) {
-    match atlas_core::session::sessions(helper) {
+    match atlas_core::user::logins::sessions(helper) {
         Some(sessions) => (json!(sessions.leftovers()), json!(sessions.blockers)),
         None => (json!([]), json!([])),
     }
@@ -204,7 +204,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
         json!({
             "uid": pairing.controller_uid,
             "name": pairing.controller_name,
-            "realName": account::real_name(&pairing.controller_name),
+            "realName": atlas_core::user::account::real_name(&pairing.controller_name),
         })
     });
 

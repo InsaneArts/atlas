@@ -1133,7 +1133,7 @@ pub(super) fn account() -> String {
 }
 
 /// The second login `client` acts in.
-pub(super) fn user_of(client: &Client) -> User {
+pub(super) fn user_of(client: &Client) -> atlas_core::user::User {
     match client.desktop().kind() {
         Kind::User(login) => *login,
     }

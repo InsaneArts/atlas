@@ -25,7 +25,7 @@ pub mod executor;
 
 use crate::client::Client;
 use atlas_core::{
-    account::{Account, account_named, account_with_uid, administrator},
+    account::{Account, account_named, account_with_uid},
     acl::Acl,
     app_bundle::{executable_of, signature},
     config::Config,
@@ -425,7 +425,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         "controller": controller,
         "helper": {
             "account": account,
-            "admin": administrator(&account.name),
+            "admin": atlas_core::user::account::administrator(&account.name),
         },
         "config": {
             "path": config_path,
@@ -462,7 +462,7 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
     let reachable = status["ok"] == true;
     let session = require_hidden(&status, uid).ok();
     let absence = if atlas_core::session::silent(&status) {
-        tokio::task::spawn_blocking(move || atlas_core::session::absence(uid))
+        tokio::task::spawn_blocking(move || atlas_core::user::logins::absence(uid))
             .await
             .ok()
             .flatten()
