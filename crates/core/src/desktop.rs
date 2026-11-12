@@ -3,7 +3,7 @@
 use crate::{
     digest::bytes_sha256,
     error::Result,
-    process::{self, Info},
+    process::{self, Info, Instance},
     protocol::{self, Left},
     session::{Observation, Session},
 };
@@ -109,6 +109,29 @@ impl Desktop {
     pub fn orphans_run(&self) -> Result<bool> {
         match &self.kind {
             Kind::SecondLogin(login) => Ok(orphaned(&process::of_user(login.uid)?)),
+        }
+    }
+
+    /// Process `pid` of this desktop, told apart from a later process with
+    /// the same number; none when it cannot be looked at.
+    pub fn instance(&self, pid: u32) -> Option<Instance> {
+        match &self.kind {
+            Kind::SecondLogin(_) => i32::try_from(pid)
+                .ok()
+                .and_then(|pid| process::info(pid).ok().flatten())
+                .map(|info| info.instance),
+        }
+    }
+
+    /// Whether `instance` of this desktop has exited: its PID is gone, a
+    /// zombie, or another process's. Unknown is not exited.
+    pub fn exited(&self, instance: Instance) -> bool {
+        match &self.kind {
+            Kind::SecondLogin(_) => match process::info(instance.pid) {
+                Ok(None) => true,
+                Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
+                Err(_) => false,
+            },
         }
     }
 }

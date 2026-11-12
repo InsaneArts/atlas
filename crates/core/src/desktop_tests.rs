@@ -52,6 +52,24 @@ fn a_full_look_finds_work_whose_group_leader_is_gone() {
 }
 
 #[test]
+fn a_process_has_exited_only_once_its_instance_is_gone() {
+    let desktop = login(nix::unistd::getuid().as_raw());
+    let mut child =
+        crate::test_support::TestChild::spawn(&mut std::process::Command::new("/bin/cat"));
+    let instance = desktop
+        .instance(child.process.id())
+        .expect("a running process can be looked at");
+    assert!(!desktop.exited(instance), "it still runs");
+
+    drop(child.process.stdin.take());
+    assert!(child.wait().success());
+    assert!(desktop.exited(instance), "it ended and was reaped");
+    // A PID that names another process later is not the one that ran.
+    let reused = crate::process::Instance::new(i32::try_from(std::process::id()).unwrap(), [1, 0]);
+    assert!(desktop.exited(reused));
+}
+
+#[test]
 fn a_second_login_is_asked_about_its_own_account_alone() {
     use std::os::unix::process::CommandExt;
 

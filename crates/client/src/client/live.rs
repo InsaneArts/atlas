@@ -245,10 +245,7 @@ impl LiveStream {
             stream.producer = Some(Served {
                 daemon,
                 generation,
-                instance: i32::try_from(daemon)
-                    .ok()
-                    .and_then(|pid| atlas_core::process::info(pid).ok().flatten())
-                    .map(|info| info.instance),
+                instance: client.desktop().instance(daemon),
             });
         }
         Ok(Some(stream))
@@ -404,7 +401,7 @@ impl LiveStream {
         let _ = tokio::time::timeout_at(until, self.socket.shutdown()).await;
         loop {
             // A daemon that exited took its native source with it.
-            if exited(instance) {
+            if instance.is_some_and(|instance| client.desktop().exited(instance)) {
                 return Ok(());
             }
             let query = atlas_core::files::token()[..32].to_owned();
@@ -589,16 +586,6 @@ struct Served {
     daemon: u32,
     generation: u64,
     instance: Option<atlas_core::process::Instance>,
-}
-
-/// Whether the daemon in `instance` has exited: its PID is gone, a zombie,
-/// or another process's. Unknown is not exited.
-fn exited(instance: Option<atlas_core::process::Instance>) -> bool {
-    instance.is_some_and(|instance| match atlas_core::process::info(instance.pid) {
-        Ok(None) => true,
-        Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
-        Err(_) => false,
-    })
 }
 
 /// One acquisition's record as it goes: the stage it is in and when that
