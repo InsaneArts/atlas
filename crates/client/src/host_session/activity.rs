@@ -13,7 +13,6 @@ use super::{
 use crate::{
     activity_log::{self, Row},
     client::Client,
-    handoff,
     task::{
         Owned,
         record::{installs_of, unfinished_cleanup_of},
@@ -410,7 +409,7 @@ impl Reading<'_> {
     fn copies(&self, tokens: &[Token]) -> Vec<Value> {
         tokens
             .iter()
-            .map(|token| json!({"app": handoff::copy_app(self.store.copies(), token)}))
+            .map(|token| json!({"app": self.store.copies().app(token)}))
             .collect()
     }
 
@@ -431,9 +430,7 @@ impl Reading<'_> {
                 for (owned, state) in task.claims() {
                     let live = state.live();
                     match owned {
-                        Owned::Copy { id }
-                            if live && handoff::copy_exists(self.store.copies(), &id) =>
-                        {
+                        Owned::Copy { id } if live && self.store.copies().exists(&id) => {
                             copies += 1;
                         }
                         Owned::Plan { id }

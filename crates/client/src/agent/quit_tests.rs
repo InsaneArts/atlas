@@ -1,5 +1,7 @@
 use super::*;
 use crate::agent::tests::refused;
+use crate::handoff::Copies;
+use std::path::Path;
 
 #[test]
 fn quit_output_names_each_signalled_app_once() {
@@ -68,7 +70,7 @@ async fn a_close_whose_first_list_is_refused_quits_nothing_and_keeps_every_copy(
 
     let error = helper
         .serve(
-            close_in(&client, Closing::App("TextEdit"), &root),
+            close_in(&client, Closing::App("TextEdit"), &Copies::in_folder(&root)),
             |request| {
                 signalled |= quitting(request);
                 Some(refused("busy"))
@@ -94,7 +96,7 @@ async fn a_close_whose_list_fails_after_the_signal_keeps_the_copies_and_says_wha
 
     let error = helper
         .serve(
-            close_in(&client, Closing::App("TextEdit"), &root),
+            close_in(&client, Closing::App("TextEdit"), &Copies::in_folder(&root)),
             |request| {
                 if quitting(request) {
                     return Some(completed("812\n"));
@@ -130,9 +132,10 @@ async fn a_malformed_list_never_reads_as_not_running() {
     let (root, copies) = two_copies(directory.path());
 
     let error = helper
-        .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
-            Some(json!({"ok": true, "apps": null}))
-        })
+        .serve(
+            close_in(&client, Closing::App("TextEdit"), &Copies::in_folder(&root)),
+            |_| Some(json!({"ok": true, "apps": null})),
+        )
         .await
         .unwrap_err();
 
@@ -150,9 +153,10 @@ async fn an_empty_list_still_means_not_running() {
     let (root, copies) = two_copies(directory.path());
 
     let reply = helper
-        .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
-            Some(json!({"ok": true, "apps": []}))
-        })
+        .serve(
+            close_in(&client, Closing::App("TextEdit"), &Copies::in_folder(&root)),
+            |_| Some(json!({"ok": true, "apps": []})),
+        )
         .await
         .unwrap();
 
@@ -195,9 +199,10 @@ async fn removed_copies_are_settled_in_the_task_that_claimed_them() {
         .unwrap();
 
     let reply = helper
-        .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
-            Some(json!({"ok": true, "apps": []}))
-        })
+        .serve(
+            close_in(&client, Closing::App("TextEdit"), &Copies::in_folder(&root)),
+            |_| Some(json!({"ok": true, "apps": []})),
+        )
         .await
         .unwrap();
 
@@ -224,7 +229,7 @@ async fn a_close_keeps_the_apps_identity_after_it_has_quit() {
             close_in(
                 &client,
                 Closing::App("TextEdit"),
-                &directory.path().join("copies"),
+                &Copies::in_folder(&directory.path().join("copies")),
             ),
             |request| {
                 Some(if quitting(request) {

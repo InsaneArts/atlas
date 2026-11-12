@@ -62,11 +62,9 @@ pub(super) fn targets(
     let mut targets = Targets::default();
     for bundle in bundles {
         let within = match bundle {
-            Bundle::Copy(token) => hands.copy_node(token, session).map(|node| Within {
-                folder: handoff::copy_folder(hands.copies(), token)
-                    .to_string_lossy()
-                    .into_owned(),
-                node,
+            Bundle::Copy(token) => hands.copies().identity(token, session).map(|copy| Within {
+                folder: copy.folder,
+                node: copy.node,
             }),
             Bundle::Install(id) => install_in(installs, id).and_then(proven_install),
         };

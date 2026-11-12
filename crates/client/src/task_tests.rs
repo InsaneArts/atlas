@@ -2,6 +2,7 @@ use super::{
     record::{Entry, Noted, OWNED, Record, VERSION},
     *,
 };
+use crate::handoff::Copies;
 use crate::host_session::{Host, store::Store as Sessions};
 use serde_json::json;
 use std::{ffi::OsStr, fs, path::Path};
@@ -348,7 +349,7 @@ fn a_rolled_back_plan_is_settled_in_every_task_that_claimed_it() {
     let facts = ReplyFacts::new(
         changes,
         &rolled_back(&kept, &[".config/probe"]),
-        Path::new(crate::handoff::ROOT),
+        &Copies::in_shared_folder(),
     );
     settle_rolled_back_facts(&client, &facts).unwrap();
     let preview = Ok(json!({"ok": true, "planId": undone, "phase": "rolledBack", "preview": true}));
@@ -393,7 +394,7 @@ fn an_unconfirmed_rollback_leaves_pending_task_claims_unchanged() {
         let facts = ReplyFacts::new(
             Kind::Environment { changes: true },
             &result,
-            Path::new(crate::handoff::ROOT),
+            &Copies::in_shared_folder(),
         );
         settle_rolled_back_facts(&client, &facts).unwrap();
         assert_eq!(bytes(output, &task), before);

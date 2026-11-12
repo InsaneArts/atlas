@@ -5,10 +5,9 @@
 //! its installs, which a copy into the helper may have written into;
 //! remove its copy folders. Each step names the steps it waits for.
 use super::receipt::{Entry, StepState};
-use crate::{collect::ReceiptId, handoff, host_session::Key, task::Owned};
+use crate::{collect::ReceiptId, handoff::Copies, host_session::Key, task::Owned};
 use atlas_core::{files::Token, protocol::JobId};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// One step of a cleanup: what it does, and to which recorded thing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,9 +70,9 @@ impl Step {
     }
 
     /// The app a copy folder this step removes is for, under `copies`.
-    pub(super) fn copied_app(&self, copies: &Path) -> Option<String> {
+    pub(super) fn copied_app(&self, copies: &Copies) -> Option<String> {
         match self {
-            Self::RemoveCopy { copy } => handoff::copy_app(copies, copy),
+            Self::RemoveCopy { copy } => copies.app(copy),
             Self::CheckOutputs { .. }
             | Self::Quit { .. }
             | Self::StopJob { .. }

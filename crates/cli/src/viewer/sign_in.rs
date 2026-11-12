@@ -9,21 +9,15 @@
 //! the viewer itself ending. The person's Stop is never touched.
 use super::{LEASE_SECONDS, Viewer};
 use crate::menubar::Line;
-use atlas_client::{agent, client::Client, jobs};
+use atlas_client::{agent, app_selection, client::Client, jobs};
 use atlas_control::{ActionPermit, Beside, HoldKind, PrivateHold};
-use atlas_core::{
-    desktop::Kind,
-    error::{Code, Error, Holder, Result},
-};
+use atlas_core::error::{Code, Error, Holder, Result};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 /// What the person hears when an agent's command keeps them from signing in.
 pub(super) const COMMAND_RUNNING: &str =
     "An agent's command is still running. Try again when it ends.";
-
-/// Where the browsers the helper may sign in with are installed.
-const APPLICATIONS: &str = "/Applications";
 
 /// The helper's browser a sign-in opens: Google Chrome, else Firefox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,11 +50,11 @@ impl Browser {
             .find(|browser| browser.bundle() == bundle)
     }
 
-    /// The first of Chrome and Firefox installed in `applications`.
-    fn installed_in(applications: &Path) -> Option<Self> {
+    /// The first of Chrome and Firefox that `installed` says is installed.
+    fn first_installed(installed: impl Fn(&str) -> bool) -> Option<Self> {
         [Self::Chrome, Self::Firefox]
             .into_iter()
-            .find(|browser| applications.join(format!("{}.app", browser.app())).is_dir())
+            .find(|browser| installed(browser.app()))
     }
 
     /// Whether a page opens in a window of its own: Chrome opens one for it,
@@ -114,9 +108,9 @@ impl Viewer {
             Some(bundle) => Browser::of(bundle).ok_or_else(|| {
                 Error::new(Code::Input, "Atlas opens Google Chrome or Firefox for this")
             })?,
-            // A second login shares this Mac's Applications folder.
-            None => match self.client().desktop().kind() {
-                Kind::SecondLogin(_) => Browser::installed_in(Path::new(APPLICATIONS)),
+            None => {
+                let desktop = self.client().desktop();
+                Browser::first_installed(|app| app_selection::installed(&desktop, app))
             }
             .ok_or_else(|| {
                 Error::new(

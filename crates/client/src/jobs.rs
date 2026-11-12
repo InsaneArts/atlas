@@ -728,7 +728,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
 
 /// Whether the desktop's daemon may be listening, so a failed connection
 /// to it does not prove it keeps no jobs.
-fn daemon_listens(client: &Client) -> bool {
+pub(crate) fn daemon_listens(client: &Client) -> bool {
     match client.desktop().kind() {
         Kind::SecondLogin(_) => client.transport.path.exists(),
     }

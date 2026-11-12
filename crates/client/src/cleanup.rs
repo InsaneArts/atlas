@@ -18,7 +18,6 @@ mod tests;
 use crate::{
     client::{Actor, AppList, Client},
     environment::PlanState,
-    handoff,
     host_session::{
         Key,
         store::{Read as SessionRead, Store as Sessions},
@@ -241,7 +240,7 @@ impl Preview {
                 }
             }
             Step::RemoveCopy { copy } => {
-                value["present"] = json!(handoff::copy_exists(copies, copy));
+                value["present"] = json!(copies.exists(copy));
             }
             Step::CheckOutputs { outputs } => {
                 let found: Vec<_> = outputs.iter().map(|output| hands.intact(output)).collect();

@@ -224,7 +224,7 @@ pub(crate) fn settle_rolled_back(
     kind: Kind,
     result: &Result<Value>,
 ) -> Result<()> {
-    let copies = crate::handoff::copies_folder(&client.desktop());
+    let copies = crate::handoff::Copies::of(&client.desktop());
     settle_rolled_back_facts(client, &ReplyFacts::new(kind, result, &copies))
 }
 

@@ -252,7 +252,7 @@ impl Viewer {
                         .leftovers(&seen.record, &[])
                         .copies
                         .iter()
-                        .map(|token| atlas_client::handoff::copy_app(store.copies(), token))
+                        .map(|token| store.copies().app(token))
                         .collect();
                     (seen.record.key.clone(), apps)
                 })

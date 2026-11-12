@@ -78,16 +78,12 @@ const ALLOWED: &[(&str, &str)] = &[
         "owner: the name its account goes by",
     ),
     (
-        "crates/cli/src/viewer/sign_in.rs",
-        "owner: which browser it has for signing in",
-    ),
-    (
         "crates/client/src/agent/elements.rs",
         "owner: where the inspection tool it runs is",
     ),
     (
         "crates/client/src/app_selection.rs",
-        "owner: which of its apps is Atlas, left running when apps are closed",
+        "owner: which apps it has installed, and which of its apps is Atlas",
     ),
     (
         "crates/client/src/capability.rs",
@@ -96,10 +92,6 @@ const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/client/src/capability/canary.rs",
         "second login: establishing native capability evidence",
-    ),
-    (
-        "crates/client/src/cleanup/live.rs",
-        "owner: a copy's identity as it sees it, for a cleanup",
     ),
     (
         "crates/client/src/client.rs",
@@ -138,10 +130,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "owner: syncing, applying, rolling back and running an environment in it",
     ),
     (
-        "crates/client/src/environment/discovery.rs",
-        "second login: what environment discovery says of its account",
-    ),
-    (
         "crates/client/src/environment/list.rs",
         "owner: listing the environments copied into it",
     ),
@@ -163,7 +151,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/handoff.rs",
-        "owner: opening a file in it, and the second login's way of doing so",
+        "owner: opening a file in it and every use of the copies made, and the second login's way of doing so",
     ),
     (
         "crates/client/src/home_privacy.rs",
@@ -207,7 +195,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/core/src/config.rs",
-        "owner: the desktop that the settings name",
+        "second login: the flat settings file, which names one second login",
     ),
     (
         "crates/core/src/desktop.rs",

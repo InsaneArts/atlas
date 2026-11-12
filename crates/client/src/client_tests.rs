@@ -1046,6 +1046,8 @@ async fn a_successful_but_uncertain_release_keeps_its_original_claim() {
 async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value) {
     let (dir, mut client, input, _session) = native_client();
     client.actor = Actor::Viewer;
+    // As in use, commands go to the daemon's socket.
+    client.transport.path = client.config.socket_path.clone();
     let daemon = UnixListener::bind(&client.config.socket_path).unwrap();
     let mut caller = Box::pin(client.hold(true));
     let mut hello = dispatched(&mut caller, &input, "hello").await;
@@ -1309,6 +1311,8 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
     let helper = UnixListener::bind(&client.transport.path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
+    // The person's Stop finds no daemon keeping jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let run = || run_of(&["true"], 1000);
     let ownership = acting.controller.acquire(false).unwrap();
@@ -1551,6 +1555,8 @@ async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fa
     let helper = UnixListener::bind(&client.transport.path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
+    // The person's Stop finds no daemon keeping jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let ownership = acting.controller.acquire(false).unwrap();
     let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));

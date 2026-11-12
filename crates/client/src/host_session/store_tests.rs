@@ -57,7 +57,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
         client,
         session,
         Some(&Doing::new(verb)),
-        &ReplyFacts::new(kind, &Ok(reply), Path::new(crate::handoff::ROOT)),
+        &ReplyFacts::new(kind, &Ok(reply), &Copies::in_shared_folder()),
         || now,
     )
     .unwrap();
@@ -68,7 +68,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
 fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
     let kind = Kind::Environment { changes };
     let result = Ok(reply);
-    let facts = ReplyFacts::new(kind, &result, Path::new(crate::handoff::ROOT));
+    let facts = ReplyFacts::new(kind, &result, &Copies::in_shared_folder());
     note_at(client, session, None, &facts, || TEST_NOW).unwrap();
     forget_rolled_back_facts(client, &facts).unwrap();
 }
@@ -270,16 +270,12 @@ fn an_absent_reply_leaves_existing_copy_labels_intact() {
     let facts = ReplyFacts::new(
         Kind::Open,
         &Err(Error::new(Code::Transport, "No reply").uncertain()),
-        Path::new(crate::handoff::ROOT),
+        &Copies::in_shared_folder(),
     );
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
 
-    let facts = ReplyFacts::new(
-        Kind::Open,
-        &Ok(Value::Null),
-        Path::new(crate::handoff::ROOT),
-    );
+    let facts = ReplyFacts::new(Kind::Open, &Ok(Value::Null), &Copies::in_shared_folder());
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     record.copies.truncate(64);
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
@@ -399,7 +395,7 @@ fn settlement_uses_decoded_facts_even_when_its_projection_changes() {
     let kind = Kind::Environment { changes: true };
     let mut projection = Ok(json!({"ok": true, "phase": "rolledBack", "planId": plan,
         "keptTargets": ["private target"], "retainedDirectories": []}));
-    let facts = ReplyFacts::new(kind, &projection, Path::new(crate::handoff::ROOT));
+    let facts = ReplyFacts::new(kind, &projection, &Copies::in_shared_folder());
     projection.as_mut().unwrap()["phase"] = json!("future");
     projection.as_mut().unwrap()["planId"] = json!("private token");
     projection.as_mut().unwrap()["keptTargets"] = json!([]);
@@ -427,7 +423,7 @@ fn the_record_keeps_atlas_names_and_tokens_but_never_file_names_or_text() {
     let client = client(directory.path());
     let session = session("private");
     let token = Token::new();
-    let copy = format!("{}/{token}/Quarterly Plan.txt", handoff::ROOT);
+    let copy = format!("{}/{token}/Quarterly Plan.txt", crate::handoff::ROOT);
 
     noted(
         &client,
@@ -511,7 +507,7 @@ fn a_close_drops_the_copies_it_removed() {
     let client = client(directory.path());
     let session = session("closing");
     let (kept, gone) = (Token::new(), Token::new());
-    let copied = |token: &Token| json!({"from": "/tmp/a.txt", "to": format!("{}/{token}/a.txt", handoff::ROOT)});
+    let copied = |token: &Token| json!({"from": "/tmp/a.txt", "to": format!("{}/{token}/a.txt", crate::handoff::ROOT)});
 
     noted(
         &client,
@@ -525,7 +521,7 @@ fn a_close_drops_the_copies_it_removed() {
         &session,
         Kind::Close,
         "close",
-        json!({"ok": true, "removed": [format!("{}/{gone}", handoff::ROOT)]}),
+        json!({"ok": true, "removed": [format!("{}/{gone}", crate::handoff::ROOT)]}),
     );
 
     let record = store(&client).read(session.key()).unwrap();

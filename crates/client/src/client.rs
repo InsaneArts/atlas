@@ -36,7 +36,7 @@ use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
-    desktop::{Desktop, Kind},
+    desktop::{Desktop, Kind, SecondLogin},
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
@@ -338,10 +338,15 @@ impl Client {
                 .await?;
             return Self::challenged_proof(&reply, &challenge);
         }
-        // A second login runs the shared Atlas command from this disk.
-        let command = match self.desktop().kind() {
-            Kind::SecondLogin(_) => &self.config.identity_probe,
-        };
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.session_proof_by_command(login).await,
+        }
+    }
+
+    /// A fresh proof of the second login `login`'s session from a new run of
+    /// the shared Atlas command, which it runs from this disk.
+    async fn session_proof_by_command(&self, _login: &SecondLogin) -> Result<Value> {
+        let command = &self.config.identity_probe;
         let request = json!({
             "op": "run",
             "argv": [command, "session-info"],

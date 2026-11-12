@@ -10,7 +10,8 @@ use super::{
     record::{Leftovers, Record, Seen, VERSION},
 };
 use crate::{
-    client::Client, doing::Doing, environment::Phase, handoff, helper_info::Capture, task::State,
+    client::Client, doing::Doing, environment::Phase, handoff::Copies, helper_info::Capture,
+    task::State,
 };
 use atlas_control::{Cause, Controller};
 use atlas_core::{
@@ -23,7 +24,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -91,9 +92,8 @@ enum Left {
 
 impl ReplyFacts {
     /// Decode only Atlas names and settlement facts, never private reply text.
-    /// Copies are known by their place in `copies`, the folder the desktop
-    /// the reply came from opens copies from.
-    pub fn new(kind: Kind, result: &Result<Value>, copies: &Path) -> Self {
+    /// Copies are known by `copies`, those of the desktop the reply came from.
+    pub fn new(kind: Kind, result: &Result<Value>, copies: &Copies) -> Self {
         let refused_code = |code: &str| matches!(code, "busy" | "stopped" | "uncertain");
         let reply = match result {
             Err(error) => {
@@ -160,8 +160,8 @@ static RECENT: Mutex<Option<Cached<Seen>>> = Mutex::new(None);
 /// The records of one output folder.
 pub struct Store {
     folder: RecordFolder<Key>,
-    /// Where `open`'s copy folders are.
-    copies: PathBuf,
+    /// The copies `open` made, which its records name.
+    copies: Copies,
 }
 
 /// A record file, including bytes this build must preserve.
@@ -202,19 +202,19 @@ impl Store {
     pub fn at(output: &Path) -> Self {
         Self {
             folder: RecordFolder::at(output, &SESSIONS),
-            copies: PathBuf::from(handoff::ROOT),
+            copies: Copies::in_shared_folder(),
         }
     }
 
     /// This store, with copy folders under `root` instead.
     #[cfg(test)]
     pub(crate) fn copying_into(mut self, root: &Path) -> Self {
-        self.copies = root.to_owned();
+        self.copies = Copies::in_folder(root);
         self
     }
 
-    /// Where `open`'s copy folders are.
-    pub fn copies(&self) -> &Path {
+    /// The copies `open` made, which its records name.
+    pub fn copies(&self) -> &Copies {
         &self.copies
     }
 
@@ -452,7 +452,7 @@ impl Store {
         record
             .copies
             .iter()
-            .filter(|token| handoff::copy_exists(&self.copies, token))
+            .filter(|token| self.copies.exists(token))
             .cloned()
             .collect()
     }
@@ -564,7 +564,7 @@ pub fn note(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) -> Result<()> {
-    let copies = handoff::copies_folder(&client.desktop());
+    let copies = Copies::of(&client.desktop());
     note_facts(
         client,
         session,
@@ -638,7 +638,7 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 /// session or this one. It decides nothing about the rollback itself.
 #[cfg(test)]
 fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
-    let copies = handoff::copies_folder(&client.desktop());
+    let copies = Copies::of(&client.desktop());
     forget_rolled_back_facts(client, &ReplyFacts::new(kind, result, &copies))
 }
 
@@ -668,7 +668,7 @@ fn capture_named(path: &Value) -> Option<Capture> {
 fn tokens<'a>(
     listed: &'a Value,
     field: &'a str,
-    copies: &'a Path,
+    copies: &'a Copies,
 ) -> impl Iterator<Item = Token> + 'a {
     listed
         .as_array()
@@ -680,7 +680,7 @@ fn tokens<'a>(
             } else {
                 &entry[field]
             };
-            handoff::token_of(path.as_str()?, copies)
+            copies.token_of(path.as_str()?)
         })
 }
 

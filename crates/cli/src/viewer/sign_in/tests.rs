@@ -5,7 +5,7 @@ use atlas_client::{
     test_support::{Helper, completed, exited},
 };
 use atlas_core::test_support::UID;
-use std::sync::Mutex;
+use std::{path::Path, sync::Mutex};
 
 #[test]
 fn a_typed_address_opens_as_typed_and_is_listed_by_its_site() {
@@ -92,25 +92,15 @@ fn each_hold_opens_the_browsers_own_page_for_it() {
 
 #[test]
 fn chrome_is_chosen_when_installed_and_firefox_otherwise() {
-    let applications = tempfile::tempdir().unwrap();
-    assert_eq!(Browser::installed_in(applications.path()), None);
-    fs_dir(applications.path(), "Firefox.app");
+    assert_eq!(Browser::first_installed(|_| false), None);
     assert_eq!(
-        Browser::installed_in(applications.path()),
+        Browser::first_installed(|app| app == "Firefox"),
         Some(Browser::Firefox)
     );
-    fs_dir(applications.path(), "Google Chrome.app");
-    assert_eq!(
-        Browser::installed_in(applications.path()),
-        Some(Browser::Chrome)
-    );
+    assert_eq!(Browser::first_installed(|_| true), Some(Browser::Chrome));
     assert_eq!(Browser::of("com.google.Chrome"), Some(Browser::Chrome));
     assert_eq!(Browser::of("org.mozilla.firefox"), Some(Browser::Firefox));
     assert_eq!(Browser::of("com.apple.Safari"), None);
-}
-
-fn fs_dir(parent: &Path, name: &str) {
-    std::fs::create_dir(parent.join(name)).unwrap();
 }
 
 /// How the stand-in helper answers a sign-in's steps.

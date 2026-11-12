@@ -35,12 +35,117 @@ use std::{
 /// Where the copies live.
 pub const ROOT: &str = "/Users/Shared/Atlas/Open";
 
-/// The folder on this disk that `desktop` opens copies of files from, and
-/// where they are found, checked and removed again. A desktop has one only
-/// when it shares this disk.
-pub fn copies_folder(desktop: &Desktop) -> PathBuf {
-    match desktop.kind() {
-        Kind::SecondLogin(_) => PathBuf::from(ROOT),
+/// The copies a desktop opens, and everything done with them once made:
+/// whether one is still there, the app it is for, where it is and its
+/// identity, which a path lies in, and removing and pruning them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Copies(Place);
+
+/// Where a desktop keeps its copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Place {
+    /// A folder of this disk the desktop reads, as a second login does:
+    /// ROOT, but in tests.
+    SharedFolder(PathBuf),
+}
+
+/// A copy folder's identity, as a cleanup of the session that made it
+/// checks what runs from it against: where it is, and the node it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CopyIdentity {
+    pub(crate) folder: String,
+    pub(crate) node: String,
+}
+
+impl Copies {
+    /// The copies `desktop` opens.
+    pub fn of(desktop: &Desktop) -> Self {
+        match desktop.kind() {
+            Kind::SecondLogin(_) => Self::in_shared_folder(),
+        }
+    }
+
+    /// The copies in this disk's shared folder, which a second login opens
+    /// and which session records name, as they do not say which desktop
+    /// made them.
+    pub(crate) fn in_shared_folder() -> Self {
+        Self(Place::SharedFolder(PathBuf::from(ROOT)))
+    }
+
+    /// The copies in the folder `root`, for tests.
+    #[cfg(test)]
+    pub(crate) fn in_folder(root: &Path) -> Self {
+        Self(Place::SharedFolder(root.to_path_buf()))
+    }
+
+    /// Whether the copy folder `token` names is still there.
+    pub(crate) fn exists(&self, token: &Token) -> bool {
+        match &self.0 {
+            Place::SharedFolder(root) => copy_exists(root, token),
+        }
+    }
+
+    /// The app the copy folder `token` names is for: the app its files
+    /// were opened with, else the app it holds. Never a copied file's name.
+    pub fn app(&self, token: &Token) -> Option<String> {
+        match &self.0 {
+            Place::SharedFolder(root) => copy_app(root, token),
+        }
+    }
+
+    /// Where the copy folder `token` names is, as replies show it.
+    pub(crate) fn location(&self, token: &Token) -> String {
+        match &self.0 {
+            Place::SharedFolder(root) => copy_folder(root, token).to_string_lossy().into_owned(),
+        }
+    }
+
+    /// The identity of the copy folder `token` names, when a cleanup of
+    /// `session`'s work may treat it as its own.
+    pub(crate) fn identity(&self, token: &Token, session: &Key) -> Option<CopyIdentity> {
+        match &self.0 {
+            Place::SharedFolder(root) => copy_node(root, token, session).map(|node| CopyIdentity {
+                folder: copy_folder(root, token).to_string_lossy().into_owned(),
+                node,
+            }),
+        }
+    }
+
+    /// The token of the copy folder `path` lies in, when it lies in one of
+    /// these copies: the folder's own name, never the copy's.
+    pub(crate) fn token_of(&self, path: &str) -> Option<Token> {
+        match &self.0 {
+            Place::SharedFolder(root) => token_of(path, root),
+        }
+    }
+
+    /// Remove the copy folder `token` names for a cleanup of `session`'s
+    /// work, unless an app in `running` may use it: see [`remove_copy`].
+    pub(crate) fn remove(&self, token: &Token, session: &Key, running: &[AppRow]) -> CopyRemoval {
+        match &self.0 {
+            Place::SharedFolder(root) => remove_copy(root, token, session, running),
+        }
+    }
+
+    /// Remove the copies of `app` for host `session`'s command or none,
+    /// unless an app in `running` may use them: see [`remove_copies_in`].
+    pub(crate) fn remove_of_app(
+        &self,
+        app: &str,
+        running: &[AppRow],
+        session: Option<&Key>,
+    ) -> Removed {
+        match &self.0 {
+            Place::SharedFolder(root) => remove_copies_in(root, app, running, session),
+        }
+    }
+
+    /// Remove the copies older than a week that no app in `running` may
+    /// use: see [`prune_in`]. The tokens of those removed come back.
+    pub(crate) fn prune(&self, running: &[AppRow]) -> Vec<Token> {
+        match &self.0 {
+            Place::SharedFolder(root) => prune_in(root, running),
+        }
     }
 }
 
@@ -743,7 +848,7 @@ fn labelled(folder: &Path) -> Label {
 
 /// The token of the copy folder `path` lies in, when it lies in one under
 /// `copies`: the folder's own name, never the copy's.
-pub(crate) fn token_of(path: &str, copies: &Path) -> Option<Token> {
+fn token_of(path: &str, copies: &Path) -> Option<Token> {
     let rest = Path::new(path).strip_prefix(copies).ok()?;
     Token::parse(rest.components().next()?.as_os_str().to_str()?)
 }
@@ -754,13 +859,13 @@ fn folder_token(folder: &Path) -> Option<Token> {
 }
 
 /// Whether the copy folder `token` names is still there, under `root`.
-pub(crate) fn copy_exists(root: &Path, token: &Token) -> bool {
+fn copy_exists(root: &Path, token: &Token) -> bool {
     private_folder(&root.join(token.as_str()))
 }
 
 /// The app the copy folder `token` names is for: the app its files were
 /// opened with, else the app it holds. Never a copied file's name.
-pub fn copy_app(root: &Path, token: &Token) -> Option<String> {
+fn copy_app(root: &Path, token: &Token) -> Option<String> {
     let folder = root.join(token.as_str());
     if !private_folder(&folder) {
         return None;
@@ -909,12 +1014,7 @@ impl Removed {
 /// once `app` was gone) and, for a command of host `session`, any another
 /// session made or whose label cannot be read. Without a session, every
 /// copy not in use goes: a session only ever keeps more.
-pub(crate) fn remove_copies_in(
-    root: &Path,
-    app: &str,
-    running: &[AppRow],
-    session: Option<&Key>,
-) -> Removed {
+fn remove_copies_in(root: &Path, app: &str, running: &[AppRow], session: Option<&Key>) -> Removed {
     let mut removed = Removed::default();
     for folder in copies_of(root, app) {
         let Some(name) = folder.file_name().and_then(|name| name.to_str()) else {
@@ -1061,7 +1161,7 @@ impl OpenCopy {
 /// `root`, when a cleanup of host session `session`'s work may treat it as
 /// its own, judged from one descriptor: what quitting what runs from it is
 /// checked against.
-pub(crate) fn copy_node(root: &Path, token: &Token, session: &Key) -> Option<String> {
+fn copy_node(root: &Path, token: &Token, session: &Key) -> Option<String> {
     root_if_owned_in(root)?;
     let held = open_folder(root).ok()?;
     let copy = OpenCopy::open(&held, token.as_str()).ok()??;
@@ -1078,12 +1178,7 @@ pub(crate) fn copy_node(root: &Path, token: &Token, session: &Key) -> Option<Str
 /// Atlas's own duplicates of the person's files, so it is deleted where it
 /// is, once its path is seen to name that same folder still; one swapped
 /// meanwhile is kept. Only that one folder is looked at.
-pub(crate) fn remove_copy(
-    root: &Path,
-    token: &Token,
-    session: &Key,
-    running: &[AppRow],
-) -> CopyRemoval {
+fn remove_copy(root: &Path, token: &Token, session: &Key, running: &[AppRow]) -> CopyRemoval {
     take_copy(root, token.as_str(), Some(session), running)
 }
 
@@ -1126,7 +1221,7 @@ pub fn runs_from(executable: &str, folder: &Path) -> bool {
 }
 
 /// Where the copy folder `token` names is, under `root`.
-pub fn copy_folder(root: &Path, token: &Token) -> PathBuf {
+fn copy_folder(root: &Path, token: &Token) -> PathBuf {
     root.join(token.as_str())
 }
 
@@ -1134,7 +1229,7 @@ pub fn copy_folder(root: &Path, token: &Token) -> PathBuf {
 /// not in use by an app in `running` (the helper's apps), so a copy nobody
 /// closed does not stay forever. The tokens of the folders removed come
 /// back, so their claims can be settled.
-pub(crate) fn prune_in(root: &Path, running: &[AppRow]) -> Vec<Token> {
+fn prune_in(root: &Path, running: &[AppRow]) -> Vec<Token> {
     prune_at(root, running, std::time::SystemTime::now(), |_| ())
 }
 

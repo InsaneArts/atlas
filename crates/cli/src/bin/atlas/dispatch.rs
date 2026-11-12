@@ -238,7 +238,7 @@ fn note_outcome(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) {
-    let copies = atlas_client::handoff::copies_folder(&client.desktop());
+    let copies = atlas_client::handoff::Copies::of(&client.desktop());
     let facts = host_session::store::ReplyFacts::new(kind, result, &copies);
     if let Some(host) = host {
         let _ = host_session::store::note_facts(client, host, doing, &facts);

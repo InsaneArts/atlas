@@ -3,6 +3,7 @@
 //! Agents' commands read it before they change the helper, and a command
 //! under way hears of it from either side's saved marker.
 use super::{Actor, Client};
+use crate::jobs;
 use atlas_core::{
     desktop::Kind,
     error::{Code, Error, Result},
@@ -54,14 +55,10 @@ impl Client {
     /// could not be told. A daemon that is not running, or that keeps no
     /// jobs, has none to end.
     async fn end_jobs_for_stop(&self) -> (Option<Value>, Option<String>) {
-        // The daemon, by the socket the settings name, answering within two
-        // seconds.
-        let daemon = match self.desktop().kind() {
-            Kind::SecondLogin(_) => Transport {
-                path: self.config.socket_path.clone(),
-                timeout: Duration::from_secs(2),
-                peer_uid: self.transport.peer_uid,
-            },
+        // The daemon, answering within two seconds.
+        let daemon = Transport {
+            timeout: Duration::from_secs(2),
+            ..self.transport.clone()
         };
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
         let unconfirmed = || {
@@ -94,7 +91,7 @@ impl Client {
             Ok(reply) if reply["code"] == "job" => unconfirmed(),
             // A removed socket does not acknowledge a request already sent.
             Err(error)
-                if error.code == Code::Io && !error.uncertain && !self.daemon_socket_present() =>
+                if error.code == Code::Io && !error.uncertain && !jobs::daemon_listens(self) =>
             {
                 (None, None)
             }
@@ -213,14 +210,6 @@ impl Client {
     /// marker, or the person's note.
     pub(crate) fn stop_marked(&self) -> bool {
         matches!(self.service_stop_saved(), Ok(true)) || self.controller.stop_noted()
-    }
-
-    /// Whether the daemon's socket is there, so a failed connection to it
-    /// does not prove it keeps no jobs.
-    fn daemon_socket_present(&self) -> bool {
-        match self.desktop().kind() {
-            Kind::SecondLogin(_) => self.config.socket_path.exists(),
-        }
     }
 
     /// Whether the input service has a Stop saved, as it keeps one across

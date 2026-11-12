@@ -12,26 +12,23 @@ use crate::{
     client::{Actor, AppList, Client},
     collect::{self, Intact},
     environment::{self, InstallState, PlanState, RemovalReply, Undone},
+    handoff::Copies,
     host_session::Key,
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::Kind,
     error::{Code, Error, Result},
     files::Token,
     protocol::{JobId, Shown},
 };
-use std::{
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub(super) struct Live<'a> {
     client: &'a Client,
     /// The control a cleanup that acts holds; none for a preview, which
     /// only reads.
     ownership: Option<&'a Ownership>,
-    copies: PathBuf,
+    copies: Copies,
     /// Whether an earlier outcome was unknown when control was taken.
     unknown: bool,
 }
@@ -42,7 +39,7 @@ impl<'a> Live<'a> {
         Self {
             client,
             ownership: None,
-            copies: crate::handoff::copies_folder(&client.desktop()),
+            copies: Copies::of(&client.desktop()),
             unknown: false,
         }
     }
@@ -63,16 +60,8 @@ impl<'a> Live<'a> {
 }
 
 impl Hands for Live<'_> {
-    fn copies(&self) -> &Path {
+    fn copies(&self) -> &Copies {
         &self.copies
-    }
-
-    fn copy_node(&self, token: &Token, session: &Key) -> Option<String> {
-        match self.client.desktop().kind() {
-            // The second login sees the copy in this disk's folder, so its
-            // identity is the one this Mac reads.
-            Kind::SecondLogin(_) => crate::handoff::copy_node(&self.copies, token, session),
-        }
     }
 
     async fn apps(&self) -> Result<AppList> {
