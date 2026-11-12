@@ -14,7 +14,7 @@ mod record;
 mod run;
 pub mod service;
 mod service_change;
-mod session;
+pub(crate) mod session;
 mod stop;
 #[cfg(test)]
 #[path = "client_tests.rs"]
@@ -40,15 +40,18 @@ use atlas_core::{
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
-    transport::{Transport, run_output},
+    transport::Transport,
 };
 pub(crate) use atlas_core::{screen::frame::Size, time::timestamp};
 use serde_json::{Value, json};
 
 use std::{path::Path, sync::Arc, time::Duration};
 
+/// What identifies an installed build without hashing it: its device,
+/// inode, size and modification time.
+pub(crate) type BuildKey = (u64, u64, u64, i64, i64);
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
-type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
+type BuildCache = Arc<std::sync::Mutex<Option<(BuildKey, String)>>>;
 
 #[cfg(test)]
 type AskShown = Arc<dyn Fn(&str) + Send + Sync>;
@@ -341,33 +344,6 @@ impl Client {
         match self.desktop().kind() {
             Kind::User(login) => self.session_proof_by_command(login).await,
         }
-    }
-
-    /// A fresh proof of the second login `login`'s session from a new run of
-    /// the shared Atlas command, which it runs from this disk.
-    async fn session_proof_by_command(&self, _login: &atlas_core::user::User) -> Result<Value> {
-        let command = &self.config.identity_probe;
-        let request = json!({
-            "op": "run",
-            "argv": [command, "session-info"],
-            "timeoutMs": 3000,
-        });
-        let reply = self.transport.call(&request).await?;
-        if reply["ok"] != true || reply["exitCode"] != 0 || reply["timedOut"] != false {
-            return Err(Error::new(
-                Code::Identity,
-                format!(
-                    "The helper cannot run the shared Atlas command at {}. Run atlas \
-                     install.",
-                    command.display()
-                ),
-            ));
-        }
-
-        let output = run_output(&reply, 4096)
-            .map_err(|_| Error::new(Code::Identity, "Malformed or oversized identity output"))?;
-
-        Ok(serde_json::from_slice(&output)?)
     }
 
     /// The proof in `reply`, only when it answers `challenge`.

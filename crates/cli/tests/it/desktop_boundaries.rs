@@ -1349,11 +1349,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: the inspection tool the desktop runs",
     ),
     (
-        "crates/client/src/agent/elements.rs",
-        &["probe_in"],
-        "pending: the user's inspection tool",
-    ),
-    (
         "crates/client/src/app_selection.rs",
         &["atlas_bundle_in", "installed"],
         "owner: which apps the desktop has installed, and which is Atlas",
@@ -1373,11 +1368,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "exception: the link, a local socket to the user",
     ),
     (
-        "crates/client/src/client.rs",
-        &["Client::session_proof_by_command"],
-        "pending: the user's legacy session proof",
-    ),
-    (
         "crates/client/src/client/input.rs",
         &["Client::input_transport"],
         "exception: the link, a local socket to the user",
@@ -1388,19 +1378,9 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: installing the shared Atlas command, and which build it is",
     ),
     (
-        "crates/client/src/client/install.rs",
-        &["Client::build_on_this_disk", "Client::install_on_this_disk"],
-        "pending: the user's shared Atlas command on this disk",
-    ),
-    (
         "crates/client/src/client/service.rs",
         &["Client::spawn_input", "Client::stop_input"],
         "owner: starting and stopping the desktop's input service",
-    ),
-    (
-        "crates/client/src/client/service.rs",
-        &["Client::launch_input_in", "Client::spawn_input_in"],
-        "pending: starting the user's input service",
     ),
     (
         "crates/client/src/client/service_change.rs",
@@ -1411,11 +1391,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/client/src/client/session.rs",
         &["Client::desktop_gone"],
         "owner: whether the desktop's session has ended",
-    ),
-    (
-        "crates/client/src/client/session.rs",
-        &["Client::user_gone"],
-        "pending: whether the user's session has ended",
     ),
     (
         "crates/client/src/client/stop.rs",
@@ -1479,11 +1454,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: who proves which agent host a command came from",
     ),
     (
-        "crates/client/src/host_session.rs",
-        &["verified_by_user"],
-        "pending: proving an agent host to the user",
-    ),
-    (
         "crates/client/src/jobs.rs",
         &["daemon_listens", "started"],
         "owner: whether the daemon listens, and that a started job is the one asked for",
@@ -1497,11 +1467,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/client/src/overview.rs",
         &["report"],
         "owner: the report of the desktop's readiness",
-    ),
-    (
-        "crates/client/src/overview.rs",
-        &["logins", "user_report"],
-        "pending: the report of the user's readiness",
     ),
     (
         "crates/core/src/config.rs",
@@ -1698,7 +1663,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 20;
+const PENDING_LIMIT: usize = 13;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

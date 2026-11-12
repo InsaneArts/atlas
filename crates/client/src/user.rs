@@ -4,10 +4,14 @@
 pub mod capability;
 pub mod console_agents;
 pub mod copies;
+pub(crate) mod elements;
 pub mod environment;
 pub mod home_privacy;
-pub(crate) mod install;
+pub(crate) mod host_session;
+mod install;
+pub(crate) mod overview;
 pub(crate) mod service;
+mod session;
 pub mod setup;
 pub(crate) mod shared;
 pub mod switch;

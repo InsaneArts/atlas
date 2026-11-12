@@ -1,6 +1,7 @@
-use super::*;
 use crate::test_support::client_in;
 use atlas_control::Controller;
+use atlas_core::digest::file_sha256;
+use std::fs;
 
 #[test]
 fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {

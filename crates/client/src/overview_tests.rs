@@ -1114,12 +1114,6 @@ fn an_incomplete_job_inventory_is_never_shown_as_no_jobs() {
 }
 
 #[test]
-fn why_the_helper_is_silent_is_looked_at_again_within_seconds() {
-    assert!(ABSENCE.fresh_for() <= Duration::from_secs(5));
-    assert!(ABSENCE.fresh_for() < LOGINS.fresh_for());
-}
-
-#[test]
 fn the_overview_counts_running_jobs() {
     let mut ready = report(true, true);
     assert_eq!(
