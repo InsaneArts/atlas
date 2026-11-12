@@ -1,4 +1,4 @@
-use super::problem;
+use crate::setup::problem;
 use atlas_core::{
     account::{FIRST_USER_UID, account_with_uid},
     error::Result,

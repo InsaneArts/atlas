@@ -227,9 +227,9 @@ async fn preflight(
     client: Option<&Client>,
 ) -> Result<()> {
     if let Some(loaded) = set_up(config)?
-        && atlas_client::setup::migrate::in_effect(loaded.desktop().user().uid)
+        && atlas_client::user::setup::migrate::in_effect(loaded.desktop().user().uid)
     {
-        atlas_client::setup::migrate::preflight_apply(config, program).await?;
+        atlas_client::user::setup::migrate::preflight_apply(config, program).await?;
     }
     if let Some(client) = client {
         client.require_service_idle().await?;
@@ -269,7 +269,7 @@ async fn update_finish_using(
     let daemon = client.status().await["daemon"]["pid"].is_number();
     let executable = std::env::current_exe()?;
     let finished = if has_helper_job(
-        atlas_client::setup::migrate::recorded(loaded.desktop().user().uid),
+        atlas_client::user::setup::migrate::recorded(loaded.desktop().user().uid),
         daemon,
     ) {
         // The daemon restarts first: a daemon whose app was swapped under it
@@ -278,7 +278,7 @@ async fn update_finish_using(
         // restart itself.
         let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
 
-        if atlas_client::setup::migrate::in_effect(loaded.desktop().user().uid) {
+        if atlas_client::user::setup::migrate::in_effect(loaded.desktop().user().uid) {
             steps.push(&["setup", "--apply"]);
         }
 

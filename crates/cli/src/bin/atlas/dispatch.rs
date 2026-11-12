@@ -414,13 +414,13 @@ async fn setup(
     args: cli::Setup,
 ) -> Result<Value> {
     if !args.apply {
-        return atlas_client::setup::preview(config, args.helper.as_deref()).await;
+        return atlas_client::user::setup::preview(config, args.helper.as_deref()).await;
     }
 
     let client = client()?;
     // Setup settles only mutations its own log records, and refuses others.
     let ownership = client.service_change(true).await?;
-    atlas_client::setup::migrate::apply(config, &client, &ownership).await
+    atlas_client::user::setup::migrate::apply(config, &client, &ownership).await
 }
 
 fn activity(client: &Client, host: Option<&HostSession>, args: &cli::Activity) -> Result<Value> {

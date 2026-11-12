@@ -19,7 +19,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     // Atlas opened in an account another one chose as its helper (an
     // account with Atlas settings of its own is a controller, whatever a
     // shared file says).
-    if setup::configuration::absent(config_path) {
+    if atlas_client::user::setup::configuration::absent(config_path) {
         let pairing = atlas_daemon::user::setup::pairing::request()
             .filter(|pairing| pairing.helper_uid == uid);
         if pairing.is_some() || helper_job_here(uid) {
@@ -88,8 +88,9 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     } = atlas_client::capability::doctor_report(reply.clone(), config.desktop().user()).diagnosis;
     let hidden = config.desktop().prove(&observation).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
-    let finished =
-        ready && setup::migrate::settled(helper.uid) && observation.input_build_current();
+    let finished = ready
+        && atlas_client::user::setup::migrate::settled(helper.uid)
+        && observation.input_build_current();
 
     // Never asked and silent (a choice cut short, or an `atlas init` stopped
     // once it wrote settings): the window offers the choice again, and
@@ -106,7 +107,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     // back, so another account can be chosen.
     let forgettable = Asked {
         requested: requested(uid, &helper),
-        recorded: setup::migrate::in_effect_for(helper.uid, &helper.home),
+        recorded: atlas_client::user::setup::migrate::in_effect_for(helper.uid, &helper.home),
         answered: answering || answers(&config),
         prepared: prepared(&helper),
     }

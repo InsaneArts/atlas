@@ -1175,14 +1175,14 @@ async fn input_replacement_and_setup_repairs_refuse_recent_work_before_dispatch(
             "worker is active in the helper."
         );
         assert_eq!(
-            crate::setup::migrate::apply(&config, &client, &ownership)
+            crate::user::setup::migrate::apply(&config, &client, &ownership)
                 .await
                 .unwrap_err()
                 .code,
             Code::Busy
         );
         assert_eq!(
-            crate::setup::migrate::fresh_pass(&config, &client, &ownership)
+            crate::user::setup::migrate::fresh_pass(&config, &client, &ownership)
                 .await
                 .err()
                 .map(|error| error.code),

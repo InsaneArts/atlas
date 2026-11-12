@@ -8,7 +8,7 @@ fn an_executor_test_worker() {
 #[test]
 fn an_executor_reports_readiness_before_its_caller_is_killed() {
     interrupted_executor(
-        "setup::job::tests::a_job_installation_test_caller",
+        "user::setup::job::tests::a_job_installation_test_caller",
         "install",
     );
 }

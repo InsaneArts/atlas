@@ -410,7 +410,7 @@ fn sandbox(dir: &Path) -> Migration {
 #[test]
 fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
     if !atlas_core::test_support::isolated(
-        "setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
+        "user::setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
     ) {
         return;
     }
@@ -453,7 +453,7 @@ fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
 #[test]
 fn only_pending_actions_this_setup_owns_let_it_continue() {
     if !atlas_core::test_support::isolated(
-        "setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
+        "user::setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
     ) {
         return;
     }

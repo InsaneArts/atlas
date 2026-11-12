@@ -431,7 +431,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| match config.desktop().kind() {
             Kind::User(login) => {
-                atlas_client::setup::migrate::settled(login.uid)
+                atlas_client::user::setup::migrate::settled(login.uid)
                     && atlas_core::account::account_with_uid(login.uid)
                         .is_ok_and(|account| account.is_some())
             }

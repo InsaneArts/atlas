@@ -426,7 +426,7 @@ pub(crate) fn create_in_terminal(
     .concat();
     let asker = format!("SUDO_UID={}", nix::unistd::getuid().as_raw());
     let uid = uid.to_string();
-    let picture = setup::account::helper_picture().unwrap_or_default();
+    let picture = atlas_client::user::setup::account::helper_picture().unwrap_or_default();
     let orphans = numbers(orphans);
     let mut arguments = vec![
         "/usr/bin/env",

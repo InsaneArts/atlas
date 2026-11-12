@@ -4,13 +4,13 @@ use atlas_core::error::Code;
 #[test]
 fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
     if !atlas_core::test_support::isolated(
-        "setup::job::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
+        "user::setup::job::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
     ) {
         return;
     }
     for mode in ["retire", "install", "restore"] {
         crate::test_support::interrupted_executor(
-            "setup::job::tests::a_job_installation_test_caller",
+            "user::setup::job::tests::a_job_installation_test_caller",
             mode,
         );
     }
@@ -72,13 +72,13 @@ async fn helper_installation_and_restarts_defer_before_dispatching_active_work()
 #[test]
 fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
     if !atlas_core::test_support::isolated(
-        "setup::job::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
+        "user::setup::job::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
     ) {
         return;
     }
     for mode in ["prepare", "fresh-install"] {
         crate::test_support::interrupted_executor(
-            "setup::job::tests::a_job_installation_test_caller",
+            "user::setup::job::tests::a_job_installation_test_caller",
             mode,
         );
     }
@@ -146,7 +146,7 @@ async fn a_job_installation_test_caller() {
 #[test]
 fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
     if !atlas_core::test_support::isolated(
-        "setup::job::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
+        "user::setup::job::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
     ) {
         return;
     }

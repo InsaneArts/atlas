@@ -1,6 +1,6 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
 use super::problem;
-use atlas_client::setup::{self, executor};
+use atlas_client::setup::executor;
 use atlas_control::{Controller, ExecutorClaims};
 use atlas_core::{account, app_bundle::signed_executable, error::Result};
 use atlas_native::native::endpoint;
@@ -388,7 +388,7 @@ fn complete_setup(
         uid,
         controller: controller_name.to_owned(),
     })?;
-    let installed = setup::job::install_job(&run, agent, logs)?;
+    let installed = atlas_client::user::setup::job::install_job(&run, agent, logs)?;
     run(&atlas_daemon::user::setup::Request::ForgetOpener { uid })?;
     if installed["pid"].is_null() {
         run(&atlas_daemon::user::setup::Request::Kickstart { uid })?;
@@ -413,7 +413,7 @@ pub(super) async fn observe(
         pairing,
         async || {
             let client = atlas_client::client::Client::new(config.clone())?;
-            setup::migrate::managed_job(&client).await
+            atlas_client::user::setup::migrate::managed_job(&client).await
         },
         async |pairing| resume(config, pairing).await,
         || Controller::new(&config.desktop())?.pending(),

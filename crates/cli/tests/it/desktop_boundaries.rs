@@ -1181,7 +1181,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
-        &["carry_out", "setup_helper", "switch_on_this_mac"],
+        &["carry_out", "setup", "setup_helper", "switch_on_this_mac"],
         "pending: switching this Mac to the user, its login timing and its setup worker",
     ),
     (
@@ -1197,6 +1197,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     (
         "crates/cli/src/bin/atlas/init.rs",
         &[
+            "choose_helper",
+            "helper_step",
             "install_job",
             "log_in_once",
             "mark_since_lock",
@@ -1204,6 +1206,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "run",
             "selected",
             "start_helper",
+            "verify_step",
         ],
         "pending: setting the user up from the terminal",
     ),
@@ -1236,6 +1239,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/cli/src/onboarding.rs",
         &[
             "accept",
+            "asked",
             "check_choice",
             "choosable",
             "choose",
@@ -1281,6 +1285,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "verify",
         ],
         "pending: the setup connection and its acceptance",
+    ),
+    (
+        "crates/cli/src/onboarding/as_root.rs",
+        &["create_in_terminal"],
+        "pending: creating the user's account as root",
     ),
     (
         "crates/cli/src/onboarding/status.rs",
@@ -1513,6 +1522,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: whether the daemon listens, and that a started job is the one asked for",
     ),
     (
+        "crates/client/src/lib.rs",
+        &["mod user"],
+        "declares: the user desktop's module",
+    ),
+    (
         "crates/client/src/overview.rs",
         &["report"],
         "owner: the report of the desktop's readiness",
@@ -1521,76 +1535,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/client/src/overview.rs",
         &["logins", "user_report"],
         "pending: the report of the user's readiness",
-    ),
-    (
-        "crates/client/src/setup.rs",
-        &[
-            "observe",
-            "preview",
-            "preview_account",
-            "request_as_helper",
-            "worker_reply",
-        ],
-        "pending: the user's setup, as the controller sees it",
-    ),
-    (
-        "crates/client/src/setup/configuration.rs",
-        &[
-            "configure_helper",
-            "in_home",
-            "managed",
-            "proposed",
-            "replaced",
-        ],
-        "pending: the settings setup writes for the user",
-    ),
-    (
-        "crates/client/src/setup/job.rs",
-        &[
-            "as_helper",
-            "first_login_setup",
-            "helper_agent",
-            "helper_runner",
-            "install_job",
-            "prepare_and_install",
-            "prepare_helper",
-            "refresh_helper",
-            "replace_job",
-            "restart_helper",
-        ],
-        "pending: installing, refreshing and restarting the user's job",
-    ),
-    (
-        "crates/client/src/setup/migrate.rs",
-        &[
-            "Basis",
-            "Migration::agent",
-            "Migration::apply",
-            "Migration::helper",
-            "Migration::layout",
-            "Migration::preflight_with",
-            "Migration::verify",
-            "await_endpoint",
-            "basis",
-            "choose_helper",
-            "daemon_pid",
-            "earlier_migration",
-            "finalize",
-            "helper_argv",
-            "helper_reply",
-            "helper_result",
-            "inspect",
-            "managed_job",
-            "plan_fresh",
-            "preflight_apply",
-            "recorded_log",
-            "require_background",
-            "rollback_unfinished",
-            "setup_identity",
-            "unknown_version",
-            "unplanned",
-        ],
-        "pending: moving an older setup forward",
     ),
     (
         "crates/client/src/switch.rs",
@@ -1800,7 +1744,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 34;
+const PENDING_LIMIT: usize = 31;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

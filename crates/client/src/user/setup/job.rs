@@ -1,6 +1,7 @@
 //! The helper's background job as its controller installs, replaces and
 //! restarts it, each action run by a worker inside the helper login.
-use super::{problem, reported_pid};
+use super::reported_pid;
+use crate::setup::problem;
 use crate::{client::Client, setup};
 use atlas_core::{
     account::{Account, account_with_uid},
@@ -47,11 +48,11 @@ fn as_helper(
     request: &atlas_daemon::user::setup::Request,
     expected: &Identity,
 ) -> Result<Value> {
-    setup::request_as_helper(
+    super::request_as_helper(
         executable,
         helper,
         request,
-        setup::Invocation::CachedLogin,
+        super::Invocation::CachedLogin,
         expected,
     )?
     .map_err(|unfinished| {
@@ -330,20 +331,20 @@ pub async fn refresh_helper(
     client: &Client,
     helper: &Account,
     expected: &Identity,
-    mut progress: impl FnMut(setup::Progress<'_>) -> Result<()>,
+    mut progress: impl FnMut(super::Progress<'_>) -> Result<()>,
 ) -> Result<Option<Value>> {
     let executable = Path::new(app_bundle::EXECUTABLE);
     let (agent, layout) = helper_agent(helper, executable)?;
     let expected_hash = agent.plist_sha256(&layout.paths().logs());
-    let job = setup::migrate::managed_job(client).await?;
+    let job = super::migrate::managed_job(client).await?;
 
     if job.outdated(&expected_hash) {
-        progress(setup::Progress::Administrator(
+        progress(super::Progress::Administrator(
             "  macOS asks for your password once, to replace the helper's background job with \
              this version's.",
         ))?;
 
-        progress(setup::Progress::Waiting(
+        progress(super::Progress::Waiting(
             "Replacing the helper's background job…",
         ))?;
         replace_job(
@@ -354,7 +355,7 @@ pub async fn refresh_helper(
             helper_runner(executable, helper, expected),
         )
         .await?;
-        progress(setup::Progress::Done(
+        progress(super::Progress::Done(
             "Helper job",
             "replaced with this version's",
         ))?;
@@ -365,11 +366,11 @@ pub async fn refresh_helper(
 
     let pid = reported_pid(&client.status().await["daemon"]["pid"]);
     if pid.is_some_and(|pid| !app_bundle::runs_current(pid, executable)) {
-        progress(setup::Progress::Waiting(
+        progress(super::Progress::Waiting(
             "Restarting the helper on this version…",
         ))?;
         client.restart().await?;
-        progress(setup::Progress::Done("Helper", "restarted on this version"))?;
+        progress(super::Progress::Done("Helper", "restarted on this version"))?;
         return Ok(Some(json!({"step": "restart"})));
     }
 
@@ -419,11 +420,11 @@ pub fn first_login_setup(client: &Client, helper: &Account, expected: &Identity)
             uid: helper.uid,
             opener: false,
         };
-        setup::request_as_helper(
+        super::request_as_helper(
             executable,
             helper,
             &request,
-            setup::Invocation::BeforeLogin,
+            super::Invocation::BeforeLogin,
             expected,
         )?
         .map_err(|unfinished| {

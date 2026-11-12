@@ -60,7 +60,8 @@ fn settings(config_path: &Path) -> Result<Option<Config>> {
 /// request names it, or a setup with it (not an earlier account with its
 /// user ID) is recorded.
 fn asked(controller: u32, helper: &account::Account) -> bool {
-    requested(controller, helper) || setup::migrate::in_effect_for(helper.uid, &helper.home)
+    requested(controller, helper)
+        || atlas_client::user::setup::migrate::in_effect_for(helper.uid, &helper.home)
 }
 
 /// Whether the shared request is this account's (`controller`), naming
@@ -225,7 +226,8 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let mut readied = true;
     let orphans = orphans_now()?;
     if !orphans.is_empty()
-        || !setup::configuration::proposed(&helper).is_ok_and(|config| answers(&config))
+        || !atlas_client::user::setup::configuration::proposed(&helper)
+            .is_ok_and(|config| answers(&config))
     {
         // Root readies this account only while it is still the one checked.
         match closing_first(helper.uid, &orphans, || as_root::ready(&expected, &orphans))? {
@@ -255,13 +257,13 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     let me = this_account()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;
-    let fresh = setup::configuration::proposed(helper)?;
+    let fresh = atlas_client::user::setup::configuration::proposed(helper)?;
 
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
     let config = match &previous {
         Some(previous) if previous.desktop().user().uid == helper.uid => {
-            setup::configuration::in_home(previous, helper)
+            atlas_client::user::setup::configuration::in_home(previous, helper)
         }
         Some(previous) => {
             keep_other_helper(me.uid, previous)?;
@@ -273,7 +275,7 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     let linked = setup::installed_app::link_command(&executable)?;
 
     // A setup record left by an earlier account with this user ID.
-    setup::migrate::archive_foreign(helper.uid, &helper.home)?;
+    atlas_client::user::setup::migrate::archive_foreign(helper.uid, &helper.home)?;
 
     // Which account this is, so nothing later acts on another account that
     // is given its user ID. Unrecorded, nothing later ends a login under
@@ -305,8 +307,12 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
 
     match previous {
         Some(previous) if previous == config => {}
-        Some(previous) => setup::configuration::replace_config(config_path, &previous, &config)?,
-        None => setup::configuration::write_config(config_path, &config)?,
+        Some(previous) => atlas_client::user::setup::configuration::replace_config(
+            config_path,
+            &previous,
+            &config,
+        )?,
+        None => atlas_client::user::setup::configuration::write_config(config_path, &config)?,
     }
 
     Ok(json!({
@@ -512,7 +518,7 @@ pub fn create_helper(name: &str, full_name: &str) -> Result<account::Account> {
     let orphans = atlas_core::user::logins::sessions(None)
         .map(|sessions| sessions.leftover_uids(atlas_core::user::logins::Kind::Orphan))
         .ok_or_else(|| init_problem("macOS could not list its logins, so no account was made"))?;
-    let uid = setup::account::free_uid()?;
+    let uid = atlas_client::user::setup::account::free_uid()?;
     closing_first(uid, &orphans, || {
         as_root::create_in_terminal(name, uid, full_name, &orphans)
     })?
@@ -814,7 +820,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
     let helper = account::account_with_uid(config.desktop().user().uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
-    let set_up = setup::migrate::in_effect_for(helper.uid, &helper.home)
+    let set_up = atlas_client::user::setup::migrate::in_effect_for(helper.uid, &helper.home)
         || answers(&config)
         || prepared(&helper);
     let asked = requested(uid, &helper);
@@ -855,7 +861,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 /// Rejects invalid account names or an unsuitable account and returns privileged
 /// account-creation or identity-record failures.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
-    setup::validate_account_name(name).map_err(problem)?;
+    atlas_client::user::setup::validate_account_name(name).map_err(problem)?;
 
     if full_name.is_empty()
         || full_name.chars().count() > 64
@@ -877,7 +883,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     ready_to_choose(config_path, uid, None)?;
 
     let password = Secret(read_secret(std::io::stdin())?);
-    let next_uid = setup::account::free_uid()?;
+    let next_uid = atlas_client::user::setup::account::free_uid()?;
     let mut readied = true;
     let orphans = orphans_now()?;
     let made = closing_first(next_uid, &orphans, || {
@@ -889,10 +895,16 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
         Err(Refusal::Unavailable) => setup_transaction(&controller_of(next_uid)?, || {
             without_approval(&orphans_now()?, || {
                 readied = false;
-                let mut args = setup::account::add_user_args(name, full_name, next_uid);
+                let mut args =
+                    atlas_client::user::setup::account::add_user_args(name, full_name, next_uid);
                 args.push("interactive".to_owned());
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                answer_prompts(setup::account::SYSADMINCTL, &args, &password.0, APPROVAL)?;
+                answer_prompts(
+                    atlas_client::user::setup::account::SYSADMINCTL,
+                    &args,
+                    &password.0,
+                    APPROVAL,
+                )?;
                 created(name)
             })
         })?,
@@ -1028,10 +1040,12 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     }
 
     if let Some(helper) = account::account_with_uid(config.desktop().user().uid)? {
-        setup::migrate::archive_foreign(helper.uid, &helper.home)?;
+        atlas_client::user::setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 
-    let doctor = setup::migrate::finalize(config_path, &client, Code::Onboarding).await?;
+    let doctor =
+        atlas_client::user::setup::migrate::finalize(config_path, &client, Code::Onboarding)
+            .await?;
     if !doctor.ready {
         return Err(problem(
             "Atlas is set up but not ready yet. Try again in a moment.",

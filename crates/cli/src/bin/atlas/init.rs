@@ -6,10 +6,7 @@ use atlas_cli::ui::{
     progress::{Spinner, done, heading, say, skipped},
     style,
 };
-use atlas_client::setup::{FULL_NAME, missing, validate_account_name as valid_account_name};
-use atlas_client::setup::{
-    configure_helper, first_login_setup, prepare_helper, refresh_helper, restart_helper,
-};
+use atlas_client::setup::{FULL_NAME, missing};
 use atlas_client::{client::Client, setup};
 use atlas_core::{
     account,
@@ -72,7 +69,7 @@ fn choose_helper() -> Result<(account::Account, Identity)> {
         "Short name for the new account",
         "atlas",
         |name| {
-            valid_account_name(name)?;
+            atlas_client::user::setup::validate_account_name(name)?;
             match account::account_named(name) {
                 Ok(Some(_)) => Err(format!(
                     "{name} already exists; choose it from the list instead."
@@ -331,7 +328,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     let (config, helper, expected) = helper_step(config_path, &mut rights)?;
     let name = helper.name.clone();
     // Whether an earlier run already finished setup (decides the first-run steps).
-    let settled_before = setup::migrate::settled(helper.uid);
+    let settled_before = atlas_client::user::setup::migrate::settled(helper.uid);
     let mut client = Client::new(config.clone())?;
     client.host_session = atlas_core::host::HostSession::from_env();
     client.allow_disrupt = allow_disrupt;
@@ -381,15 +378,20 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     // The probe installed above is ready for the session checks below.
     permissions_step(&client, &config, &name).await?;
     let mut spinner = None;
-    let refreshed = refresh_helper(&client, &helper, &expected, |notice| {
-        match notice {
-            setup::Progress::Administrator(why) => administrator_rights(&mut rights, why)?,
-            setup::Progress::Waiting(message) => spinner = Some(Spinner::new(message)),
-            setup::Progress::Done(label, detail) => done(label, detail),
-        }
-        Ok(())
-    })
-    .await?;
+    let refreshed =
+        atlas_client::user::setup::refresh_helper(&client, &helper, &expected, |notice| {
+            match notice {
+                atlas_client::user::setup::Progress::Administrator(why) => {
+                    administrator_rights(&mut rights, why)?
+                }
+                atlas_client::user::setup::Progress::Waiting(message) => {
+                    spinner = Some(Spinner::new(message))
+                }
+                atlas_client::user::setup::Progress::Done(label, detail) => done(label, detail),
+            }
+            Ok(())
+        })
+        .await?;
     drop(spinner);
     done_steps.extend(refreshed);
     verify_step(&client, config_path).await?;
@@ -407,7 +409,8 @@ fn helper_step(
     config_path: &Path,
     rights: &mut setup::AdministratorRights,
 ) -> Result<(Config, account::Account, Identity)> {
-    let (config, helper, identity) = configure_helper(config_path, choose_helper, say)?;
+    let (config, helper, identity) =
+        atlas_client::user::setup::configure_helper(config_path, choose_helper, say)?;
     if close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
         say(
@@ -430,7 +433,7 @@ fn helper_step(
             atlas_core::config::tilde(config_path)
         ),
     );
-    if setup::migrate::archive_foreign(helper.uid, &helper.home)? {
+    if atlas_client::user::setup::migrate::archive_foreign(helper.uid, &helper.home)? {
         say("  Set aside a setup record left by an earlier account with the same ID.");
     }
     Ok((config, helper, identity))
@@ -495,7 +498,7 @@ async fn start_helper(
 ) -> Result<()> {
     // Set up before: the helper's job is installed and starts by itself
     // once the helper signs in (after a restart, say). No password then.
-    let installed = setup::migrate::settled(helper.uid);
+    let installed = atlas_client::user::setup::migrate::settled(helper.uid);
     let mut granted = false;
 
     if !installed {
@@ -542,7 +545,7 @@ async fn log_in_once(
     // login. Only a convenience: a refusal leaves them to the person,
     // and the step says what came of it.
     if !installed {
-        let step = match first_login_setup(client, helper, expected) {
+        let step = match atlas_client::user::setup::first_login_setup(client, helper, expected) {
             Ok(reply) => json!({"step": "firstLogin", "answered": reply["answered"]}),
             Err(error) => json!({"step": "firstLogin", "error": error.error}),
         };
@@ -598,7 +601,7 @@ async fn install_job(
     }
 
     let spinner = Spinner::new("Installing the helper's background job…");
-    let log = prepare_helper(client, helper, expected).await?;
+    let log = atlas_client::user::setup::prepare_helper(client, helper, expected).await?;
 
     spinner.set("Starting the helper…");
     let answered =
@@ -699,7 +702,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
                 wait_until_back(client, config.desktop().user().uid, &client.status().await)
                     .await?;
                 let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
-                restart_helper(client).await?;
+                atlas_client::user::setup::restart_helper(client).await?;
             }
 
             let lacking = missing(&client.status().await);
@@ -740,7 +743,8 @@ async fn verify_step(client: &Client, config_path: &Path) -> Result<()> {
     recover(client).await?;
 
     let _spinner = Spinner::new("Starting input and checking everything…");
-    let doctor = setup::migrate::finalize(config_path, client, Code::Init).await?;
+    let doctor =
+        atlas_client::user::setup::migrate::finalize(config_path, client, Code::Init).await?;
     if !doctor.ready {
         return Err(problem(
             "Setup finished but is not ready; run atlas doctor to see why",

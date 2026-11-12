@@ -93,11 +93,11 @@ fn retire_helper_job(
     // account recorded, and still logged out.
     let ask = |request: &atlas_daemon::user::setup::Request, failed: &str| -> Result<Value> {
         retirement_request(controller, request, || {
-            setup::request_as_helper(
+            atlas_client::user::setup::request_as_helper(
                 executable,
                 &account,
                 request,
-                setup::Invocation::LoggedOut,
+                atlas_client::user::setup::Invocation::LoggedOut,
                 helper,
             )?
             .map_err(|unfinished| {
@@ -518,7 +518,9 @@ impl Teardown for Live<'_> {
             }
         }
         // Archive evidence only after the job is gone; it must stop counting as setup.
-        if let Err(error) = setup::migrate::archive_uninstalled(config.desktop().user().uid) {
+        if let Err(error) =
+            atlas_client::user::setup::migrate::archive_uninstalled(config.desktop().user().uid)
+        {
             self.warnings.push(format!(
                 "The setup record was not set aside: {}",
                 error.error
@@ -782,11 +784,11 @@ impl Live<'_> {
         let desktop = Desktop::from(atlas_core::user::User { uid: account.uid });
         let outcome = Controller::new(&desktop).and_then(|controller| {
             setup::executor::setup_transaction(&controller, || {
-                setup::request_as_helper(
+                atlas_client::user::setup::request_as_helper(
                     &self.found.executable,
                     &account,
                     &request,
-                    setup::Invocation::Login,
+                    atlas_client::user::setup::Invocation::Login,
                     &expected,
                 )?
                 .map_err(|unfinished| {
@@ -1038,7 +1040,7 @@ async fn settle(
             let uid = client.desktop().user().uid;
             let exists = account::account_with_uid(uid)?.is_some();
             let status = client.status().await;
-            let pid = setup::reported_pid(&status["inputService"]["pid"]);
+            let pid = atlas_client::user::setup::reported_pid(&status["inputService"]["pid"]);
             Ok((exists, atlas_core::user::logins::logged_in(uid), pid))
         },
         |pid| client.stop_input(pid),
