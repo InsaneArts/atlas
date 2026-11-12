@@ -26,22 +26,35 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => {
             let helper = helper_name(login.uid)?;
-            list_as(client, login, &helper, all).await
+            let (here, there) = list_as(client, login, &helper, all).await?;
+            labelled(client, &here, &there, all)
         }
     }
 }
 
-/// [`list`] for the second login `login`, whose account ACLs name `helper`.
+/// What [`list`] lists of the second login `login`, whose account ACLs name
+/// `helper`: the frozen plans here, and the helper's own transactions.
 pub(super) async fn list_as(
     client: &Client,
     login: &atlas_core::user::User,
     helper: &str,
     all: bool,
-) -> Result<Value> {
+) -> Result<(Vec<Frozen>, Transactions)> {
     let here = frozen(shared_folder(client)?, login.uid);
     let there = transactions(client, helper, all, &here).await?;
+    Ok((here, there))
+}
+
+/// The listing of `here` and `there`, each labelled with the session and
+/// task that made it.
+pub(super) fn labelled(
+    client: &Client,
+    here: &[Frozen],
+    there: &Transactions,
+    all: bool,
+) -> Result<Value> {
     let work = task::everyone(client.output_dir()?);
-    Ok(listing(&here, &there, &Labels::new(&work, client), all))
+    Ok(listing(here, there, &Labels::new(&work, client), all))
 }
 
 /// The most frozen plans the helper is asked about by ID.

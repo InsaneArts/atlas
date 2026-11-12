@@ -1,5 +1,5 @@
 use super::{
-    list::{Labels, SHOWN, frozen, list_as, listing},
+    list::{Labels, SHOWN, frozen, labelled, list_as, listing},
     *,
 };
 use crate::test_support::Helper;
@@ -2408,13 +2408,14 @@ async fn a_listed_plan_names_the_session_and_task_that_made_it() {
         .unwrap();
     let before = client.controller.pending().unwrap();
 
-    let listed = helper
+    let (here, there) = helper
         .serve(
             list_as(&client, &user_of(&client), &account(), false),
             previewing(&sandbox.home),
         )
         .await
         .unwrap();
+    let listed = labelled(&client, &here, &there, false).unwrap();
 
     let plans = listed["plans"].as_array().unwrap();
     let mine = plans
