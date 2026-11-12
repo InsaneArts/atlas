@@ -63,7 +63,7 @@ impl Desktop {
     /// same desktop.
     pub fn id(&self) -> DesktopId {
         let named = match &self.kind {
-            Kind::User(login) => format!("helper:{}", login.uid),
+            Kind::User(user) => user.record_name(),
         };
         let digest = bytes_sha256(named.as_bytes());
         DesktopId(digest[..DesktopId::LENGTH].to_owned())
@@ -96,7 +96,7 @@ impl Desktop {
     /// be read or listed may run.
     pub fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
         match &self.kind {
-            Kind::User(login) => protocol::left_may_run(left, group, login.uid),
+            Kind::User(user) => user.left_may_run(left, group),
         }
     }
 
@@ -110,7 +110,7 @@ impl Desktop {
     /// cannot be looked for may run.
     pub fn orphans_run(&self) -> Result<bool> {
         match &self.kind {
-            Kind::User(login) => Ok(orphaned(&process::of_user(login.uid)?)),
+            Kind::User(user) => user.orphans_run(),
         }
     }
 
@@ -118,10 +118,7 @@ impl Desktop {
     /// the same number; none when it cannot be looked at.
     pub fn instance(&self, pid: u32) -> Option<Instance> {
         match &self.kind {
-            Kind::User(_) => i32::try_from(pid)
-                .ok()
-                .and_then(|pid| process::info(pid).ok().flatten())
-                .map(|info| info.instance),
+            Kind::User(_) => User::instance(pid),
         }
     }
 
@@ -129,11 +126,41 @@ impl Desktop {
     /// zombie, or another process's. Unknown is not exited.
     pub fn exited(&self, instance: Instance) -> bool {
         match &self.kind {
-            Kind::User(_) => match process::info(instance.pid) {
-                Ok(None) => true,
-                Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
-                Err(_) => false,
-            },
+            Kind::User(_) => User::exited(instance),
+        }
+    }
+}
+
+impl User {
+    /// What its records' name is made from: its account alone.
+    fn record_name(&self) -> String {
+        format!("helper:{}", self.uid)
+    }
+
+    /// [`Desktop::left_may_run`] for this user: its processes in this kernel.
+    fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
+        protocol::left_may_run(left, group, self.uid)
+    }
+
+    /// [`Desktop::orphans_run`] for this user: its processes in this kernel.
+    fn orphans_run(&self) -> Result<bool> {
+        Ok(orphaned(&process::of_user(self.uid)?))
+    }
+
+    /// [`Desktop::instance`] for this user: a process of this kernel.
+    fn instance(pid: u32) -> Option<Instance> {
+        i32::try_from(pid)
+            .ok()
+            .and_then(|pid| process::info(pid).ok().flatten())
+            .map(|info| info.instance)
+    }
+
+    /// [`Desktop::exited`] for this user: a process of this kernel.
+    fn exited(instance: Instance) -> bool {
+        match process::info(instance.pid) {
+            Ok(None) => true,
+            Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
+            Err(_) => false,
         }
     }
 }

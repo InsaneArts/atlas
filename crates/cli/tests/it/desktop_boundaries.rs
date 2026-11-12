@@ -1566,6 +1566,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "<Desktop as From<User>>::from",
             "User",
             "impl From<User> for Desktop",
+            "impl User",
         ],
         "pending: the user desktop's type",
     ),
