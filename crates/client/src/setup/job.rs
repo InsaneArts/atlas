@@ -1,6 +1,6 @@
 //! The helper's background job as its controller installs, replaces and
 //! restarts it, each action run by a worker inside the helper login.
-use super::{account::problem, reported_pid};
+use super::{problem, reported_pid};
 use crate::{client::Client, setup};
 use atlas_core::{
     account::{Account, account_with_uid},

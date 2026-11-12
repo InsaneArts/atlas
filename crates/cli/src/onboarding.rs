@@ -21,8 +21,8 @@ use atlas_client::{
     client::Client,
     setup::{
         self,
-        account::problem as init_problem,
         executor::{APPROVAL, Secret, answer_prompts, problem, read_secret, setup_transaction},
+        problem as init_problem,
     },
 };
 use atlas_control::{Controller, Ownership};

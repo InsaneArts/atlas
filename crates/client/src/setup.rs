@@ -9,7 +9,7 @@ pub mod job;
 pub mod migrate;
 
 pub mod account;
-pub use account::{FULL_NAME, validate_account_name};
+pub use account::validate_account_name;
 pub use configuration::configure_helper;
 pub use executor::{AdministratorRights, administrator_rights_current};
 pub use job::{first_login_setup, prepare_helper, refresh_helper, restart_helper};
@@ -42,6 +42,14 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+
+/// A setup failure, as setup and its executor report it.
+pub fn problem(message: impl Into<String>) -> Error {
+    Error::new(Code::Init, message)
+}
+
+/// The full name a new helper account gets.
+pub const FULL_NAME: &str = "Atlas";
 
 /// The privileged dispatcher checks the chosen account after authorization,
 /// immediately before entering its launchd session. The worker repeats the

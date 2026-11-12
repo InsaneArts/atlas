@@ -129,7 +129,7 @@ async fn a_job_installation_test_caller() {
         if paused == "restore"
             && matches!(request, atlas_daemon::user::setup::Request::Install { .. })
         {
-            return Err(setup::account::problem("installation was refused"));
+            return Err(setup::problem("installation was refused"));
         }
         Ok(
             json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": "b".repeat(64)}}}),
@@ -157,9 +157,8 @@ fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
     drop(other);
     setup_transaction(controller, || Ok(())).unwrap();
     assert_eq!(controller.pending().unwrap().len(), 1);
-    let outcome: Result<()> = setup_transaction(controller, || {
-        Err(setup::account::problem("reply lost").uncertain())
-    });
+    let outcome: Result<()> =
+        setup_transaction(controller, || Err(setup::problem("reply lost").uncertain()));
     assert!(outcome.is_err());
     assert_eq!(controller.pending().unwrap().len(), 2);
 }
@@ -193,10 +192,10 @@ fn an_earlier_job_is_set_aside_and_restored_on_failure() {
                     json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": earlier}}}),
                 ),
                 atlas_daemon::user::setup::Request::Install { .. } if install_fails => {
-                    Err(setup::account::problem("refused"))
+                    Err(setup::problem("refused"))
                 }
                 atlas_daemon::user::setup::Request::Restore { .. } if restore_fails => {
-                    Err(setup::account::problem("no backup"))
+                    Err(setup::problem("no backup"))
                 }
                 _ => Ok(json!({"ok": true})),
             }
@@ -303,7 +302,7 @@ fn held_at(
                 json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": "0".repeat(64)}}}),
             ),
             atlas_daemon::user::setup::Request::Install { .. } if !installs => {
-                Err(setup::account::problem("installation was refused"))
+                Err(setup::problem("installation was refused"))
             }
             _ => Ok(json!({"ok": true})),
         }

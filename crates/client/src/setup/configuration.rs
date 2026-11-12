@@ -1,5 +1,5 @@
 //! Shared configuration construction and persistence for setup workflows.
-use super::account::problem;
+use super::problem;
 use atlas_core::{
     account,
     config::{self, Config},

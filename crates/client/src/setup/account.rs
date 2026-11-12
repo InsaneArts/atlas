@@ -1,12 +1,9 @@
+use super::problem;
 use atlas_core::{
     account::{FIRST_USER_UID, account_with_uid},
-    error::{Code, Error, Result},
+    error::Result,
 };
 use std::process::Command;
-
-pub fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Init, message)
-}
 
 /// Whether `name` can be a new account's short name.
 ///
@@ -43,9 +40,6 @@ pub fn validate_account_name(name: &str) -> std::result::Result<(), String> {
 
     Ok(())
 }
-
-/// The full name a new helper account gets.
-pub const FULL_NAME: &str = "Atlas";
 
 pub const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
 
