@@ -32,6 +32,7 @@ extension WindowCoordinator {
         self?.parts?.closePanel()
         self?.showAlert(alert)
       },
+      closePanel: { [weak self] in self?.parts?.closePanel() },
       holdingControl: { [weak self] in
         guard let viewer = self?.viewer, viewer.window.isPresented else { return false }
         return viewer.controller.holdingControl

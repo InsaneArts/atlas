@@ -122,6 +122,14 @@
       return snapshot
     }
 
+    @Test("the wrong account preview hides on OK and leaves locking to the app")
+    func theWrongAccountPreviewHandlesItsEvents() throws {
+      let sample = try #require(PreviewStates.panel.first { $0.name == "Wrong account" }).value
+      #expect(sample.wrongAccount == "atlas")
+      #expect(PreviewStates.panel(sample, applying: .dismissWrongAccountNote).wrongAccount == nil)
+      #expect(PreviewStates.panel(sample, applying: .lockForWrongAccount) == sample)
+    }
+
     @Test("each panel sample is what the panel shows for the same facts")
     func samplesMatchThePresenter() throws {
       var paused = try snapshot("observing", state: "idle")
@@ -138,6 +146,8 @@
       needsYouCommand.status.overview.commands = 1
       var serviceNote = try snapshot("observing", state: "idle")
       serviceNote.status.restartingService = .restarting
+      var wrongAccount = try snapshot("observing", state: "idle")
+      wrongAccount.status.consoleName = ViewerStatus.ConsoleName(state: .another, name: "atlas")
       var accounts = try snapshot("observing", state: "idle")
       accounts.status.overview.accounts = [
         ViewerStatus.Account(kind: .site, key: "github.com", name: "github.com", added: 1),
@@ -176,6 +186,7 @@
         "You have control, a command runs": controlCommand,
         "Needs you, a command runs": needsYouCommand,
         "Service note": serviceNote,
+        "Wrong account": wrongAccount,
         "Accounts": accounts,
         "Waiting, a message": try asking(Self.ask("a1", kind: .sendKey, message: message)),
         "Waiting, a click": try asking(Self.ask("a2", kind: .click, element: "Send", frame: send), picture: "ask-a2"),

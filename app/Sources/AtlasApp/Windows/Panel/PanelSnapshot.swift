@@ -34,6 +34,8 @@ struct PanelSnapshot {
   var icons: [String: IconImage] = [:]
   /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac.
   var serviceNoteDismissed = false
+  /// Whether the person dismissed the wrong account note since macOS last named them.
+  var wrongAccountDismissed = false
   /// The questions Atlas asks the person and what they allowed, as `asks.json` last said; nil before it was read.
   var asks: AskList?
   /// The questions' pictures, by their file name.

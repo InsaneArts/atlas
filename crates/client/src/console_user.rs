@@ -11,17 +11,20 @@
 //! out: macOS names the person again only when their login next comes onto
 //! the screen, as after a switch to the login window and back.
 use atlas_native::native::{cf, console_user::ConsoleUser};
+use serde::Serialize;
 
 /// Whether macOS names this login's account as the one at the screen.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
 pub enum Named {
-    /// It names this account, or this login is not the one on the screen.
+    /// This login is on the screen and macOS names this account.
     This,
     /// This login is on the screen and macOS names another account, by
     /// this name.
-    Another(String),
-    /// This process runs in no login of its own account, or macOS named no
-    /// account.
+    Another { name: String },
+    /// This login is not the one on the screen, which says nothing of the
+    /// account named; this process runs in no login of its own account; or
+    /// macOS named no account.
     Unknown,
 }
 
@@ -33,9 +36,9 @@ impl Named {
             // A shell switched to another account runs in the login it was
             // started from, which says nothing of that account's own.
             (Some(login), _) if login.uid != uid => Self::Unknown,
-            (Some(login), _) if !login.on_screen => Self::This,
+            (Some(login), _) if !login.on_screen => Self::Unknown,
             (Some(_), Some(named)) if named.uid == uid => Self::This,
-            (Some(_), Some(named)) => Self::Another(named.name),
+            (Some(_), Some(named)) => Self::Another { name: named.name },
             (Some(_), None) | (None, _) => Self::Unknown,
         }
     }
