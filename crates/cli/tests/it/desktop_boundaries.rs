@@ -1196,7 +1196,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/doctor.rs",
-        &["user_report"],
+        &["user_files", "user_report"],
         "pending: what doctor reports of the user",
     ),
     (

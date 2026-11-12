@@ -37,17 +37,89 @@ const IDLE_LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(1_
 /// times in a row, a minute or more apart, and could not restart it.
 const RECORDER_TRIES: u64 = 3;
 
+/// What doctor sees of the desktop itself, before the checks every desktop
+/// shares: the report so far, the steps that come before every other,
+/// whether this shell may not reach it, and the Apple jobs restarting in it.
+struct Observed {
+    report: Value,
+    first_steps: Vec<String>,
+    shell_blocked: bool,
+    restarts: Option<Vec<console_agents::Restart>>,
+}
+
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
-    match client.desktop().kind() {
-        Kind::User(login) => user_report(client, login, verbose).await,
+    let Observed {
+        mut report,
+        mut first_steps,
+        shell_blocked,
+        restarts,
+    } = match client.desktop().kind() {
+        Kind::User(login) => user_report(client, login).await,
+    };
+
+    // Every command keeps a lock and screenshots in the person's Library;
+    // a shell that may not write there cannot use the helper. (A shell
+    // that could not even connect has been told so already.)
+    if !shell_blocked && let Err(error) = client.writable() {
+        first_steps.push(error.error);
+    }
+
+    if !first_steps.is_empty() {
+        report["ready"] = json!(false);
+        if let Some(steps) = report["nextSteps"].as_array_mut() {
+            for (index, step) in first_steps.into_iter().enumerate() {
+                steps.insert(index, json!(step));
+            }
+        }
+    }
+
+    let controller = client.controller.clone();
+    let causes = pending_result(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            tokio::task::spawn_blocking(move || {
+                controller.pending_causes_within(std::time::Duration::from_millis(50))
+            }),
+        )
+        .await
+        .ok(),
+    );
+    let session = client.host_session.as_ref().map(HostSession::key);
+    let asking = asker(client.actor, session, ui::interactive());
+    recorder_report(&mut report, asking);
+    restarting_report(&mut report, restarts.as_deref(), asking, verbose);
+    let named = answer_within(LOOK_LIMIT, Named::Unknown, Named::now).await;
+    named_report(&mut report, &named, asking);
+    let idle_time = answer_within(IDLE_LOOK_LIMIT, IdleTime::Unknown, || {
+        IdleTime::now(Look::Only)
+    })
+    .await;
+    idle_time_report(&mut report, &idle_time, asking);
+    pending_report(&mut report, causes, asking);
+    if verbose || ui::human() {
+        match client.desktop().kind() {
+            Kind::User(login) => user_files(login, &mut report).await,
+        }
+        // Account names are the person's: only when the person asks, in
+        // text on a terminal, never in output an agent could read.
+        if shows_accounts(asking, ui::human(), std::io::stdout().is_terminal())
+            && let atlas_client::sign_ins::Listed::Accounts(accounts) =
+                atlas_client::sign_ins::listed()
+        {
+            report["accounts"] =
+                json!(accounts.iter().map(|entry| &entry.name).collect::<Vec<_>>());
+        }
+        report
+    } else {
+        atlas_client::capability::summary(report)
     }
 }
 
-/// [`report`] for the second login `login`, with what this Mac can tell of
-/// it: its account, why it is silent, the logins Atlas can close, the Apple
-/// agents restarting in it and the home folder it may read.
-async fn user_report(client: &Client, login: &atlas_core::user::User, verbose: bool) -> Value {
+/// What doctor sees of the second login `login`, with what this Mac can
+/// tell of it: its account, why it is silent, the logins Atlas can close
+/// and the Apple agents restarting in it.
+async fn user_report(client: &Client, login: &atlas_core::user::User) -> Observed {
     let uid = login.uid;
     let status = client.status().await;
     let account = atlas_core::account::account_with_uid(uid).ok().flatten();
@@ -138,65 +210,22 @@ async fn user_report(client: &Client, login: &atlas_core::user::User, verbose: b
         }
     }
 
-    // Every command keeps a lock and screenshots in the person's Library;
-    // a shell that may not write there cannot use the helper. (A shell
-    // that could not even connect has been told so already.)
-    if !shell_blocked && let Err(error) = client.writable() {
-        first_steps.push(error.error);
+    Observed {
+        report,
+        first_steps,
+        shell_blocked,
+        restarts,
     }
+}
 
-    if !first_steps.is_empty() {
-        report["ready"] = json!(false);
-        if let Some(steps) = report["nextSteps"].as_array_mut() {
-            for (index, step) in first_steps.into_iter().enumerate() {
-                steps.insert(index, json!(step));
-            }
-        }
-    }
-
-    let controller = client.controller.clone();
-    let causes = pending_result(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(250),
-            tokio::task::spawn_blocking(move || {
-                controller.pending_causes_within(std::time::Duration::from_millis(50))
-            }),
-        )
-        .await
-        .ok(),
-    );
-    let session = client.host_session.as_ref().map(HostSession::key);
-    let asking = asker(client.actor, session, ui::interactive());
-    recorder_report(&mut report, asking);
-    restarting_report(&mut report, restarts.as_deref(), asking, verbose);
-    let named = answer_within(LOOK_LIMIT, Named::Unknown, Named::now).await;
-    named_report(&mut report, &named, asking);
-    let idle_time = answer_within(IDLE_LOOK_LIMIT, IdleTime::Unknown, || {
-        IdleTime::now(Look::Only)
-    })
-    .await;
-    idle_time_report(&mut report, &idle_time, asking);
-    pending_report(&mut report, causes, asking);
-    if verbose || ui::human() {
-        // What the helper can open in the person's home folder: for the
-        // person, never in an agent's compact reply.
-        if let Ok(Ok(files)) =
-            tokio::task::spawn_blocking(move || atlas_client::user::home_privacy::status(uid)).await
-        {
-            report["files"] = json!(files);
-        }
-        // Account names are the person's: only when the person asks, in
-        // text on a terminal, never in output an agent could read.
-        if shows_accounts(asking, ui::human(), std::io::stdout().is_terminal())
-            && let atlas_client::sign_ins::Listed::Accounts(accounts) =
-                atlas_client::sign_ins::listed()
-        {
-            report["accounts"] =
-                json!(accounts.iter().map(|entry| &entry.name).collect::<Vec<_>>());
-        }
-        report
-    } else {
-        atlas_client::capability::summary(report)
+/// What the second login `login` can open in the person's home folder, for
+/// the person, never in an agent's compact reply.
+async fn user_files(login: &atlas_core::user::User, report: &mut Value) {
+    let uid = login.uid;
+    if let Ok(Ok(files)) =
+        tokio::task::spawn_blocking(move || atlas_client::user::home_privacy::status(uid)).await
+    {
+        report["files"] = json!(files);
     }
 }
 
