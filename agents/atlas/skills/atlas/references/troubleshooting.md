@@ -37,7 +37,7 @@ follow the guide. Read `error` to the person when you stop.
 | `denied` | The person keeps this account Look Only, or said no to what the agent was about to send there. That step wasn't sent; `performed` or `typed` says what ran before it. | Don't try another way. Ask the person what they want instead. |
 | `elements` | An accessibility element could not be found uniquely or is hidden. When a name matched nothing or several, `candidates` lists up to five with their role, name and the point a click lands on (`at`; the box of a labelled checkbox or radio button); when the scan was incomplete, `scan` says why (`withheld`: the app hid its windows, as apps do while the Mac's screen is locked, so only its menu bar is listed). `atlas elements --name` lists `candidates` the same way when nothing matched. | Add `--role`, pick from `candidates`, check `atlas elements`, or click coordinates from a crop. For `withheld`, ask the person to unlock the Mac, then look again. |
 | `environment` | A provisioning plan was refused. | Read `error`; plans never overwrite unknown changes. |
-| `focus-changed` | An action given `--app`, `--pid`, `--window` or `--field` was not sent: something else had focus or was at its point. `reason` says what (see focus-changed reasons below). Nothing is uncertain. | Do what `next` says. Check `performed`, `typed` and `partial` for what was sent before it, then send only what was not. Do not use `atlas open` to bring a showing app forward. |
+| `focus-changed` | An action was not sent: something else had focus or was at its point (for one given `--app`, `--pid`, `--window` or `--field`), or Atlas could not tell where it goes. `reason` says what (see focus-changed reasons below). Nothing is uncertain unless `uncertain` says so (typing stopped partway). | Do what `next` says. Check `performed`, `typed` and `partial` for what was sent before it, then send only what was not. Do not use `atlas open` to bring a showing app forward. |
 | `identity` | The helper session, account or display is not the configured one. | Stop and tell the person; run `atlas doctor`. |
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |
 | `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was refused before anything was sent: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; a refused batch sent nothing, otherwise observe with a screenshot before retrying. |
@@ -99,7 +99,9 @@ follow the guide. Read `error` to the person when you stop.
   yet), `withheld` (the app hid its windows, as apps do while the Mac's
   screen is locked: ask the person to unlock it), `cut` (a name too long to
   read), `deep` (a field nested deeper than Atlas reads), `slow` (the app did
-  not answer in time).
+  not answer in time), `untold` (the step may send in an account the person
+  listed, and Atlas could not tell where it goes well enough to ask them:
+  take a screenshot and try once more, then tell the person).
 
 `found` names what was there: the app, the window's number, and the focused
 element's role and name, never its value. Earlier actions were sent only

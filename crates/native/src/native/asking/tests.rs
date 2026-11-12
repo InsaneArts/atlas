@@ -111,7 +111,7 @@ fn actions(value: serde_json::Value) -> Vec<Action> {
 fn what(decision: &Decision) -> Option<&'static str> {
     match decision {
         Decision::Ask(question) => Some(question.what),
-        Decision::Free | Decision::Deny { .. } => None,
+        Decision::Free | Decision::Deny { .. } | Decision::Unclear => None,
     }
 }
 
@@ -503,7 +503,7 @@ fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
         deadline: std::time::Instant::now(),
         intended: Some(SLACK.to_owned()),
         held: None,
-        point: None,
+        scripted: None,
     };
     let front = Target {
         app: Some("com.apple.TextEdit".to_owned()),
@@ -788,7 +788,7 @@ fn a_keyboard_once_grant_is_bound_to_the_window_the_focused_field_is_in() {
 }
 
 #[test]
-fn a_page_that_cant_be_read_is_no_one_sites_so_no_grant_for_a_site_covers_it() {
+fn a_page_that_cant_be_read_is_refused_without_asking_until_it_reads() {
     let mut asking = slack_and_github(Level::Ask, Level::Ask);
     asking.grants.push(Allowance::Task {
         account: site("slack.com"),
@@ -799,24 +799,82 @@ fn a_page_that_cant_be_read_is_no_one_sites_so_no_grant_for_a_site_covers_it() {
         ..page("app.slack.com", "AXButton", Some("Send"))
     };
     let mut look = scripted(unread, Target::default());
-    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
-        panic!("slack.com's grant doesn't cover a page that could be github.com");
-    };
     assert_eq!(
-        question.details()["once"],
-        false,
-        "nor can it be allowed once"
+        decide(&click, &asking, &mut look),
+        Decision::Unclear,
+        "slack.com's grant doesn't cover a page that could be github.com, and the person \
+         could only deny it"
     );
-    asking.grants.push(once(&question));
     asking.grants.push(Allowance::Task {
-        account: question.account_key.clone(),
+        account: AccountKey::unread(),
     });
-    assert!(
-        matches!(decide(&click, &asking, &mut look), Decision::Ask(_)),
-        "it asks until the page is read"
+    assert_eq!(
+        decide(&click, &asking, &mut look),
+        Decision::Unclear,
+        "no grant covers a page that can't be told"
     );
     look.point = page("app.slack.com", "AXButton", Some("Send"));
     assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+}
+
+#[test]
+fn a_key_whose_app_cant_be_read_is_refused_without_asking() {
+    let asking = listing(Kind::App, SLACK, Level::Ask);
+    let shortcut = actions(json!([{"type": "key", "key": "cmd+alt+j"}]));
+    let mut look = scripted(Target::default(), Target::default());
+    assert_eq!(
+        decide(&shortcut, &asking, &mut look),
+        Decision::Unclear,
+        "it could be Slack, and no answer but Deny could be offered"
+    );
+    let mut checked = recheck(&shortcut, &asking);
+    assert_eq!(checked.check(&shortcut[0], &mut look), Decision::Unclear);
+
+    look.focus = Target {
+        app: Some(CHROME.to_owned()),
+        window: Some(7),
+        ..Target::default()
+    };
+    assert_eq!(
+        decide(&shortcut, &asking, &mut look),
+        Decision::Free,
+        "read as Chrome, it is in no listed account"
+    );
+    look.focus.app = Some(SLACK.to_owned());
+    let Decision::Ask(question) = decide(&shortcut, &asking, &mut look) else {
+        panic!("a shortcut in Slack asks");
+    };
+    assert_eq!(question.details()["once"], true);
+    assert_eq!(question.details()["task"], true);
+}
+
+#[test]
+fn a_question_offers_an_answer_whenever_one_is_asked() {
+    let mut asking = listing(Kind::App, SLACK, Level::Ask);
+    let shortcut = actions(json!([{"type": "key", "key": "cmd+alt+j"}]));
+    let slack = Target {
+        app: Some(SLACK.to_owned()),
+        ..Target::default()
+    };
+    let mut look = scripted(Target::default(), slack);
+    let Decision::Ask(question) = decide(&shortcut, &asking, &mut look) else {
+        panic!("a window that can't be told still leaves the task to allow");
+    };
+    assert_eq!(question.details()["once"], false);
+    assert_eq!(question.details()["task"], true);
+
+    asking.unknown = true;
+    assert_eq!(
+        decide(&shortcut, &asking, &mut look),
+        Decision::Unclear,
+        "with the list unread and the window unknown, nothing could be allowed"
+    );
+    look.focus.window = Some(3);
+    let Decision::Ask(question) = decide(&shortcut, &asking, &mut look) else {
+        panic!("a known window can be allowed once");
+    };
+    assert_eq!(question.details()["once"], true);
+    assert_eq!(question.details()["task"], false);
 }
 
 #[test]
@@ -1255,7 +1313,7 @@ fn a_referenced_elements_question_shows_it_where_it_was_just_met_or_nowhere() {
     };
     let mut frame = |met| match super::met(decide(&click, &asking, &mut look), &click[0], met) {
         Decision::Ask(question) => question.frame,
-        Decision::Free | Decision::Deny { .. } => panic!("asks"),
+        Decision::Free | Decision::Deny { .. } | Decision::Unclear => panic!("asks"),
     };
     assert_eq!(
         frame(Some(&now)),

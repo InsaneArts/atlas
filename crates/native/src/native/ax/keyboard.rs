@@ -68,6 +68,11 @@ pub(in crate::native) struct Keyboard {
     pub(in crate::native) within: Within,
 }
 
+/// What a refusal says when where an action lands can't be told well
+/// enough to ask the person about it.
+pub(in crate::native) const UNTOLD: &str =
+    "Atlas could not tell where this goes well enough to ask the person";
+
 /// Why Atlas could not tell where keyboard focus is, as a refusal names
 /// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +95,9 @@ pub(in crate::native) enum Unread {
     /// The app gave its own element as its focused window, as apps do
     /// while the Mac's screen is locked: it withheld its windows.
     Withheld,
+    /// Where an action lands could not be told well enough to ask the
+    /// person about it.
+    Untold,
 }
 
 impl Unread {
@@ -131,6 +139,7 @@ impl Unread {
             Self::Withheld => {
                 "The app withheld its windows, as apps do while the Mac's screen is locked"
             }
+            Self::Untold => UNTOLD,
         };
         Error::new(Code::Native, said).with("unread", serde_json::json!(self))
     }

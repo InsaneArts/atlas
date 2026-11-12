@@ -222,6 +222,10 @@ fn in_the_way(reason: Option<&str>, unread: Option<&str>) -> (&'static str, &'st
         (Some("unreadable"), Some("slow")) => {
             ("Your app did not say where its focus is", "wait a moment")
         }
+        (Some("unreadable"), Some("untold")) => (
+            "Atlas couldn't tell where this goes well enough to ask the person",
+            "take a screenshot",
+        ),
         (Some("unreadable"), _) => (
             "Atlas couldn't tell what was in front, often because the active app has no window",
             "click where your app shows, or open the app if none of it shows",
@@ -257,6 +261,12 @@ pub fn focus_advice(result: &serde_json::Value) -> Option<String> {
         return Some(format!(
             "{what}, and nothing was sent. Wait a moment and try once more; if it refuses again, \
              tell the person the app is not answering instead of repeating the command."
+        ));
+    }
+    if (reason, unread) == (Some("unreadable"), Some("untold")) {
+        return Some(format!(
+            "{what}, and nothing was sent. Take a screenshot and try once more; if it refuses \
+             again, tell the person instead of repeating the command."
         ));
     }
 

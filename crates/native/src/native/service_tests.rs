@@ -4589,19 +4589,20 @@ fn a_stop_or_release_landing_before_the_batch_runs_keeps_its_own_refusal() {
     );
 }
 
-/// An agent's click, with the accounts the client sends while the person lists any: refused before its first event.
-async fn gated_click(asking: Value) -> (Result<Value>, usize) {
+/// An agent's click landing on `target`, with the accounts the client sends while the person lists any:
+/// refused before its first event.
+async fn gated_click(asking: Value, target: super::asking::Target) -> (Result<Value>, usize) {
     let owner = "e".repeat(48);
     let directory = tempfile::tempdir().unwrap();
     let (tap, posted) = Tap::new();
     let service = tapped_service(directory.path(), tap, Arc::default());
-    service.engine.lock().await.asking_point = Some(super::asking::Target::default());
+    service.engine.lock().await.asking_target = Some(target);
     service
         .gate
         .acquire_lasting(&owner, super::Who::Agent, LASTING)
         .unwrap();
     let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
-    // The observer, rather than a screen coordinate, proves the target is unknown.
+    // The scripted target, rather than a screen coordinate, is where it lands.
     let click = vec![serde_json::from_value(json!({"type": "click", "x": 1, "y": 1})).unwrap()];
     let asking = serde_json::from_value(asking).unwrap();
     let reply = service
@@ -4621,7 +4622,11 @@ async fn gated_click(asking: Value) -> (Result<Value>, usize) {
 
 #[tokio::test]
 async fn a_request_the_person_must_be_asked_about_sends_nothing() {
-    let (reply, posted) = gated_click(json!({"unknown": true})).await;
+    let landing = super::asking::Target {
+        window: Some(1),
+        ..super::asking::Target::default()
+    };
+    let (reply, posted) = gated_click(json!({"unknown": true}), landing).await;
     // Judged just before its first event: a refusal that sent nothing.
     let reply = reply.unwrap();
     assert_eq!(reply["code"], "waiting-for-person");
@@ -4639,7 +4644,7 @@ async fn an_app_that_cant_be_told_takes_the_strictest_level_and_look_only_sends_
         {"kind": "app", "id": "com.example.bank", "name": "Bank", "level": "lookOnly"},
         {"kind": "app", "id": "com.example.chat", "name": "Chat", "level": "ask"},
     ]});
-    let (reply, posted) = gated_click(asking).await;
+    let (reply, posted) = gated_click(asking, super::asking::Target::default()).await;
     assert_eq!(reply.unwrap()["code"], "denied");
     assert_eq!(posted, 0, "nothing was sent");
 }
@@ -4656,4 +4661,29 @@ fn a_request_brings_its_accounts_only_when_it_has_any() {
         panic!("input");
     };
     assert_eq!(asking.unwrap_err().code, Code::Input);
+}
+
+#[tokio::test]
+async fn a_request_the_person_could_only_deny_is_refused_at_once_and_sends_nothing() {
+    // The list can't be read and neither can where the click lands: no
+    // answer but Deny could be offered.
+    let (reply, posted) =
+        gated_click(json!({"unknown": true}), super::asking::Target::default()).await;
+    let reply = reply.unwrap();
+    assert_eq!(reply["code"], "focus-changed");
+    assert_eq!(reply["reason"], "unreadable");
+    assert_eq!(reply["unread"], "untold");
+    assert!(
+        reply["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Atlas could not tell where this goes well enough to ask the person"),
+        "{reply}"
+    );
+    assert!(reply.get("ask").is_none(), "no question for the person");
+    assert_eq!(
+        (&reply["performed"], &reply["partial"], &reply["uncertain"]),
+        (&json!(0), &json!(false), &json!(false))
+    );
+    assert_eq!(posted, 0, "nothing was sent");
 }

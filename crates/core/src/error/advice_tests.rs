@@ -135,7 +135,7 @@ fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
 
 /// Every kind of thing a focus refusal can find in the way, as its
 /// `reason` and `unread`.
-const EVERY_WAY: [(Option<&str>, Option<&str>); 12] = [
+const EVERY_WAY: [(Option<&str>, Option<&str>); 13] = [
     (Some("app"), None),
     (Some("window"), None),
     (Some("sheet"), None),
@@ -148,6 +148,7 @@ const EVERY_WAY: [(Option<&str>, Option<&str>); 12] = [
     (Some("unreadable"), Some("cut")),
     (Some("unreadable"), Some("deep")),
     (Some("unreadable"), Some("slow")),
+    (Some("unreadable"), Some("untold")),
 ];
 
 /// A refusal for the window, a sheet or the field, or one Atlas could
@@ -180,6 +181,11 @@ fn a_focus_refusal_says_what_was_in_the_way() {
             Some("unreadable"),
             Some("slow"),
             "did not say where its focus is",
+        ),
+        (
+            Some("unreadable"),
+            Some("untold"),
+            "well enough to ask the person",
         ),
         (Some("made-up"), None, "Another app"),
         (Some("app"), Some("slow"), "Another app"),
@@ -233,6 +239,19 @@ fn an_unreadable_focus_result_does_not_promise_that_repeating_the_command_will_w
         sent.starts_with("Your app did not say where its focus is. Earlier actions were sent"),
         "{sent}"
     );
+}
+
+/// A step that couldn't be asked about may stay that way, so the agent
+/// tries once more and then tells the person instead of repeating it.
+#[test]
+fn a_step_atlas_could_not_ask_about_is_tried_once_more_then_told_to_the_person() {
+    let said = focus_changed(false, Some("unreadable"), Some("untold"));
+    assert_eq!(
+        said,
+        "Atlas couldn't tell where this goes well enough to ask the person, and nothing was sent. Take a screenshot and try once more; if it refuses again, tell the person instead of repeating the command."
+    );
+    let sent = focus_changed(true, Some("unreadable"), Some("untold"));
+    assert!(sent.contains("Earlier actions were sent"), "{sent}");
 }
 
 /// When what is in front cannot be read, often because the active app

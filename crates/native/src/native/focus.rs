@@ -1081,6 +1081,18 @@ pub(super) fn refused(reason: Reason) -> Error {
     refused_because(reason, reason.fact())
 }
 
+/// The refusal for an action whose landing can't be told well enough for
+/// the person to allow it in a listed account.
+pub(super) fn untold() -> Error {
+    let message = format!(
+        "{}, so take a screenshot and try once more, then tell the person; {NOT_SENT}",
+        ax::UNTOLD
+    );
+    Error::new(Code::FocusChanged, message)
+        .with("reason", json!(Reason::Unreadable))
+        .with("unread", json!(Unread::Untold))
+}
+
 /// [`refused`], saying what is wrong as `fact`.
 fn refused_because(reason: Reason, fact: impl Display) -> Error {
     let message = format!("{fact}, so {}; {NOT_SENT}", reason.remedy());

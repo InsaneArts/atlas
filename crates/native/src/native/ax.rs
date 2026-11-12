@@ -32,7 +32,7 @@ pub(super) use ffi::act;
 #[cfg(test)]
 pub(super) use keyboard::ScriptedApp;
 pub(super) use keyboard::{
-    Aimed, Asked, Focused, Held, Judged, Keyboard, Status, Unread, Within, focused_aim,
+    Aimed, Asked, Focused, Held, Judged, Keyboard, Status, UNTOLD, Unread, Within, focused_aim,
     focused_text, frontmost, keyboard, password_page, pointed_aim, remaining, still_focused,
 };
 pub(super) use references::{Described, Looks, Reached, Resolved, confirm, read, resolve};

@@ -595,11 +595,14 @@ pub fn asker_lives(client: &Client, ask: &Ask) -> bool {
 }
 
 /// Whether `outcome` proves its request sent nothing: refused before its
-/// first event, to ask the person or for a Look Only account.
+/// first event, to ask the person, for a Look Only account, or because
+/// something else had focus or where it lands couldn't be told.
 pub(crate) fn sent_nothing(outcome: &Result<Value>) -> bool {
     came(outcome).is_some_and(|came| {
-        matches!(came.code, Code::WaitingForPerson | Code::Denied)
-            && !came.uncertain
+        matches!(
+            came.code,
+            Code::WaitingForPerson | Code::Denied | Code::FocusChanged
+        ) && !came.uncertain
             && came.performed == 0
             && !came.partial
             && came.typed == 0

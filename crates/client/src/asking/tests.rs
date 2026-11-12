@@ -685,3 +685,56 @@ async fn stop_preserves_known_delivery_counts_for_reply_and_error_outcomes() {
         assert_eq!(attempts, 1);
     }
 }
+
+#[test]
+fn a_permit_comes_back_after_a_focus_refusal_that_sent_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(dir.path());
+    let action = atlas_core::actions::Action::Type {
+        text: "hello\n".to_owned(),
+    }
+    .digest();
+    let asks = client.controller.asks();
+    let permit = Permit {
+        session: "terminal".to_owned(),
+        process: None,
+        account: json!({"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}),
+        action: action.clone(),
+        target: json!({"window": 7}),
+        value: None,
+        ends: u64::MAX,
+    };
+    let refused = |performed| {
+        Ok(json!({
+            "ok": false,
+            "code": "focus-changed",
+            "reason": "unreadable",
+            "unread": "untold",
+            "performed": performed,
+            "partial": false,
+            "uncertain": false,
+        }))
+    };
+
+    asks.permit(permit, now_ms()).unwrap();
+    let taken = asks
+        .take_permits("terminal", None, std::slice::from_ref(&action), now_ms())
+        .unwrap();
+    return_permits(&client, taken, &refused(0));
+    let taken = asks
+        .take_permits("terminal", None, std::slice::from_ref(&action), now_ms())
+        .unwrap();
+    assert_eq!(
+        taken.len(),
+        1,
+        "nothing was sent, so it is still the person's"
+    );
+
+    return_permits(&client, taken, &refused(1));
+    assert!(
+        asks.take_permits("terminal", None, &[action], now_ms())
+            .unwrap()
+            .is_empty(),
+        "spent once something of the request was sent"
+    );
+}

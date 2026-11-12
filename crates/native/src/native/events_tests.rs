@@ -295,6 +295,12 @@ async fn each_character_after_the_first_is_judged_again_and_one_that_asks_stops_
     let mut recheck = crate::native::asking::recheck(std::slice::from_ref(&typing), &asking);
     let _ = recheck.check(&typing, &mut Nowhere);
     engine.recheck = Some(recheck);
+    // Each later character lands in a window that can be told, so the
+    // person can be asked.
+    engine.asking_target = Some(crate::native::asking::Target {
+        window: Some(1),
+        ..crate::native::asking::Target::default()
+    });
 
     let error = engine.perform(typing).await.unwrap_err();
     assert_eq!(error.code, Code::WaitingForPerson);

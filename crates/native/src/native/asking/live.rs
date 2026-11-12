@@ -42,9 +42,9 @@ pub(crate) struct OnScreen<'a> {
     pub(crate) intended: Option<String>,
     /// The element keyboard focus was on when last read.
     pub(crate) held: Option<Held>,
-    /// The pointed target supplied by a service policy test.
+    /// The target a service policy test supplies, wherever an action lands.
     #[cfg(test)]
-    pub(crate) point: Option<Target>,
+    pub(crate) scripted: Option<Target>,
 }
 
 impl<'a> OnScreen<'a> {
@@ -63,7 +63,7 @@ impl<'a> OnScreen<'a> {
             intended: None,
             held,
             #[cfg(test)]
-            point: None,
+            scripted: None,
         }
     }
 
@@ -100,8 +100,8 @@ impl OnScreen<'_> {
 impl Look for OnScreen<'_> {
     fn at_point(&mut self, x: f64, y: f64) -> Target {
         #[cfg(test)]
-        if let Some(point) = &self.point {
-            return point.clone();
+        if let Some(scripted) = &self.scripted {
+            return scripted.clone();
         }
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let Some((pid, number)) = crate::native::windows::windows().ok().and_then(|windows| {
@@ -127,6 +127,10 @@ impl Look for OnScreen<'_> {
 
     fn focused(&mut self) -> Target {
         self.held = None;
+        #[cfg(test)]
+        if let Some(scripted) = &self.scripted {
+            return scripted.clone();
+        }
         let Some(pid) = self.focused_pid() else {
             return self.as_intended(Target::default());
         };

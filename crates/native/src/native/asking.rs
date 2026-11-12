@@ -299,6 +299,11 @@ pub(crate) enum Decision {
     Ask(Box<Question>),
     /// The account is Look Only; nothing is sent.
     Deny { account: String },
+    /// It would ask, but where it lands can't be told well enough for the
+    /// person to allow it, neither this once nor for the task. Nothing is
+    /// sent and no one is asked: a question they could only deny would
+    /// hold the agent for nothing.
+    Unclear,
 }
 
 /// What the person is asked: the account, what the agent would do there,
@@ -479,7 +484,10 @@ pub(crate) fn met(
             question.frame = met.cloned();
             Decision::Ask(question)
         }
-        decision @ (Decision::Free | Decision::Ask(_) | Decision::Deny { .. }) => decision,
+        decision @ (Decision::Free
+        | Decision::Ask(_)
+        | Decision::Deny { .. }
+        | Decision::Unclear) => decision,
     }
 }
 
@@ -607,9 +615,13 @@ fn judged(
     if pinned && by.is_some() {
         return (Decision::Free, by, noted(first, Some(Allowed::Once)));
     }
+    let task = tasks && known;
+    if !pinned && !task {
+        return (Decision::Unclear, None, None);
+    }
     let asked = Decision::Ask(Box::new(Question {
         once: pinned,
-        task: tasks && known,
+        task,
         typing: asking.typing.clone(),
         bound,
         ..question(

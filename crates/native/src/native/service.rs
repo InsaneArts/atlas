@@ -751,7 +751,7 @@ fn recheck(
     );
     #[cfg(test)]
     {
-        look.point = engine.asking_point.clone();
+        look.scripted = engine.asking_target.clone();
     }
     let decision = judge(&mut recheck, &mut look);
     recheck.held = look.held;
@@ -779,7 +779,7 @@ fn gate_request(
         intended,
         held: None,
         #[cfg(test)]
-        point: engine.asking_point.clone(),
+        scripted: engine.asking_target.clone(),
     };
     refusal(asking::decide(actions, asking, &mut look), asking.dry)
 }
@@ -808,6 +808,7 @@ fn refusal(decision: asking::Decision, dry: bool) -> Result<()> {
                  It wasn't sent."
             ),
         )),
+        asking::Decision::Unclear => Err(super::focus::untold()),
     }
 }
 
