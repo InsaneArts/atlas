@@ -94,13 +94,15 @@ fn agent(dir: &Path) -> atlas_daemon::user::setup::Agent {
 fn worker(dir: &Path, stage: &str) -> atlas_client::test_support::Fixture {
     atlas_client::test_support::Fixture::spawn(
         dir,
-        atlas_core::test_support::rerun("onboarding::acceptance::tests::an_acceptance_test_worker")
-            .arg("--nocapture")
-            .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir)
-            .env("ATLAS_ACCEPTANCE_TEST_STAGE", stage)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
+        atlas_core::test_support::rerun(
+            "user::onboarding::acceptance::tests::an_acceptance_test_worker",
+        )
+        .arg("--nocapture")
+        .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir)
+        .env("ATLAS_ACCEPTANCE_TEST_STAGE", stage)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null()),
     )
     .unwrap()
 }
@@ -108,7 +110,7 @@ fn worker(dir: &Path, stage: &str) -> atlas_client::test_support::Fixture {
 #[test]
 fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends",
+        "user::onboarding::acceptance::tests::interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends",
     ) {
         return;
     }
@@ -127,7 +129,7 @@ fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
         worker
             .request(
                 atlas_core::test_support::rerun(
-                    "onboarding::acceptance::tests::an_acceptance_test_requester",
+                    "user::onboarding::acceptance::tests::an_acceptance_test_requester",
                 )
                 .arg("--nocapture")
                 .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
@@ -164,7 +166,7 @@ fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
 #[test]
 fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::acceptance_excludes_competing_teardown_through_completion_and_rollback",
+        "user::onboarding::acceptance::tests::acceptance_excludes_competing_teardown_through_completion_and_rollback",
     ) {
         return;
     }
@@ -186,7 +188,7 @@ fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
         worker
             .request(
                 atlas_core::test_support::rerun(
-                    "onboarding::acceptance::tests::an_acceptance_test_requester",
+                    "user::onboarding::acceptance::tests::an_acceptance_test_requester",
                 )
                 .arg("--nocapture")
                 .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
@@ -224,7 +226,7 @@ fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
 #[test]
 fn acceptance_refuses_dispatch_during_teardown_or_after_the_pairing_changes() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::acceptance_refuses_dispatch_during_teardown_or_after_the_pairing_changes",
+        "user::onboarding::acceptance::tests::acceptance_refuses_dispatch_during_teardown_or_after_the_pairing_changes",
     ) {
         return;
     }
@@ -436,7 +438,7 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
 #[test]
 fn observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization",
+        "user::onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization",
     ) {
         return;
     }
@@ -447,7 +449,7 @@ fn observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorizati
 #[test]
 fn observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization",
+        "user::onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization",
     ) {
         return;
     }
@@ -458,7 +460,7 @@ fn observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorizati
 #[test]
 fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job",
+        "user::onboarding::acceptance::tests::observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job",
     ) {
         return;
     }
@@ -508,7 +510,7 @@ fn serve_repair_worker(dir: &Path, output: fs::File) {
 #[test]
 fn acceptance_refuses_a_stale_ticket_before_dispatching_setup() {
     if !atlas_core::test_support::isolated(
-        "onboarding::acceptance::tests::acceptance_refuses_a_stale_ticket_before_dispatching_setup",
+        "user::onboarding::acceptance::tests::acceptance_refuses_a_stale_ticket_before_dispatching_setup",
     ) {
         return;
     }

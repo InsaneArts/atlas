@@ -9,7 +9,6 @@ mod stand_in;
 use inspection::{Found, survey};
 use log_out::{log_out_helper, logged_out_twice, retiring, still_logged_in, unrecorded_message};
 
-use crate::onboarding::as_root::{self, Target, Via};
 use atlas_client::{client::Client, setup};
 use atlas_control::{Controller, Ownership};
 use atlas_core::{
@@ -471,8 +470,12 @@ impl Teardown for Live<'_> {
             return Err(problem("Atlas lost control of the helper"));
         };
         let target = match (&self.found.helper, retiring(self.found.known.as_ref())) {
-            (None, _) => Some(Target::Orphan(client.desktop().user().uid)),
-            (Some(_), Some(identity)) => Some(Target::Helper(identity.clone())),
+            (None, _) => Some(crate::user::onboarding::as_root::Target::Orphan(
+                client.desktop().user().uid,
+            )),
+            (Some(_), Some(identity)) => Some(crate::user::onboarding::as_root::Target::Helper(
+                identity.clone(),
+            )),
             (Some(_), None) => None,
         };
 
@@ -571,7 +574,11 @@ impl Teardown for Live<'_> {
         ));
         let name = &identity.name;
         match setup::executor::setup_transaction_held(&client.controller, || {
-            as_root::remove_helper(&identity, Via::Sudo { ask: true }).map_err(|refusal| {
+            crate::user::onboarding::as_root::remove_helper(
+                &identity,
+                crate::user::onboarding::as_root::Via::Sudo { ask: true },
+            )
+            .map_err(|refusal| {
                 problem(match refusal {
                     Refusal::Failed(why) => why,
                     Refusal::Cancelled | Refusal::Unavailable => {

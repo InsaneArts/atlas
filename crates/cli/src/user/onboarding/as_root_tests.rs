@@ -68,7 +68,7 @@ fn account_replacement_during_the_last_age_lookup_prevents_bootout() {
 #[test]
 fn a_callers_death_does_not_release_a_paused_executors_claims() {
     if !atlas_core::test_support::isolated(
-        "onboarding::as_root::tests::a_callers_death_does_not_release_a_paused_executors_claims",
+        "user::onboarding::as_root::tests::a_callers_death_does_not_release_a_paused_executors_claims",
     ) {
         return;
     }
@@ -105,7 +105,7 @@ fn executor_fixture(dir: &Path, mode: &str) -> atlas_client::test_support::Fixtu
     atlas_client::test_support::Fixture::spawn(
         dir,
         atlas_core::test_support::rerun(
-            "onboarding::as_root::tests::a_privileged_executor_test_caller",
+            "user::onboarding::as_root::tests::a_privileged_executor_test_caller",
         )
         .arg("--nocapture")
         .env("ATLAS_EXECUTOR_TEST_DIRECTORY", dir)
@@ -133,7 +133,7 @@ fn a_privileged_executor_test_caller() {
     command
         .args(["-f", "-c", &script, "zsh"])
         .arg(std::env::current_exe().unwrap())
-        .arg("onboarding::as_root::tests::a_privileged_executor_test_worker")
+        .arg("user::onboarding::as_root::tests::a_privileged_executor_test_worker")
         .env("ATLAS_EXECUTOR_TEST_DIRECTORY", &dir);
     let outcome = super::super::owned(
         &[controller],
@@ -191,7 +191,7 @@ fn a_privileged_executor_test_worker() {
 #[test]
 fn a_timed_out_executor_holds_control_and_claims_until_it_exits() {
     if !atlas_core::test_support::isolated(
-        "onboarding::as_root::tests::a_timed_out_executor_holds_control_and_claims_until_it_exits",
+        "user::onboarding::as_root::tests::a_timed_out_executor_holds_control_and_claims_until_it_exits",
     ) {
         return;
     }

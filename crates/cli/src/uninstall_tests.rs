@@ -47,7 +47,7 @@ fn an_opener_removal_test_caller() {
     let _ = setup::executor::setup_transaction(&controller, || {
         atlas_client::test_support::pause_executor(
             &directory,
-            "onboarding::tests::an_executor_test_worker",
+            "user::onboarding::tests::an_executor_test_worker",
         );
         Ok(json!({"ok": true, "removed": true}))
     });

@@ -8,5 +8,6 @@ pub mod onboarding;
 pub mod terminal;
 pub mod ui;
 pub mod uninstall;
+pub mod user;
 pub mod viewer;
 pub mod watch;

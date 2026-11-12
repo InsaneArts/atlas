@@ -371,7 +371,7 @@ print -r -- "@atlas readied $readied"
 
 /// The helper account's picture, Atlas's mark, carried in Atlas's signed
 /// executable rather than read from the app's folder.
-const PICTURE: &[u8] = include_bytes!("../../../../app/Resources/HelperPicture.png");
+const PICTURE: &[u8] = include_bytes!("../../../../../app/Resources/HelperPicture.png");
 
 /// How the steps reach root: through macOS's one approval, its dialog
 /// saying what will happen, or through sudo in a terminal, asking for the

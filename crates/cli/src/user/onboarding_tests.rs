@@ -9,7 +9,7 @@ fn settings_are_absent_only_when_the_configuration_is_missing() {
         assert!(settings(&dir.path().join(missing)).unwrap().is_none());
     }
     let valid = dir.path().join("valid.toml");
-    fs::write(&valid, include_str!("../../../examples/config.toml")).unwrap();
+    fs::write(&valid, include_str!("../../../../examples/config.toml")).unwrap();
     assert_eq!(
         settings(&valid).unwrap().unwrap(),
         Config::load(&valid).unwrap()
@@ -46,13 +46,13 @@ fn choosing_the_configured_helper_again_bypasses_the_replacement_refusal() {
 #[test]
 fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death",
+        "user::onboarding::tests::setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death",
     ) {
         return;
     }
     for mode in ["selected", "allocated"] {
         atlas_client::test_support::interrupted_executor(
-            "onboarding::tests::an_account_setup_test_caller",
+            "user::onboarding::tests::an_account_setup_test_caller",
             mode,
         );
     }
@@ -61,12 +61,12 @@ fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_d
 #[test]
 fn interactive_creation_keeps_its_worker_claim_after_the_caller_dies() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::interactive_creation_keeps_its_worker_claim_after_the_caller_dies",
+        "user::onboarding::tests::interactive_creation_keeps_its_worker_claim_after_the_caller_dies",
     ) {
         return;
     }
     atlas_client::test_support::interrupted_executor(
-        "onboarding::tests::an_account_setup_test_caller",
+        "user::onboarding::tests::an_account_setup_test_caller",
         "interactive",
     );
 }
@@ -91,7 +91,7 @@ fn an_account_setup_test_caller() {
                 "zsh",
                 executable.to_str().unwrap(),
                 "--exact",
-                "onboarding::tests::an_interactive_setup_test_worker",
+                "user::onboarding::tests::an_interactive_setup_test_worker",
                 "--nocapture",
             ];
             answer_prompts("/bin/zsh", &args, b"unused", Duration::from_secs(30))
@@ -126,7 +126,7 @@ fn an_interactive_setup_test_worker() {
 #[test]
 fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone",
+        "user::onboarding::tests::setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone",
     ) {
         return;
     }
@@ -178,7 +178,7 @@ fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
 #[test]
 fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup",
+        "user::onboarding::tests::preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup",
     ) {
         return;
     }
@@ -379,7 +379,7 @@ fn shared_requests_and_helper_text_never_wait_for_a_pipe_writer() {
 #[test]
 fn a_helper_answers_only_while_its_socket_listens() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::a_helper_answers_only_while_its_socket_listens",
+        "user::onboarding::tests::a_helper_answers_only_while_its_socket_listens",
     ) {
         return;
     }
@@ -505,7 +505,7 @@ fn a_login_under_the_helpers_user_id_is_closed_only_as_the_recorded_helpers() {
 #[test]
 fn every_leftover_login_closes_under_one_approval() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::every_leftover_login_closes_under_one_approval",
+        "user::onboarding::tests::every_leftover_login_closes_under_one_approval",
     ) {
         return;
     }
@@ -559,7 +559,7 @@ fn every_leftover_login_closes_under_one_approval() {
 #[test]
 fn closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome",
+        "user::onboarding::tests::closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome",
     ) {
         return;
     }
@@ -627,7 +627,7 @@ fn untouched(refusal: Refusal) -> as_root::Unclosed {
 #[test]
 fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::the_helper_is_logged_out_as_root_only_under_control_held_throughout",
+        "user::onboarding::tests::the_helper_is_logged_out_as_root_only_under_control_held_throughout",
     ) {
         return;
     }
@@ -678,7 +678,7 @@ fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
 #[test]
 fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::a_log_out_as_root_stays_pending_until_the_login_is_seen_gone",
+        "user::onboarding::tests::a_log_out_as_root_stays_pending_until_the_login_is_seen_gone",
     ) {
         return;
     }
@@ -723,7 +723,7 @@ fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
 #[test]
 fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone",
+        "user::onboarding::tests::a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone",
     ) {
         return;
     }
@@ -750,7 +750,7 @@ fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
 #[test]
 fn a_log_out_root_never_started_leaves_nothing_pending() {
     if !atlas_core::test_support::isolated(
-        "onboarding::tests::a_log_out_root_never_started_leaves_nothing_pending",
+        "user::onboarding::tests::a_log_out_root_never_started_leaves_nothing_pending",
     ) {
         return;
     }
@@ -790,7 +790,7 @@ fn a_log_out_root_never_started_leaves_nothing_pending() {
 }
 
 /// The test that stands in for an executor in this test binary.
-const WORKER: &str = "onboarding::tests::an_executor_test_worker";
+const WORKER: &str = "user::onboarding::tests::an_executor_test_worker";
 
 #[test]
 fn an_executor_test_worker() {
@@ -800,7 +800,7 @@ fn an_executor_test_worker() {
 #[test]
 fn a_surviving_executor_keeps_recovery_excluded_until_its_observed_exit() {
     atlas_client::test_support::interrupted_executor(
-        "onboarding::tests::an_account_setup_test_caller",
+        "user::onboarding::tests::an_account_setup_test_caller",
         "interactive",
     );
 }

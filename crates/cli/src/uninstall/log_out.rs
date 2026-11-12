@@ -1,7 +1,6 @@
 //! Logging the helper out for uninstall, gentlest way first, until its login
 //! is known to be gone.
 use super::{Progress, Question};
-use crate::onboarding::as_root::{self, Target, Via};
 use atlas_client::client::Client;
 use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
@@ -66,7 +65,7 @@ pub(super) async fn log_out_helper(
     client: &Client,
     ownership: &Ownership,
     yes: bool,
-    target: Option<Target>,
+    target: Option<crate::user::onboarding::as_root::Target>,
     ask: &dyn Fn(Question) -> Result<bool>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
@@ -171,7 +170,7 @@ pub(super) fn strictly(came: Came, logged_out: bool) -> Came {
 fn root_log_out(
     client: &Client,
     ownership: &Ownership,
-    target: Option<Target>,
+    target: Option<crate::user::onboarding::as_root::Target>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Came {
     let uid = client.desktop().user().uid;
@@ -186,10 +185,15 @@ fn root_log_out(
         return Came::Stayed;
     }
 
-    let ended = crate::onboarding::end_as_root(
+    let ended = crate::user::onboarding::end_as_root(
         &client.controller,
         ownership,
-        || as_root::close(&[target], Via::Sudo { ask: true }),
+        || {
+            crate::user::onboarding::as_root::close(
+                &[target],
+                crate::user::onboarding::as_root::Via::Sudo { ask: true },
+            )
+        },
         || logged_out_twice(uid),
     );
 

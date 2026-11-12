@@ -696,33 +696,45 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
     use atlas_cli::onboarding;
 
     match step {
-        OnboardingCommand::Status => onboarding::status(config).await,
-        OnboardingCommand::Choose { account } => onboarding::choose(config, &account),
+        OnboardingCommand::Status => atlas_cli::user::onboarding::status(config).await,
+        OnboardingCommand::Choose { account } => {
+            atlas_cli::user::onboarding::choose(config, &account)
+        }
         OnboardingCommand::Create { account, full_name } => {
-            onboarding::create(config, &account, &full_name)
+            atlas_cli::user::onboarding::create(config, &account, &full_name)
         }
         OnboardingCommand::Accept {
             controller_uid,
             controller_name,
-        } => onboarding::accept(controller_uid, &controller_name),
-        OnboardingCommand::AcceptWorker { ticket } => onboarding::accept_worker(&ticket).await,
-        OnboardingCommand::Window { state } => onboarding::window(state == WindowState::Open),
-        OnboardingCommand::Forget => onboarding::forget(config),
-        OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(config),
-        OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
-        OnboardingCommand::Finish => onboarding::finish(config).await,
+        } => atlas_cli::user::onboarding::accept(controller_uid, &controller_name),
+        OnboardingCommand::AcceptWorker { ticket } => {
+            atlas_cli::user::onboarding::accept_worker(&ticket).await
+        }
+        OnboardingCommand::Window { state } => {
+            atlas_cli::user::onboarding::window(state == WindowState::Open)
+        }
+        OnboardingCommand::Forget => atlas_cli::user::onboarding::forget(config),
+        OnboardingCommand::Close { helper: false } => {
+            atlas_cli::user::onboarding::close_leftovers(config)
+        }
+        OnboardingCommand::Close { helper: true } => {
+            atlas_cli::user::onboarding::close_helper(config)
+        }
+        OnboardingCommand::Finish => atlas_cli::user::onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
         OnboardingCommand::Files { change } => {
             let change = change.map(|change| match change {
-                HomeFiles::Private => onboarding::HomeChange::Private,
-                HomeFiles::Open => onboarding::HomeChange::Open,
-                HomeFiles::Offered => onboarding::HomeChange::Offered,
+                HomeFiles::Private => atlas_cli::user::onboarding::HomeChange::Private,
+                HomeFiles::Open => atlas_cli::user::onboarding::HomeChange::Open,
+                HomeFiles::Offered => atlas_cli::user::onboarding::HomeChange::Offered,
             });
             let (config, by_person) = (config.to_path_buf(), actor() == Actor::Viewer);
             // `ls` and `chmod` wait on their own, off the command's async work.
-            tokio::task::spawn_blocking(move || onboarding::files(&config, change, by_person))
-                .await
-                .map_err(|error| Error::new(Code::Io, error.to_string()))?
+            tokio::task::spawn_blocking(move || {
+                atlas_cli::user::onboarding::files(&config, change, by_person)
+            })
+            .await
+            .map_err(|error| Error::new(Code::Io, error.to_string()))?
         }
         OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
             choice.map(|choice| choice == SignInCopies::Allow),

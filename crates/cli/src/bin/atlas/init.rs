@@ -1,6 +1,5 @@
 //! Terminal choices, progress and waiting for attended setup.
 use super::prompt;
-use atlas_cli::onboarding::{close_attended, create_helper};
 use atlas_cli::ui::{
     self,
     progress::{Spinner, done, heading, say, skipped},
@@ -91,7 +90,9 @@ fn choose_helper() -> Result<(account::Account, Identity)> {
     }
 
     say("macOS asks for your administrator password, then a password for the new account.");
-    selected(create_helper(&name, FULL_NAME)?)
+    selected(atlas_cli::user::onboarding::create_helper(
+        &name, FULL_NAME,
+    )?)
 }
 
 /// Capture the account and its permanent identity at selection time.
@@ -412,7 +413,7 @@ fn helper_step(
 ) -> Result<(Config, account::Account, Identity)> {
     let (config, helper, identity) =
         atlas_client::user::setup::configure_helper(config_path, choose_helper, say)?;
-    if close_attended(helper.uid, Some(&identity), || {
+    if atlas_cli::user::onboarding::close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
         say(
             "  macOS kept a login open for an account that was deleted. Close it before you go on,\n  or the next login can stall.",

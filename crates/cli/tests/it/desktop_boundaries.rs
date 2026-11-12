@@ -1185,6 +1185,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "pending: switching this Mac to the user, its login timing and its setup worker",
     ),
     (
+        "crates/cli/src/bin/atlas/dispatch.rs",
+        &["onboarding"],
+        "exception: the way in for the user's own setup: the setup window's steps",
+    ),
+    (
         "crates/cli/src/bin/atlas/doctor.rs",
         &["report"],
         "owner: what doctor reports",
@@ -1228,6 +1233,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "pending: finishing an update in the user",
     ),
     (
+        "crates/cli/src/lib.rs",
+        &["mod user"],
+        "declares: the user desktop's module",
+    ),
+    (
         "crates/cli/src/mcp.rs",
         &["Server::switch_helper"],
         "owner: showing the person this desktop",
@@ -1236,74 +1246,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/cli/src/mcp.rs",
         &["Server::switch_to_user"],
         "pending: switching this Mac to the user",
-    ),
-    (
-        "crates/cli/src/onboarding.rs",
-        &[
-            "accept",
-            "asked",
-            "check_choice",
-            "choosable",
-            "choose",
-            "close_all",
-            "close_attended",
-            "close_helper",
-            "close_leftovers",
-            "closing_first",
-            "closing_first_using",
-            "controller_of",
-            "create",
-            "create_helper",
-            "created",
-            "expected_agent",
-            "files",
-            "finish",
-            "forget",
-            "keep_other_helper",
-            "leftover_logins",
-            "leftover_targets",
-            "orphans_now",
-            "prepared",
-            "requested",
-            "use_helper",
-            "window",
-        ],
-        "pending: choosing and preparing the user's account",
-    ),
-    (
-        "crates/cli/src/onboarding/acceptance.rs",
-        &[
-            "accept_worker",
-            "accepted",
-            "accepted_at",
-            "allow",
-            "complete_setup",
-            "drive",
-            "observe",
-            "reconcile",
-            "resume",
-            "serve_channel",
-            "signal",
-            "verify",
-        ],
-        "pending: the setup connection and its acceptance",
-    ),
-    (
-        "crates/cli/src/onboarding/as_root.rs",
-        &["create_in_terminal"],
-        "pending: creating the user's account as root",
-    ),
-    (
-        "crates/cli/src/onboarding/status.rs",
-        &[
-            "candidates",
-            "configured",
-            "helper_job_here",
-            "helper_side",
-            "logins",
-            "status",
-        ],
-        "pending: how far the user's setup has come",
     ),
     (
         "crates/cli/src/ui/render/act.rs",
@@ -1663,7 +1605,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 13;
+const PENDING_LIMIT: usize = 9;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.
