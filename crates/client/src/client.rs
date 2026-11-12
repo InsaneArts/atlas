@@ -354,7 +354,7 @@ impl Client {
                 format!(
                     "The helper cannot run the shared Atlas command at {}. Run atlas \
                      install.",
-                    self.config.identity_probe.display()
+                    command.display()
                 ),
             ));
         }
