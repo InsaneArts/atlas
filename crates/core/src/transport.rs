@@ -139,14 +139,23 @@ impl Transport {
         }
     }
 
-    /// Whether the kernel says the peer of `stream` is this transport's
-    /// account, and process `pid` of it: what a lane that reads its own
-    /// reply checks before it trusts one.
+    /// A connection of its own to this transport's service, for a lane that
+    /// reads its own reply, made by `until`, when the kernel says process
+    /// `pid` of this transport's account is at its other end; none when
+    /// another process is.
     ///
     /// # Errors
     ///
-    /// Returns the failure to read the peer.
-    pub fn served_by(&self, stream: &UnixStream, pid: u32) -> io::Result<bool> {
+    /// Returns the failure to connect, then the failure to read the peer.
+    pub async fn lane(&self, pid: u32, until: Instant) -> Result<Option<UnixStream>> {
+        let stream = connect_socket(&self.path, until).await?;
+        Ok(self.served_by(&stream, pid)?.then_some(stream))
+    }
+
+    /// Whether the kernel says the peer of `stream` is this transport's
+    /// account, and process `pid` of it: what a lane that reads its own
+    /// reply checks before it trusts one.
+    fn served_by(&self, stream: &UnixStream, pid: u32) -> io::Result<bool> {
         let peer = stream.peer_cred()?;
         Ok(peer.uid() == self.peer_uid
             && peer.pid().and_then(|pid| u32::try_from(pid).ok()) == Some(pid))

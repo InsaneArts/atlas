@@ -14,7 +14,7 @@ use atlas_core::{
         SESSION_PROOF, SessionPin,
     },
     session::{Epoch, InputEpoch},
-    transport::{connect_socket, refusal},
+    transport::refusal,
 };
 use serde_json::{Value, json};
 use std::{
@@ -193,15 +193,15 @@ impl LiveStream {
         let high_res = offers(RGB_STREAM_HIGH_RES);
         let limit = if high_res { limit } else { limit.min(1600) };
         let epoch = verified.session.epoch.clone();
-        let socket = tokio::time::timeout(DEADLINE, connect_socket(&client.transport.path, setup))
+        let lane = tokio::time::timeout(DEADLINE, client.transport.lane(epoch.capture_pid, setup))
             .await
             .map_err(|_| invalid("Preview connection timed out"))??;
-        if !client.transport.served_by(&socket, epoch.capture_pid)? {
+        let Some(socket) = lane else {
             return Err(Error::new(
                 Code::Identity,
                 "The preview peer is not the verified helper daemon",
             ));
-        }
+        };
         let mut stream = Self {
             socket,
             epoch,
@@ -665,13 +665,12 @@ async fn drain_query(
     query: &str,
     until: tokio::time::Instant,
 ) -> Result<Value> {
-    let mut socket = connect_socket(&client.transport.path, until).await?;
-    if !client.transport.served_by(&socket, daemon)? {
+    let Some(mut socket) = client.transport.lane(daemon, until).await? else {
         return Err(Error::new(
             Code::Identity,
             "The drain answer did not come from the helper daemon that ran the stream",
         ));
-    }
+    };
     let mut line = serde_json::to_vec(&json!({"op": "stream-drain-status", "daemonPID": daemon,
         "producerGeneration": generation, "queryID": query}))?;
     line.push(b'\n');

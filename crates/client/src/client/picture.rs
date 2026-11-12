@@ -15,7 +15,7 @@ use atlas_core::{
     protocol::SessionPin,
     screen::elements::Element,
     session::InputEpoch,
-    transport::{Transport, connect_socket},
+    transport::Transport,
 };
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -283,13 +283,15 @@ async fn frame(
     daemon: u32,
     cancelled: oneshot::Receiver<()>,
 ) -> Result<Raw> {
-    let mut socket = connect_socket(&transport.path, tokio::time::Instant::now() + WAIT).await?;
-    if !transport.served_by(&socket, daemon)? {
+    let lane = transport
+        .lane(daemon, tokio::time::Instant::now() + WAIT)
+        .await?;
+    let Some(mut socket) = lane else {
         return Err(Error::new(
             Code::Identity,
             "The picture did not come from the verified helper daemon",
         ));
-    }
+    };
     let pin = SessionPin {
         security_session_id: epoch.security_session_id,
         display_id: epoch.display_id,
