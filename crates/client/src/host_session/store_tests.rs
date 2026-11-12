@@ -423,7 +423,7 @@ fn the_record_keeps_atlas_names_and_tokens_but_never_file_names_or_text() {
     let client = client(directory.path());
     let session = session("private");
     let token = Token::new();
-    let copy = format!("{}/{token}/Quarterly Plan.txt", crate::handoff::ROOT);
+    let copy = format!("{}/{token}/Quarterly Plan.txt", crate::user::copies::ROOT);
 
     noted(
         &client,
@@ -507,7 +507,7 @@ fn a_close_drops_the_copies_it_removed() {
     let client = client(directory.path());
     let session = session("closing");
     let (kept, gone) = (Token::new(), Token::new());
-    let copied = |token: &Token| json!({"from": "/tmp/a.txt", "to": format!("{}/{token}/a.txt", crate::handoff::ROOT)});
+    let copied = |token: &Token| json!({"from": "/tmp/a.txt", "to": format!("{}/{token}/a.txt", crate::user::copies::ROOT)});
 
     noted(
         &client,
@@ -521,7 +521,7 @@ fn a_close_drops_the_copies_it_removed() {
         &session,
         Kind::Close,
         "close",
-        json!({"ok": true, "removed": [format!("{}/{gone}", crate::handoff::ROOT)]}),
+        json!({"ok": true, "removed": [format!("{}/{gone}", crate::user::copies::ROOT)]}),
     );
 
     let record = store(&client).read(session.key()).unwrap();

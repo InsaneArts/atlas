@@ -1306,6 +1306,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "pending: how far the user's setup has come",
     ),
     (
+        "crates/cli/src/ui/render/act.rs",
+        &["opened"],
+        "exception: the link: copies are made on a shared disk, and these words name its folder",
+    ),
+    (
         "crates/cli/src/uninstall.rs",
         &[
             "<Live<'_> as Teardown>::log_out",
@@ -1314,6 +1319,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "<Live<'_> as Teardown>::retire",
             "Live<'_>::forget_requested_opener",
             "Live<'_>::trash",
+            "handed_over",
             "home_note",
             "retire_helper_job",
             "retirement_request",
@@ -1478,13 +1484,24 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/handoff.rs",
-        &["Copies::of", "hand_over"],
+        &[
+            "Copies::app",
+            "Copies::exists",
+            "Copies::identity",
+            "Copies::location",
+            "Copies::of",
+            "Copies::prune",
+            "Copies::remove",
+            "Copies::remove_of_app",
+            "Copies::token_of",
+            "hand_over",
+        ],
         "owner: where the desktop's copies are, and handing files over",
     ),
     (
         "crates/client/src/handoff.rs",
-        &["hand_over_to"],
-        "pending: the user's shared copies folder",
+        &["Copies::in_shared_folder"],
+        "exception: records do not say which desktop made the copies they name",
     ),
     (
         "crates/client/src/host_session.rs",
@@ -1711,7 +1728,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 27;
+const PENDING_LIMIT: usize = 26;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

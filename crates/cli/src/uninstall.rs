@@ -862,7 +862,7 @@ impl Live<'_> {
 
         // The shared folder itself, once nothing but Atlas's is left in it:
         // another account could not set Atlas up while it is there.
-        if let Some(shared) = Path::new(atlas_client::handoff::ROOT).parent()
+        if let Some(shared) = Path::new(atlas_client::user::copies::ROOT).parent()
             && remove_own_empty_folder(shared)
         {
             self.removed.push(json!(shared));
@@ -1243,7 +1243,9 @@ fn remove_caches(
 /// plans and requests beside the shared command. Only folders that are
 /// provably Atlas's own are listed.
 fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
-    let mut leftovers: Vec<PathBuf> = atlas_client::handoff::root_if_owned().into_iter().collect();
+    let mut leftovers: Vec<PathBuf> = atlas_client::user::copies::root_if_owned()
+        .into_iter()
+        .collect();
 
     if let Some(shared) = shared_command.parent() {
         leftovers.extend(atlas_client::environment::leftovers(shared));

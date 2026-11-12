@@ -90,7 +90,7 @@ impl Client {
 
         let shared = target
             .parent()
-            .filter(|parent| Path::new(crate::handoff::ROOT).parent() == Some(*parent));
+            .filter(|parent| Path::new(crate::user::copies::ROOT).parent() == Some(*parent));
         let folder_ready = shared.is_none_or(|parent| {
             fs::symlink_metadata(parent).is_ok_and(|metadata| {
                 metadata.is_dir()

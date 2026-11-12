@@ -140,7 +140,7 @@ pub(super) fn opened(what: &str, value: &Value) -> Rendered {
             "\n  {}",
             style::dim(format!(
                 "copied first to {}, where the helper can read it",
-                atlas_client::handoff::ROOT
+                atlas_client::user::copies::ROOT
             ))
         )
     } else {

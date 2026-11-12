@@ -849,7 +849,7 @@ pub(crate) async fn fresh_pass(
 
 /// How launchd and the helper's LaunchAgents folder show the managed job,
 /// read through `client`'s daemon (read-only, so no pending marker): the
-/// worker's report for [`LABEL`] (`loaded`, `plistKind`, `plistSha256`...).
+/// worker's report for [`LABEL`](atlas_daemon::user::setup::LABEL) (`loaded`, `plistKind`, `plistSha256`...).
 ///
 /// # Errors
 ///

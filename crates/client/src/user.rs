@@ -3,6 +3,7 @@
 //! shared code reaches it through owners that match on the desktop's kind.
 pub mod capability;
 pub mod console_agents;
+pub mod copies;
 pub mod home_privacy;
 pub mod setup;
 pub mod switch;
