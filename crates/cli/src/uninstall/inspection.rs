@@ -31,6 +31,22 @@ impl Found {
     }
 }
 
+/// The account of the helper `config` names: its name, when it still exists
+/// and is not known to be another account, and whether it is the one
+/// recorded (`None` without an account).
+fn helper_account(config: &Config) -> (Option<String>, Option<Standing>) {
+    let account = account::account_with_uid(config.desktop().user().uid)
+        .ok()
+        .flatten();
+    let known = account
+        .as_ref()
+        .map(atlas_daemon::user::setup::identity::standing_of);
+    let helper = account
+        .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
+        .map(|account| account.name);
+    (helper, known)
+}
+
 /// Find what uninstall would remove and what it keeps, changing nothing.
 pub(super) fn survey(config_path: &Path) -> Result<Found> {
     let app = atlas_core::app_bundle::installed_app()?;
@@ -44,17 +60,7 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
     };
 
     let config = client.as_ref().map(|client| &client.config);
-    let account = config.and_then(|config| {
-        account::account_with_uid(config.desktop().user().uid)
-            .ok()
-            .flatten()
-    });
-    let known = account
-        .as_ref()
-        .map(atlas_daemon::user::setup::identity::standing_of);
-    let helper = account
-        .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
-        .map(|account| account.name);
+    let (helper, known) = config.map_or((None, None), helper_account);
     let data = config::home()?.join("Library/Application Support/Atlas");
     let leftovers = config
         .map(|config| handed_over(&config.identity_probe))

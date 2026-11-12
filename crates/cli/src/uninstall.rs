@@ -14,7 +14,7 @@ use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account,
     config::{self, Config},
-    desktop::Desktop,
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
 };
 use atlas_daemon::identity::{Identity, Standing};
@@ -459,80 +459,28 @@ impl Teardown for Live<'_> {
     }
 
     fn logged_out(&mut self) -> bool {
-        self.found
-            .client
-            .as_ref()
-            .is_some_and(|client| logged_out_twice(client.desktop().user().uid))
+        logged_out(self.found)
     }
 
     async fn log_out(&mut self) -> Result<()> {
-        let (Some(client), Some(ownership)) = (&self.found.client, &self.exclusion) else {
-            return Err(problem("Atlas lost control of the helper"));
-        };
-        let target = match (&self.found.helper, retiring(self.found.known.as_ref())) {
-            (None, _) => Some(crate::user::onboarding::as_root::Target::Orphan(
-                client.desktop().user().uid,
-            )),
-            (Some(_), Some(identity)) => Some(crate::user::onboarding::as_root::Target::Helper(
-                identity.clone(),
-            )),
-            (Some(_), None) => None,
-        };
-
-        log_out_helper(client, ownership, self.yes, target, self.ask, self.progress).await
+        log_out(
+            self.found,
+            self.exclusion.as_ref(),
+            self.yes,
+            self.ask,
+            self.progress,
+        )
+        .await
     }
 
     fn retire(&mut self) -> Result<()> {
-        let Some(client) = &self.found.client else {
-            return Ok(());
-        };
-        let job = retiring(self.found.known.as_ref());
-        let _ownership = self
-            .exclusion
-            .as_ref()
-            .ok_or_else(|| problem("Atlas lost control of the helper"))?;
-
-        let config = &client.config;
-        if let Some(helper) = job {
-            (self.progress)(Progress::Say(
-                "Stopping the helper's background job (macOS may ask for your password)…",
-            ));
-            if let Some(opener) =
-                retire_helper_job(&self.found.executable, helper, &client.controller)?
-            {
-                self.removed.push(json!("helper job"));
-                (self.progress)(Progress::Done("Helper job", "stopped"));
-                match opener {
-                    Ok(true) => self
-                        .removed
-                        .push(json!("Atlas's one-time start in the helper")),
-                    Ok(false) => {}
-                    Err(why) => self.warnings.push(why),
-                }
-            } else {
-                (self.progress)(Progress::Skipped(
-                    "Helper job",
-                    "the helper account no longer exists",
-                ));
-                self.warnings.push(format!(
-                    "The helper account (user ID {}) no longer exists, so no job was stopped",
-                    config.desktop().user().uid
-                ));
-            }
-        }
-        // Archive evidence only after the job is gone; it must stop counting as setup.
-        if let Err(error) =
-            atlas_client::user::setup::migrate::archive_uninstalled(config.desktop().user().uid)
-        {
-            self.warnings.push(format!(
-                "The setup record was not set aside: {}",
-                error.error
-            ));
-        }
-        if remove_link_to(&config.identity_probe, &self.found.executable)? {
-            self.removed.push(json!(config.identity_probe));
-        }
-        Ok(())
+        retire(
+            self.found,
+            self.exclusion.as_ref(),
+            &mut self.removed,
+            &mut self.warnings,
+            self.progress,
+        )
     }
 
     fn rest(&mut self) -> Result<()> {
@@ -548,66 +496,23 @@ impl Teardown for Live<'_> {
     }
 
     fn remove_helper(&mut self) {
-        if self.found.helper.is_none() {
-            return;
-        }
-        let Some(identity) = retiring(self.found.known.as_ref()).cloned() else {
-            self.kept_account("Atlas can't tell it is still the helper");
-            return;
-        };
-
-        let (Some(client), Some(_ownership)) = (&self.found.client, &self.exclusion) else {
-            self.warnings
-                .push("The helper account was kept: Atlas lost control of it".into());
-            return;
-        };
-        let uid = identity.uid;
-        if uid == nix::unistd::getuid().as_raw()
-            || atlas_core::user::logins::console_owner() == Some(uid)
-        {
-            self.keep_helper();
-            return;
-        }
-
-        (self.progress)(Progress::Say(
-            "Deleting the helper account (macOS may ask for your password)…",
-        ));
-        let name = &identity.name;
-        match setup::executor::setup_transaction_held(&client.controller, || {
-            crate::user::onboarding::as_root::remove_helper(
-                &identity,
-                crate::user::onboarding::as_root::Via::Sudo { ask: true },
-            )
-            .map_err(|refusal| {
-                problem(match refusal {
-                    Refusal::Failed(why) => why,
-                    Refusal::Cancelled | Refusal::Unavailable => {
-                        "administrator rights were not granted".into()
-                    }
-                })
-            })
-        }) {
-            Ok(()) => {
-                self.removed.push(json!(format!("helper account {name}")));
-                self.deleted = true;
-                (self.progress)(Progress::Done("Helper account", &format!("{name} deleted")));
-            }
-            Err(error) => {
-                let why = error.error;
-                (self.progress)(Progress::Skipped(
-                    "Helper account",
-                    &format!("deletion not confirmed: {why}"),
-                ));
-                self.warnings.push(format!(
-                    "Deletion of the helper account {name} was not confirmed: {why}. Its outcome \
-                     stays pending until Atlas recovers it."
-                ));
-            }
-        }
+        remove_account(
+            self.found,
+            self.exclusion.as_ref(),
+            &mut self.removed,
+            &mut self.warnings,
+            &mut self.deleted,
+            self.progress,
+        );
     }
 
     fn keep_helper(&mut self) {
-        self.kept_account("it is still logged in");
+        kept_account(
+            self.found,
+            &mut self.warnings,
+            self.progress,
+            "it is still logged in",
+        );
     }
 
     fn hint(&mut self) {
@@ -653,14 +558,6 @@ impl Teardown for Live<'_> {
 }
 
 impl Live<'_> {
-    fn kept_account(&mut self, why: &str) {
-        if let Some(name) = &self.found.helper {
-            (self.progress)(Progress::Skipped("Helper account", &format!("kept: {why}")));
-            self.warnings
-                .push(format!("The helper account {name} was kept: {why}"));
-        }
-    }
-
     /// Stop a running menu bar, then its opening at login. Turning it off
     /// here is not the person's choice: unless they had turned it off
     /// themselves, the record of a choice goes, so setting Atlas up again
@@ -771,51 +668,7 @@ impl Live<'_> {
         if stand_in::reached("opener") {
             return;
         }
-        let me = nix::unistd::getuid().as_raw();
-        let client = self.found.client.as_ref();
-        let Some(pairing) = atlas_daemon::user::setup::pairing::request().filter(|pairing| {
-            pairing.controller_uid == me
-                && client.is_none_or(|client| client.desktop().user().uid != pairing.helper_uid)
-        }) else {
-            return;
-        };
-        let Ok(Some(account)) = account::account_with_uid(pairing.helper_uid) else {
-            return;
-        };
-
-        let request = atlas_daemon::user::setup::Request::ForgetOpener { uid: account.uid };
-        let Some(expected) = atlas_daemon::user::setup::identity::verified(account.uid) else {
-            self.warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
-            return;
-        };
-        let desktop = Desktop::from(atlas_core::user::User { uid: account.uid });
-        let outcome = Controller::new(&desktop).and_then(|controller| {
-            setup::executor::setup_transaction(&controller, || {
-                atlas_client::user::setup::request_as_helper(
-                    &self.found.executable,
-                    &account,
-                    &request,
-                    atlas_client::user::setup::Invocation::Login,
-                    &expected,
-                )?
-                .map_err(|unfinished| {
-                    let error = problem(unfinished.reason().unwrap_or("no reply"));
-                    unfinished.behind(error)
-                })
-            })
-        });
-        match outcome {
-            Ok(reply) => {
-                if reply["removed"] == true {
-                    self.removed
-                        .push(json!(format!("Atlas's one-time start in {}", account.name)));
-                }
-            }
-            Err(error) => self.warnings.push(format!(
-                "Atlas's one-time start in {} was not removed: {}",
-                account.name, error.error
-            )),
-        }
+        forget_requested_opener(self.found, &mut self.removed, &mut self.warnings);
     }
 
     /// The app goes to the Trash, where it can be recovered; what it left for
@@ -861,20 +714,7 @@ impl Live<'_> {
             (self.progress)(Progress::Done("Copies for the helper", "removed"));
         }
 
-        // The request naming the helper, when this account made it.
-        let request = Path::new(atlas_daemon::user::setup::pairing::REQUEST);
-        if remove_own_file(request).unwrap_or(false) {
-            self.removed.push(json!(request));
-        }
-
-        // The shared folder itself, once nothing but Atlas's is left in it:
-        // another account could not set Atlas up while it is there.
-        if let Some(shared) = Path::new(atlas_client::user::copies::ROOT).parent()
-            && remove_own_empty_folder(shared)
-        {
-            self.removed.push(json!(shared));
-        }
-
+        remove_pairing_leftovers(&mut self.removed);
         Ok(())
     }
 
@@ -906,6 +746,249 @@ impl Live<'_> {
         }
 
         Ok(())
+    }
+}
+
+/// Whether the helper `found` names is seen logged out now: no loginwindow
+/// and no Dock, twice half a second apart. A look that fails is not.
+fn logged_out(found: &Found) -> bool {
+    found
+        .client
+        .as_ref()
+        .is_some_and(|client| logged_out_twice(client.desktop().user().uid))
+}
+
+/// Log the helper `found` names out, under `exclusion`, as
+/// [`log_out_helper`] does: root closes the login of the helper as
+/// recorded, or of its user ID once its account is gone.
+async fn log_out(
+    found: &Found,
+    exclusion: Option<&Ownership>,
+    yes: bool,
+    ask: &dyn Fn(Question) -> Result<bool>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<()> {
+    let (Some(client), Some(ownership)) = (&found.client, exclusion) else {
+        return Err(problem("Atlas lost control of the helper"));
+    };
+    let target = match (&found.helper, retiring(found.known.as_ref())) {
+        (None, _) => Some(crate::user::onboarding::as_root::Target::Orphan(
+            client.desktop().user().uid,
+        )),
+        (Some(_), Some(identity)) => Some(crate::user::onboarding::as_root::Target::Helper(
+            identity.clone(),
+        )),
+        (Some(_), None) => None,
+    };
+
+    log_out_helper(client, ownership, yes, target, ask, progress).await
+}
+
+/// Retire the job of the helper `found` names, under `exclusion`, set its
+/// setup record aside and take away the shared command's link, saying what
+/// went in `removed` and what did not in `warnings`.
+fn retire(
+    found: &Found,
+    exclusion: Option<&Ownership>,
+    removed: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<()> {
+    let Some(client) = &found.client else {
+        return Ok(());
+    };
+    let job = retiring(found.known.as_ref());
+    let _ownership = exclusion.ok_or_else(|| problem("Atlas lost control of the helper"))?;
+
+    let config = &client.config;
+    if let Some(helper) = job {
+        progress(Progress::Say(
+            "Stopping the helper's background job (macOS may ask for your password)…",
+        ));
+        if let Some(opener) = retire_helper_job(&found.executable, helper, &client.controller)? {
+            removed.push(json!("helper job"));
+            progress(Progress::Done("Helper job", "stopped"));
+            match opener {
+                Ok(true) => removed.push(json!("Atlas's one-time start in the helper")),
+                Ok(false) => {}
+                Err(why) => warnings.push(why),
+            }
+        } else {
+            progress(Progress::Skipped(
+                "Helper job",
+                "the helper account no longer exists",
+            ));
+            warnings.push(format!(
+                "The helper account (user ID {}) no longer exists, so no job was stopped",
+                config.desktop().user().uid
+            ));
+        }
+    }
+    // Archive evidence only after the job is gone; it must stop counting as setup.
+    if let Err(error) =
+        atlas_client::user::setup::migrate::archive_uninstalled(config.desktop().user().uid)
+    {
+        warnings.push(format!(
+            "The setup record was not set aside: {}",
+            error.error
+        ));
+    }
+    if remove_link_to(&config.identity_probe, &found.executable)? {
+        removed.push(json!(config.identity_probe));
+    }
+    Ok(())
+}
+
+/// Delete the account of the helper `found` names, under `exclusion`, or
+/// keep it and say why; `deleted` says it went.
+fn remove_account(
+    found: &Found,
+    exclusion: Option<&Ownership>,
+    removed: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+    deleted: &mut bool,
+    progress: &dyn Fn(Progress<'_>),
+) {
+    if found.helper.is_none() {
+        return;
+    }
+    let Some(identity) = retiring(found.known.as_ref()).cloned() else {
+        kept_account(
+            found,
+            warnings,
+            progress,
+            "Atlas can't tell it is still the helper",
+        );
+        return;
+    };
+
+    let (Some(client), Some(_ownership)) = (&found.client, exclusion) else {
+        warnings.push("The helper account was kept: Atlas lost control of it".into());
+        return;
+    };
+    let uid = identity.uid;
+    if uid == nix::unistd::getuid().as_raw()
+        || atlas_core::user::logins::console_owner() == Some(uid)
+    {
+        kept_account(found, warnings, progress, "it is still logged in");
+        return;
+    }
+
+    progress(Progress::Say(
+        "Deleting the helper account (macOS may ask for your password)…",
+    ));
+    let name = &identity.name;
+    match setup::executor::setup_transaction_held(&client.controller, || {
+        crate::user::onboarding::as_root::remove_helper(
+            &identity,
+            crate::user::onboarding::as_root::Via::Sudo { ask: true },
+        )
+        .map_err(|refusal| {
+            problem(match refusal {
+                Refusal::Failed(why) => why,
+                Refusal::Cancelled | Refusal::Unavailable => {
+                    "administrator rights were not granted".into()
+                }
+            })
+        })
+    }) {
+        Ok(()) => {
+            removed.push(json!(format!("helper account {name}")));
+            *deleted = true;
+            progress(Progress::Done("Helper account", &format!("{name} deleted")));
+        }
+        Err(error) => {
+            let why = error.error;
+            progress(Progress::Skipped(
+                "Helper account",
+                &format!("deletion not confirmed: {why}"),
+            ));
+            warnings.push(format!(
+                "Deletion of the helper account {name} was not confirmed: {why}. Its outcome \
+                 stays pending until Atlas recovers it."
+            ));
+        }
+    }
+}
+
+/// Say that the account of the helper `found` names was kept, and `why`.
+fn kept_account(
+    found: &Found,
+    warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
+    why: &str,
+) {
+    if let Some(name) = &found.helper {
+        progress(Progress::Skipped("Helper account", &format!("kept: {why}")));
+        warnings.push(format!("The helper account {name} was kept: {why}"));
+    }
+}
+
+/// [`Live::forget_requested_opener`]: the one-time start left in an account
+/// this account asked for but never finished setting up, other than the
+/// helper `found` names. What went is said in `removed`, what did not in
+/// `warnings`.
+fn forget_requested_opener(found: &Found, removed: &mut Vec<Value>, warnings: &mut Vec<String>) {
+    let me = nix::unistd::getuid().as_raw();
+    let client = found.client.as_ref();
+    let Some(pairing) = atlas_daemon::user::setup::pairing::request().filter(|pairing| {
+        pairing.controller_uid == me
+            && client.is_none_or(|client| client.desktop().user().uid != pairing.helper_uid)
+    }) else {
+        return;
+    };
+    let Ok(Some(account)) = account::account_with_uid(pairing.helper_uid) else {
+        return;
+    };
+
+    let request = atlas_daemon::user::setup::Request::ForgetOpener { uid: account.uid };
+    let Some(expected) = atlas_daemon::user::setup::identity::verified(account.uid) else {
+        warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
+        return;
+    };
+    let desktop = Desktop::from(atlas_core::user::User { uid: account.uid });
+    let outcome = Controller::new(&desktop).and_then(|controller| {
+        setup::executor::setup_transaction(&controller, || {
+            atlas_client::user::setup::request_as_helper(
+                &found.executable,
+                &account,
+                &request,
+                atlas_client::user::setup::Invocation::Login,
+                &expected,
+            )?
+            .map_err(|unfinished| {
+                let error = problem(unfinished.reason().unwrap_or("no reply"));
+                unfinished.behind(error)
+            })
+        })
+    });
+    match outcome {
+        Ok(reply) => {
+            if reply["removed"] == true {
+                removed.push(json!(format!("Atlas's one-time start in {}", account.name)));
+            }
+        }
+        Err(error) => warnings.push(format!(
+            "Atlas's one-time start in {} was not removed: {}",
+            account.name, error.error
+        )),
+    }
+}
+
+/// What setting the helper up left in the shared folder, named in `removed`
+/// as it goes: the request naming the helper, when this account made it,
+/// and the shared folder itself, once nothing but Atlas's is left in it
+/// (another account could not set Atlas up while it is there).
+fn remove_pairing_leftovers(removed: &mut Vec<Value>) {
+    let request = Path::new(atlas_daemon::user::setup::pairing::REQUEST);
+    if remove_own_file(request).unwrap_or(false) {
+        removed.push(json!(request));
+    }
+
+    if let Some(shared) = Path::new(atlas_client::user::copies::ROOT).parent()
+        && remove_own_empty_folder(shared)
+    {
+        removed.push(json!(shared));
     }
 }
 
@@ -1044,16 +1127,28 @@ async fn settle(
         &client.controller,
         warnings,
         async {
-            let uid = client.desktop().user().uid;
-            let exists = account::account_with_uid(uid)?.is_some();
-            let status = client.status().await;
-            let pid = atlas_client::user::setup::reported_pid(&status["inputService"]["pid"]);
-            Ok((exists, atlas_core::user::logins::logged_in(uid), pid))
+            match client.desktop().kind() {
+                Kind::User(login) => observed(client, login).await,
+            }
         },
         |pid| client.stop_input(pid),
         progress,
     )
     .await
+}
+
+/// What settling needs to know of the second login `login`: whether its
+/// account exists, whether it is logged in, and its input service's
+/// process, as its status reports it.
+async fn observed(
+    client: &Client,
+    login: &atlas_core::user::User,
+) -> Result<(bool, Option<bool>, Option<u32>)> {
+    let uid = login.uid;
+    let exists = account::account_with_uid(uid)?.is_some();
+    let status = client.status().await;
+    let pid = atlas_client::user::setup::reported_pid(&status["inputService"]["pid"]);
+    Ok((exists, atlas_core::user::logins::logged_in(uid), pid))
 }
 
 async fn settle_with<F>(
