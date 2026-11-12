@@ -36,9 +36,9 @@ struct PanelIdleNote: View {
   private var detail: String {
     let why = "macOS stopped counting your typing, so apps like 1Password lock on their own."
     guard let app = fix.app else {
-      return "\(why) An app keeps secure keyboard entry on, and Atlas couldn't tell which. Quitting that app fixes it."
+      return "\(why) Quit the app that keeps secure keyboard entry on to fix it."
     }
-    return "\(why) \(app) keeps secure keyboard entry on. Quit \(app) to fix it."
+    return "\(why) \(app) keeps secure keyboard entry on: quit it to fix this."
   }
 }
 
