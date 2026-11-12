@@ -16,7 +16,7 @@ struct PanelWrongAccountNote: View {
           .textStyle(.callout, weight: .semibold)
           .foregroundStyle(Color.textPrimary)
         Text(
-          "That can make a macOS service in your login restart over and over and slowly slow your Mac. Lock your screen, choose Switch User, and log back in as yourself to fix it."
+          "So a macOS service in your login keeps restarting and slows your Mac. Lock the screen, choose Switch User and log back in as yourself."
         )
         .textStyle(.callout)
         .foregroundStyle(Color.textSecondary)

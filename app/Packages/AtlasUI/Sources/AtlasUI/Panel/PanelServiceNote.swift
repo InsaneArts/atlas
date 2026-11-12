@@ -11,10 +11,10 @@ struct PanelServiceNote: View {
   var body: some View {
     VStack(alignment: .leading, spacing: Spacing.sPlus) {
       VStack(alignment: .leading, spacing: Spacing.half) {
-        Text("A macOS service in the helper slowly slows your Mac")
+        Text("A macOS service in the helper slows your Mac")
           .textStyle(.callout, weight: .semibold)
           .foregroundStyle(Color.textPrimary)
-        Text("It's a macOS bug. Atlas tries to keep the service paused. Log the helper out and back in to clear it.")
+        Text("A macOS bug that Atlas tries to keep paused. Log the helper out and in to clear it.")
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)
       }
