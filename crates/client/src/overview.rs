@@ -12,6 +12,7 @@ pub use sessions::{add_host_sessions, add_sessions_for};
 use crate::{
     activity_log::{self, Op, Row},
     client::Client,
+    console_user::Named,
 };
 use atlas_control::Controller;
 use atlas_core::{
@@ -51,6 +52,11 @@ const RESTARTS_REUSE: Duration = Duration::from_secs(10 * 60);
 /// How long one look at the idle time apps read is reused: the person's
 /// apps lock only after minutes of it stopped.
 const IDLE_TIME_REUSE: Duration = Duration::from_secs(15);
+/// How long the account named at the person's screen is reused.
+const CONSOLE_NAME_REUSE: Duration = Duration::from_secs(15);
+
+/// The account macOS names at the person's screen.
+static CONSOLE_NAME: Shared<Named> = Shared::new(CONSOLE_NAME_REUSE);
 
 /// The logins Atlas can close, and whether the helper's login is stale.
 static LOGINS: Shared<(Vec<u32>, bool)> = Shared::new(REUSE);
@@ -126,6 +132,12 @@ pub async fn report(
         .await
         .unwrap_or(crate::idle_time::IdleTime::Unknown);
     status["idleTime"] = json!(idle_time);
+    status["consoleName"] = json!(
+        CONSOLE_NAME
+            .get(nix::unistd::getuid().as_raw(), until, Named::now)
+            .await
+            .unwrap_or(Named::Unknown)
+    );
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
@@ -191,9 +203,8 @@ pub async fn read(client: &Client) -> Reading {
     let now = atlas_core::time::timestamp();
     let overview = overview(&doctor, false, pending, &activity, now);
     let mut reading = Reading::new(doctor, overview, false, now);
-    // What the person's idle time shows, an app's name among it, is for
-    // their own app alone, never a reader like this one.
     if let Some(fields) = reading.value.as_object_mut() {
+        fields.remove("consoleName");
         fields.remove("idleTime");
     }
     add_host_sessions(&mut reading, client, now).await;

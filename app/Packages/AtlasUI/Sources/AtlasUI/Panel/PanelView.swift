@@ -34,6 +34,9 @@ public struct PanelView: View {
       if let fix = state.idleNote {
         PanelIdleNote(fix: fix, send: send)
       }
+      if let name = state.wrongAccount {
+        PanelWrongAccountNote(name: name, send: send)
+      }
       if let ask = state.ask {
         PanelAskCard(ask: ask, send: send)
           .id(ask.id)
@@ -121,6 +124,12 @@ public struct PanelView: View {
 
   #Preview("Service note") {
     PanelView(state: PreviewStates.panelServiceNote) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Wrong account") {
+    PanelView(state: PreviewStates.panelWrongAccount) { _ in }
       .panelCard()
       .padding(Spacing.xxxl)
   }

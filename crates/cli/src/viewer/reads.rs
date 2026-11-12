@@ -178,6 +178,9 @@ impl Viewer {
             .private_hold()
             .map_or(Value::Null, |hold| json!(hold));
 
+        if !person && let Some(fields) = status.value.as_object_mut() {
+            fields.remove("consoleName");
+        }
         status.value
     }
 

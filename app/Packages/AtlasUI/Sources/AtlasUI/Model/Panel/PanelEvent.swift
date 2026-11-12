@@ -46,6 +46,10 @@ public enum PanelEvent: Equatable, Sendable {
   case dismissServiceNote
   /// OK on the note that the person's apps think they are away: hide it until it happens again.
   case dismissIdleNote
+  /// Lock Screen on the wrong account note: lock so the person can switch back to their login.
+  case lockForWrongAccount
+  /// OK on the wrong account note: hide it until macOS names the person again.
+  case dismissWrongAccountNote
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

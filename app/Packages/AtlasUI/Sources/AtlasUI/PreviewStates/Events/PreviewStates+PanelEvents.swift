@@ -29,6 +29,10 @@
         var next = state
         next.idleNote = nil
         return next
+      case .dismissWrongAccountNote:
+        var next = state
+        next.wrongAccount = nil
+        return next
       case .answerAsk:
         var next = state
         next.ask = nil
@@ -37,7 +41,8 @@
         var next = state
         next.allowed.removeAll { $0.id == id }
         return next
-      case .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover, .askSwitch,
+      case .lockForWrongAccount, .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover,
+        .askSwitch,
         .openSettings,
         .openAccounts,
         .showMore:

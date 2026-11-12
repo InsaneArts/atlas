@@ -12,6 +12,8 @@ public struct PanelState: Equatable, Sendable {
   /// The note that the person's apps think they are away, by the step that fixes it, while it shows under the header;
   /// nil hides it.
   public var idleNote: PanelIdleFix?
+  /// The other account macOS names at the screen; nil hides the note.
+  public var wrongAccount: String?
   /// Whether the ⋯ menu is open, which draws its button in the header pressed.
   public var isMoreOpen: Bool
   /// The question Atlas asks the person now, at the top of the panel's content, oldest first; nil for none.
@@ -47,6 +49,7 @@ public struct PanelState: Equatable, Sendable {
   ///   - showsServiceNote: Whether the note that a macOS service in the helper slowly slows the Mac shows; not by
   ///     default.
   ///   - idleNote: The note that the person's apps think they are away, by its fix; none by default.
+  ///   - wrongAccount: The other account macOS names at the screen; nil hides the note.
   ///   - isMoreOpen: Whether the ⋯ menu is open.
   ///   - ask: The question Atlas asks the person now; none by default.
   ///   - allowed: What the person allowed for a task; nothing by default.
@@ -62,6 +65,7 @@ public struct PanelState: Equatable, Sendable {
     notice: String? = nil,
     showsServiceNote: Bool = false,
     idleNote: PanelIdleFix? = nil,
+    wrongAccount: String? = nil,
     isMoreOpen: Bool = false,
     ask: AskCardState? = nil,
     allowed: [AllowedRowState] = [],
@@ -77,6 +81,7 @@ public struct PanelState: Equatable, Sendable {
     self.notice = notice
     self.showsServiceNote = showsServiceNote
     self.idleNote = idleNote
+    self.wrongAccount = wrongAccount
     self.isMoreOpen = isMoreOpen
     self.ask = ask
     self.allowed = allowed
