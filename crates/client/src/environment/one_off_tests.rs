@@ -1,5 +1,8 @@
 use super::*;
-use crate::test_support::{Helper, completed};
+use crate::{
+    environment::installs::ASKED,
+    test_support::{Helper, completed},
+};
 
 #[tokio::test]
 async fn sixty_five_installs_are_asked_about_once_each_within_the_workers_limit() {

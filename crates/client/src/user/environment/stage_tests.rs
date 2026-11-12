@@ -1,7 +1,10 @@
 use super::*;
-use crate::environment::{
-    problem,
-    tests::{Sandbox, account, stage_in, task_claims, tasked, user_of, worker_reply, write_plan},
+use crate::{
+    environment::{
+        problem,
+        tests::{Sandbox, stage_in, task_claims, tasked, user_of, worker_reply, write_plan},
+    },
+    user::environment::tests::account,
 };
 use atlas_core::test_support::UID;
 use serde_json::json;
@@ -281,4 +284,41 @@ async fn an_apply_claims_its_plan_for_the_task_before_the_helper_is_asked() {
     assert_eq!(applied["phase"], "applied");
     assert_eq!(asked, [vec![(plan.clone(), State::Made)]]);
     assert_eq!(task_claims(&client, &task), [(plan, State::Made)]);
+}
+
+/// A rollback's own folder goes once nothing in it is unconfirmed, also
+/// after a refusal (a mistyped ID); a frozen plan's folder goes only with
+/// a finished undo.
+#[test]
+fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &atlas_core::files::token());
+    fs::write(stage.join("controller.lock"), b"").unwrap();
+    let refused: Result<Value> = Ok(json!({"ok": false, "error": worker::MISSING}));
+    let finished: Result<Value> =
+        Ok(json!({"ok": true, "phase": "rolledBack", "resumeRequired": false}));
+    let stopped: Result<Value> =
+        Ok(json!({"ok": false, "phase": "rollingBack", "resumeRequired": true}));
+
+    for apply in [false, true] {
+        assert!(rolled_back(&refused, apply, true, &stage), "apply {apply}");
+        assert!(
+            !rolled_back(&refused, apply, false, &stage),
+            "apply {apply}"
+        );
+    }
+
+    assert!(rolled_back(&Err(problem("refused")), true, true, &stage));
+    assert!(rolled_back(&finished, true, false, &stage));
+    assert!(!rolled_back(&finished, false, false, &stage));
+    assert!(!rolled_back(&stopped, true, false, &stage));
+
+    fs::create_dir(stage.join("request-ab12")).unwrap();
+    assert!(!rolled_back(&refused, true, true, &stage));
+    assert!(!rolled_back(
+        &Err(problem("lost").uncertain()),
+        true,
+        true,
+        &stage
+    ));
 }

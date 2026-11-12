@@ -1248,7 +1248,7 @@ fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
         .collect();
 
     if let Some(shared) = shared_command.parent() {
-        leftovers.extend(atlas_client::environment::leftovers(shared));
+        leftovers.extend(atlas_client::user::environment::stage::leftovers(shared));
     }
 
     leftovers

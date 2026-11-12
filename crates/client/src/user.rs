@@ -4,6 +4,7 @@
 pub mod capability;
 pub mod console_agents;
 pub mod copies;
+pub mod environment;
 pub mod home_privacy;
 pub mod setup;
 pub mod switch;

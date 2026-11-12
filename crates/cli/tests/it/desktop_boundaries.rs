@@ -1433,19 +1433,9 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: applying, rolling back, running and syncing an environment",
     ),
     (
-        "crates/client/src/environment.rs",
-        &["rollback_in", "run_in"],
-        "pending: the user's environment staging",
-    ),
-    (
         "crates/client/src/environment/list.rs",
         &["list"],
         "owner: listing environments",
-    ),
-    (
-        "crates/client/src/environment/list.rs",
-        &["list_as"],
-        "pending: the user's environment staging",
     ),
     (
         "crates/client/src/environment/one_off.rs",
@@ -1453,34 +1443,14 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: installing and removing an app, and how installs stand",
     ),
     (
-        "crates/client/src/environment/one_off.rs",
-        &["install_states_in"],
-        "pending: the user's environment staging",
-    ),
-    (
         "crates/client/src/environment/profile.rs",
         &["sync"],
         "owner: freezing an environment profile",
     ),
     (
-        "crates/client/src/environment/profile.rs",
-        &["sync_in"],
-        "pending: the user's environment staging",
-    ),
-    (
-        "crates/client/src/environment/stage.rs",
-        &["apply_frozen", "freeze", "freeze_as", "prune"],
-        "pending: the user's environment staging",
-    ),
-    (
         "crates/client/src/environment/undo.rs",
         &["plan_states", "undo_plan"],
         "owner: how environment plans stand, and undoing one",
-    ),
-    (
-        "crates/client/src/environment/undo.rs",
-        &["plan_states_in", "undo_plan_in"],
-        "pending: the user's environment staging",
     ),
     (
         "crates/client/src/handoff.rs",
@@ -1728,7 +1698,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 26;
+const PENDING_LIMIT: usize = 20;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

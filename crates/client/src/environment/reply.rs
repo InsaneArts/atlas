@@ -14,17 +14,17 @@ use std::path::PathBuf;
 /// The facts orchestration reads from a worker's reply; the reply itself
 /// stays for whoever is shown it. Optional fields retain the difference
 /// between explicit proof and a missing or malformed field.
-pub(super) struct WorkerReply {
-    pub(super) ok: Option<bool>,
-    pub(super) phase: Option<Phase>,
-    pub(super) error: String,
+pub(crate) struct WorkerReply {
+    pub(crate) ok: Option<bool>,
+    pub(crate) phase: Option<Phase>,
+    pub(crate) error: String,
     pub(super) resume_required: Option<bool>,
     pub(super) kept_targets: Vec<String>,
     pub(super) retained_directories: usize,
 }
 
 impl WorkerReply {
-    pub(super) fn read(reply: &Value) -> Self {
+    pub(crate) fn read(reply: &Value) -> Self {
         let phase = reply["phase"]
             .as_str()
             .and_then(|_| Phase::deserialize(&reply["phase"]).ok());
@@ -48,12 +48,12 @@ impl WorkerReply {
 
     /// Whether the helper confirmed the transaction reached `phase` with
     /// nothing left to resume.
-    pub(super) fn settled(&self, phase: Phase) -> bool {
+    pub(crate) fn settled(&self, phase: Phase) -> bool {
         self.ok == Some(true) && self.phase == Some(phase) && self.resume_required == Some(false)
     }
 
     /// Whether the helper said it never started this plan.
-    pub(super) fn never_started(&self) -> bool {
+    pub(crate) fn never_started(&self) -> bool {
         self.ok == Some(false) && self.error == super::worker::MISSING
     }
 }
@@ -125,7 +125,7 @@ pub(crate) struct Transactions {
 
 impl Transactions {
     /// The transactions this build can read.
-    pub(super) fn known(&self) -> impl Iterator<Item = &TransactionSummary> {
+    pub(crate) fn known(&self) -> impl Iterator<Item = &TransactionSummary> {
         self.transactions
             .iter()
             .filter_map(|transaction| match transaction {
@@ -136,7 +136,7 @@ impl Transactions {
 
     /// Whether the helper and this build read every transaction the helper
     /// looked at.
-    pub(super) fn all_read(&self) -> bool {
+    pub(crate) fn all_read(&self) -> bool {
         self.unreadable == 0 && self.known().count() == self.transactions.len()
     }
 }

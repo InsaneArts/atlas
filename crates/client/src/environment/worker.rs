@@ -12,7 +12,7 @@ use changing::{Changing, Installation, RollbackState};
 mod changing;
 
 /// The helper's answer for a plan it never applied.
-pub(super) const MISSING: &str =
+pub(crate) const MISSING: &str =
     "Nothing was copied into the helper with this ID, so there is nothing to undo";
 
 /// Internal worker; invoked through the verified helper, never through sudo.
@@ -76,7 +76,7 @@ const LISTED: usize = 200;
 /// state only, creates nothing, and holds the store's shared lock only
 /// while it reads one record, so an operation that wants the store waits
 /// no longer than that.
-pub(super) fn transactions(
+pub(crate) fn transactions(
     home: &Path,
     all: bool,
     ids: &[String],
@@ -229,7 +229,7 @@ fn account_home(uid: u32) -> Result<PathBuf> {
     Ok(home)
 }
 
-pub(super) fn preview(
+pub(crate) fn preview(
     home: &Path,
     uid: u32,
     id: &str,
@@ -380,7 +380,7 @@ fn validate_plan(home: &Path, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn apply_plan(
+pub(crate) fn apply_plan(
     home: &Path,
     plan: &Plan,
     guard: &impl Fn() -> Result<()>,
@@ -572,7 +572,7 @@ fn prepare_inode(
     fingerprint(path)?.ok_or_else(|| problem("Prepared file disappeared"))
 }
 
-pub(super) fn rollback(
+pub(crate) fn rollback(
     home: &Path,
     id: &str,
     apply: bool,
