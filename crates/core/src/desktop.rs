@@ -48,9 +48,10 @@ impl Desktop {
         &self.kind
     }
 
-    /// The second login this desktop is. Whoever asks relies on a second
-    /// login on this Mac: its account, its processes in this kernel, its
-    /// files on this disk.
+    /// The second login this desktop is: the way in for the second login's
+    /// own setup, update and removal, which work on its account, its
+    /// processes in this kernel and its files on this disk. Anything that
+    /// differs between kinds matches on [`Desktop::kind`] instead.
     pub fn second_login(&self) -> &SecondLogin {
         let Kind::SecondLogin(login) = &self.kind;
         login

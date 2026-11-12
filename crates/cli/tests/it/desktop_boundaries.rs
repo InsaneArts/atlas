@@ -21,9 +21,8 @@ use std::{
 const NAMES: [&str; 3] = ["SecondLogin", "second_login", "helper_uid"];
 
 /// The sources that may name the second login, from the workspace root,
-/// each with what it owns or implements. A source that reaches the second
-/// login through [`second_login`](atlas_core::desktop::Desktop::second_login)
-/// only until its work has an owner says so.
+/// each with what it owns (an operation that matches on the desktop's kind)
+/// or what of the second login's own implementation it holds.
 const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/agents/src/lib.rs",
@@ -39,7 +38,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/init.rs",
-        "until it has an owner: setting it up from the terminal",
+        "second login: setting it up from the terminal",
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
@@ -47,7 +46,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
-        "until it has an owner: finishing an update in it",
+        "second login: finishing an update in it",
     ),
     (
         "crates/cli/src/mcp.rs",
@@ -55,31 +54,28 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/onboarding.rs",
-        "until it has an owner: choosing and preparing its account",
+        "second login: choosing and preparing its account",
     ),
     (
         "crates/cli/src/onboarding/acceptance.rs",
-        "until it has an owner: the setup connection and its acceptance",
+        "second login: the setup connection and its acceptance",
     ),
     (
         "crates/cli/src/onboarding/status.rs",
-        "until it has an owner: how far setup has come",
+        "second login: how far setup has come",
     ),
-    (
-        "crates/cli/src/uninstall.rs",
-        "until it has an owner: removing it",
-    ),
+    ("crates/cli/src/uninstall.rs", "second login: removing it"),
     (
         "crates/cli/src/uninstall/inspection.rs",
-        "until it has an owner: what removing it would take",
+        "second login: what removing it would take",
     ),
     (
         "crates/cli/src/uninstall/log_out.rs",
-        "until it has an owner: logging it out before removal",
+        "second login: logging it out before removal",
     ),
     (
         "crates/client/src/capability/canary.rs",
-        "until it has an owner: establishing native capability evidence",
+        "second login: establishing native capability evidence",
     ),
     (
         "crates/client/src/client.rs",
@@ -143,19 +139,19 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/setup.rs",
-        "until it has an owner: its setup, as the controller sees it",
+        "second login: its setup, as the controller sees it",
     ),
     (
         "crates/client/src/setup/configuration.rs",
-        "until it has an owner: the settings setup writes for it",
+        "second login: the settings setup writes for it",
     ),
     (
         "crates/client/src/setup/job.rs",
-        "until it has an owner: installing and restarting its job",
+        "second login: installing and restarting its job",
     ),
     (
         "crates/client/src/setup/migrate.rs",
-        "until it has an owner: moving an older setup forward",
+        "second login: moving an older setup forward",
     ),
     (
         "crates/client/src/switch.rs",
@@ -171,7 +167,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/core/src/desktop.rs",
-        "owner: its identity, its proof and its input readiness; and the way to it for sources that have no owner yet",
+        "owner: its identity, proof, input readiness and processes; and the way in for the second login's own setup, update and removal",
     ),
     (
         "crates/daemon/src/helper_setup/first_login.rs",
@@ -540,9 +536,7 @@ fn only_listed_sources_name_the_second_login() {
 fn every_listed_source_says_what_it_owns_or_implements() {
     for (path, role) in ALLOWED {
         assert!(
-            role.starts_with("owner: ")
-                || role.starts_with("second login: ")
-                || role.starts_with("until it has an owner: "),
+            role.starts_with("owner: ") || role.starts_with("second login: "),
             "{path} says neither what it owns nor what it implements: {role}"
         );
     }

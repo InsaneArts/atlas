@@ -66,14 +66,19 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    // The second login's staged files: the name its ACLs use for its
-    // account, and the plans frozen here for it.
-    let (helper, here) = match client.desktop().kind() {
-        Kind::SecondLogin(login) => (
-            helper_name(login.uid)?,
-            frozen(shared_folder(client)?, login.uid),
-        ),
-    };
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => plan_states_in(client, login, ids).await,
+    }
+}
+
+/// [`plan_states`] of the plans `ids` in the second login `login`.
+async fn plan_states_in(
+    client: &Client,
+    login: &SecondLogin,
+    ids: &[Token],
+) -> Result<Vec<PlanState>> {
+    let helper = helper_name(login.uid)?;
+    let here = frozen(shared_folder(client)?, login.uid);
     let mut transactions: Vec<TransactionSummary> = Vec::new();
     for batch in ids.chunks(list::ASKED) {
         let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
@@ -149,11 +154,19 @@ pub(crate) async fn undo_plan(
     ownership: &Ownership,
     id: &Token,
 ) -> Result<Undone> {
-    // The account the second login's staged files are given to, by the
-    // name its ACLs use.
-    let helper = match client.desktop().kind() {
-        Kind::SecondLogin(login) => helper_name(login.uid)?,
-    };
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => undo_plan_in(client, login, ownership, id).await,
+    }
+}
+
+/// [`undo_plan`] of plan `id` in the second login `login`.
+async fn undo_plan_in(
+    client: &Client,
+    login: &SecondLogin,
+    ownership: &Ownership,
+    id: &Token,
+) -> Result<Undone> {
+    let helper = helper_name(login.uid)?;
     let stage = stage_path(client, id.as_str())?;
     let (lock, created) = open_stage(&stage, &helper)?;
 

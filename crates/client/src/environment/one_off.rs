@@ -63,17 +63,17 @@ pub(crate) async fn install_app(
     source: &Path,
     name: &str,
 ) -> Result<Value> {
-    // The account the second login's staged files are given to, by the
-    // name its ACLs use.
-    let helper = match client.desktop().kind() {
-        Kind::SecondLogin(login) => helper_name(login.uid)?,
-    };
-    let request = Request::InstallApp {
-        id: id.as_str().to_owned(),
-        source: source.to_owned(),
-        name: name.to_owned(),
-    };
-    send(client, &helper, Some(ownership), request).await
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => {
+            let helper = helper_name(login.uid)?;
+            let request = Request::InstallApp {
+                id: id.as_str().to_owned(),
+                source: source.to_owned(),
+                name: name.to_owned(),
+            };
+            send(client, &helper, Some(ownership), request).await
+        }
+    }
 }
 
 /// Whether the install that answered `reply` may have put its app in place:
@@ -102,15 +102,15 @@ pub(crate) async fn remove_app(
     ownership: &Ownership,
     id: &Token,
 ) -> Result<Value> {
-    // The account the second login's staged files are given to, by the
-    // name its ACLs use.
-    let helper = match client.desktop().kind() {
-        Kind::SecondLogin(login) => helper_name(login.uid)?,
-    };
-    let request = Request::RemoveApp {
-        id: id.as_str().to_owned(),
-    };
-    send(client, &helper, Some(ownership), request).await
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => {
+            let helper = helper_name(login.uid)?;
+            let request = Request::RemoveApp {
+                id: id.as_str().to_owned(),
+            };
+            send(client, &helper, Some(ownership), request).await
+        }
+    }
 }
 
 /// How each of `ids` stands, read without control: each asked once, in as
@@ -126,12 +126,18 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
     if unique.is_empty() {
         return Ok(Vec::new());
     }
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => install_states_in(client, login, &unique).await,
+    }
+}
 
-    // The account the second login's staged files are given to, by the
-    // name its ACLs use.
-    let helper = match client.desktop().kind() {
-        Kind::SecondLogin(login) => helper_name(login.uid)?,
-    };
+/// [`install_states`] of the installs `unique` in the second login `login`.
+async fn install_states_in(
+    client: &Client,
+    login: &SecondLogin,
+    unique: &[String],
+) -> Result<Vec<InstallState>> {
+    let helper = helper_name(login.uid)?;
     let mut listed = Vec::new();
     for batch in unique.chunks(ASKED) {
         let request = Request::Installs {
