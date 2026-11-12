@@ -1,5 +1,5 @@
 //! Terminal choices, progress and waiting for attended setup.
-use super::prompt;
+use crate::prompt;
 use atlas_cli::ui::{
     self,
     progress::{Spinner, done, heading, say, skipped},
@@ -301,8 +301,8 @@ fn mark_since_lock(step: &str) {
 }
 
 /// Guide the person from an installed app to a ready helper.
-pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value> {
-    super::dispatch::as_yourself("init")?;
+pub(crate) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value> {
+    crate::dispatch::as_yourself("init")?;
     if !ui::interactive() {
         return Err(problem("init is a guided setup; run it in a terminal"));
     }

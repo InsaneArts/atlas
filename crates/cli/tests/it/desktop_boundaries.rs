@@ -62,15 +62,13 @@ const OWN_PATHS: [&str; 4] = ["Kind", "Self", "desktop", "user"];
 const GUARDED: [&str; 4] = ["Desktop", "Kind", "User", "desktop"];
 
 /// Why an item outside the kinds' modules may name the user desktop.
-const ROLES: [&str; 5] = [
+const ROLES: [&str; 4] = [
     // It matches on the desktop's kind and hands each kind its operation.
     "owner: ",
     // It declares a kind's module.
     "declares: ",
     // A shared assumption about the user desktop, kept on purpose.
     "exception: ",
-    // The user desktop's own code, still to move into its module.
-    "pending: ",
     // Code built only for the tests of the crates above.
     "test support: ",
 ];
@@ -1181,8 +1179,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
-        &["carry_out", "setup", "setup_helper", "switch_on_this_mac"],
-        "pending: switching this Mac to the user, its login timing and its setup worker",
+        &["carry_out"],
+        "exception: the way in for the user's own setup: the commands that set it up and check it",
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
@@ -1193,29 +1191,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/cli/src/bin/atlas/doctor.rs",
         &["report"],
         "owner: what doctor reports",
-    ),
-    (
-        "crates/cli/src/bin/atlas/doctor.rs",
-        &["user_files", "user_report"],
-        "pending: what doctor reports of the user",
-    ),
-    (
-        "crates/cli/src/bin/atlas/init.rs",
-        &[
-            "choose_helper",
-            "helper_step",
-            "install_job",
-            "log_in_once",
-            "mark_since_lock",
-            "offer_lock",
-            "permissions_step",
-            "run",
-            "selected",
-            "start_helper",
-            "verify_step",
-            "wait_until_back",
-        ],
-        "pending: setting the user up from the terminal",
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
@@ -1229,18 +1204,18 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
-        &["chosen_as_helper", "first_login_opener", "set_up_in"],
-        "pending: whether the user's setup is complete, and its first-login opener",
+        &["main"],
+        "exception: the way in for the user's own setup: the helper's one-time opener",
+    ),
+    (
+        "crates/cli/src/bin/atlas/main.rs",
+        &["mod user"],
+        "declares: the user desktop's module",
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
         &["preflight", "update_finish_using"],
         "owner: what moving the desktop onto a new build takes",
-    ),
-    (
-        "crates/cli/src/bin/atlas/update.rs",
-        &["helper_steps_in", "preflight_in"],
-        "pending: finishing an update in the user",
     ),
     (
         "crates/cli/src/lib.rs",
@@ -1605,9 +1580,6 @@ const KEPT: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 5;
-
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.
 fn target_roots(member: &Path) -> Vec<PathBuf> {
@@ -1894,20 +1866,6 @@ fn every_listed_item_says_why() {
     assert!(files.is_sorted(), "the list is kept in order of source");
     let kept: Vec<(&str, &str)> = KEPT.iter().map(|(file, item, _)| (*file, *item)).collect();
     assert!(kept.is_sorted(), "the kept list is kept in order");
-}
-
-#[test]
-fn pending_entries_only_shrink() {
-    // Pending entries mark the user desktop's own code still to move. Each
-    // move removes its own and lowers the limit, until both reach zero.
-    let pending = ALLOWED
-        .iter()
-        .filter(|(_, _, role)| role.starts_with("pending: "))
-        .count();
-    assert!(
-        pending <= PENDING_LIMIT,
-        "{pending} pending entries; no move may add one (limit {PENDING_LIMIT})"
-    );
 }
 
 #[test]
@@ -2548,7 +2506,7 @@ fn a_relative_import_of_the_kind_is_judged_like_any_other() {
             &[(
                 "crates/a/src/lib.rs",
                 &["use self::Kind::User"],
-                "pending: importing it"
+                "exception: importing it"
             )]
         ),
         [
@@ -2698,7 +2656,7 @@ fn each_import_is_listed_by_what_it_brings_in() {
     let allowed: &[(&str, &[&str], &str)] = &[(
         "crates/a/src/lib.rs",
         &["use atlas_core::desktop::User"],
-        "pending: importing it",
+        "exception: importing it",
     )];
     assert_eq!(
         check(&files, allowed),
@@ -2773,7 +2731,7 @@ fn imports_in_two_trait_implementations_are_told_apart() {
     let allowed: &[(&str, &[&str], &str)] = &[(
         "crates/a/src/lib.rs",
         &["use crate::config::helper_uid inside <Report as A>::read"],
-        "pending: reading it",
+        "exception: reading it",
     )];
     assert_eq!(
         check(&files, allowed),

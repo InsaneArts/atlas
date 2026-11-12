@@ -273,20 +273,20 @@ async fn carry_out(
             unreachable!("main runs these before anything else")
         }
         Command::InputService(args) => input_service(args).await,
-        Command::SetupHelper(args) => setup_helper(&args),
+        Command::SetupHelper(args) => crate::user::setup::setup_helper(&args),
         Command::Update(args) => update::run(config, args, host, allow_disrupt).await,
         Command::UpdateFinish => update::update_finish(config, host, allow_disrupt).await,
         Command::PictureAfter { before, ended } => {
             client()?.picture_after(&before, ended).await?;
             Ok(json!({"ok": true}))
         }
-        Command::Init => super::init::run(config, allow_disrupt).await,
+        Command::Init => crate::user::init::run(config, allow_disrupt).await,
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => agents(config, host, action).await,
         Command::Uninstall(args) => super::uninstall::run(config, args).await,
         Command::Menubar(args) => menu_bar(config, client, args).await,
         Command::Switch(args) => switch(config, args),
-        Command::Setup(args) => setup(config, client, args).await,
+        Command::Setup(args) => crate::user::setup::setup(config, client, args).await,
         Command::Config(args) => settings(config, client, &args),
         Command::Status => Ok(client()?.status().await),
         Command::Sound { state: None } => atlas_client::sound::show(&client()?).await,
@@ -397,30 +397,6 @@ fn guide(args: &cli::AgentGuide) -> Value {
     };
     print(&guide);
     Value::Null
-}
-
-fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
-    let guard = atlas_daemon::user::setup::Guard {
-        account: Some(serde_json::from_str(&args.account)?),
-        logged_out: args.logged_out,
-    };
-    atlas_daemon::user::setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
-}
-
-/// `atlas setup`: a preview, or the recorded setup applied.
-async fn setup(
-    config: &Path,
-    client: &impl Fn() -> Result<Client>,
-    args: cli::Setup,
-) -> Result<Value> {
-    if !args.apply {
-        return atlas_client::user::setup::preview(config, args.helper.as_deref()).await;
-    }
-
-    let client = client()?;
-    // Setup settles only mutations its own log records, and refuses others.
-    let ownership = client.service_change(true).await?;
-    atlas_client::user::setup::migrate::apply(config, &client, &ownership).await
 }
 
 fn activity(client: &Client, host: Option<&HostSession>, args: &cli::Activity) -> Result<Value> {
@@ -941,56 +917,10 @@ fn settings(
 fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     // Without settings there is no desktop, and the accounts are this Mac's.
     let Ok(config) = Config::load(config) else {
-        return switch_on_this_mac(None, args);
+        return crate::user::switch::switch_on_this_mac(None, args);
     };
     match config.desktop().kind() {
-        desktop::Kind::User(login) => switch_on_this_mac(Some(login), args),
-    }
-}
-
-/// [`switch`] among this Mac's accounts, the second login `login` among
-/// them when there is one, and the one chosen when none is named.
-fn switch_on_this_mac(login: Option<&atlas_core::user::User>, args: cli::Switch) -> Result<Value> {
-    let accounts = atlas_client::user::switch::accounts(login.map(|login| login.uid))?;
-
-    if args.list {
-        return Ok(json!({"ok": true, "accounts": accounts}));
-    }
-
-    let target = match args.account {
-        Some(name) => Some(
-            accounts
-                .iter()
-                .find(|candidate| candidate.name == name)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::new(
-                        Code::Switch,
-                        format!("No account named {name} to switch to"),
-                    )
-                })?,
-        ),
-        None if args.lock => None,
-        None => accounts.iter().find(|candidate| candidate.helper).cloned(),
-    };
-
-    if !args.yes {
-        let question = match &target {
-            Some(account) => format!(
-                "Lock the screen so you can switch to {}?",
-                account.real_name.as_deref().unwrap_or(&account.name)
-            ),
-            None => "Lock the screen now?".to_owned(),
-        };
-
-        if !prompt::confirm(&question, true, "pass --yes")? {
-            return Err(prompt::cancelled());
-        }
-    }
-
-    match target {
-        Some(account) => atlas_client::user::switch::to(&account),
-        None => atlas_client::user::switch::lock_screen(),
+        desktop::Kind::User(login) => crate::user::switch::switch_on_this_mac(Some(login), args),
     }
 }
 
