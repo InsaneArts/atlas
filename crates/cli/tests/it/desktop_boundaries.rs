@@ -1243,11 +1243,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: showing the person this desktop",
     ),
     (
-        "crates/cli/src/mcp.rs",
-        &["Server::switch_to_user"],
-        "pending: switching this Mac to the user",
-    ),
-    (
         "crates/cli/src/ui/render/act.rs",
         &["opened"],
         "exception: the link: copies are made on a shared disk, and these words name its folder",
@@ -1601,7 +1596,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 6;
+const PENDING_LIMIT: usize = 5;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

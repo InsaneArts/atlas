@@ -33,7 +33,7 @@ use tokio::{
 
 mod control;
 mod guarded;
-mod presentation;
+pub(crate) mod presentation;
 mod reads;
 mod resources;
 mod stream;
@@ -475,27 +475,8 @@ impl Server {
     /// hang.
     async fn switch_helper(&self) -> Result<Value> {
         match self.client.desktop().kind() {
-            Kind::User(login) => Self::switch_to_user(*login).await,
+            Kind::User(login) => crate::user::switch::switch_to_user(*login).await,
         }
-    }
-
-    /// Lock this Mac to its login window, for the person to choose the
-    /// second login `login` there.
-    async fn switch_to_user(login: atlas_core::user::User) -> Result<Value> {
-        tokio::task::spawn_blocking(move || {
-            let account = atlas_client::user::switch::accounts(Some(login.uid))?
-                .into_iter()
-                .find(|account| account.helper)
-                .ok_or_else(|| Error::new(Code::Switch, "The helper's account wasn't found"))?;
-            atlas_client::user::switch::to(&account)
-        })
-        .await
-        .map_err(|error| Error::new(Code::Switch, "The screen didn't lock").with_source(error))??;
-
-        Ok(tool_result(
-            "The screen is locked. Choose the helper there.",
-            json!({"switched": true}),
-        ))
     }
 
     /// Log the helper out, as Log Out in Atlas does: its apps quit as at
