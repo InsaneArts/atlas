@@ -20,13 +20,14 @@ pub struct Desktop {
 /// from every one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// A second login on this Mac, kept off the console.
-    SecondLogin(SecondLogin),
+    /// A hidden user on this Mac, kept off the console: what people know
+    /// as Second Login.
+    User(User),
 }
 
-/// A second login on this Mac, by its account.
+/// A hidden user on this Mac, by its account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SecondLogin {
+pub struct User {
     pub uid: u32,
 }
 
@@ -34,10 +35,10 @@ pub struct SecondLogin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopId(String);
 
-impl From<SecondLogin> for Desktop {
-    fn from(login: SecondLogin) -> Self {
+impl From<User> for Desktop {
+    fn from(user: User) -> Self {
         Self {
-            kind: Kind::SecondLogin(login),
+            kind: Kind::User(user),
         }
     }
 }
@@ -48,13 +49,13 @@ impl Desktop {
         &self.kind
     }
 
-    /// The second login this desktop is: the way in for the second login's
-    /// own setup, update and removal, which work on its account, its
-    /// processes in this kernel and its files on this disk. Anything that
+    /// The hidden user this desktop is: the way in for that user's own
+    /// setup, update and removal, which work on its account, its processes
+    /// in this kernel and its files on this disk. Anything that
     /// differs between kinds matches on [`Desktop::kind`] instead.
-    pub fn second_login(&self) -> &SecondLogin {
-        let Kind::SecondLogin(login) = &self.kind;
-        login
+    pub fn user(&self) -> &User {
+        let Kind::User(user) = &self.kind;
+        user
     }
 
     /// The name this desktop's locks and records carry. A second login's
@@ -62,7 +63,7 @@ impl Desktop {
     /// same desktop.
     pub fn id(&self) -> DesktopId {
         let named = match &self.kind {
-            Kind::SecondLogin(login) => format!("helper:{}", login.uid),
+            Kind::User(login) => format!("helper:{}", login.uid),
         };
         let digest = bytes_sha256(named.as_bytes());
         DesktopId(digest[..DesktopId::LENGTH].to_owned())
@@ -76,7 +77,7 @@ impl Desktop {
     /// For a second login, what [`Observation::require_hidden`] refuses.
     pub fn prove(&self, observation: &Observation) -> Result<Session> {
         match &self.kind {
-            Kind::SecondLogin(login) => observation.require_hidden(login.uid),
+            Kind::User(login) => observation.require_hidden(login.uid),
         }
     }
 
@@ -85,7 +86,7 @@ impl Desktop {
     /// build.
     pub fn input_current(&self, observation: &Observation, pid: u32) -> bool {
         match &self.kind {
-            Kind::SecondLogin(login) => observation.input_current(login.uid, pid),
+            Kind::User(login) => observation.input_current(login.uid, pid),
         }
     }
 
@@ -95,7 +96,7 @@ impl Desktop {
     /// be read or listed may run.
     pub fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
         match &self.kind {
-            Kind::SecondLogin(login) => protocol::left_may_run(left, group, login.uid),
+            Kind::User(login) => protocol::left_may_run(left, group, login.uid),
         }
     }
 
@@ -109,7 +110,7 @@ impl Desktop {
     /// cannot be looked for may run.
     pub fn orphans_run(&self) -> Result<bool> {
         match &self.kind {
-            Kind::SecondLogin(login) => Ok(orphaned(&process::of_user(login.uid)?)),
+            Kind::User(login) => Ok(orphaned(&process::of_user(login.uid)?)),
         }
     }
 
@@ -117,7 +118,7 @@ impl Desktop {
     /// the same number; none when it cannot be looked at.
     pub fn instance(&self, pid: u32) -> Option<Instance> {
         match &self.kind {
-            Kind::SecondLogin(_) => i32::try_from(pid)
+            Kind::User(_) => i32::try_from(pid)
                 .ok()
                 .and_then(|pid| process::info(pid).ok().flatten())
                 .map(|info| info.instance),
@@ -128,7 +129,7 @@ impl Desktop {
     /// zombie, or another process's. Unknown is not exited.
     pub fn exited(&self, instance: Instance) -> bool {
         match &self.kind {
-            Kind::SecondLogin(_) => match process::info(instance.pid) {
+            Kind::User(_) => match process::info(instance.pid) {
                 Ok(None) => true,
                 Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
                 Err(_) => false,

@@ -10,7 +10,7 @@ use crate::{
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Desktop, Kind, SecondLogin},
+    desktop::{Desktop, Kind, User},
     error::{Code, Error, Result},
     files::Token,
     name::same_text,
@@ -61,7 +61,7 @@ impl Copies {
     /// The copies `desktop` opens.
     pub fn of(desktop: &Desktop) -> Self {
         match desktop.kind() {
-            Kind::SecondLogin(_) => Self::in_shared_folder(),
+            Kind::User(_) => Self::in_shared_folder(),
         }
     }
 
@@ -467,7 +467,7 @@ pub(crate) async fn hand_over(
 ) -> Result<Handed> {
     refuse_targets(&targets)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => hand_over_to(client, login, ownership, targets, running).await,
+        Kind::User(login) => hand_over_to(client, login, ownership, targets, running).await,
     }
 }
 
@@ -476,7 +476,7 @@ pub(crate) async fn hand_over(
 /// here that its account may read, of what it cannot.
 async fn hand_over_to(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     ownership: &Arc<Ownership>,
     targets: Vec<Target>,
     running: &[AppRow],

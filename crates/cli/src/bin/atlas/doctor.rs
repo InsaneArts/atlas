@@ -7,7 +7,7 @@ use atlas_client::{
     host_session::{Asker, Recovery},
     idle_time::{IdleTime, Look},
 };
-use atlas_core::desktop::{Kind, SecondLogin};
+use atlas_core::desktop::{Kind, User};
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
 use std::io::IsTerminal;
@@ -40,14 +40,14 @@ const RECORDER_TRIES: u64 = 3;
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => second_login_report(client, login, verbose).await,
+        Kind::User(login) => user_report(client, login, verbose).await,
     }
 }
 
 /// [`report`] for the second login `login`, with what this Mac can tell of
 /// it: its account, why it is silent, the logins Atlas can close, the Apple
 /// agents restarting in it and the home folder it may read.
-async fn second_login_report(client: &Client, login: &SecondLogin, verbose: bool) -> Value {
+async fn user_report(client: &Client, login: &User, verbose: bool) -> Value {
     let uid = login.uid;
     let status = client.status().await;
     let account = atlas_core::account::account_with_uid(uid).ok().flatten();

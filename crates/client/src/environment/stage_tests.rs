@@ -1,9 +1,7 @@
 use super::*;
 use crate::environment::{
     problem,
-    tests::{
-        Sandbox, account, second_login_of, stage_in, task_claims, tasked, worker_reply, write_plan,
-    },
+    tests::{Sandbox, account, stage_in, task_claims, tasked, user_of, worker_reply, write_plan},
 };
 use atlas_core::test_support::UID;
 use serde_json::json;
@@ -268,7 +266,7 @@ async fn an_apply_claims_its_plan_for_the_task_before_the_helper_is_asked() {
     let mut asked = Vec::new();
     let applied = helper
         .serve(
-            apply_frozen(&client, &second_login_of(&client), &account(), &id),
+            apply_frozen(&client, &user_of(&client), &account(), &id),
             |_| {
                 asked.push(task_claims(&client, &task));
                 Some(worker_reply(

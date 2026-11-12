@@ -67,16 +67,12 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
         return Ok(Vec::new());
     }
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => plan_states_in(client, login, ids).await,
+        Kind::User(login) => plan_states_in(client, login, ids).await,
     }
 }
 
 /// [`plan_states`] of the plans `ids` in the second login `login`.
-async fn plan_states_in(
-    client: &Client,
-    login: &SecondLogin,
-    ids: &[Token],
-) -> Result<Vec<PlanState>> {
+async fn plan_states_in(client: &Client, login: &User, ids: &[Token]) -> Result<Vec<PlanState>> {
     let helper = helper_name(login.uid)?;
     let here = frozen(shared_folder(client)?, login.uid);
     let mut transactions: Vec<TransactionSummary> = Vec::new();
@@ -155,14 +151,14 @@ pub(crate) async fn undo_plan(
     id: &Token,
 ) -> Result<Undone> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => undo_plan_in(client, login, ownership, id).await,
+        Kind::User(login) => undo_plan_in(client, login, ownership, id).await,
     }
 }
 
 /// [`undo_plan`] of plan `id` in the second login `login`.
 async fn undo_plan_in(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     ownership: &Ownership,
     id: &Token,
 ) -> Result<Undone> {

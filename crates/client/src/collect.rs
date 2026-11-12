@@ -100,7 +100,7 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
     // A second login shares this disk, so a path in the person's own home
     // is the shell's `~`, never the helper's file.
     let person = match client.desktop().kind() {
-        Kind::SecondLogin(_) => atlas_core::config::home().ok(),
+        Kind::User(_) => atlas_core::config::home().ok(),
     };
     for source in files {
         if let Some(refused) = given(source, person.as_deref()) {

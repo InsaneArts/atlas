@@ -64,7 +64,7 @@ pub(crate) async fn install_app(
     name: &str,
 ) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
+        Kind::User(login) => {
             let helper = helper_name(login.uid)?;
             let request = Request::InstallApp {
                 id: id.as_str().to_owned(),
@@ -103,7 +103,7 @@ pub(crate) async fn remove_app(
     id: &Token,
 ) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
+        Kind::User(login) => {
             let helper = helper_name(login.uid)?;
             let request = Request::RemoveApp {
                 id: id.as_str().to_owned(),
@@ -127,14 +127,14 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
         return Ok(Vec::new());
     }
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => install_states_in(client, login, &unique).await,
+        Kind::User(login) => install_states_in(client, login, &unique).await,
     }
 }
 
 /// [`install_states`] of the installs `unique` in the second login `login`.
 async fn install_states_in(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     unique: &[String],
 ) -> Result<Vec<InstallState>> {
     let helper = helper_name(login.uid)?;

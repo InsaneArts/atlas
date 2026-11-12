@@ -16,7 +16,7 @@ pub(crate) use atlas_core::process::Instance;
 pub use recovery::{Asker, Recovery};
 
 use crate::client::Client;
-use atlas_core::desktop::{Kind, SecondLogin};
+use atlas_core::desktop::{Kind, User};
 use serde_json::json;
 
 /// The host session of this process's command, resolved locally, asking the
@@ -27,15 +27,15 @@ pub async fn from_env_verified(client: &Client) -> Option<HostSession> {
     match client.desktop().kind() {
         // The second login's daemon shares this Mac's kernel, so it can look
         // at this command's ancestry.
-        Kind::SecondLogin(login) => verified_by_second_login(client, login, local).await,
+        Kind::User(login) => verified_by_user(client, login, local).await,
     }
 }
 
 /// [`from_env_verified`], asking the second login's daemon for the proof
 /// `local` lacks.
-async fn verified_by_second_login(
+async fn verified_by_user(
     client: &Client,
-    _login: &SecondLogin,
+    _login: &User,
     local: Option<HostSession>,
 ) -> Option<HostSession> {
     let mut claims = atlas_core::host::verification::from_env();

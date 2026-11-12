@@ -30,7 +30,7 @@ use atlas_control::Ownership;
 use atlas_core::{
     account::helper_search_path,
     config::parse_toml,
-    desktop::{Kind, SecondLogin},
+    desktop::{Kind, User},
     error::{Code, Error, Result},
     files::LockFile,
     transport::{OutputError, run_output},
@@ -113,9 +113,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
         .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
     let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            freeze(client, login, &manifest, selection.files, apply_now).await
-        }
+        Kind::User(login) => freeze(client, login, &manifest, selection.files, apply_now).await,
     }
 }
 
@@ -127,7 +125,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 /// Unacknowledged worker effects retain their transaction and pending ownership.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
+        Kind::User(login) => {
             let helper = helper_name(login.uid)?;
             tidy(client);
             apply_frozen(client, login, &helper, plan_id).await
@@ -143,14 +141,14 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
 /// kept, and unknown restoration stays pending.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => rollback_in(client, login, transaction_id, apply).await,
+        Kind::User(login) => rollback_in(client, login, transaction_id, apply).await,
     }
 }
 
 /// [`rollback`] in the second login `login`.
 async fn rollback_in(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     transaction_id: &str,
     apply: bool,
 ) -> Result<Value> {
@@ -190,14 +188,14 @@ async fn rollback_in(
 pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => run_in(client, login, argv, timeout).await,
+        Kind::User(login) => run_in(client, login, argv, timeout).await,
     }
 }
 
 /// [`run`] in the second login `login`, once its arguments are valid.
 async fn run_in(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     argv: Vec<String>,
     timeout: Duration,
 ) -> Result<Value> {

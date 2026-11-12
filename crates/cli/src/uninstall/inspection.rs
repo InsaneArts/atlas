@@ -45,7 +45,7 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
 
     let config = client.as_ref().map(|client| &client.config);
     let account = config.and_then(|config| {
-        account::account_with_uid(config.desktop().second_login().uid)
+        account::account_with_uid(config.desktop().user().uid)
             .ok()
             .flatten()
     });

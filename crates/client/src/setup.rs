@@ -375,14 +375,12 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
     match (helper, config) {
         (Some(name), _) => account_named(name)?
             .ok_or_else(|| problem(format!("No account named {name} exists on this Mac"))),
-        (None, Some(config)) => {
-            account_with_uid(config.desktop().second_login().uid)?.ok_or_else(|| {
-                problem(format!(
-                    "Configured helper UID {} has no account",
-                    config.desktop().second_login().uid
-                ))
-            })
-        }
+        (None, Some(config)) => account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
+            problem(format!(
+                "Configured helper UID {} has no account",
+                config.desktop().user().uid
+            ))
+        }),
         (None, None) => Err(Error::new(
             Code::Usage,
             "No usable configuration; name the helper account with --helper NAME",
@@ -405,7 +403,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
 
     let conflict = config
         .as_ref()
-        .is_some_and(|config| config.desktop().second_login().uid != account.uid);
+        .is_some_and(|config| config.desktop().user().uid != account.uid);
 
     // Otherwise the configuration atlas init would write; shown, never
     // written, by preview.

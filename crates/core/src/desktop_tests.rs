@@ -2,11 +2,11 @@ use super::*;
 use serde_json::json;
 
 fn login(uid: u32) -> Desktop {
-    Desktop::from(SecondLogin { uid })
+    Desktop::from(User { uid })
 }
 
 #[test]
-fn a_second_login_keeps_the_record_name_installs_already_use() {
+fn a_user_desktop_keeps_the_record_name_installs_already_use() {
     assert_eq!(login(502).id().as_str(), "c6a7efd7472129144451d113");
     assert_eq!(login(503).id().as_str(), "ae2892390aeb6c07f55a0eea");
 }
@@ -18,7 +18,7 @@ fn a_desktop_is_named_by_its_account_alone() {
 }
 
 #[test]
-fn a_second_login_is_proved_by_the_second_login_check() {
+fn a_user_desktop_is_proved_by_the_hidden_session_check() {
     for value in [
         json!({"ok": false}),
         json!({"ok": true, "user": {"uid": 503}}),
@@ -70,7 +70,7 @@ fn a_process_has_exited_only_once_its_instance_is_gone() {
 }
 
 #[test]
-fn a_second_login_is_asked_about_its_own_account_alone() {
+fn a_user_desktop_is_asked_about_its_own_account_alone() {
     use std::os::unix::process::CommandExt;
 
     let uid = nix::unistd::getuid().as_raw();

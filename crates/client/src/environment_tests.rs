@@ -938,7 +938,7 @@ async fn a_week_old_preview_cut_short_is_pruned() {
         week_old(old);
     }
 
-    prune(&client, &second_login_of(&client), "nobody").await;
+    prune(&client, &user_of(&client), "nobody").await;
     assert!(!cut_short.exists());
     assert!(unknown.exists(), "an unknown outcome stays");
     assert!(foreign.exists(), "another helper's plan stays");
@@ -1133,9 +1133,9 @@ pub(super) fn account() -> String {
 }
 
 /// The second login `client` acts in.
-pub(super) fn second_login_of(client: &Client) -> SecondLogin {
+pub(super) fn user_of(client: &Client) -> User {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => *login,
+        Kind::User(login) => *login,
     }
 }
 
@@ -2410,7 +2410,7 @@ async fn a_listed_plan_names_the_session_and_task_that_made_it() {
 
     let listed = helper
         .serve(
-            list_as(&client, &second_login_of(&client), &account(), false),
+            list_as(&client, &user_of(&client), &account(), false),
             previewing(&sandbox.home),
         )
         .await
@@ -2466,15 +2466,12 @@ async fn a_plan_pruned_because_the_helper_never_started_it_is_settled_gone() {
         .unwrap();
 
     helper
-        .serve(
-            prune(&client, &second_login_of(&client), &account()),
-            |_| {
-                Some(worker_reply(
-                    1,
-                    &json!({"ok": false, "error": worker::MISSING}),
-                ))
-            },
-        )
+        .serve(prune(&client, &user_of(&client), &account()), |_| {
+            Some(worker_reply(
+                1,
+                &json!({"ok": false, "error": worker::MISSING}),
+            ))
+        })
         .await;
 
     assert!(!stage.exists(), "the plan the helper never started went");
@@ -2526,7 +2523,7 @@ async fn a_preview_claims_its_plan_for_the_task_once_the_plan_is_written() {
         .serve(
             freeze_as(
                 &client,
-                &second_login_of(&client),
+                &user_of(&client),
                 &account(),
                 &sandbox.root.join("manifest.toml"),
                 selections,
@@ -2647,15 +2644,9 @@ async fn a_manifest_that_selects_a_secret_is_refused_before_the_helper_is_asked_
         target: ".config/probe/.env".into(),
         executable: false,
     }];
-    let error = freeze(
-        &client,
-        &second_login_of(&client),
-        &manifest,
-        selections,
-        false,
-    )
-    .await
-    .unwrap_err();
+    let error = freeze(&client, &user_of(&client), &manifest, selections, false)
+        .await
+        .unwrap_err();
     assert_eq!(error.code, Code::Credentials, "{error}");
     assert!(
         !directory.path().join("output").exists(),
@@ -2705,15 +2696,9 @@ async fn a_manifest_source_that_is_a_link_named_like_a_secret_is_refused_though_
         target: ".npmrc".into(),
         executable: false,
     }];
-    let error = freeze(
-        &client,
-        &second_login_of(&client),
-        &manifest,
-        selections,
-        false,
-    )
-    .await
-    .unwrap_err();
+    let error = freeze(&client, &user_of(&client), &manifest, selections, false)
+        .await
+        .unwrap_err();
     assert_eq!(error.code, Code::Credentials, "{error}");
 }
 
@@ -2731,7 +2716,7 @@ async fn refused_as_read(sandbox: &Sandbox) -> atlas_core::error::Error {
         .serve(
             freeze_as(
                 &client,
-                &second_login_of(&client),
+                &user_of(&client),
                 &account(),
                 &manifest,
                 selections,

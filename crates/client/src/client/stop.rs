@@ -217,7 +217,7 @@ impl Client {
     /// disk.
     fn service_stop_saved(&self) -> std::io::Result<bool> {
         match self.desktop().kind() {
-            Kind::SecondLogin(_) => self
+            Kind::User(_) => self
                 .config
                 .input_socket
                 .with_extension("stopped")

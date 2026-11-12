@@ -57,7 +57,7 @@ fn app_program(executable: &str) -> bool {
 /// alone. A second login runs Atlas from the same app as this Mac.
 pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
     match desktop.kind() {
-        Kind::SecondLogin(_) => atlas_bundle(),
+        Kind::User(_) => atlas_bundle(),
     }
 }
 
@@ -66,7 +66,7 @@ pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
 /// elsewhere are not looked for.
 pub fn installed(desktop: &Desktop, name: &str) -> bool {
     match desktop.kind() {
-        Kind::SecondLogin(_) => installed_in(Path::new(APPLICATIONS), name),
+        Kind::User(_) => installed_in(Path::new(APPLICATIONS), name),
     }
 }
 

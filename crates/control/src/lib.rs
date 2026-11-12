@@ -276,10 +276,7 @@ impl Controller {
     /// `directory`.
     #[cfg(any(test, feature = "test-support"))]
     pub fn at(uid: u32, directory: &Path) -> Self {
-        Self::in_directory(
-            &Desktop::from(atlas_core::desktop::SecondLogin { uid }),
-            directory,
-        )
+        Self::in_directory(&Desktop::from(atlas_core::desktop::User { uid }), directory)
     }
 
     /// Locating state is read-only; the directory appears with the first lock.

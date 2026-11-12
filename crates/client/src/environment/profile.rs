@@ -1,7 +1,7 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
 use super::{
-    Kind, SecondLogin, Selection, discovery, freeze, problem,
+    Kind, Selection, User, discovery, freeze, problem,
     runner::{ENVIRONMENT_TARGET, Environment},
     selectable_variable,
 };
@@ -177,7 +177,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     refuse_credentials(&path, &profile)?;
     let bytes = selected_environment(&profile)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => sync_in(client, login, path, profile, bytes, apply).await,
+        Kind::User(login) => sync_in(client, login, path, profile, bytes, apply).await,
     }
 }
 
@@ -185,7 +185,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
 /// `bytes`, in the second login `login`.
 async fn sync_in(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     path: PathBuf,
     profile: Profile,
     bytes: Vec<u8>,

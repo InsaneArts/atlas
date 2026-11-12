@@ -389,7 +389,7 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
 
     match config.desktop().kind() {
         // This Mac can see whether the second login is logged out.
-        Kind::SecondLogin(login) => match atlas_core::session::absence(login.uid) {
+        Kind::User(login) => match atlas_core::session::absence(login.uid) {
             Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
                 Code::LoggedOut,
                 "The helper is logged out (after a restart or a log-out)",
@@ -430,7 +430,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
         .is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| match config.desktop().kind() {
-            Kind::SecondLogin(login) => {
+            Kind::User(login) => {
                 atlas_client::setup::migrate::settled(login.uid)
                     && atlas_core::account::account_with_uid(login.uid)
                         .is_ok_and(|account| account.is_some())

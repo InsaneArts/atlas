@@ -1,28 +1,35 @@
-//! Which production sources may name the second login.
+//! Which production sources may name the user desktop: a hidden user on
+//! this Mac, the kind people know as Second Login.
 //!
 //! A desktop has a kind, and each thing that differs between kinds has one
-//! owner that matches on it. Code outside those owners, and outside the
-//! second login's own implementation, must not name the second login: it
-//! would then work for that one kind alone, unseen.
+//! owner that matches on it. Code outside those owners, and outside the user
+//! desktop's own implementation, must not name it: it would then work for
+//! that one kind alone, unseen.
 //!
-//! This checks names, not types. Three identifiers mean the second login
-//! and nothing else in the workspace: `SecondLogin`, `second_login` and
-//! `helper_uid`. A source that holds one must be listed in [`ALLOWED`]
-//! with why. What it cannot see: an allowed function that returns the
-//! account under another name, a struct that keeps it as `uid`, and an
-//! assumption that never names the second login at all, such as a file
-//! kept beside a socket. Those assumptions are outside this check.
+//! This checks names, not types. The user desktop is named by the
+//! identifiers `User` and `helper_uid`, and by its accessor, `user`, called
+//! as a method or reached through a path (`.user()`, `Desktop::user`). A
+//! plain `user` (a variable, a field, a free function) is not. A source
+//! that names it must be listed in [`ALLOWED`] with why. What it cannot
+//! see: an allowed function that returns the account under another name, a
+//! struct that keeps it as `uid`, and an assumption that never names the
+//! user desktop at all, such as a file kept beside a socket. Those
+//! assumptions are outside this check.
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
-/// The identifiers that name the second login.
-const NAMES: [&str; 3] = ["SecondLogin", "second_login", "helper_uid"];
+/// The identifiers that name the user desktop wherever they appear.
+const NAMES: [&str; 2] = ["User", "helper_uid"];
 
-/// The sources that may name the second login, from the workspace root,
+/// The user desktop's accessor, which names it when called as a method or
+/// through a path.
+const ACCESSOR: &str = "user";
+
+/// The sources that may name the user desktop, from the workspace root,
 /// each with what it owns (an operation that matches on the desktop's kind)
-/// or what of the second login's own implementation it holds.
+/// or what of the user desktop's own implementation it holds.
 const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/agents/src/lib.rs",
@@ -38,7 +45,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/init.rs",
-        "second login: setting it up from the terminal",
+        "user: setting it up from the terminal",
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
@@ -46,7 +53,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
-        "second login: finishing an update in it",
+        "user: finishing an update in it",
     ),
     (
         "crates/cli/src/mcp.rs",
@@ -54,24 +61,24 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cli/src/onboarding.rs",
-        "second login: choosing and preparing its account",
+        "user: choosing and preparing its account",
     ),
     (
         "crates/cli/src/onboarding/acceptance.rs",
-        "second login: the setup connection and its acceptance",
+        "user: the setup connection and its acceptance",
     ),
     (
         "crates/cli/src/onboarding/status.rs",
-        "second login: how far setup has come",
+        "user: how far setup has come",
     ),
-    ("crates/cli/src/uninstall.rs", "second login: removing it"),
+    ("crates/cli/src/uninstall.rs", "user: removing it"),
     (
         "crates/cli/src/uninstall/inspection.rs",
-        "second login: what removing it would take",
+        "user: what removing it would take",
     ),
     (
         "crates/cli/src/uninstall/log_out.rs",
-        "second login: logging it out before removal",
+        "user: logging it out before removal",
     ),
     (
         "crates/cli/src/viewer/reads.rs",
@@ -87,11 +94,11 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/capability.rs",
-        "second login: its readiness, and the native-dialog evidence kept for it on this disk",
+        "user: its readiness, and the native-dialog evidence kept for it on this disk",
     ),
     (
         "crates/client/src/capability/canary.rs",
-        "second login: establishing native capability evidence",
+        "user: establishing native capability evidence",
     ),
     (
         "crates/client/src/client.rs",
@@ -143,7 +150,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/environment/stage.rs",
-        "second login: staging an environment on this disk for its account",
+        "user: staging an environment on this disk for its account",
     ),
     (
         "crates/client/src/environment/undo.rs",
@@ -151,11 +158,11 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/handoff.rs",
-        "owner: opening a file in it and every use of the copies made, and the second login's way of doing so",
+        "owner: opening a file in it and every use of the copies made, and the user desktop's way of doing so",
     ),
     (
         "crates/client/src/home_privacy.rs",
-        "second login: what its account may reach of the person's home",
+        "user: what its account may reach of the person's home",
     ),
     (
         "crates/client/src/host_session.rs",
@@ -171,43 +178,43 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/setup.rs",
-        "second login: its setup, as the controller sees it",
+        "user: its setup, as the controller sees it",
     ),
     (
         "crates/client/src/setup/configuration.rs",
-        "second login: the settings setup writes for it",
+        "user: the settings setup writes for it",
     ),
     (
         "crates/client/src/setup/job.rs",
-        "second login: installing and restarting its job",
+        "user: installing and restarting its job",
     ),
     (
         "crates/client/src/setup/migrate.rs",
-        "second login: moving an older setup forward",
+        "user: moving an older setup forward",
     ),
     (
         "crates/client/src/switch.rs",
-        "second login: locking this Mac to its login window, and the account to come back to",
+        "user: locking this Mac to its login window, and the account to come back to",
     ),
     (
         "crates/control/src/lib.rs",
-        "second login: the controller of one, built for the tests of the crates above",
+        "user: the controller of one, built for the tests of the crates above",
     ),
     (
         "crates/core/src/config.rs",
-        "second login: the flat settings file, which names one second login",
+        "user: the flat settings file, which names one user desktop",
     ),
     (
         "crates/core/src/desktop.rs",
-        "owner: its identity, proof, input readiness and processes; and the way in for the second login's own setup, update and removal",
+        "owner: its identity, proof, input readiness and processes; and the way in for the user desktop's own setup, update and removal",
     ),
     (
         "crates/daemon/src/helper_setup/first_login.rs",
-        "second login: its first login",
+        "user: its first login",
     ),
     (
         "crates/daemon/src/helper_setup/pairing.rs",
-        "second login: its pairing request",
+        "user: its pairing request",
     ),
 ];
 
@@ -375,19 +382,33 @@ fn identifier(token: &Token) -> Option<&str> {
     }
 }
 
-/// Whether `tokens` name the second login.
-fn names_second_login(tokens: &[Token]) -> bool {
-    tokens
-        .iter()
-        .filter_map(identifier)
-        .any(|name| NAMES.contains(&name))
+/// Whether `tokens` name the user desktop.
+fn names_the_user(tokens: &[Token]) -> bool {
+    let colon = Token::Punctuation(':');
+    tokens.iter().enumerate().any(|(at, token)| {
+        let Some(name) = identifier(token) else {
+            return false;
+        };
+        if NAMES.contains(&name) {
+            return true;
+        }
+        // The accessor: through a path (`Desktop::user`, called or not), or
+        // called as a method (`.user()`, `.user::<>()`). A field is followed
+        // by neither `(` nor `::`.
+        let after = |count: usize| at.checked_sub(count).and_then(|before| tokens.get(before));
+        let next = tokens.get(at + 1);
+        name == ACCESSOR
+            && ((after(1) == Some(&colon) && after(2) == Some(&colon))
+                || (after(1) == Some(&Token::Punctuation('.'))
+                    && (next == Some(&Token::Punctuation('(')) || next == Some(&colon))))
+    })
 }
 
-/// A way `tokens` would let the second login's type leave under another
+/// A way `tokens` would let the user desktop's type leave under another
 /// name, which no source may use: renamed with `as`, behind a type alias,
 /// or through a glob of the desktop module.
-fn renames_second_login(tokens: &[Token]) -> Option<&'static str> {
-    let named = |token: &Token| matches!(identifier(token), Some("SecondLogin" | "second_login"));
+fn renames_the_user(tokens: &[Token]) -> Option<&'static str> {
+    let named = |token: &Token| identifier(token) == Some("User");
     let word = |token: &Token, expected: &str| identifier(token) == Some(expected);
     let punctuation = |token: &Token, expected: char| *token == Token::Punctuation(expected);
 
@@ -523,7 +544,7 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn only_listed_sources_name_the_second_login() {
+fn only_listed_sources_name_the_user_desktop() {
     let root = workspace_root();
     let mut unlisted = Vec::new();
     let mut renamed = Vec::new();
@@ -533,10 +554,10 @@ fn only_listed_sources_name_the_second_login() {
             .unwrap_or_else(|error| panic!("{} could not be read: {error}", source.display()));
         let tokens = tokens(&text);
         let path = source.to_string_lossy().into_owned();
-        if let Some(how) = renames_second_login(&tokens) {
+        if let Some(how) = renames_the_user(&tokens) {
             renamed.push(format!("{path} {how}"));
         }
-        if names_second_login(&tokens) {
+        if names_the_user(&tokens) {
             if !ALLOWED.iter().any(|(allowed, _)| *allowed == path) {
                 unlisted.push(path.clone());
             }
@@ -551,16 +572,16 @@ fn only_listed_sources_name_the_second_login() {
 
     assert!(
         renamed.is_empty(),
-        "the second login may not leave under another name: {renamed:#?}"
+        "the user desktop may not leave under another name: {renamed:#?}"
     );
     assert!(
         unlisted.is_empty(),
-        "these sources name the second login and are not its owners or its own code; \
+        "these sources name the user desktop and are not its owners or its own code; \
          call the operation's owner instead: {unlisted:#?}"
     );
     assert!(
         stale.is_empty(),
-        "these sources are listed and no longer name the second login; remove them: {stale:#?}"
+        "these sources are listed and no longer name the user desktop; remove them: {stale:#?}"
     );
 }
 
@@ -568,7 +589,7 @@ fn only_listed_sources_name_the_second_login() {
 fn every_listed_source_says_what_it_owns_or_implements() {
     for (path, role) in ALLOWED {
         assert!(
-            role.starts_with("owner: ") || role.starts_with("second login: "),
+            role.starts_with("owner: ") || role.starts_with("user: "),
             "{path} says neither what it owns nor what it implements: {role}"
         );
     }
@@ -579,53 +600,72 @@ fn every_listed_source_says_what_it_owns_or_implements() {
 }
 
 #[test]
-fn comments_and_literals_do_not_name_the_second_login() {
+fn comments_and_literals_do_not_name_the_user_desktop() {
     for source in [
-        "// second_login in a line comment",
+        "// User and .user() in a line comment",
         "/// helper_uid in a doc comment\nfn f() {}",
-        "/* SecondLogin /* nested helper_uid */ still a comment */ fn f() {}",
+        "/* User /* nested helper_uid */ still a comment */ fn f() {}",
         r#"let key = "helper_uid";"#,
         r#"let key = config["helper_uid"];"#,
         r#"let escaped = "a \" helper_uid \" b";"#,
-        r##"let raw = r#"SecondLogin "quoted" helper_uid"#;"##,
-        r#"let bytes = b"helper_uid"; let text = c"second_login";"#,
-        r#"json!({"helper_uid": 1, "SecondLogin": 2})"#,
+        r##"let raw = r#"User "quoted" helper_uid"#;"##,
+        r#"let bytes = b"helper_uid"; let text = c"user";"#,
+        r#"json!({"helper_uid": 1, "User": 2})"#,
         r#"#[serde(rename = "helper_uid")] struct Kept;"#,
         "let quote = '\"'; let other = '\\''; let tick = 'h';",
     ] {
-        assert!(!names_second_login(&tokens(source)), "{source}");
+        assert!(!names_the_user(&tokens(source)), "{source}");
     }
 }
 
 #[test]
-fn every_identifier_use_names_the_second_login() {
+fn every_identifier_use_names_the_user_desktop() {
     for source in [
-        "let login = desktop.second_login();",
-        "let uid = client\n    .desktop()\n    .second_login()\n    .uid;",
-        "use atlas_core::desktop::{Desktop, SecondLogin};",
-        "match desktop.kind() { Kind::SecondLogin(login) => login.uid }",
-        "Desktop::from(SecondLogin { uid })",
+        "let login = desktop.user();",
+        "let uid = client\n    .desktop()\n    .user()\n    .uid;",
+        "use atlas_core::desktop::{Desktop, User};",
+        "match desktop.kind() { Kind::User(login) => login.uid }",
+        "Desktop::from(User { uid })",
         "struct Pairing { helper_uid: u32 }",
         "let Config { helper_uid, .. } = config;",
         "json!({\"helperUID\": pairing.helper_uid})",
-        "fn held<'a>(login: &'a SecondLogin) {}",
+        "fn held<'a>(login: &'a User) {}",
         "let text = \"closed\"; let uid = config.helper_uid;",
-        "let r#type = desktop.r#second_login();",
-        "#[cfg(test)] fn fixture() -> SecondLogin { todo!() }",
+        "let r#type = desktop.r#user();",
+        "#[cfg(test)] fn fixture() -> User { todo!() }",
+        "let account = Desktop::user(&desktop);",
+        "let account = desktop . user ( );",
+        "let accessor = Desktop::user; let account = accessor(&desktop);",
+        "let account = (Desktop::r#user)(&desktop);",
+        "let account = desktop.user::<>();",
+        "let account = desktop.r#user::<>();",
     ] {
-        assert!(names_second_login(&tokens(source)), "{source}");
+        assert!(names_the_user(&tokens(source)), "{source}");
     }
 }
 
 #[test]
-fn the_second_login_cannot_leave_under_another_name() {
+fn a_plain_user_does_not_name_the_user_desktop() {
+    for source in [
+        "let user = account; let uid = user.uid;",
+        "fn user() -> Value { json!({}) }",
+        r#"json!({"user": user(), "session": session()})"#,
+        "let named = facts.user; let field = report.user.name;",
+        "fn of(user: &Account) -> u32 { user.uid }",
+    ] {
+        assert!(!names_the_user(&tokens(source)), "{source}");
+    }
+}
+
+#[test]
+fn the_user_desktop_cannot_leave_under_another_name() {
     for (source, how) in [
         (
-            "use atlas_core::desktop::SecondLogin as Login;",
+            "use atlas_core::desktop::User as Login;",
             "renames it with `as`",
         ),
         (
-            "pub use atlas_core::desktop::{Desktop, SecondLogin as Account};",
+            "pub use atlas_core::desktop::{Desktop, User as Account};",
             "renames it with `as`",
         ),
         (
@@ -653,27 +693,27 @@ fn the_second_login_cannot_leave_under_another_name() {
             "imports the desktop module's items with a glob",
         ),
         (
-            "type Login = atlas_core::desktop::SecondLogin;",
+            "type Login = atlas_core::desktop::User;",
             "hides it behind a type alias",
         ),
         (
-            "pub(crate) type Logins<'a> = Vec<&'a SecondLogin>;",
+            "pub(crate) type Logins<'a> = Vec<&'a User>;",
             "hides it behind a type alias",
         ),
     ] {
-        assert_eq!(renames_second_login(&tokens(source)), Some(how), "{source}");
+        assert_eq!(renames_the_user(&tokens(source)), Some(how), "{source}");
     }
     for source in [
-        "use atlas_core::desktop::{Desktop, SecondLogin};",
-        "let uid = login.uid as u64; let login: SecondLogin = made;",
-        "type Reply = Result<Value>; fn of(login: &SecondLogin) {}",
+        "use atlas_core::desktop::{Desktop, User};",
+        "let uid = login.uid as u64; let login: User = made;",
+        "type Reply = Result<Value>; fn of(login: &User) {}",
         "use crate::desktop::Desktop;",
         "use atlas_core::{desktop::{Desktop, Kind}, error::{*}};",
         "use atlas_core::{desktop::Desktop, session::*};",
         "let area = desktop::width * 2;",
-        "let type_of = kind; let login = SecondLogin { uid };",
+        "let type_of = kind; let login = User { uid };",
     ] {
-        assert_eq!(renames_second_login(&tokens(source)), None, "{source}");
+        assert_eq!(renames_the_user(&tokens(source)), None, "{source}");
     }
 }
 

@@ -932,13 +932,13 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
         return switch_on_this_mac(None, args);
     };
     match config.desktop().kind() {
-        desktop::Kind::SecondLogin(login) => switch_on_this_mac(Some(login), args),
+        desktop::Kind::User(login) => switch_on_this_mac(Some(login), args),
     }
 }
 
 /// [`switch`] among this Mac's accounts, the second login `login` among
 /// them when there is one, and the one chosen when none is named.
-fn switch_on_this_mac(login: Option<&desktop::SecondLogin>, args: cli::Switch) -> Result<Value> {
+fn switch_on_this_mac(login: Option<&desktop::User>, args: cli::Switch) -> Result<Value> {
     use atlas_client::switch;
 
     let accounts = switch::accounts(login.map(|login| login.uid))?;

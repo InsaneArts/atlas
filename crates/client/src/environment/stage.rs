@@ -126,7 +126,7 @@ pub(super) fn sweep(shared: &Path) {
 /// retained request (a step whose outcome is unknown), one the helper
 /// started, or one it cannot answer for, stays. A plan removed is settled
 /// gone wherever a task claimed it.
-pub(super) async fn prune(client: &Client, login: &SecondLogin, helper: &str) {
+pub(super) async fn prune(client: &Client, login: &User, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
@@ -345,7 +345,7 @@ pub(super) const READ: &str = "read-";
 
 pub(super) async fn freeze(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     manifest: &Path,
     selections: Vec<Selection>,
     apply_now: bool,
@@ -383,7 +383,7 @@ fn source_path(manifest: &Path, source: &Path) -> Result<PathBuf> {
 /// `helper`, once the helper is verified.
 pub(super) async fn freeze_as(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     helper: &str,
     manifest: &Path,
     selections: Vec<Selection>,
@@ -498,7 +498,7 @@ pub(super) fn planned(stage: &Path) -> bool {
 
 pub(super) async fn apply_frozen(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     helper: &str,
     plan_id: &str,
 ) -> Result<Value> {

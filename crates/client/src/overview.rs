@@ -16,7 +16,7 @@ use crate::{
 };
 use atlas_control::Controller;
 use atlas_core::{
-    desktop::{Kind, SecondLogin},
+    desktop::{Kind, User},
     error::{Code, Error},
     single_flight::Shared,
 };
@@ -81,7 +81,7 @@ pub async fn report(
         .await
         .unwrap_or_else(|_| json!(late()));
     let mut doctor = match client.desktop().kind() {
-        Kind::SecondLogin(login) => second_login_report(login, reply, until, idle).await,
+        Kind::User(login) => user_report(login, reply, until, idle).await,
     };
     let status = &mut doctor.diagnosis.value;
 
@@ -106,8 +106,8 @@ pub async fn report(
 /// can close, whether an Apple agent keeps restarting in it, and whether
 /// switching to and from it has stopped the idle time the person's apps
 /// read, which `idle` says may be restarted.
-async fn second_login_report(
-    login: &SecondLogin,
+async fn user_report(
+    login: &User,
     reply: Value,
     until: Instant,
     idle: crate::idle_time::Look,

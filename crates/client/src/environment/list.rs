@@ -24,7 +24,7 @@ pub(super) const SHOWN: usize = 50;
 /// unknown transaction ownership.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
+        Kind::User(login) => {
             let helper = helper_name(login.uid)?;
             list_as(client, login, &helper, all).await
         }
@@ -34,7 +34,7 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 /// [`list`] for the second login `login`, whose account ACLs name `helper`.
 pub(super) async fn list_as(
     client: &Client,
-    login: &SecondLogin,
+    login: &User,
     helper: &str,
     all: bool,
 ) -> Result<Value> {
