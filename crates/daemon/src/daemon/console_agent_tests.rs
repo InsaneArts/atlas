@@ -380,7 +380,8 @@ fn the_agent_is_paused_the_moment_it_starts_and_nothing_else_is_watched() {
         Report {
             state: State::Paused,
             pauses: 1,
-            misses: 0
+            misses: 0,
+            ..Report::OFF
         }
     );
 }
@@ -496,7 +497,7 @@ fn the_agent_started_by_anything_but_launchd_is_never_signalled() {
     keeper.on(Event::Spawned(LAUNCHD));
     keeper.on(Event::Became(41));
     assert_eq!(fake.signals(), []);
-    assert_eq!(keeper.identify(41), Is::Other);
+    assert_eq!(keeper.identify(41, PROGRAM), Is::Other);
 }
 
 #[test]
@@ -541,7 +542,8 @@ fn a_stop_that_shows_as_the_helper_comes_on_screen_is_taken_back() {
         Report {
             state: State::Watching,
             pauses: 0,
-            misses: 0
+            misses: 0,
+            ..Report::OFF
         }
     );
 
@@ -632,7 +634,8 @@ fn an_agent_left_paused_by_an_earlier_daemon_is_kept_while_hidden() {
         Report {
             state: State::Paused,
             pauses: 0,
-            misses: 0
+            misses: 0,
+            ..Report::OFF
         }
     );
 }
@@ -748,7 +751,8 @@ fn a_stop_that_does_not_show_is_taken_back_and_counted_as_missed() {
         Report {
             state: State::Watching,
             pauses: 0,
-            misses: 1
+            misses: 1,
+            ..Report::OFF
         }
     );
 }
@@ -1099,7 +1103,7 @@ fn a_handle_that_keeps_no_agent_says_so_and_does_nothing() {
     assert_eq!(agent.report(), Report::OFF);
     assert_eq!(
         agent.report().json(),
-        json!({"state": "off", "pauses": 0, "misses": 0})
+        json!({"state": "off", "pauses": 0, "misses": 0, "rapportd": {"paused": false, "pauses": 0}})
     );
     agent.stop();
 }
@@ -1416,10 +1420,158 @@ fn a_report_says_its_state_in_one_word() {
             state,
             pauses: 2,
             misses: 1,
+            ..Report::OFF
         };
         assert_eq!(
             report.json(),
-            json!({"state": word, "pauses": 2, "misses": 1})
+            json!({"state": word, "pauses": 2, "misses": 1, "rapportd": {"paused": false, "pauses": 0}})
         );
     }
+}
+
+/// launchd starts `rapportd` as `pid` for the account `uid` in `session`,
+/// and it has become it.
+fn start_rapportd(fake: &Fake, pid: i32, uid: u32, session: i32) -> Instance {
+    let instance = fake.start(pid);
+    fake.become_program(pid, QUIET, uid);
+    fake.change(pid, |process| {
+        process.info.name = "rapportd".into();
+        process.session = session;
+    });
+    instance
+}
+
+fn quiet(keeper: &Keeper<&Fake>) -> Option<Instance> {
+    keeper.quiet.map(|kept| kept.process)
+}
+
+#[test]
+fn the_hidden_helpers_rapportd_is_paused_whatever_its_age() {
+    let fake = Fake::new(true);
+    let rapportd = start_rapportd(&fake, 300, HELPER, LOGIN);
+    fake.pass(Duration::from_secs(3600));
+    let keeper = keeper(&fake);
+    assert_eq!(quiet(&keeper), Some(rapportd));
+    assert!(fake.stopped(300));
+    assert_eq!(fake.signals(), [(300, Signal::SIGSTOP)]);
+    let report = report(&keeper);
+    assert!(report.quiet);
+    assert_eq!(report.quiet_pauses, 1);
+}
+
+#[test]
+fn the_helpers_rapportd_runs_again_on_screen_and_is_paused_again_once_hidden() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    let mut keeper = keeper(&fake);
+    fake.hidden.set(false);
+    keeper.look();
+    assert_eq!(quiet(&keeper), None);
+    assert!(!fake.stopped(300));
+    fake.hidden.set(true);
+    keeper.look();
+    assert!(fake.stopped(300));
+    assert_eq!(report(&keeper).quiet_pauses, 2);
+}
+
+#[test]
+fn the_persons_own_rapportd_and_another_logins_are_never_signalled() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, PERSON, LOGIN);
+    start_rapportd(&fake, 301, HELPER, ELSEWHERE);
+    let keeper = keeper(&fake);
+    assert_eq!(quiet(&keeper), None);
+    assert!(
+        fake.signals()
+            .iter()
+            .all(|(pid, _)| *pid != 300 && *pid != 301)
+    );
+}
+
+#[test]
+fn a_program_only_named_rapportd_is_never_signalled() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    fake.change(300, |process| process.program = PathBuf::from(OTHER));
+    let keeper = keeper(&fake);
+    assert_eq!(quiet(&keeper), None);
+    assert_eq!(fake.signals(), []);
+}
+
+#[test]
+fn a_rapportd_that_ended_or_was_continued_gives_way_to_the_one_running() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    let mut keeper = keeper(&fake);
+    fake.end(300);
+    let next = start_rapportd(&fake, 310, HELPER, LOGIN);
+    keeper.look();
+    assert_eq!(quiet(&keeper), Some(next));
+    fake.change(310, |process| process.info.stopped = false);
+    keeper.look();
+    assert!(fake.stopped(310), "someone else's continue is undone");
+    assert_eq!(report(&keeper).quiet_pauses, 3);
+}
+
+#[test]
+fn a_rapportd_left_paused_by_an_earlier_daemon_is_held_and_runs_again_on_screen() {
+    let fake = Fake::new(true);
+    let rapportd = start_rapportd(&fake, 300, HELPER, LOGIN);
+    fake.change(300, |process| process.info.stopped = true);
+    let mut keeper = keeper(&fake);
+    assert_eq!(quiet(&keeper), Some(rapportd));
+    assert_eq!(fake.signals(), [], "held as it was");
+    fake.hidden.set(false);
+    keeper.look();
+    assert!(!fake.stopped(300));
+}
+
+#[test]
+fn the_helpers_rapportd_runs_again_when_the_keeper_goes() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    let keeper = keeper(&fake);
+    assert!(fake.stopped(300));
+    assert!(keeper.end());
+    assert!(!fake.stopped(300));
+}
+
+#[test]
+fn a_rapportd_the_kernel_does_not_list_is_looked_for_again() {
+    let fake = Fake::new(true);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    fake.lists.set(false);
+    let mut keeper = keeper(&fake);
+    assert_eq!(quiet(&keeper), None);
+    fake.lists.set(true);
+    keeper.look();
+    assert!(fake.stopped(300));
+}
+
+#[test]
+fn a_rapportd_left_paused_by_an_earlier_daemon_runs_again_when_the_helper_is_on_screen() {
+    let fake = Fake::new(false);
+    start_rapportd(&fake, 300, HELPER, LOGIN);
+    fake.change(300, |process| process.info.stopped = true);
+    let keeper = keeper(&fake);
+    assert!(!fake.stopped(300));
+    assert_eq!(quiet(&keeper), None);
+}
+
+#[test]
+fn a_rapportd_held_again_after_a_continue_that_did_not_show_is_owed_nothing() {
+    let fake = Fake::new(true);
+    let rapportd = start_rapportd(&fake, 300, HELPER, LOGIN);
+    let mut keeper = keeper(&fake);
+    fake.obeys.set(false);
+    fake.hidden.set(false);
+    keeper.look();
+    assert!(fake.stopped(300), "the continue did not show");
+    fake.hidden.set(true);
+    keeper.look();
+    assert_eq!(quiet(&keeper), Some(rapportd));
+    assert!(keeper.owed.is_empty());
+    fake.obeys.set(true);
+    keeper.look();
+    assert!(fake.stopped(300), "held, so no continue is sent");
 }
