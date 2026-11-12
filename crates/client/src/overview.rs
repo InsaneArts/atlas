@@ -81,22 +81,13 @@ pub async fn report(
         .await
         .unwrap_or_else(|_| json!(late()));
     let mut doctor = match client.desktop().kind() {
-        Kind::SecondLogin(login) => second_login_report(login, reply, until).await,
+        Kind::SecondLogin(login) => second_login_report(login, reply, until, idle).await,
     };
     let status = &mut doctor.diagnosis.value;
 
-    // Whether the idle time the person's apps read has stopped while they
-    // type, as a switch to or from the helper can leave it, restarted when
-    // `idle` allows. This process runs in the person's login.
-    let person = nix::unistd::getuid().as_raw();
-    let idle_time = IDLE_TIME
-        .get(person, until, move || crate::idle_time::IdleTime::now(idle))
-        .await
-        .unwrap_or(crate::idle_time::IdleTime::Unknown);
-    status["idleTime"] = json!(idle_time);
     status["consoleName"] = json!(
         CONSOLE_NAME
-            .get(person, until, Named::now)
+            .get(nix::unistd::getuid().as_raw(), until, Named::now)
             .await
             .unwrap_or(Named::Unknown)
     );
@@ -112,11 +103,14 @@ pub async fn report(
 
 /// The doctor report for the second login `login` from its status `reply`,
 /// with what this Mac can tell of it: why it is silent, the logins Atlas
-/// can close, and whether an Apple agent keeps restarting in it.
+/// can close, whether an Apple agent keeps restarting in it, and whether
+/// switching to and from it has stopped the idle time the person's apps
+/// read, which `idle` says may be restarted.
 async fn second_login_report(
     login: &SecondLogin,
     reply: Value,
     until: Instant,
+    idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
     let uid = login.uid;
     // Why a silent helper is down, asked off the runtime (and only then).
@@ -161,6 +155,15 @@ async fn second_login_report(
             .flatten()
     };
     status["restartingService"] = json!(crate::console_agents::Restarting::of(restarts.as_deref()));
+
+    // Whether the idle time the person's apps read has stopped while they
+    // type, as a switch to or from the second login can leave it, restarted
+    // when `idle` allows. This process runs in the person's login.
+    let idle_time = IDLE_TIME
+        .get(uid, until, move || crate::idle_time::IdleTime::now(idle))
+        .await
+        .unwrap_or(crate::idle_time::IdleTime::Unknown);
+    status["idleTime"] = json!(idle_time);
 
     doctor.absence = absence;
     doctor

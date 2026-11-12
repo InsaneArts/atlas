@@ -268,10 +268,15 @@ impl Client {
     /// Start the installed executable as the helper's input service. The caller
     /// records the launch as a pending mutation and settles it on success.
     async fn spawn_input(&self) -> Result<u32> {
-        let child = match self.desktop().kind() {
-            Kind::SecondLogin(login) => self.launch_input_in(login).await?,
-        };
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.spawn_input_in(login).await,
+        }
+    }
 
+    /// [`Client::spawn_input`] in the second login `login`: launched, then
+    /// waited for until it is ready.
+    async fn spawn_input_in(&self, login: &SecondLogin) -> Result<u32> {
+        let child = self.launch_input_in(login).await?;
         let deadline = Instant::now() + Duration::from_secs(6);
 
         loop {

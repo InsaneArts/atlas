@@ -94,8 +94,16 @@ const ALLOWED: &[(&str, &str)] = &[
         "owner: starting its input service",
     ),
     (
+        "crates/client/src/client/service_change.rs",
+        "owner: whether replacing its services is a first setup",
+    ),
+    (
         "crates/client/src/client/session.rs",
         "owner: whether its session has ended",
+    ),
+    (
+        "crates/client/src/client/stop.rs",
+        "owner: the Stop its input service keeps, and ending its jobs on a Stop",
     ),
     (
         "crates/client/src/environment.rs",
