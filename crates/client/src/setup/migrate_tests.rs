@@ -9,40 +9,40 @@ fn every_worker_is_given_the_required_identity() {
     };
     let client = Client::new(config()).unwrap();
     for request in [
-        Request::Inspect {
+        atlas_daemon::user::setup::Request::Inspect {
             uid: 502,
-            labels: vec![LABEL.into()],
+            labels: vec![atlas_daemon::user::setup::LABEL.into()],
         },
-        Request::Prepare {
+        atlas_daemon::user::setup::Request::Prepare {
             uid: 502,
             controller: "c".into(),
         },
-        Request::Install {
-            agent: Agent {
-                label: LABEL.into(),
+        atlas_daemon::user::setup::Request::Install {
+            agent: atlas_daemon::user::setup::Agent {
+                label: atlas_daemon::user::setup::LABEL.into(),
                 program: "/Applications/Atlas.app/Contents/MacOS/Atlas".into(),
                 uid: 502,
                 controller_uid: 501,
                 socket: "/Users/helper/.atlas/helper/502.sock".into(),
             },
         },
-        Request::Retire {
+        atlas_daemon::user::setup::Request::Retire {
             uid: 502,
             label: "old".into(),
             sha256: "a".repeat(64),
             missing_ok: false,
         },
-        Request::Restore {
+        atlas_daemon::user::setup::Request::Restore {
             uid: 502,
             label: "old".into(),
             sha256: "a".repeat(64),
         },
-        Request::FirstLogin {
+        atlas_daemon::user::setup::Request::FirstLogin {
             uid: 502,
             opener: true,
         },
-        Request::ForgetOpener { uid: 502 },
-        Request::Kickstart { uid: 502 },
+        atlas_daemon::user::setup::Request::ForgetOpener { uid: 502 },
+        atlas_daemon::user::setup::Request::Kickstart { uid: 502 },
     ] {
         let argv = helper_argv(&client, &request, &expected).unwrap();
         assert_eq!(argv[3], "--account");
@@ -61,13 +61,16 @@ async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
     migration.log.plan.home = dir.path().join("helper");
     let layout = migration.layout();
     let defined = migration.agent().plist_sha256(&layout.paths().logs());
-    let plist = layout.agent_plist(LABEL).to_string_lossy().into_owned();
+    let plist = layout
+        .agent_plist(atlas_daemon::user::setup::LABEL)
+        .to_string_lossy()
+        .into_owned();
     let shown = std::cell::RefCell::new(json!({"loaded": false, "plistKind": "absent"}));
     let inspect = async |request| match request {
-        Request::Inspect { labels, .. } => {
-            assert_eq!(labels, vec![LABEL.to_owned()]);
+        atlas_daemon::user::setup::Request::Inspect { labels, .. } => {
+            assert_eq!(labels, vec![atlas_daemon::user::setup::LABEL.to_owned()]);
             let job = shown.borrow().clone();
-            Ok(json!({"ok": true, "jobs": {LABEL: job}}))
+            Ok(json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: job}}))
         }
         _ => panic!("preflight must only inspect"),
     };
@@ -107,7 +110,7 @@ async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
         );
     }
 
-    let unsigned = |_: &Path| Err(problem("not signed as Atlas"));
+    let unsigned = |_: &Path| Err(atlas_daemon::user::setup::problem("not signed as Atlas"));
     let error = migration
         .preflight_with(program, unsigned, inspect)
         .await
@@ -173,7 +176,7 @@ fn plan(config_path: PathBuf, text: &str) -> Plan {
         home: "/Users/h".into(),
         old_label: String::new(),
         old_plist_sha256: String::new(),
-        label: LABEL.into(),
+        label: atlas_daemon::user::setup::LABEL.into(),
         controller_uid: 501,
         program: "/x".into(),
         cdhash: "ab".into(),
@@ -208,7 +211,7 @@ fn a_setup_is_in_effect_only_for_the_account_it_was_made_with() {
     ));
     assert!(!in_effect_with(Ok(None), home));
     assert!(
-        in_effect_with(Err(problem("unreadable")), home),
+        in_effect_with(Err(atlas_daemon::user::setup::problem("unreadable")), home),
         "a record that cannot be read counts"
     );
 }
@@ -249,7 +252,7 @@ fn records_keep_the_format_setups_write() {
             "home": "/Users/h",
             "oldLabel": "",
             "oldPlistSha256": "",
-            "label": LABEL,
+            "label": atlas_daemon::user::setup::LABEL,
             "controllerUid": 501,
             "program": "/x",
             "cdhash": "ab",
@@ -309,8 +312,12 @@ fn only_a_refusal_marked_unchanged_is_certain() {
         ]})
     };
     let refused = |reply: Value| {
-        helper_reply(&reply)
-            .is_ok_and(|value| matches!(acknowledged(value), Err(Unfinished::Unchanged(_))))
+        helper_reply(&reply).is_ok_and(|value| {
+            matches!(
+                atlas_daemon::user::setup::acknowledged(value),
+                Err(atlas_daemon::user::setup::Unfinished::Unchanged(_))
+            )
+        })
     };
 
     assert!(refused(reply(
@@ -415,13 +422,19 @@ fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
     };
 
     let uncertain = step(&mut migration);
-    let outcome = migration.conclude(&uncertain, Err::<(), _>(problem("lost").uncertain()));
+    let outcome = migration.conclude(
+        &uncertain,
+        Err::<(), _>(atlas_daemon::user::setup::problem("lost").uncertain()),
+    );
     assert!(outcome.unwrap_err().uncertain);
 
     let definitive = step(&mut migration);
     assert!(
         migration
-            .conclude(&definitive, Err::<(), _>(problem("refused")))
+            .conclude(
+                &definitive,
+                Err::<(), _>(atlas_daemon::user::setup::problem("refused"))
+            )
             .is_err()
     );
 
@@ -512,7 +525,9 @@ fn an_update_carries_over_only_a_setup_still_in_effect() {
     }
 
     assert!(!carried_over(Ok(None)));
-    assert!(carried_over(Err(problem("unreadable"))));
+    assert!(carried_over(Err(atlas_daemon::user::setup::problem(
+        "unreadable"
+    ))));
 }
 
 #[test]

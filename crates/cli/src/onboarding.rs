@@ -33,17 +33,7 @@ use atlas_core::{
     desktop::Desktop,
     error::{Code, Error, Result},
 };
-use atlas_daemon::{
-    helper_setup,
-    helper_setup::{
-        Agent, LABEL, Layout,
-        pairing::{
-            MAX_RECORD, Pairing, REQUEST, WINDOW_MARKER, read_request, read_text, request,
-            write_request,
-        },
-    },
-    identity::Identity,
-};
+use atlas_daemon::identity::Identity;
 use atlas_native::approval::Refusal;
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::MetadataExt, path::Path, time::Duration};
@@ -76,7 +66,7 @@ fn asked(controller: u32, helper: &account::Account) -> bool {
 /// Whether the shared request is this account's (`controller`), naming
 /// `helper`.
 fn requested(controller: u32, helper: &account::Account) -> bool {
-    request().is_some_and(|pairing| {
+    atlas_daemon::user::setup::pairing::request().is_some_and(|pairing| {
         pairing.controller_uid == controller
             && pairing.helper_uid == helper.uid
             && pairing.helper_name == helper.name
@@ -105,7 +95,7 @@ impl Asked {
 /// init` does just before installing the helper's background job there.
 /// Only the account it was prepared for may look inside it.
 fn prepared(helper: &account::Account) -> bool {
-    let layout = Layout::new(helper.uid, helper.home.clone());
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
 
     fs::metadata(layout.paths().daemon()).is_ok_and(|metadata| metadata.is_dir())
 }
@@ -229,7 +219,7 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let helper = choosable(name, uid)?;
     ready_to_choose(config_path, uid, Some(helper.uid))?;
 
-    let expected = helper_setup::identity::current(&helper)
+    let expected = atlas_daemon::user::setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the chosen helper account"))?;
     // Atlas already answering there needs nothing readied.
     let mut readied = true;
@@ -288,12 +278,12 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     // Which account this is, so nothing later acts on another account that
     // is given its user ID. Unrecorded, nothing later ends a login under
     // its user ID or deletes it.
-    if helper_setup::identity::current(helper).as_ref() != Some(expected) {
+    if atlas_daemon::user::setup::identity::current(helper).as_ref() != Some(expected) {
         return Err(problem(
             "The chosen account changed while Atlas waited; choose it again",
         ));
     }
-    helper_setup::identity::remember_as(helper, expected, true)?;
+    atlas_daemon::user::setup::identity::remember_as(helper, expected, true)?;
 
     // The shared executable (which also makes /Users/Shared/Atlas) and the
     // request first, the settings last: a choice cut short leaves no
@@ -301,9 +291,9 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     Client::new(config.clone())?.bootstrap_probe()?;
 
     let _ownership = controller_of(helper.uid)?.acquire(true)?;
-    write_request(
-        Path::new(REQUEST),
-        &Pairing {
+    atlas_daemon::user::setup::pairing::write_request(
+        Path::new(atlas_daemon::user::setup::pairing::REQUEST),
+        &atlas_daemon::user::setup::pairing::Pairing {
             ticket: atlas_core::files::token(),
             controller_uid: me.uid,
             controller_name: me.name,
@@ -583,7 +573,7 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
     let helper = settings(config_path)?.map(|config| config.desktop().user().uid);
     let sessions = atlas_core::user::logins::sessions(helper)
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
-    let identity = helper.and_then(helper_setup::identity::verified);
+    let identity = helper.and_then(atlas_daemon::user::setup::identity::verified);
     let all: Vec<u32> = leftover_logins(&sessions, identity.as_ref())
         .iter()
         .map(|(uid, _)| *uid)
@@ -633,7 +623,7 @@ pub fn close_helper(config_path: &Path) -> Result<Value> {
             ));
         }
 
-        helper_setup::identity::verified(uid).ok_or_else(|| {
+        atlas_daemon::user::setup::identity::verified(uid).ok_or_else(|| {
             problem(
                 "Atlas can't tell that the account with the helper's user ID is still its \
                  helper. Run atlas init, then try again.",
@@ -841,7 +831,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
         return Ok(json!({"ok": true, "forgotten": null}));
     }
 
-    match fs::remove_file(REQUEST) {
+    match fs::remove_file(atlas_daemon::user::setup::pairing::REQUEST) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -926,7 +916,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     }
 
     let account = choosable(&account.name, uid)?;
-    let expected = helper_setup::identity::current(&account)
+    let expected = atlas_daemon::user::setup::identity::current(&account)
         .ok_or_else(|| problem("macOS could not identify the new account"))?;
     let chosen = use_helper(config_path, &account, &expected)?;
     Ok(json!({
@@ -968,14 +958,21 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
         (me.uid, &me.name),
         config::installed_path().is_ok_and(|path| path.exists()),
         atlas_core::user::account::administrator(&me.name),
-        request(),
+        atlas_daemon::user::setup::pairing::request(),
         acceptance::signal,
     )
 }
 
-fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
+fn expected_agent(
+    layout: &atlas_daemon::user::setup::Layout,
+    controller_uid: u32,
+) -> Result<atlas_daemon::user::setup::Agent> {
     let program = app_bundle::app_executable()?;
-    Ok(Agent::managed(layout, program, controller_uid))
+    Ok(atlas_daemon::user::setup::Agent::managed(
+        layout,
+        program,
+        controller_uid,
+    ))
 }
 
 /// Mark (`true`) or clear the onboarding window being open in this account.
@@ -988,7 +985,7 @@ pub fn window(open: bool) -> Result<Value> {
     let path = this_account()?
         .home
         .join(atlas_daemon::helper_paths::ROOT)
-        .join(WINDOW_MARKER);
+        .join(atlas_daemon::user::setup::pairing::WINDOW_MARKER);
 
     if open {
         if let Some(parent) = path.parent() {

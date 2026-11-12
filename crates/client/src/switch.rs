@@ -354,18 +354,18 @@ pub(crate) fn ready_to_switch(
 fn person_of_this_helper() -> Option<u32> {
     let me = nix::unistd::getuid().as_raw();
     if let Some(pairing) =
-        atlas_daemon::helper_setup::pairing::request().filter(|pairing| pairing.helper_uid == me)
+        atlas_daemon::user::setup::pairing::request().filter(|pairing| pairing.helper_uid == me)
     {
         return Some(pairing.controller_uid);
     }
 
-    let layout = atlas_daemon::helper_setup::Layout {
+    let layout = atlas_daemon::user::setup::Layout {
         uid: me,
         home: atlas_core::config::home().ok()?,
         guard: None,
     };
     let plist =
-        std::fs::read_to_string(layout.agent_plist(atlas_daemon::helper_setup::LABEL)).ok()?;
+        std::fs::read_to_string(layout.agent_plist(atlas_daemon::user::setup::LABEL)).ok()?;
     controller_in(&plist)
 }
 

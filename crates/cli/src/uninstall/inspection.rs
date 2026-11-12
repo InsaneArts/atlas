@@ -49,7 +49,9 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
             .ok()
             .flatten()
     });
-    let known = account.as_ref().map(helper_setup::identity::standing_of);
+    let known = account
+        .as_ref()
+        .map(atlas_daemon::user::setup::identity::standing_of);
     let helper = account
         .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
         .map(|account| account.name);

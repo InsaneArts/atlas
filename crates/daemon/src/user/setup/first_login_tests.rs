@@ -87,7 +87,7 @@ fn the_opener_runs_atlas_once_at_login_and_is_named_atlas() {
 
 #[test]
 fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check() {
-    const TEST: &str = "helper_setup::first_login::tests::a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check";
+    const TEST: &str = "user::setup::first_login::tests::a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check";
     const DIRECTORY: &str = "ATLAS_FIRST_LOGIN_TEST_DIRECTORY";
     let Some(directory) = std::env::var_os(DIRECTORY).map(PathBuf::from) else {
         let dir = tempfile::tempdir().unwrap();

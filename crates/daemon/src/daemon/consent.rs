@@ -184,8 +184,8 @@ async fn guided() -> bool {
     tokio::task::spawn_blocking(|| {
         let uid = nix::unistd::getuid().as_raw();
         atlas_core::config::home().is_ok_and(|home| {
-            crate::helper_setup::pairing::window_open(&home)
-                || crate::helper_setup::first_login::opener_waiting(&crate::helper_setup::Layout {
+            crate::user::setup::pairing::window_open(&home)
+                || crate::user::setup::first_login::opener_waiting(&crate::user::setup::Layout {
                     uid,
                     home,
                     guard: None,
@@ -523,7 +523,7 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
     let login =
         atlas_core::user::logins::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
-    if crate::helper_setup::pairing::window_open(&home)
+    if crate::user::setup::pairing::window_open(&home)
         || login.is_some_and(|pid| shown_in(&home, pid))
     {
         return;

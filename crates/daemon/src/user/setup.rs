@@ -807,5 +807,5 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 }
 
 #[cfg(test)]
-#[path = "helper_setup_tests.rs"]
+#[path = "setup_tests.rs"]
 mod tests;

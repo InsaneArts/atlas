@@ -36,9 +36,9 @@ async fn helper_installation_and_restarts_defer_before_dispatching_active_work()
         name: "helper".into(),
         home: directory.path().join("home"),
     };
-    let layout = Layout::new(helper.uid, helper.home.clone());
-    let agent = Agent {
-        label: LABEL.into(),
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
+    let agent = atlas_daemon::user::setup::Agent {
+        label: atlas_daemon::user::setup::LABEL.into(),
         program: directory.path().join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
@@ -96,9 +96,9 @@ async fn a_job_installation_test_caller() {
         name: "helper".into(),
         home: directory.join("home"),
     };
-    let layout = Layout::new(helper.uid, helper.home.clone());
-    let agent = Agent {
-        label: LABEL.into(),
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
+    let agent = atlas_daemon::user::setup::Agent {
+        label: atlas_daemon::user::setup::LABEL.into(),
         program: directory.join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
@@ -106,21 +106,34 @@ async fn a_job_installation_test_caller() {
     };
     let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
     let paused = mode.clone();
-    let run = move |request: &Request| {
+    let run = move |request: &atlas_daemon::user::setup::Request| {
         let pause = matches!(
             (paused.as_str(), request),
-            ("retire", Request::Retire { .. })
-                | ("install" | "fresh-install", Request::Install { .. })
-                | ("restore", Request::Restore { .. })
-                | ("prepare", Request::Prepare { .. })
+            ("retire", atlas_daemon::user::setup::Request::Retire { .. })
+                | (
+                    "install" | "fresh-install",
+                    atlas_daemon::user::setup::Request::Install { .. }
+                )
+                | (
+                    "restore",
+                    atlas_daemon::user::setup::Request::Restore { .. }
+                )
+                | (
+                    "prepare",
+                    atlas_daemon::user::setup::Request::Prepare { .. }
+                )
         );
         if pause {
             crate::test_support::pause_executor(&directory, crate::test_support::WORKER);
         }
-        if paused == "restore" && matches!(request, Request::Install { .. }) {
+        if paused == "restore"
+            && matches!(request, atlas_daemon::user::setup::Request::Install { .. })
+        {
             return Err(setup::account::problem("installation was refused"));
         }
-        Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
+        Ok(
+            json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": "b".repeat(64)}}}),
+        )
     };
     if matches!(mode.as_str(), "prepare" | "fresh-install") {
         let _ =
@@ -157,8 +170,8 @@ use setup::executor::setup_transaction;
 /// restored when the new one cannot go in.
 #[test]
 fn an_earlier_job_is_set_aside_and_restored_on_failure() {
-    let agent = Agent {
-        label: LABEL.to_owned(),
+    let agent = atlas_daemon::user::setup::Agent {
+        label: atlas_daemon::user::setup::LABEL.to_owned(),
         program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
         uid: 503,
         controller_uid: 501,
@@ -169,18 +182,20 @@ fn an_earlier_job_is_set_aside_and_restored_on_failure() {
 
     let attempt_with = |earlier: Option<&str>, install_fails: bool, restore_fails: bool| {
         let actions = std::cell::RefCell::new(Vec::new());
-        let run = |request: &Request| -> Result<Value> {
+        let run = |request: &atlas_daemon::user::setup::Request| -> Result<Value> {
             let action = serde_json::to_value(request).unwrap()["action"].clone();
             actions
                 .borrow_mut()
                 .push(action.as_str().unwrap().to_owned());
 
             match request {
-                Request::Inspect { .. } => {
-                    Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
+                atlas_daemon::user::setup::Request::Inspect { .. } => Ok(
+                    json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": earlier}}}),
+                ),
+                atlas_daemon::user::setup::Request::Install { .. } if install_fails => {
+                    Err(setup::account::problem("refused"))
                 }
-                Request::Install { .. } if install_fails => Err(setup::account::problem("refused")),
-                Request::Restore { .. } if restore_fails => {
+                atlas_daemon::user::setup::Request::Restore { .. } if restore_fails => {
                     Err(setup::account::problem("no backup"))
                 }
                 _ => Ok(json!({"ok": true})),
@@ -237,15 +252,21 @@ fn an_earlier_job_is_set_aside_and_restored_on_failure() {
 
 /// The helper job a test installs for a helper at home in `directory`,
 /// with the layout it lives in.
-fn test_agent(directory: &Path) -> (atlas_core::account::Account, Agent, Layout) {
+fn test_agent(
+    directory: &Path,
+) -> (
+    atlas_core::account::Account,
+    atlas_daemon::user::setup::Agent,
+    atlas_daemon::user::setup::Layout,
+) {
     let helper = atlas_core::account::Account {
         uid: 7001,
         name: "helper".into(),
         home: directory.join("home"),
     };
-    let layout = Layout::new(helper.uid, helper.home.clone());
-    let agent = Agent {
-        label: LABEL.into(),
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
+    let agent = atlas_daemon::user::setup::Agent {
+        label: atlas_daemon::user::setup::LABEL.into(),
         program: directory.join("atlas"),
         uid: helper.uid,
         controller_uid: nix::unistd::getuid().as_raw(),
@@ -264,7 +285,7 @@ fn held_at(
     actions: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     entered: std::sync::mpsc::Sender<()>,
     released: std::sync::mpsc::Receiver<()>,
-) -> impl Fn(&Request) -> Result<Value> + Send + 'static {
+) -> impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value> + Send + 'static {
     let actions = std::sync::Arc::clone(actions);
     let held = std::sync::atomic::AtomicBool::new(false);
     move |request| {
@@ -278,10 +299,10 @@ fn held_at(
             let _ = released.recv();
         }
         match request {
-            Request::Inspect { .. } => {
-                Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "0".repeat(64)}}}))
-            }
-            Request::Install { .. } if !installs => {
+            atlas_daemon::user::setup::Request::Inspect { .. } => Ok(
+                json!({"ok": true, "jobs": {atlas_daemon::user::setup::LABEL: {"plistSha256": "0".repeat(64)}}}),
+            ),
+            atlas_daemon::user::setup::Request::Install { .. } if !installs => {
                 Err(setup::account::problem("installation was refused"))
             }
             _ => Ok(json!({"ok": true})),

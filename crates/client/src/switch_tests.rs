@@ -296,7 +296,7 @@ fn only_the_persons_own_verified_desktop_counts_as_switching_back() {
 
 #[test]
 fn a_helper_job_names_the_person_it_works_for() {
-    use atlas_daemon::helper_setup::{Agent, plist};
+    use atlas_daemon::user::setup::{Agent, plist};
 
     let agent = Agent {
         label: "com.insanearts.atlas.helper".into(),

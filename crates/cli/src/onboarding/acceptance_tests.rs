@@ -47,8 +47,8 @@ fn channel<R: BufRead, W>(input: R, output: W) -> Channel<R, W> {
         output,
     )
 }
-fn pairing() -> Pairing {
-    Pairing {
+fn pairing() -> atlas_daemon::user::setup::pairing::Pairing {
+    atlas_daemon::user::setup::pairing::Pairing {
         ticket: "a".repeat(atlas_core::files::TOKEN_BYTES * 2),
         controller_uid: nix::unistd::getuid().as_raw(),
         controller_name: "requester".into(),
@@ -82,11 +82,11 @@ fn acceptance_reads_only_a_bounded_plain_file_without_waiting_for_a_writer() {
     nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
     assert!(!accepted_at(&path, &pairing));
 }
-fn agent(dir: &Path) -> helper_setup::Agent {
-    helper_setup::Agent {
+fn agent(dir: &Path) -> atlas_daemon::user::setup::Agent {
+    atlas_daemon::user::setup::Agent {
         uid: 7001,
         controller_uid: pairing().controller_uid,
-        label: helper_setup::LABEL.into(),
+        label: atlas_daemon::user::setup::LABEL.into(),
         program: dir.join("Atlas"),
         socket: dir.join("helper/c.sock"),
     }
@@ -292,16 +292,16 @@ impl ObservedHelper {
         Ok(self.directory.path().join("receipt.json"))
     }
 
-    async fn job(&self) -> Result<JobReport> {
+    async fn job(&self) -> Result<atlas_daemon::user::setup::JobReport> {
         if self.inspection_unavailable.replace(false) {
             return Err(problem("The helper is not answering"));
         }
         let path = self.directory.path().join("job.json");
         let value: Value = serde_json::from_slice(&fs::read(path)?)?;
-        Ok(JobReport::from(&value))
+        Ok(atlas_daemon::user::setup::JobReport::from(&value))
     }
 
-    async fn resume(&self, pairing: Pairing) -> Result<()> {
+    async fn resume(&self, pairing: atlas_daemon::user::setup::pairing::Pairing) -> Result<()> {
         let root = self.directory.path();
         let controller = &self.controller;
         std::thread::scope(|scope| {
@@ -341,7 +341,10 @@ impl ObservedHelper {
 }
 
 /// The status loop's decision over this helper's observations.
-async fn observe(observed: &ObservedHelper, accepted: Pairing) -> Value {
+async fn observe(
+    observed: &ObservedHelper,
+    accepted: atlas_daemon::user::setup::pairing::Pairing,
+) -> Value {
     reconcile(
         accepted == pairing(),
         observed.receipt(accepted.helper_uid),
@@ -389,7 +392,8 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
         let initial = initial.unwrap();
         assert_eq!(
             initial.definition,
-            JobReport::from(&json!({"plistKind": plist_kind})).definition
+            atlas_daemon::user::setup::JobReport::from(&json!({"plistKind": plist_kind}))
+                .definition
         );
         assert_eq!(initial.loaded, Some(loaded));
         assert_eq!(initial.pid, pid.map(u64::from));
@@ -403,7 +407,7 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
     let repaired = runtime.block_on(observed.job()).unwrap();
     assert_eq!(
         repaired.definition,
-        helper_setup::Definition::Regular,
+        atlas_daemon::user::setup::Definition::Regular,
         "repair restores the plist"
     );
     assert_eq!(repaired.loaded, Some(true), "repair loads the helper job");
@@ -463,25 +467,26 @@ fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() 
 
 fn serve_repair_worker(dir: &Path, output: fs::File) {
     let controller = Controller::at(7001, &dir.join("requester/state"));
-    let run = |request: Request| {
+    let run = |request: atlas_daemon::user::setup::Request| {
         assert!(controller.acquire(true).is_err());
         assert_eq!(controller.pending().unwrap().len(), 2);
-        if matches!(request, Request::Prepare { .. }) {
+        if matches!(request, atlas_daemon::user::setup::Request::Prepare { .. }) {
             atlas_client::test_support::executor_ready(dir, || {})?;
         }
         let path = dir.join("job.json");
         let mut job: Value = serde_json::from_slice(&fs::read(&path)?)?;
         match request {
-            Request::Inspect { .. } => {
-                return Ok(json!({"ok":true,"jobs":{helper_setup::LABEL:job}}));
+            atlas_daemon::user::setup::Request::Inspect { .. } => {
+                return Ok(json!({"ok":true,"jobs":{atlas_daemon::user::setup::LABEL:job}}));
             }
-            Request::Install { .. } => {
+            atlas_daemon::user::setup::Request::Install { .. } => {
                 job["plistKind"] = json!("regular");
                 job["loaded"] = json!(true);
                 job["pid"] = Value::Null;
             }
-            Request::Kickstart { .. } => job["pid"] = json!(42),
-            Request::Prepare { .. } | Request::ForgetOpener { .. } => {}
+            atlas_daemon::user::setup::Request::Kickstart { .. } => job["pid"] = json!(42),
+            atlas_daemon::user::setup::Request::Prepare { .. }
+            | atlas_daemon::user::setup::Request::ForgetOpener { .. } => {}
             _ => panic!("Unexpected repair request"),
         }
         fs::write(dir.join("changed"), serde_json::to_vec(&request)?)?;
@@ -573,19 +578,19 @@ fn an_acceptance_test_worker() {
         serve_repair_worker(&dir, output);
         return;
     }
-    let run = |request: Request| {
+    let run = |request: atlas_daemon::user::setup::Request| {
         let action = match request {
-            Request::Prepare { .. } => "prepare",
-            Request::Retire { .. } => "retire",
-            Request::Install { .. } => "install",
-            Request::Restore { .. } => "restore",
-            Request::ForgetOpener { .. } => "opener",
-            Request::Kickstart { .. } => "kickstart",
+            atlas_daemon::user::setup::Request::Prepare { .. } => "prepare",
+            atlas_daemon::user::setup::Request::Retire { .. } => "retire",
+            atlas_daemon::user::setup::Request::Install { .. } => "install",
+            atlas_daemon::user::setup::Request::Restore { .. } => "restore",
+            atlas_daemon::user::setup::Request::ForgetOpener { .. } => "opener",
+            atlas_daemon::user::setup::Request::Kickstart { .. } => "kickstart",
             _ => "inspect",
         };
         if action == "inspect" {
             return Ok(
-                json!({"ok":true,"jobs":{helper_setup::LABEL:{"plistSha256":"b".repeat(64)}}}),
+                json!({"ok":true,"jobs":{atlas_daemon::user::setup::LABEL:{"plistSha256":"b".repeat(64)}}}),
             );
         }
         fs::write(dir.join("changed"), action).unwrap();

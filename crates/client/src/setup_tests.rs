@@ -81,17 +81,17 @@ fn the_privileged_dispatcher_checks_identity_before_entering_a_session() {
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
     };
     let requests = [
-        helper_setup::Request::FirstLogin {
+        atlas_daemon::user::setup::Request::FirstLogin {
             uid: 7001,
             opener: false,
         },
-        helper_setup::Request::Prepare {
+        atlas_daemon::user::setup::Request::Prepare {
             uid: 7001,
             controller: "person".into(),
         },
-        helper_setup::Request::Install {
-            agent: helper_setup::Agent {
-                label: helper_setup::LABEL.into(),
+        atlas_daemon::user::setup::Request::Install {
+            agent: atlas_daemon::user::setup::Agent {
+                label: atlas_daemon::user::setup::LABEL.into(),
                 uid: 7001,
                 controller_uid: 501,
                 program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),

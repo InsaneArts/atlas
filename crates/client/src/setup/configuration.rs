@@ -5,7 +5,6 @@ use atlas_core::{
     config::{self, Config},
     error::Result,
 };
-use atlas_daemon::helper_setup::{self, Layout};
 use atlas_daemon::identity::{Identity, Standing};
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 
@@ -15,7 +14,7 @@ use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 ///
 /// Returns an error when this account's home is unavailable.
 pub fn proposed(helper: &account::Account) -> Result<Config> {
-    let layout = Layout::new(helper.uid, helper.home.clone());
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
 
     Ok(Config {
         helper_uid: helper.uid,
@@ -27,7 +26,7 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
     })
 }
 
-pub(crate) fn managed(config: &Config, layout: &Layout) -> Config {
+pub(crate) fn managed(config: &Config, layout: &atlas_daemon::user::setup::Layout) -> Config {
     Config {
         socket_path: layout.paths().socket(),
         input_socket: layout.paths().input_socket(),
@@ -40,7 +39,10 @@ pub fn in_home(config: &Config, helper: &account::Account) -> Config {
     if config.socket_path.starts_with(&helper.home) {
         config.clone()
     } else {
-        managed(config, &Layout::new(helper.uid, helper.home.clone()))
+        managed(
+            config,
+            &atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone()),
+        )
     }
 }
 
@@ -194,7 +196,7 @@ pub fn configure_helper(
         Some(selected) => selected,
         None => {
             let helper = account.ok_or_else(|| problem("The helper account was not created"))?;
-            let identity = match helper_setup::identity::standing_of(&helper) {
+            let identity = match atlas_daemon::user::setup::identity::standing_of(&helper) {
                 Standing::Same(identity) => identity,
                 Standing::Unrecorded(_) | Standing::Replaced | Standing::Unknown => {
                     return Err(problem(
@@ -209,7 +211,9 @@ pub fn configure_helper(
         &helper,
         &identity,
         account::account_with_uid,
-        |helper, identity| helper_setup::identity::remember_as(helper, identity, chosen),
+        |helper, identity| {
+            atlas_daemon::user::setup::identity::remember_as(helper, identity, chosen)
+        },
     )?;
 
     // Keep the socket paths in the selected account's home.
@@ -238,7 +242,7 @@ pub fn configure_helper(
     // Which account this is, so nothing later acts on another account that
     // is given its user ID. Unrecorded, nothing later ends a login under
     // its user ID or deletes it.
-    helper_setup::identity::remember_as(&helper, &identity, chosen)?;
+    atlas_daemon::user::setup::identity::remember_as(&helper, &identity, chosen)?;
 
     Ok((config, helper, identity))
 }
@@ -249,9 +253,11 @@ pub fn configure_helper(
 fn replaced(account: &account::Account) -> Result<bool> {
     use atlas_daemon::identity::OnFile;
 
-    match helper_setup::identity::standing_of(account) {
+    match atlas_daemon::user::setup::identity::standing_of(account) {
         Standing::Replaced | Standing::Unrecorded(_) => Ok(true),
-        Standing::Unknown if helper_setup::identity::on_file(account.uid) != OnFile::Nothing => {
+        Standing::Unknown
+            if atlas_daemon::user::setup::identity::on_file(account.uid) != OnFile::Nothing =>
+        {
             Err(problem(format!(
                 "macOS could not say whether {} is still the helper Atlas set up; run atlas init \
                  again",

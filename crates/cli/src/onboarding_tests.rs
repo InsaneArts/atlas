@@ -275,8 +275,8 @@ fn the_secret_is_cut_out_byte_for_byte() {
     assert_eq!(without(b"kept", b""), b"kept");
 }
 
-fn pairing(controller: u32) -> Pairing {
-    Pairing {
+fn pairing(controller: u32) -> atlas_daemon::user::setup::pairing::Pairing {
+    atlas_daemon::user::setup::pairing::Pairing {
         ticket: "a".repeat(atlas_core::files::TOKEN_BYTES * 2),
         controller_uid: controller,
         controller_name: "person".into(),
@@ -299,35 +299,53 @@ fn a_request_is_trusted_only_from_its_controller() {
     let path = dir.path().join("onboarding.json");
     let me = nix::unistd::getuid().as_raw();
 
-    write_request(&path, &pairing(me)).unwrap();
-    assert_eq!(read_request(&path), Some(pairing(me)));
+    atlas_daemon::user::setup::pairing::write_request(&path, &pairing(me)).unwrap();
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        Some(pairing(me))
+    );
 
     // Without a ticket: ignored.
     let mut unticketed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     unticketed.as_object_mut().unwrap().remove("ticket");
     atlas_core::files::write_atomic(&path, &serde_json::to_vec(&unticketed).unwrap(), 0o644)
         .unwrap();
-    assert_eq!(read_request(&path), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        None
+    );
 
     // Written by someone else than the controller it names: ignored.
-    write_request(&path, &pairing(me + 7)).unwrap();
-    assert_eq!(read_request(&path), None);
+    atlas_daemon::user::setup::pairing::write_request(&path, &pairing(me + 7)).unwrap();
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        None
+    );
 
     // Writable by others: ignored.
-    write_request(&path, &pairing(me)).unwrap();
+    atlas_daemon::user::setup::pairing::write_request(&path, &pairing(me)).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
-    assert_eq!(read_request(&path), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        None
+    );
 
     // In a folder others can change: ignored.
-    write_request(&path, &pairing(me)).unwrap();
+    atlas_daemon::user::setup::pairing::write_request(&path, &pairing(me)).unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777)).unwrap();
-    assert_eq!(read_request(&path), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        None
+    );
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
 
     // A link to a request: ignored.
     let link = dir.path().join("link.json");
     std::os::unix::fs::symlink(&path, &link).unwrap();
-    assert_eq!(read_request(&link), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&link),
+        None
+    );
 }
 
 #[test]
@@ -335,13 +353,25 @@ fn shared_requests_and_helper_text_never_wait_for_a_pipe_writer() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("onboarding.json");
     nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
-    assert_eq!(read_request(&path), None);
-    assert_eq!(read_text(&path, 64 * 1024), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_request(&path),
+        None
+    );
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_text(&path, 64 * 1024),
+        None
+    );
     fs::remove_file(&path).unwrap();
     fs::write(&path, "a".repeat(65)).unwrap();
-    assert_eq!(read_text(&path, 64), None);
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_text(&path, 64),
+        None
+    );
     fs::write(&path, "a".repeat(64)).unwrap();
-    assert_eq!(read_text(&path, 64), Some("a".repeat(64)));
+    assert_eq!(
+        atlas_daemon::user::setup::pairing::read_text(&path, 64),
+        Some("a".repeat(64))
+    );
 }
 
 /// A helper answers only while something listens at its socket; a
@@ -385,7 +415,7 @@ fn a_helper_prepared_for_this_account_is_recognised() {
     };
     assert!(!prepared(&helper), "nothing prepared");
 
-    let layout = Layout::new(helper.uid, helper.home.clone());
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
     fs::create_dir_all(layout.paths().root()).unwrap();
     assert!(!prepared(&helper), "only its root");
 

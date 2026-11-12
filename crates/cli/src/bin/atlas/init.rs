@@ -16,7 +16,6 @@ use atlas_core::{
     config::{self, Config},
     error::{Code, Error, Result},
 };
-use atlas_daemon::helper_setup::{self, LABEL};
 use atlas_daemon::identity::Identity;
 use serde_json::{Value, json};
 use std::{
@@ -100,7 +99,7 @@ fn choose_helper() -> Result<(account::Account, Identity)> {
 
 /// Capture the account and its permanent identity at selection time.
 fn selected(helper: account::Account) -> Result<(account::Account, Identity)> {
-    let identity = helper_setup::identity::current(&helper)
+    let identity = atlas_daemon::user::setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the selected helper account"))?;
     Ok((helper, identity))
 }
@@ -522,7 +521,7 @@ async fn start_helper(
     if !started {
         job_rights(rights, &mut granted)?;
         install_job(client, config, helper, expected).await?;
-        done_steps.push(json!({"step": "daemon", "label": LABEL}));
+        done_steps.push(json!({"step": "daemon", "label": atlas_daemon::user::setup::LABEL}));
     }
 
     Ok(())

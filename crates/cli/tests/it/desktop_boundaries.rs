@@ -1181,8 +1181,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
-        &["carry_out", "switch_on_this_mac"],
-        "pending: switching this Mac to the user, and its login timing",
+        &["carry_out", "setup_helper", "switch_on_this_mac"],
+        "pending: switching this Mac to the user, its login timing and its setup worker",
     ),
     (
         "crates/cli/src/bin/atlas/doctor.rs",
@@ -1202,6 +1202,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "mark_since_lock",
             "permissions_step",
             "run",
+            "selected",
             "start_helper",
         ],
         "pending: setting the user up from the terminal",
@@ -1213,8 +1214,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
-        &["open_app"],
-        "pending: whether the user's setup is complete",
+        &["main", "open_app"],
+        "pending: whether the user's setup is complete, and its first-login opener",
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
@@ -1237,6 +1238,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "accept",
             "check_choice",
             "choosable",
+            "choose",
             "close_all",
             "close_attended",
             "close_helper",
@@ -1244,8 +1246,10 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "closing_first",
             "closing_first_using",
             "controller_of",
+            "create",
             "create_helper",
             "created",
+            "expected_agent",
             "files",
             "finish",
             "forget",
@@ -1253,8 +1257,10 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "leftover_logins",
             "leftover_targets",
             "orphans_now",
+            "prepared",
             "requested",
             "use_helper",
+            "window",
         ],
         "pending: choosing and preparing the user's account",
     ),
@@ -1265,8 +1271,12 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "accepted",
             "accepted_at",
             "allow",
+            "complete_setup",
+            "drive",
             "observe",
+            "reconcile",
             "resume",
+            "serve_channel",
             "signal",
             "verify",
         ],
@@ -1274,7 +1284,13 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/onboarding/status.rs",
-        &["configured", "helper_side", "logins", "status"],
+        &[
+            "configured",
+            "helper_job_here",
+            "helper_side",
+            "logins",
+            "status",
+        ],
         "pending: how far the user's setup has come",
     ),
     (
@@ -1285,6 +1301,9 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "<Live<'_> as Teardown>::remove_helper",
             "<Live<'_> as Teardown>::retire",
             "Live<'_>::forget_requested_opener",
+            "Live<'_>::trash",
+            "retire_helper_job",
+            "retirement_request",
             "run",
             "settle",
         ],
@@ -1505,27 +1524,71 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/setup.rs",
-        &["observe", "preview", "preview_account"],
+        &[
+            "observe",
+            "preview",
+            "preview_account",
+            "request_as_helper",
+            "worker_reply",
+        ],
         "pending: the user's setup, as the controller sees it",
     ),
     (
         "crates/client/src/setup/configuration.rs",
-        &["configure_helper", "proposed"],
+        &[
+            "configure_helper",
+            "in_home",
+            "managed",
+            "proposed",
+            "replaced",
+        ],
         "pending: the settings setup writes for the user",
     ),
     (
         "crates/client/src/setup/job.rs",
-        &["restart_helper"],
-        "pending: restarting the user's job",
+        &[
+            "as_helper",
+            "first_login_setup",
+            "helper_agent",
+            "helper_runner",
+            "install_job",
+            "prepare_and_install",
+            "prepare_helper",
+            "refresh_helper",
+            "replace_job",
+            "restart_helper",
+        ],
+        "pending: installing, refreshing and restarting the user's job",
     ),
     (
         "crates/client/src/setup/migrate.rs",
         &[
+            "Basis",
+            "Migration::agent",
+            "Migration::apply",
+            "Migration::helper",
+            "Migration::layout",
+            "Migration::preflight_with",
+            "Migration::verify",
+            "await_endpoint",
             "basis",
+            "choose_helper",
+            "daemon_pid",
+            "earlier_migration",
             "finalize",
+            "helper_argv",
+            "helper_reply",
+            "helper_result",
+            "inspect",
             "managed_job",
             "plan_fresh",
+            "preflight_apply",
             "recorded_log",
+            "require_background",
+            "rollback_unfinished",
+            "setup_identity",
+            "unknown_version",
+            "unplanned",
         ],
         "pending: moving an older setup forward",
     ),
@@ -1580,7 +1643,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/daemon/src/daemon/consent.rs",
-        &["arrival_notice", "just_logged_in", "notice"],
+        &["arrival_notice", "guided", "just_logged_in", "notice"],
         "exception: the daemon serves a user: its switch-back notice and setup guidance",
     ),
     (
@@ -1589,19 +1652,9 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "exception: the daemon serves a user: its login timing and console agent",
     ),
     (
-        "crates/daemon/src/helper_setup.rs",
-        &["Layout::check", "run_guarded"],
-        "pending: the user's setup inside it",
-    ),
-    (
-        "crates/daemon/src/helper_setup/first_login.rs",
-        &["first_login", "open_at_login", "wanted_here"],
-        "pending: the user's first login",
-    ),
-    (
-        "crates/daemon/src/helper_setup/pairing.rs",
-        &["Pairing", "read_request", "request", "write_request"],
-        "pending: the user's pairing request",
+        "crates/daemon/src/lib.rs",
+        &["mod user"],
+        "declares: the user desktop's module",
     ),
 ];
 
@@ -1747,7 +1800,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 37;
+const PENDING_LIMIT: usize = 34;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

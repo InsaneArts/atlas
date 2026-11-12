@@ -2,7 +2,7 @@
 //! reachable and what cannot be known from here, writing nothing and starting
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
 //! records and verifies the first setup of the managed private layout through
-//! the actions [`atlas_daemon::helper_setup`] runs inside the helper login.
+//! the actions [`atlas_daemon::user::setup`] runs inside the helper login.
 pub mod configuration;
 pub mod installed_app;
 pub mod job;
@@ -34,7 +34,6 @@ use atlas_core::{
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
-use atlas_daemon::helper_setup::{self, problem};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -87,10 +86,10 @@ pub enum Invocation {
 pub fn request_as_helper(
     executable: &Path,
     helper: &Account,
-    request: &helper_setup::Request,
+    request: &atlas_daemon::user::setup::Request,
     invocation: Invocation,
     expected: &atlas_daemon::identity::Identity,
-) -> Result<std::result::Result<Value, helper_setup::Unfinished>> {
+) -> Result<std::result::Result<Value, atlas_daemon::user::setup::Unfinished>> {
     let (cached_rights, mode, last) = match invocation {
         Invocation::CachedLogin => (true, "login", "--"),
         Invocation::Login => (false, "login", "--"),
@@ -98,7 +97,9 @@ pub fn request_as_helper(
         Invocation::LoggedOut => (false, "plain", "--logged-out"),
     };
     if expected.uid != helper.uid || expected.name != helper.name {
-        return Err(problem("The helper is not the account Atlas chose"));
+        return Err(atlas_daemon::user::setup::problem(
+            "The helper is not the account Atlas chose",
+        ));
     }
     let mut command = Command::new("/usr/bin/sudo");
     if cached_rights {
@@ -134,7 +135,10 @@ pub fn request_as_helper(
         .arg(last)
         .stderr(std::process::Stdio::piped());
     let output = executor::tracked_output(&mut command).map_err(|refusal| {
-        problem(format!("The setup executor did not finish: {refusal:?}")).uncertain()
+        atlas_daemon::user::setup::problem(format!(
+            "The setup executor did not finish: {refusal:?}"
+        ))
+        .uncertain()
     })?;
 
     Ok(worker_reply(&output))
@@ -144,18 +148,16 @@ pub fn request_as_helper(
 /// on standard error. Acknowledged only when the run succeeded too.
 fn worker_reply(
     output: &std::process::Output,
-) -> std::result::Result<Value, helper_setup::Unfinished> {
-    use helper_setup::{Unfinished, acknowledged};
-
+) -> std::result::Result<Value, atlas_daemon::user::setup::Unfinished> {
     let reply: Value = serde_json::from_slice(&output.stdout)
         .or_else(|_| serde_json::from_slice(&output.stderr))
-        .map_err(|cause| Unfinished::Silent(Some(cause)))?;
+        .map_err(|cause| atlas_daemon::user::setup::Unfinished::Silent(Some(cause)))?;
     if output.status.success() {
-        return acknowledged(reply);
+        return atlas_daemon::user::setup::acknowledged(reply);
     }
 
-    acknowledged(reply).and_then(|reply| {
-        Err(Unfinished::Uncertain(
+    atlas_daemon::user::setup::acknowledged(reply).and_then(|reply| {
+        Err(atlas_daemon::user::setup::Unfinished::Uncertain(
             reply["error"].as_str().map(str::to_owned),
         ))
     })
@@ -373,10 +375,13 @@ fn read_config(config_path: &Path) -> (Option<Config>, &'static str, Option<Stri
 /// configuration names.
 fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Account> {
     match (helper, config) {
-        (Some(name), _) => account_named(name)?
-            .ok_or_else(|| problem(format!("No account named {name} exists on this Mac"))),
+        (Some(name), _) => account_named(name)?.ok_or_else(|| {
+            atlas_daemon::user::setup::problem(format!(
+                "No account named {name} exists on this Mac"
+            ))
+        }),
         (None, Some(config)) => account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
-            problem(format!(
+            atlas_daemon::user::setup::problem(format!(
                 "Configured helper UID {} has no account",
                 config.desktop().user().uid
             ))

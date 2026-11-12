@@ -55,9 +55,9 @@ fn main() -> ExitCode {
     // once the desktop is up.
     let Some(command) = cli.command.take() else {
         if opened_as_app() {
-            if atlas_daemon::helper_setup::first_login::started_as_opener() {
+            if atlas_daemon::user::setup::first_login::started_as_opener() {
                 // Its output goes nowhere; the next login tries again.
-                return match atlas_daemon::helper_setup::first_login::open_at_login() {
+                return match atlas_daemon::user::setup::first_login::open_at_login() {
                     Ok(_) => ExitCode::SUCCESS,
                     Err(_) => ExitCode::FAILURE,
                 };
@@ -426,7 +426,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     };
 
     let me = nix::unistd::getuid().as_raw();
-    let helper_here = atlas_daemon::helper_setup::pairing::request()
+    let helper_here = atlas_daemon::user::setup::pairing::request()
         .is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| match config.desktop().kind() {

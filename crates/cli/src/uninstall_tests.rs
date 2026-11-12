@@ -138,10 +138,10 @@ fn interrupted_retirement_keeps_every_unacknowledged_mutation_pending() {
         return;
     }
     let requests = [
-        Request::ForgetOpener { uid: 7001 },
-        Request::Retire {
+        atlas_daemon::user::setup::Request::ForgetOpener { uid: 7001 },
+        atlas_daemon::user::setup::Request::Retire {
             uid: 7001,
-            label: LABEL.into(),
+            label: atlas_daemon::user::setup::LABEL.into(),
             sha256: "a".repeat(64),
             missing_ok: true,
         },

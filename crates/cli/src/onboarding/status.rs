@@ -20,7 +20,8 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     // account with Atlas settings of its own is a controller, whatever a
     // shared file says).
     if setup::configuration::absent(config_path) {
-        let pairing = request().filter(|pairing| pairing.helper_uid == uid);
+        let pairing = atlas_daemon::user::setup::pairing::request()
+            .filter(|pairing| pairing.helper_uid == uid);
         if pairing.is_some() || helper_job_here(uid) {
             return Ok(json!({
                 "ok": true,
@@ -74,7 +75,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let signed_in = atlas_core::user::logins::logged_in(helper.uid) == Some(true);
 
     let client = Client::new(config.clone())?;
-    let acceptance = if let Some(pairing) = request()
+    let acceptance = if let Some(pairing) = atlas_daemon::user::setup::pairing::request()
         .filter(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid)
     {
         acceptance::observe(&config, pairing).await
@@ -156,18 +157,27 @@ fn logins(helper: Option<u32>) -> (Value, Value) {
 /// The helper's side of the status: who asked (unknown when `atlas init`
 /// set it up), whether its job runs here, and its permissions as that job,
 /// the process that uses them, reports them.
-async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
-    let layout = this_account().map(|account| Layout::new(uid, account.home));
+async fn helper_side(
+    uid: u32,
+    pairing: Option<&atlas_daemon::user::setup::pairing::Pairing>,
+) -> Value {
+    let layout =
+        this_account().map(|account| atlas_daemon::user::setup::Layout::new(uid, account.home));
 
     // Installed for the account asking now: a job left by an earlier Atlas
     // (another app, another account) needs Allow again.
     let installed = layout.as_ref().is_ok_and(|layout| {
-        let current = read_text(&layout.agent_plist(LABEL), MAX_RECORD);
+        let current = atlas_daemon::user::setup::pairing::read_text(
+            &layout.agent_plist(atlas_daemon::user::setup::LABEL),
+            atlas_daemon::user::setup::pairing::MAX_RECORD,
+        );
         match (current, pairing) {
             (None, _) => false,
             (Some(_), None) => true,
             (Some(text), Some(pairing)) => expected_agent(layout, pairing.controller_uid)
-                .is_ok_and(|agent| text == helper_setup::plist(&agent, &layout.paths().logs())),
+                .is_ok_and(|agent| {
+                    text == atlas_daemon::user::setup::plist(&agent, &layout.paths().logs())
+                }),
         }
     });
     let accepted = pairing.is_some_and(acceptance::accepted);
@@ -179,9 +189,9 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     {
         let _ = acceptance::signal(pairing);
     }
-    let running = layout
-        .as_ref()
-        .is_ok_and(|layout| helper_setup::job_pid(layout, LABEL).is_some());
+    let running = layout.as_ref().is_ok_and(|layout| {
+        atlas_daemon::user::setup::job_pid(layout, atlas_daemon::user::setup::LABEL).is_some()
+    });
 
     // macOS counts a process the window starts as the window's own, so only
     // the job's answer tells what Atlas itself may do here. Without one (not
@@ -265,5 +275,9 @@ fn app() -> Value {
 /// Whether Atlas is set up in this account as someone's helper already
 /// (its background job is installed here, as `atlas init` leaves it).
 fn helper_job_here(uid: u32) -> bool {
-    this_account().is_ok_and(|account| Layout::new(uid, account.home).agent_plist(LABEL).exists())
+    this_account().is_ok_and(|account| {
+        atlas_daemon::user::setup::Layout::new(uid, account.home)
+            .agent_plist(atlas_daemon::user::setup::LABEL)
+            .exists()
+    })
 }

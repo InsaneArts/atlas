@@ -18,11 +18,7 @@ use atlas_core::{
     desktop::Desktop,
     error::{Code, Error, Result},
 };
-use atlas_daemon::{
-    helper_setup,
-    helper_setup::{Agent, JobReport, LABEL, Layout, Request, Unfinished},
-    identity::{Identity, Standing},
-};
+use atlas_daemon::identity::{Identity, Standing};
 use atlas_native::approval::Refusal;
 use serde_json::{Value, json};
 use std::{
@@ -95,7 +91,7 @@ fn retire_helper_job(
     // and reaching into its login would start one again. Each request is
     // checked again by the helper itself once sudo let it run: still the
     // account recorded, and still logged out.
-    let ask = |request: &Request, failed: &str| -> Result<Value> {
+    let ask = |request: &atlas_daemon::user::setup::Request, failed: &str| -> Result<Value> {
         retirement_request(controller, request, || {
             setup::request_as_helper(
                 executable,
@@ -106,8 +102,9 @@ fn retire_helper_job(
             )?
             .map_err(|unfinished| {
                 let said = match &unfinished {
-                    Unfinished::Silent(_) => failed.to_owned(),
-                    Unfinished::Unchanged(why) | Unfinished::Uncertain(why) => {
+                    atlas_daemon::user::setup::Unfinished::Silent(_) => failed.to_owned(),
+                    atlas_daemon::user::setup::Unfinished::Unchanged(why)
+                    | atlas_daemon::user::setup::Unfinished::Uncertain(why) => {
                         format!("{failed}: {}", why.as_deref().unwrap_or("unknown"))
                     }
                 };
@@ -118,35 +115,37 @@ fn retire_helper_job(
     let stopping = "The helper job could not be stopped";
 
     let inspected = ask(
-        &Request::Inspect {
+        &atlas_daemon::user::setup::Request::Inspect {
             uid: helper.uid,
-            labels: vec![LABEL.to_owned()],
+            labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
         },
         stopping,
     )?;
 
     // The definition there now, else (none there) the one this Atlas
     // would write, whose backup a retired job leaves.
-    let sha256 = JobReport::from(&inspected["jobs"][LABEL])
-        .sha256
-        .unwrap_or_else(|| {
-            let layout = Layout::new(helper.uid, account.home.clone());
-            let controller = nix::unistd::getuid().as_raw();
-            Agent::managed(&layout, executable.to_owned(), controller)
-                .plist_sha256(&layout.paths().logs())
-        });
+    let sha256 = atlas_daemon::user::setup::JobReport::from(
+        &inspected["jobs"][atlas_daemon::user::setup::LABEL],
+    )
+    .sha256
+    .unwrap_or_else(|| {
+        let layout = atlas_daemon::user::setup::Layout::new(helper.uid, account.home.clone());
+        let controller = nix::unistd::getuid().as_raw();
+        atlas_daemon::user::setup::Agent::managed(&layout, executable.to_owned(), controller)
+            .plist_sha256(&layout.paths().logs())
+    });
 
     let opener = ask(
-        &Request::ForgetOpener { uid: helper.uid },
+        &atlas_daemon::user::setup::Request::ForgetOpener { uid: helper.uid },
         "Atlas's one-time start in the helper was not removed",
     )
     .map(|reply| reply["removed"] == true)
     .map_err(|error| error.error);
 
     ask(
-        &Request::Retire {
+        &atlas_daemon::user::setup::Request::Retire {
             uid: helper.uid,
-            label: LABEL.to_owned(),
+            label: atlas_daemon::user::setup::LABEL.to_owned(),
             sha256,
             missing_ok: true,
         },
@@ -159,7 +158,7 @@ fn retire_helper_job(
 /// nothing. A failed or lost reply keeps its own generation pending.
 fn retirement_request(
     controller: &Controller,
-    request: &Request,
+    request: &atlas_daemon::user::setup::Request,
     ask: impl FnOnce() -> Result<Value>,
 ) -> Result<Value> {
     if request.requires_claim() {
@@ -765,7 +764,7 @@ impl Live<'_> {
         }
         let me = nix::unistd::getuid().as_raw();
         let client = self.found.client.as_ref();
-        let Some(pairing) = atlas_daemon::helper_setup::pairing::request().filter(|pairing| {
+        let Some(pairing) = atlas_daemon::user::setup::pairing::request().filter(|pairing| {
             pairing.controller_uid == me
                 && client.is_none_or(|client| client.desktop().user().uid != pairing.helper_uid)
         }) else {
@@ -775,8 +774,8 @@ impl Live<'_> {
             return;
         };
 
-        let request = Request::ForgetOpener { uid: account.uid };
-        let Some(expected) = helper_setup::identity::verified(account.uid) else {
+        let request = atlas_daemon::user::setup::Request::ForgetOpener { uid: account.uid };
+        let Some(expected) = atlas_daemon::user::setup::identity::verified(account.uid) else {
             self.warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
             return;
         };
@@ -854,7 +853,7 @@ impl Live<'_> {
         }
 
         // The request naming the helper, when this account made it.
-        let request = Path::new(atlas_daemon::helper_setup::pairing::REQUEST);
+        let request = Path::new(atlas_daemon::user::setup::pairing::REQUEST);
         if remove_own_file(request).unwrap_or(false) {
             self.removed.push(json!(request));
         }

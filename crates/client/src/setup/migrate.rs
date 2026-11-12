@@ -20,10 +20,6 @@ use atlas_core::{
     session::{Diagnosis, Observation, require_hidden},
     transport::run_output,
 };
-use atlas_daemon::helper_setup::{
-    Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged, identity,
-    problem,
-};
 use atlas_daemon::identity::Identity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -210,16 +206,20 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
 /// The helper the person chose, while the account is still that one. Only
 /// the person's selection records an identity.
 fn setup_identity(uid: u32) -> Result<Identity> {
-    identity::verified(uid).ok_or_else(choose_helper)
+    atlas_daemon::user::setup::identity::verified(uid).ok_or_else(choose_helper)
 }
 
 fn choose_helper() -> Error {
-    problem(
+    atlas_daemon::user::setup::problem(
         "Atlas could not verify the helper account. Choose the helper again in Atlas to record its identity before setting it up.",
     )
 }
 
-fn helper_argv(client: &Client, request: &Request, expected: &Identity) -> Result<Vec<String>> {
+fn helper_argv(
+    client: &Client,
+    request: &atlas_daemon::user::setup::Request,
+    expected: &Identity,
+) -> Result<Vec<String>> {
     Ok(vec![
         client.config.identity_probe.to_string_lossy().into_owned(),
         "setup-helper".to_owned(),
@@ -230,30 +230,38 @@ fn helper_argv(client: &Client, request: &Request, expected: &Identity) -> Resul
 }
 
 fn helper_reply(reply: &Value) -> Result<Value> {
-    let output = run_output(reply, 65536)
-        .map_err(|_| problem("The helper setup command returned malformed output"))?;
-    serde_json::from_slice(&output)
-        .map_err(|error| problem("The helper setup command returned no result").with_source(error))
+    let output = run_output(reply, 65536).map_err(|_| {
+        atlas_daemon::user::setup::problem("The helper setup command returned malformed output")
+    })?;
+    serde_json::from_slice(&output).map_err(|error| {
+        atlas_daemon::user::setup::problem("The helper setup command returned no result")
+            .with_source(error)
+    })
 }
 
 /// A worker's reply as an outcome: only a refusal that says it changed
 /// nothing is certain.
 fn helper_result(reply: Value) -> Result<Value> {
-    acknowledged(reply).map_err(|unfinished| {
-        let error = problem(format!(
+    atlas_daemon::user::setup::acknowledged(reply).map_err(|unfinished| {
+        let error = atlas_daemon::user::setup::problem(format!(
             "Helper setup refused: {}",
             unfinished.reason().unwrap_or("unknown error")
         ));
         match unfinished {
-            Unfinished::Unchanged(_) => error,
-            Unfinished::Silent(_) | Unfinished::Uncertain(_) => error.uncertain(),
+            atlas_daemon::user::setup::Unfinished::Unchanged(_) => error,
+            atlas_daemon::user::setup::Unfinished::Silent(_)
+            | atlas_daemon::user::setup::Unfinished::Uncertain(_) => error.uncertain(),
         }
     })
 }
 
 /// Run one read-only request inside the helper as `expected`. Inspection
 /// changes nothing, so it needs no pending marker.
-async fn inspect(client: &Client, request: &Request, expected: &Identity) -> Result<Value> {
+async fn inspect(
+    client: &Client,
+    request: &atlas_daemon::user::setup::Request,
+    expected: &Identity,
+) -> Result<Value> {
     let reply = client
         .run(
             helper_argv(client, request, expected)?,
@@ -275,7 +283,7 @@ async fn reachable(client: &Client) -> bool {
 
 fn require_background(status: &Value, uid: u32) -> Result<()> {
     require_hidden(status, uid).map(|_| ()).map_err(|_| {
-        problem(
+        atlas_daemon::user::setup::problem(
             "The helper is not running in the background. Switch back to your own account, then \
              run atlas doctor.",
         )
@@ -283,8 +291,11 @@ fn require_background(status: &Value, uid: u32) -> Result<()> {
 }
 
 fn daemon_pid(status: &Value) -> Result<u32> {
-    reported_pid(&status["daemon"]["pid"])
-        .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))
+    reported_pid(&status["daemon"]["pid"]).ok_or_else(|| {
+        atlas_daemon::user::setup::problem(
+            "The helper did not say which process it is. Run atlas restart.",
+        )
+    })
 }
 
 async fn await_endpoint(client: &Client) -> Result<()> {
@@ -292,7 +303,7 @@ async fn await_endpoint(client: &Client) -> Result<()> {
 
     while !reachable(client).await {
         if Instant::now() >= deadline {
-            return Err(problem(format!(
+            return Err(atlas_daemon::user::setup::problem(format!(
                 "The helper did not answer in time ({}). Run atlas doctor.",
                 atlas_core::config::tilde(&client.config.socket_path)
             )));
@@ -337,12 +348,12 @@ impl Migration {
         Ok(self.account.get_or_init(|| identity))
     }
 
-    fn layout(&self) -> Layout {
-        Layout::new(self.log.plan.uid, self.log.plan.home.clone())
+    fn layout(&self) -> atlas_daemon::user::setup::Layout {
+        atlas_daemon::user::setup::Layout::new(self.log.plan.uid, self.log.plan.home.clone())
     }
 
-    fn agent(&self) -> Agent {
-        Agent {
+    fn agent(&self) -> atlas_daemon::user::setup::Agent {
+        atlas_daemon::user::setup::Agent {
             label: self.log.plan.label.clone(),
             program: self.log.plan.program.clone(),
             uid: self.log.plan.uid,
@@ -420,7 +431,7 @@ impl Migration {
     /// malformed output, or any other worker error may have changed state
     /// part way, so the generation stays pending for this setup to
     /// reconcile.
-    async fn helper(&mut self, request: Request) -> Result<Value> {
+    async fn helper(&mut self, request: atlas_daemon::user::setup::Request) -> Result<Value> {
         let argv = helper_argv(&self.client, &request, self.account()?)?;
         let generation = self.begin()?;
 
@@ -429,9 +440,10 @@ impl Migration {
             .run(argv, Run::pending().within(WORKER_PATIENCE))
             .await
         {
-            Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => {
-                Err(problem("The helper setup command was interrupted").uncertain())
-            }
+            Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => Err(
+                atlas_daemon::user::setup::problem("The helper setup command was interrupted")
+                    .uncertain(),
+            ),
             Ok(reply) => helper_reply(&reply)
                 .map_err(Error::uncertain)
                 .and_then(helper_result),
@@ -455,7 +467,7 @@ impl Migration {
 
         let status = self.client.status().await;
         if status["permissions"]["screenCapture"] != true {
-            return Err(problem(
+            return Err(atlas_daemon::user::setup::problem(
                 "Atlas lacks Screen Recording in the helper account: log in to the \
                  helper once, allow Atlas in System Settings, switch back, then run \
                  setup again",
@@ -473,7 +485,9 @@ impl Migration {
             controller,
         );
         if socket.private != Some(true) {
-            return Err(problem("The managed socket directory is not private"));
+            return Err(atlas_daemon::user::setup::problem(
+                "The managed socket directory is not private",
+            ));
         }
 
         Ok(())
@@ -496,7 +510,7 @@ impl Migration {
         &self,
         updated_program: &Path,
         signed: impl FnOnce(&Path) -> Result<String>,
-        run: impl AsyncFn(Request) -> Result<Value>,
+        run: impl AsyncFn(atlas_daemon::user::setup::Request) -> Result<Value>,
     ) -> Result<()> {
         self.require_owned_pending()?;
         let plan = &self.log.plan;
@@ -509,27 +523,29 @@ impl Migration {
         if !current.is_some_and(|current| {
             current.same_helper(&recorded) && current.output_dir == recorded.output_dir
         }) {
-            return Err(problem(format!(
+            return Err(atlas_daemon::user::setup::problem(format!(
                 "{} changed during setup; it was not overwritten",
                 plan.config_path.display()
             )));
         }
         signed(updated_program)?;
-        let observed = run(Request::Inspect {
+        let observed = run(atlas_daemon::user::setup::Request::Inspect {
             uid: plan.uid,
             labels: vec![plan.label.clone()],
         })
         .await?;
-        let job = JobReport::from(&observed["jobs"][&plan.label]);
+        let job = atlas_daemon::user::setup::JobReport::from(&observed["jobs"][&plan.label]);
         let expected = self.agent().plist_sha256(&self.layout().paths().logs());
         let expected_definition = match job.definition {
-            Definition::Absent => true,
-            Definition::Regular => job.sha256.as_deref() == Some(expected.as_str()),
-            Definition::Other => false,
+            atlas_daemon::user::setup::Definition::Absent => true,
+            atlas_daemon::user::setup::Definition::Regular => {
+                job.sha256.as_deref() == Some(expected.as_str())
+            }
+            atlas_daemon::user::setup::Definition::Other => false,
         };
         let elsewhere = !job.defined_at(&self.layout().agent_plist(&plan.label));
         if !expected_definition || job.loaded == Some(true) && elsewhere {
-            return Err(problem(
+            return Err(atlas_daemon::user::setup::problem(
                 "The helper's background job differs from its setup; run atlas init to replace it",
             ));
         }
@@ -539,22 +555,26 @@ impl Migration {
     async fn apply(&mut self) -> Result<()> {
         let plan = self.log.plan.clone();
         let (uid, controller) = (plan.uid, plan.controller.clone());
-        self.helper(Request::Prepare { uid, controller }).await?;
+        self.helper(atlas_daemon::user::setup::Request::Prepare { uid, controller })
+            .await?;
 
         // The app may have changed since planning: install only the binary
         // that was planned, still validly signed.
         if signed_daemon(&plan.program)? != plan.cdhash {
-            return Err(problem(
+            return Err(atlas_daemon::user::setup::problem(
                 "Atlas.app changed since setup was planned; run atlas init again",
             ));
         }
 
         let agent = self.agent();
-        self.helper(Request::Install { agent }).await?;
+        self.helper(atlas_daemon::user::setup::Request::Install { agent })
+            .await?;
         self.verify().await?;
 
         if !self.input_ready().await {
-            return Err(problem("Input is not ready; run atlas start-input"));
+            return Err(atlas_daemon::user::setup::problem(
+                "Input is not ready; run atlas start-input",
+            ));
         }
 
         self.settle_all()?;
@@ -572,18 +592,21 @@ struct Basis {
     text: String,
     account: Account,
     controller: Account,
-    layout: Layout,
+    layout: atlas_daemon::user::setup::Layout,
 }
 
 fn basis(config_path: &Path) -> Result<Basis> {
     let config_path = fs::canonicalize(config_path)?;
     let config = Config::load(&config_path)?;
     let text = fs::read_to_string(&config_path)?;
-    let account = account_with_uid(config.desktop().user().uid)?
-        .ok_or_else(|| problem("The configured helper account does not exist"))?;
-    let controller = account_with_uid(nix::unistd::getuid().as_raw())?
-        .ok_or_else(|| problem("The controller account cannot be resolved"))?;
-    let layout = Layout::new(config.desktop().user().uid, account.home.clone());
+    let account = account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
+        atlas_daemon::user::setup::problem("The configured helper account does not exist")
+    })?;
+    let controller = account_with_uid(nix::unistd::getuid().as_raw())?.ok_or_else(|| {
+        atlas_daemon::user::setup::problem("The controller account cannot be resolved")
+    })?;
+    let layout =
+        atlas_daemon::user::setup::Layout::new(config.desktop().user().uid, account.home.clone());
 
     Ok(Basis {
         config_path,
@@ -602,7 +625,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     let config = &base.config;
 
     if config.socket_path != base.layout.paths().socket() {
-        return Err(problem(
+        return Err(atlas_daemon::user::setup::problem(
             "The configuration does not use the managed private layout",
         ));
     }
@@ -619,7 +642,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         home: base.account.home,
         old_label: String::new(),
         old_plist_sha256: String::new(),
-        label: LABEL.to_owned(),
+        label: atlas_daemon::user::setup::LABEL.to_owned(),
         controller_uid: base.controller.uid,
         program,
         cdhash,
@@ -636,9 +659,13 @@ fn unplanned(config_path: &Path) -> Error {
     match basis(config_path) {
         Err(error) => error,
         Ok(base) if base.config.socket_path == base.layout.paths().socket() => {
-            problem("The configuration already uses the managed private layout")
+            atlas_daemon::user::setup::problem(
+                "The configuration already uses the managed private layout",
+            )
         }
-        Ok(_) => problem("The configuration does not use the managed private layout"),
+        Ok(_) => atlas_daemon::user::setup::problem(
+            "The configuration does not use the managed private layout",
+        ),
     }
 }
 
@@ -652,7 +679,7 @@ enum Start {
 }
 
 fn unknown_version(path: &Path) -> Error {
-    problem(format!(
+    atlas_daemon::user::setup::problem(format!(
         "The setup record has an unknown version ({})",
         path.display()
     ))
@@ -661,7 +688,7 @@ fn unknown_version(path: &Path) -> Error {
 /// The refusal of a migration an earlier version of Atlas recorded. Nothing
 /// is changed, so the actions it still owns stay pending.
 fn earlier_migration(path: &Path) -> Error {
-    problem(format!(
+    atlas_daemon::user::setup::problem(format!(
         "The setup record comes from an earlier version of Atlas, which this one cannot \
          continue; run atlas uninstall, then atlas init ({})",
         path.display()
@@ -671,7 +698,7 @@ fn earlier_migration(path: &Path) -> Error {
 /// The refusal of a rollback left unfinished; only an earlier version of
 /// Atlas rolled setups back.
 fn rollback_unfinished(path: &Path) -> Error {
-    problem(format!(
+    atlas_daemon::user::setup::problem(format!(
         "A rollback is unfinished; run atlas uninstall, then atlas init ({})",
         path.display()
     ))
@@ -828,15 +855,15 @@ pub(crate) async fn fresh_pass(
 ///
 /// Returns the failure to verify the helper or to read the job through its
 /// daemon.
-pub async fn managed_job(client: &Client) -> Result<JobReport> {
-    let request = Request::Inspect {
+pub async fn managed_job(client: &Client) -> Result<atlas_daemon::user::setup::JobReport> {
+    let request = atlas_daemon::user::setup::Request::Inspect {
         uid: client.desktop().user().uid,
-        labels: vec![LABEL.to_owned()],
+        labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
     };
     let expected = setup_identity(client.desktop().user().uid)?;
 
-    Ok(JobReport::from(
-        &inspect(client, &request, &expected).await?["jobs"][LABEL],
+    Ok(atlas_daemon::user::setup::JobReport::from(
+        &inspect(client, &request, &expected).await?["jobs"][atlas_daemon::user::setup::LABEL],
     ))
 }
 
@@ -899,7 +926,7 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
     migration
         .preflight_with(updated_program, signed_daemon, async |request| {
             if !reachable(&migration.client).await {
-                return Err(problem(
+                return Err(atlas_daemon::user::setup::problem(
                     "The helper is not running in the background. Log in to the helper account \
                      once, switch back, then run atlas init again.",
                 ));

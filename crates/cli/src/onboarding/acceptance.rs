@@ -1,12 +1,8 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
-use super::{MAX_RECORD, Pairing, problem, request};
+use super::problem;
 use atlas_client::setup::{self, executor};
 use atlas_control::{Controller, ExecutorClaims};
 use atlas_core::{account, app_bundle::signed_executable, error::Result};
-use atlas_daemon::{
-    helper_setup,
-    helper_setup::{JobReport, Request},
-};
 use atlas_native::native::endpoint;
 use serde_json::{Value, json};
 use std::{
@@ -27,15 +23,16 @@ fn socket(uid: u32) -> PathBuf {
     PathBuf::from(format!("/Users/Shared/Atlas-accept-{uid}/setup.sock"))
 }
 
-fn verify(pairing: &Pairing) -> Result<()> {
-    if request().as_ref() != Some(pairing) {
+fn verify(pairing: &atlas_daemon::user::setup::pairing::Pairing) -> Result<()> {
+    if atlas_daemon::user::setup::pairing::request().as_ref() != Some(pairing) {
         return Err(problem(
             "The helper request changed; choose the helper again",
         ));
     }
     let helper = account::account_with_uid(pairing.helper_uid)?
         .ok_or_else(|| problem("The chosen helper no longer exists"))?;
-    if helper_setup::identity::current(&helper).as_ref() != Some(&pairing.helper_identity)
+    if atlas_daemon::user::setup::identity::current(&helper).as_ref()
+        != Some(&pairing.helper_identity)
         || atlas_core::user::account::administrator(&helper.name) != Some(false)
     {
         return Err(problem("The chosen helper account changed before setup"));
@@ -50,8 +47,8 @@ pub(super) fn allow(
     here: (u32, &str),
     configured: bool,
     administrator: Option<bool>,
-    pairing: Option<Pairing>,
-    start: impl FnOnce(&Pairing) -> Result<Value>,
+    pairing: Option<atlas_daemon::user::setup::pairing::Pairing>,
+    start: impl FnOnce(&atlas_daemon::user::setup::pairing::Pairing) -> Result<Value>,
 ) -> Result<Value> {
     if configured {
         return Err(problem(
@@ -76,7 +73,7 @@ pub(super) fn allow(
 
 /// Only start a helper-owned listener. No authorization, layout preparation,
 /// job changes or rollback runs on the Allow side of the handoff.
-pub(super) fn signal(pairing: &Pairing) -> Result<Value> {
+pub(super) fn signal(pairing: &atlas_daemon::user::setup::pairing::Pairing) -> Result<Value> {
     if accepted(pairing) && listening(pairing.helper_uid) {
         return Ok(json!({"ok":true,"accepted":true}));
     }
@@ -132,7 +129,7 @@ fn signal_using(command: &mut Command) -> Result<Value> {
 /// failures. Unknown privileged work retains its recovery claim.
 pub async fn accept_worker(ticket: &str) -> Result<Value> {
     signed_executable()?;
-    let pairing = request()
+    let pairing = atlas_daemon::user::setup::pairing::request()
         .filter(|p| p.ticket == ticket)
         .ok_or_else(|| problem("The helper request changed before Allow"))?;
     let uid = nix::unistd::getuid().as_raw();
@@ -160,7 +157,12 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
     // reuse the endpoint without waiting for an earlier Allow to time out.
     let deadline = Instant::now() + Duration::from_secs(600);
     loop {
-        if super::read_request(Path::new(super::REQUEST)).as_ref() != Some(&pairing) {
+        if atlas_daemon::user::setup::pairing::read_request(Path::new(
+            atlas_daemon::user::setup::pairing::REQUEST,
+        ))
+        .as_ref()
+            != Some(&pairing)
+        {
             return Err(problem("The helper request changed before setup"));
         }
         if Instant::now() >= deadline {
@@ -178,7 +180,7 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-        let guard = helper_setup::Guard {
+        let guard = atlas_daemon::user::setup::Guard {
             account: Some(pairing.helper_identity.clone()),
             logged_out: false,
         };
@@ -188,21 +190,21 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
             &mut stream,
             &pairing.ticket,
             || verify(&pairing),
-            |action| helper_setup::run_guarded(action, &guard),
+            |action| atlas_daemon::user::setup::run_guarded(action, &guard),
         )
         .map(|()| json!({"ok":true}));
     }
 }
 
 /// A stale consent record is visible but never authorizes a different request.
-pub(super) fn accepted(pairing: &Pairing) -> bool {
+pub(super) fn accepted(pairing: &atlas_daemon::user::setup::pairing::Pairing) -> bool {
     let path = socket(pairing.helper_uid).with_file_name("accepted.json");
     accepted_at(&path, pairing)
 }
 
-fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
+fn accepted_at(path: &Path, pairing: &atlas_daemon::user::setup::pairing::Pairing) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let read = || -> Option<Pairing> {
+    let read = || -> Option<atlas_daemon::user::setup::pairing::Pairing> {
         let directory = fs::symlink_metadata(path.parent()?).ok()?;
         if !directory.is_dir()
             || directory.uid() != pairing.helper_uid
@@ -219,7 +221,11 @@ fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
         {
             return None;
         }
-        serde_json::from_slice(&atlas_core::files::read_limited(file, MAX_RECORD)?).ok()
+        serde_json::from_slice(&atlas_core::files::read_limited(
+            file,
+            atlas_daemon::user::setup::pairing::MAX_RECORD,
+        )?)
+        .ok()
     };
     read().as_ref() == Some(pairing)
 }
@@ -249,7 +255,7 @@ fn serve_channel(
     channel: &mut (impl Read + Write),
     ticket: &str,
     verify: impl Fn() -> Result<()>,
-    run: impl Fn(Request) -> Result<Value>,
+    run: impl Fn(atlas_daemon::user::setup::Request) -> Result<Value>,
 ) -> Result<()> {
     send(channel, &json!({"ok":true,"ticket":ticket}))?;
     loop {
@@ -262,7 +268,8 @@ fn serve_channel(
             send(channel, &json!({"ok":true}))?;
             return Ok(());
         }
-        let action: Request = serde_json::from_value(value["request"].clone())?;
+        let action: atlas_daemon::user::setup::Request =
+            serde_json::from_value(value["request"].clone())?;
         if !action.allowed_in_acceptance() {
             return Err(problem("First-login setup is not an acceptance operation"));
         }
@@ -274,7 +281,10 @@ fn serve_channel(
 
 /// The person's status loop observes acceptance and finishes setup through the
 /// worker. Only this account opens Controller::new and its durable claims.
-pub(super) async fn resume(config: &atlas_core::config::Config, pairing: Pairing) -> Result<()> {
+pub(super) async fn resume(
+    config: &atlas_core::config::Config,
+    pairing: atlas_daemon::user::setup::pairing::Pairing,
+) -> Result<()> {
     if !accepted(&pairing) {
         return Err(problem("The recorded acceptance changed before setup"));
     }
@@ -294,7 +304,7 @@ pub(super) async fn resume(config: &atlas_core::config::Config, pairing: Pairing
     let controller = Controller::new(&config.desktop())?;
     let helper = account::account_with_uid(config.desktop().user().uid)?
         .ok_or_else(|| problem("The helper no longer exists"))?;
-    let layout = helper_setup::Layout::new(helper.uid, helper.home);
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home);
     let mut agent = super::expected_agent(&layout, pairing.controller_uid)?;
     agent.program = signed_executable()?;
     let client = atlas_client::client::Client::new(config.clone())?;
@@ -325,9 +335,9 @@ fn drive(
     controller: &Controller,
     worker: nix::unistd::Pid,
     mut channel: impl Read + Write,
-    pairing: &Pairing,
+    pairing: &atlas_daemon::user::setup::pairing::Pairing,
     verify: impl FnOnce() -> Result<()>,
-    agent: helper_setup::Agent,
+    agent: atlas_daemon::user::setup::Agent,
     logs: &Path,
 ) -> Result<()> {
     let ticket = pairing.ticket.as_str();
@@ -342,10 +352,10 @@ fn drive(
     atlas_control::record_executor(worker)?;
     let channel = RefCell::new(channel);
     let outcome = (|| {
-        let run = |action: &Request| -> Result<Value> {
+        let run = |action: &atlas_daemon::user::setup::Request| -> Result<Value> {
             let mut stream = channel.borrow_mut();
             send(&mut *stream, &json!({"ticket":ticket,"request":action}))?;
-            helper_setup::acknowledged(receive(&mut *stream)?).map_err(|unfinished| {
+            atlas_daemon::user::setup::acknowledged(receive(&mut *stream)?).map_err(|unfinished| {
                 problem(unfinished.reason().unwrap_or("Helper setup failed")).uncertain()
             })
         };
@@ -369,19 +379,19 @@ fn drive(
 
 fn complete_setup(
     controller_name: &str,
-    agent: helper_setup::Agent,
+    agent: atlas_daemon::user::setup::Agent,
     logs: &Path,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value>,
 ) -> Result<()> {
     let uid = agent.uid;
-    run(&Request::Prepare {
+    run(&atlas_daemon::user::setup::Request::Prepare {
         uid,
         controller: controller_name.to_owned(),
     })?;
     let installed = setup::job::install_job(&run, agent, logs)?;
-    run(&Request::ForgetOpener { uid })?;
+    run(&atlas_daemon::user::setup::Request::ForgetOpener { uid })?;
     if installed["pid"].is_null() {
-        run(&Request::Kickstart { uid })?;
+        run(&atlas_daemon::user::setup::Request::Kickstart { uid })?;
     }
     Ok(())
 }
@@ -393,7 +403,10 @@ fn receipt(uid: u32) -> Result<PathBuf> {
 }
 
 /// Where setup stands for `pairing` in the person's status loop.
-pub(super) async fn observe(config: &atlas_core::config::Config, pairing: Pairing) -> Value {
+pub(super) async fn observe(
+    config: &atlas_core::config::Config,
+    pairing: atlas_daemon::user::setup::pairing::Pairing,
+) -> Value {
     reconcile(
         accepted(&pairing),
         receipt(pairing.helper_uid),
@@ -413,9 +426,9 @@ pub(super) async fn observe(config: &atlas_core::config::Config, pairing: Pairin
 async fn reconcile(
     accepted: bool,
     receipt: Result<PathBuf>,
-    pairing: Pairing,
-    job: impl AsyncFnOnce() -> Result<JobReport>,
-    resume: impl AsyncFnOnce(Pairing) -> Result<()>,
+    pairing: atlas_daemon::user::setup::pairing::Pairing,
+    job: impl AsyncFnOnce() -> Result<atlas_daemon::user::setup::JobReport>,
+    resume: impl AsyncFnOnce(atlas_daemon::user::setup::pairing::Pairing) -> Result<()>,
     pending: impl FnOnce() -> Result<Vec<String>>,
 ) -> Value {
     if !accepted {

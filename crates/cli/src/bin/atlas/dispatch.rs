@@ -400,11 +400,11 @@ fn guide(args: &cli::AgentGuide) -> Value {
 }
 
 fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
-    let guard = atlas_daemon::helper_setup::Guard {
+    let guard = atlas_daemon::user::setup::Guard {
         account: Some(serde_json::from_str(&args.account)?),
         logged_out: args.logged_out,
     };
-    atlas_daemon::helper_setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
+    atlas_daemon::user::setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
 }
 
 /// `atlas setup`: a preview, or the recorded setup applied.

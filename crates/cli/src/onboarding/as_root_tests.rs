@@ -334,7 +334,7 @@ fn refuses_occupied_uid(mode: &str) {
 }
 
 use super::*;
-use atlas_daemon::helper_setup::Request;
+use atlas_daemon::user::setup::Request;
 use std::{fs, process::Command};
 
 /// The steps with Apple's tools standing in as scripts in `dir` that

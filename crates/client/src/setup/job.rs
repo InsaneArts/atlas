@@ -7,10 +7,7 @@ use atlas_core::{
     app_bundle,
     error::{Error, Result},
 };
-use atlas_daemon::{
-    helper_setup::{Agent, JobReport, LABEL, Layout, Request},
-    identity::Identity,
-};
+use atlas_daemon::identity::Identity;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -24,10 +21,20 @@ fn this_account() -> Result<Account> {
 
 /// The helper's background job as this Atlas writes it, for `helper` and
 /// the app's `executable`, with the layout it lives in.
-fn helper_agent(helper: &Account, executable: &Path) -> Result<(Agent, Layout)> {
+fn helper_agent(
+    helper: &Account,
+    executable: &Path,
+) -> Result<(
+    atlas_daemon::user::setup::Agent,
+    atlas_daemon::user::setup::Layout,
+)> {
     let controller = this_account()?;
-    let layout = Layout::new(helper.uid, helper.home.clone());
-    let agent = Agent::managed(&layout, executable.to_path_buf(), controller.uid);
+    let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home.clone());
+    let agent = atlas_daemon::user::setup::Agent::managed(
+        &layout,
+        executable.to_path_buf(),
+        controller.uid,
+    );
 
     Ok((agent, layout))
 }
@@ -37,7 +44,7 @@ fn helper_agent(helper: &Account, executable: &Path) -> Result<(Agent, Layout)> 
 fn as_helper(
     executable: &Path,
     helper: &Account,
-    request: &Request,
+    request: &atlas_daemon::user::setup::Request,
     expected: &Identity,
 ) -> Result<Value> {
     setup::request_as_helper(
@@ -65,30 +72,32 @@ fn as_helper(
 ///
 /// Returns the failure of `run`, or of restoring the earlier job.
 pub fn install_job(
-    run: impl Fn(&Request) -> Result<Value>,
-    agent: Agent,
+    run: impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value>,
+    agent: atlas_daemon::user::setup::Agent,
     logs: &Path,
 ) -> Result<Value> {
     let uid = agent.uid;
-    let inspected = run(&Request::Inspect {
+    let inspected = run(&atlas_daemon::user::setup::Request::Inspect {
         uid,
-        labels: vec![LABEL.to_owned()],
+        labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
     })?;
-    let earlier = JobReport::from(&inspected["jobs"][LABEL]);
+    let earlier = atlas_daemon::user::setup::JobReport::from(
+        &inspected["jobs"][atlas_daemon::user::setup::LABEL],
+    );
     let expected = agent.plist_sha256(logs);
     // Installation accepts an inspected hash even without plistKind;
     // refresh separately requires a regular definition.
     let retired = earlier.sha256.filter(|sha| *sha != expected);
     if let Some(sha256) = &retired {
-        run(&Request::Retire {
+        run(&atlas_daemon::user::setup::Request::Retire {
             uid,
-            label: LABEL.to_owned(),
+            label: atlas_daemon::user::setup::LABEL.to_owned(),
             sha256: sha256.clone(),
             missing_ok: false,
         })?;
     }
 
-    let mut error = match run(&Request::Install { agent }) {
+    let mut error = match run(&atlas_daemon::user::setup::Request::Install { agent }) {
         Ok(installed) => return Ok(installed),
         Err(error) => error,
     };
@@ -100,16 +109,16 @@ pub fn install_job(
     // The earlier job comes back when the new one cannot go in. The new
     // definition install may have written goes first, or it would block
     // that return.
-    let restored = run(&Request::Retire {
+    let restored = run(&atlas_daemon::user::setup::Request::Retire {
         uid,
-        label: LABEL.to_owned(),
+        label: atlas_daemon::user::setup::LABEL.to_owned(),
         sha256: expected,
         missing_ok: true,
     })
     .and_then(|_| {
-        run(&Request::Restore {
+        run(&atlas_daemon::user::setup::Request::Restore {
             uid,
-            label: LABEL.to_owned(),
+            label: atlas_daemon::user::setup::LABEL.to_owned(),
             sha256,
         })
     });
@@ -129,7 +138,7 @@ fn helper_runner(
     executable: &'static Path,
     helper: &Account,
     expected: &Identity,
-) -> impl Fn(&Request) -> Result<Value> + Send + 'static {
+) -> impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value> + Send + 'static {
     let (helper, expected) = (helper.clone(), expected.clone());
     move |request| as_helper(executable, &helper, request, &expected)
 }
@@ -156,9 +165,9 @@ async fn on_worker<T: Send + 'static>(
 async fn prepare_and_install(
     client: &Client,
     controller_name: &str,
-    agent: Agent,
+    agent: atlas_daemon::user::setup::Agent,
     logs: &Path,
-    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
+    run: impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
     let ownership = client.service_change(true).await?;
     let controller = client.controller.clone();
@@ -168,7 +177,7 @@ async fn prepare_and_install(
         let installed = {
             // Executor claims bind to the thread that dispatches them.
             let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
-            run(&Request::Prepare {
+            run(&atlas_daemon::user::setup::Request::Prepare {
                 uid: agent.uid,
                 controller: controller_name,
             })
@@ -270,9 +279,9 @@ fn new_daemon_answers_on_worker(client: &Client, before: &Value) -> bool {
 async fn replace_job(
     client: &Client,
     helper: &Account,
-    agent: Agent,
-    layout: &Layout,
-    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
+    agent: atlas_daemon::user::setup::Agent,
+    layout: &atlas_daemon::user::setup::Layout,
+    run: impl Fn(&atlas_daemon::user::setup::Request) -> Result<Value> + Send + 'static,
 ) -> Result<()> {
     let exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
@@ -294,7 +303,11 @@ async fn replace_job(
         return Err(problem(format!(
             "The helper's background job was replaced but the helper did not start again. Its \
              log is {} in {}'s account; run atlas init again after checking it.",
-            layout.paths().logs().join(format!("{LABEL}.log")).display(),
+            layout
+                .paths()
+                .logs()
+                .join(format!("{}.log", atlas_daemon::user::setup::LABEL))
+                .display(),
             helper.name
         ))
         .uncertain());
@@ -346,7 +359,7 @@ pub async fn refresh_helper(
             "replaced with this version's",
         ))?;
         return Ok(Some(
-            json!({"step": "daemon", "label": LABEL, "replaced": true}),
+            json!({"step": "daemon", "label": atlas_daemon::user::setup::LABEL, "replaced": true}),
         ));
     }
 
@@ -386,7 +399,10 @@ pub async fn prepare_helper(
         helper_runner(executable, helper, expected),
     )
     .await?;
-    Ok(layout.paths().logs().join(format!("{LABEL}.log")))
+    Ok(layout
+        .paths()
+        .logs()
+        .join(format!("{}.log", atlas_daemon::user::setup::LABEL)))
 }
 
 /// Ready first-login preferences only while the chosen helper is logged out.
@@ -399,7 +415,7 @@ pub async fn prepare_helper(
 pub fn first_login_setup(client: &Client, helper: &Account, expected: &Identity) -> Result<Value> {
     let executable = Path::new(app_bundle::EXECUTABLE);
     setup::executor::setup_transaction(&client.controller, || {
-        let request = Request::FirstLogin {
+        let request = atlas_daemon::user::setup::Request::FirstLogin {
             uid: helper.uid,
             opener: false,
         };

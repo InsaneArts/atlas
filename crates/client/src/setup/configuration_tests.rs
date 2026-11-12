@@ -108,7 +108,7 @@ fn the_managed_layout_only_moves_sockets() {
         output_dir: "/Users/c/runs".into(),
         activity: Default::default(),
     };
-    let layout = Layout::new(502, "/Users/atlastest".into());
+    let layout = atlas_daemon::user::setup::Layout::new(502, "/Users/atlastest".into());
     let target = managed(&config, &layout);
     assert_eq!(
         target.socket_path,
