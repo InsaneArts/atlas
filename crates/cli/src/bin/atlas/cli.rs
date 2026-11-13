@@ -38,6 +38,17 @@ pub(super) struct Cli {
         global = true
     )]
     pub(super) config: Option<PathBuf>,
+    /// Use another desktop, by its name in the settings, for this command
+    /// only. `ATLAS_DESKTOP` names one for every command it reaches. Shown
+    /// once there is more than one kind of desktop to choose.
+    #[arg(
+        long,
+        value_name = "NAME",
+        help_heading = "Global options",
+        global = true,
+        hide = true
+    )]
+    pub(super) desktop: Option<String>,
     /// Seconds a command that changes the helper waits for another Atlas
     /// command to finish before answering busy, in place of `ATLAS_WAIT`: 30
     /// unless given, 0 answers at once, at most 600.

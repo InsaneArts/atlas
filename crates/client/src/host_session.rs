@@ -3,6 +3,7 @@
 //! [`atlas_core::host`].
 pub mod activity;
 pub mod brief;
+pub mod desktops;
 pub mod explain;
 pub(crate) mod liveness;
 pub mod names;

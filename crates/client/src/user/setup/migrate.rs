@@ -325,7 +325,11 @@ impl Migration {
     /// The setup `log` at `path`, with a client for the plan's
     /// configuration. Construction reads nothing.
     fn new(path: PathBuf, log: Log) -> Result<Self> {
-        let config = Config::parse(log.plan.new_config.as_bytes(), &log.plan.config_path)?;
+        let config = atlas_core::config::desktops::Settings::parse(
+            log.plan.new_config.as_bytes(),
+            &log.plan.config_path,
+        )?
+        .user()?;
         Ok(Self {
             path,
             log,
@@ -516,10 +520,17 @@ impl Migration {
         let plan = &self.log.plan;
         // What the activity keeps may change after setup. The helper it set up
         // may not, nor the output folder that holds its sessions' records.
-        let recorded = Config::parse(plan.new_config.as_bytes(), &plan.config_path)?;
+        let recorded = atlas_core::config::desktops::Settings::parse(
+            plan.new_config.as_bytes(),
+            &plan.config_path,
+        )?
+        .user()?;
         let current = fs::read(&plan.config_path)
             .ok()
-            .and_then(|text| Config::parse(&text, &plan.config_path).ok());
+            .and_then(|text| {
+                atlas_core::config::desktops::Settings::parse(&text, &plan.config_path).ok()
+            })
+            .and_then(|settings| settings.user().ok());
         if !current.is_some_and(|current| {
             current.same_helper(&recorded) && current.output_dir == recorded.output_dir
         }) {
@@ -598,7 +609,7 @@ struct Basis {
 
 fn basis(config_path: &Path) -> Result<Basis> {
     let config_path = fs::canonicalize(config_path)?;
-    let config = Config::load(&config_path)?;
+    let config = Config::load_user(&config_path)?;
     let text = fs::read_to_string(&config_path)?;
     let account = account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
         atlas_daemon::user::setup::problem("The configured helper account does not exist")
@@ -747,7 +758,7 @@ fn fresh_start(log: Option<Log>, path: &Path) -> Result<Start> {
 /// The setup log for the configuration at `config_path`: where it is
 /// recorded, and what is recorded there.
 fn recorded_log(config_path: &Path) -> Result<(PathBuf, Option<Log>)> {
-    let path = log_path(Config::load(config_path)?.desktop().user().uid)?;
+    let path = log_path(Config::load_user(config_path)?.desktop().user().uid)?;
     let log = load_log(&path)?;
     Ok((path, log))
 }

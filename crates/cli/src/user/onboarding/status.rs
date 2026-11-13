@@ -59,7 +59,7 @@ fn choosing(
 }
 
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_user(config_path)?;
     let (leftovers, blockers) = logins(Some(config.desktop().user().uid));
     let Some(helper) = account::account_with_uid(config.desktop().user().uid)? else {
         let mut reply = choosing(me, app, true, (leftovers, blockers))?;

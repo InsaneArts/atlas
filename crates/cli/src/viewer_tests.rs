@@ -3120,6 +3120,7 @@ async fn only_app_status_contains_populated_private_account_inventory_and_note()
             added: 1,
             how: How::TakeControl,
             level: Level::Ask,
+            desktop: None,
         },
     )
     .unwrap();

@@ -48,7 +48,7 @@ fn this_account() -> Result<account::Account> {
 }
 
 fn settings(config_path: &Path) -> Result<Option<Config>> {
-    match Config::load(config_path) {
+    match Config::load_user(config_path) {
         Ok(settings) => Ok(Some(settings)),
         Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
@@ -264,9 +264,15 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
         Some(previous) if previous.desktop().user().uid == helper.uid => {
             atlas_client::user::setup::configuration::in_home(previous, helper)
         }
+        // A repair: only the helper changes. Where records go and what the
+        // activity keeps stay as the person set them.
         Some(previous) => {
             keep_other_helper(me.uid, previous)?;
-            fresh
+            atlas_core::config::Config {
+                output_dir: previous.output_dir.clone(),
+                activity: previous.activity.clone(),
+                ..fresh
+            }
         }
         None => fresh,
     };
@@ -605,7 +611,7 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
 /// Returns identity, active-work or helper-close failures. Unknown cleanup is retained
 /// rather than acknowledged.
 pub fn close_helper(config_path: &Path) -> Result<Value> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_user(config_path)?;
     let client = Client::new(config.clone())?;
     let uid = config.desktop().user().uid;
     let me = nix::unistd::getuid().as_raw();
@@ -814,7 +820,7 @@ fn not_closed(refusal: Refusal, uids: &[u32]) -> Error {
 /// onboarding records.
 pub fn forget(config_path: &Path) -> Result<Value> {
     let uid = this_account()?.uid;
-    let config = Config::load(config_path)?;
+    let config = Config::load_user(config_path)?;
     let _ownership = Controller::new(&config.desktop())?.acquire(true)?;
     let helper = account::account_with_uid(config.desktop().user().uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
@@ -1025,7 +1031,7 @@ const BACK_WITHIN: Duration = Duration::from_secs(60);
 /// Returns configuration, helper-readiness, permission or finalization failures. Missing
 /// consent or incomplete setup never counts as finished.
 pub async fn finish(config_path: &Path) -> Result<Value> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_user(config_path)?;
     let client = Client::new(config.clone())?;
     client.bootstrap_probe()?;
     ready_to_finish(&client.status().await, config.desktop().user().uid)?;
@@ -1088,7 +1094,7 @@ pub enum HomeChange {
 /// to open the home folder, and `io` with the Terminal line when a change
 /// fails.
 pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) -> Result<Value> {
-    let uid = Config::load(config_path)?.desktop().user().uid;
+    let uid = Config::load_user(config_path)?.desktop().user().uid;
     let files = match change {
         None => atlas_client::user::home_privacy::status(uid)?,
         Some(HomeChange::Private) => atlas_client::user::home_privacy::make_private(uid)?,

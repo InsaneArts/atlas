@@ -14,6 +14,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod desktops;
+
+use desktops::Settings;
+
 pub(crate) const DEFAULT_PATH: &str = "atlas.local.toml";
 
 /// The configuration's place in a home, as `atlas init` keeps it.
@@ -192,13 +196,30 @@ impl Config {
             )
     }
 
-    /// Load and validate settings, resolving configured paths beside the settings file.
+    /// Load and validate settings, resolving configured paths beside the settings file, as
+    /// the desktop this process chose ([`desktops::choose_for_process`]).
     ///
     /// # Errors
     ///
     /// Returns a missing-settings or invalid-settings error for unreadable files, malformed
-    /// TOML, unknown keys, invalid helper identity or unusable paths.
+    /// TOML, unknown keys, invalid helper identity or unusable paths, and a refusal of a
+    /// desktop the settings do not list.
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_settings(path)?.chosen()
+    }
+
+    /// Load the settings at `path` and take their Second Login: the user
+    /// desktop's own setup, update and removal work on it, whichever
+    /// desktop is the default.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`], and a refusal of settings with no Second Login.
+    pub fn load_user(path: &Path) -> Result<Self> {
+        Self::load_settings(path)?.user()
+    }
+
+    fn load_settings(path: &Path) -> Result<Settings> {
         let path = fs::canonicalize(path).map_err(|error| {
             // Only a path with nothing there is "not set up"; a dangling link
             // or an unreadable folder is a file to repair, which init would
@@ -235,7 +256,7 @@ impl Config {
         })
     }
 
-    fn read(path: &Path) -> Result<Self> {
+    fn read(path: &Path) -> Result<Settings> {
         let file = fs::File::open(path).map_err(|error| {
             Error::new(Code::Io, format!("Open settings: {error}")).with_source(error)
         })?;
@@ -247,18 +268,25 @@ impl Config {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
         }
 
-        Self::parse(&bytes, path)
+        Settings::parse(&bytes, path)
     }
 
-    /// Parse configuration text as if it were the file at `path`: relative
-    /// paths resolve against its directory and `~/` against the home.
-    /// Destructuring makes every added setting choose its normalization here.
+    /// Parse settings text of the form that names one helper as if it were
+    /// the file at `path`: relative paths resolve against its directory and
+    /// `~/` against the home.
     ///
     /// # Errors
     ///
     /// Returns an error for text that is not a valid configuration.
     pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
-        let mut config: Self = parse_toml(bytes, path)?;
+        let config: Self = parse_toml(bytes, path)?;
+        config.settled(path)
+    }
+
+    /// These settings validated, with their paths resolved as the file at
+    /// `path` writes them.
+    /// Destructuring makes every added setting choose its normalization here.
+    fn settled(mut self, path: &Path) -> Result<Self> {
         let Self {
             helper_uid,
             socket_path,
@@ -266,7 +294,7 @@ impl Config {
             input_socket,
             output_dir,
             activity,
-        } = &mut config;
+        } = &mut self;
         crate::session::validate_uid(*helper_uid)?;
         activity.validate()?;
 
@@ -304,7 +332,7 @@ impl Config {
             };
         }
 
-        Ok(config)
+        Ok(self)
     }
 
     /// The configuration as the TOML a user would save.
@@ -445,7 +473,7 @@ fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Resu
     if text.len() as u64 > LIMIT {
         return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
     }
-    Config::parse(text.as_bytes(), &path)?;
+    Settings::parse(text.as_bytes(), &path)?;
 
     let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
     crate::files::write_beside(

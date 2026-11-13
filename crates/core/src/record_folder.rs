@@ -117,6 +117,52 @@ impl<K: RecordName> RecordFolder<K> {
         self.listing(limit).keys
     }
 
+    /// The key of every record in the folder, in no order, for a one-time
+    /// pass over all of them: up to `most`, and no folder (none written yet)
+    /// is none.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a folder that holds more than `most` entries or cannot be
+    /// read whole, rather than give part of it.
+    pub fn every(&self, most: usize) -> Result<Vec<K>> {
+        // Only nothing at all is no records: a link, even a dangling one,
+        // is refused below like any other folder that is not this account's.
+        if fs::symlink_metadata(&self.directory)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(Vec::new());
+        }
+        let entries = match fs::read_dir(&self.directory) {
+            Ok(entries) if self.exists() => entries,
+            Ok(_) => {
+                return Err(Error::new(
+                    Code::State,
+                    format!(
+                        "{} is not a folder of this account",
+                        self.directory.display()
+                    ),
+                ));
+            }
+            Err(error) => return Err(crate::context::context("List", &self.directory)(error)),
+        };
+        let mut keys = Vec::new();
+        for (seen, entry) in entries.enumerate() {
+            if seen >= most {
+                return Err(Error::new(
+                    Code::State,
+                    format!(
+                        "{} holds more than {most} entries",
+                        self.directory.display()
+                    ),
+                ));
+            }
+            let entry = entry.map_err(crate::context::context("List", &self.directory))?;
+            keys.extend(Self::key_of(&entry));
+        }
+        Ok(keys)
+    }
+
     /// Like [`Self::listed`], retaining uncertainty from a failed or bounded scan.
     pub fn listing(&self, limit: usize) -> Listing<K> {
         let absent = fs::symlink_metadata(&self.directory)

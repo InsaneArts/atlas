@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 /// The configuration, or None when Atlas is not set up here yet. A file
 /// that is there but does not load is an error, never "not set up".
 fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
-    match Config::load(config) {
+    match Config::load_user(config) {
         Ok(loaded) => Ok(Some(loaded)),
         Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
@@ -99,6 +99,10 @@ async fn update_using(
     // update-finish always answers in JSON.
     let mut finish = std::process::Command::new(&executable);
     finish.arg("update-finish");
+    // It moves the Second Login, this command's desktop.
+    if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+        finish.env(variable, key);
+    }
     if allow_disrupt {
         finish.arg("--allow-disrupt");
     }
@@ -143,8 +147,12 @@ const QUIT_MENU_BAR: &str = "Quit the menu bar, then run atlas update again";
 /// Start the menu bar with `executable` on `port`, as the settings at
 /// `config` say: whether it started.
 fn restart_menubar(executable: &std::path::Path, config: &std::path::Path, port: u16) -> bool {
+    let mut command = std::process::Command::new(executable);
+    if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+        command.env(variable, key);
+    }
     atlas_core::spawn::status(
-        std::process::Command::new(executable)
+        command
             .arg("menubar")
             .arg("--port")
             .arg(port.to_string())
@@ -162,7 +170,7 @@ fn restart_menubar(executable: &std::path::Path, config: &std::path::Path, port:
 /// where its records are leave it known not to run only when no other
 /// Atlas process runs.
 fn stop_menubar(config: &std::path::Path) -> Result<Option<u16>> {
-    let output = Config::load(config)
+    let output = Config::load_user(config)
         .and_then(Client::new)
         .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf));
     atlas_cli::menubar::stop_located(output)
@@ -276,6 +284,9 @@ async fn update_finish_using(
         let done = match run_steps(&steps, |step| {
             let mut command = std::process::Command::new(&executable);
             command.args(step);
+            if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+                command.env(variable, key);
+            }
             if allow_disrupt {
                 command.arg("--allow-disrupt");
             }

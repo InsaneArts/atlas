@@ -50,6 +50,7 @@ pub(super) fn add(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
         added: atlas_core::time::now_ms(),
         how: How::ByHand,
         level: Level::default(),
+        desktop: None,
     };
     let added = sign_ins::add_in(known(home)?, entry)?;
     Ok(json!({"ok": true, "added": added}))
@@ -66,6 +67,7 @@ pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -
         added: atlas_core::time::now_ms(),
         how: How::ByHand,
         level: Level::default(),
+        desktop: None,
     };
     sign_ins::add_in(known(home)?, entry)
 }

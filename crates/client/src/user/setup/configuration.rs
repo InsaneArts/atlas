@@ -95,7 +95,10 @@ pub fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result
         )));
     }
 
-    let toml = config.to_toml()?;
+    // Settings that list desktops keep every other one: only the Second
+    // Login's helper changes.
+    let before = fs::read_to_string(path)?;
+    let toml = config::desktops::with_user(&before, path, config)?;
     atlas_core::files::write_beside(
         path,
         0o600,
@@ -107,8 +110,8 @@ pub fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result
                     config::tilde(path)
                 ))
             };
-            let current = Config::load(path).map_err(|error| changed().with_source(error))?;
-            if current != *previous {
+            let current = Config::load_user(path).map_err(|error| changed().with_source(error))?;
+            if current != *previous || fs::read_to_string(path)? != before {
                 return Err(changed());
             }
             Ok(fs::rename(temporary, path)?)
@@ -158,7 +161,7 @@ pub fn configure_helper(
         write_config(config_path, &config)?;
         config
     } else {
-        Config::load(config_path)?
+        Config::load_user(config_path)?
     };
 
     // The account the settings name was deleted, or its user ID now belongs
@@ -185,7 +188,13 @@ pub fn configure_helper(
         ));
 
         let (helper, identity) = choose_helper()?;
-        let replacement = proposed(&helper)?;
+        // A repair: only the helper changes. Where records go and what the
+        // activity keeps stay as the person set them.
+        let replacement = Config {
+            output_dir: config.output_dir.clone(),
+            activity: config.activity.clone(),
+            ..proposed(&helper)?
+        };
         replace_config(config_path, &config, &replacement)?;
         config = replacement;
         choice = Some((helper, identity));

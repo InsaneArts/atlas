@@ -289,6 +289,10 @@ impl Server {
         for variable in atlas_core::host::Host::session_variables() {
             command.env_remove(variable);
         }
+        // Its desktop is this server's, whatever the settings now call it.
+        if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+            command.env(variable, key);
+        }
         let output = tokio::time::timeout(TAKING, atlas_core::spawn::output_async(&mut command))
             .await
             .map_err(|_| Error::new(Code::Capture, "The screenshot took too long"))?

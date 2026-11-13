@@ -1215,6 +1215,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",
+        &["choose_desktop"],
+        "exception: the way in for the user's own setup: its setup, update and removal work on it",
+    ),
+    (
+        "crates/cli/src/bin/atlas/main.rs",
         &["main"],
         "exception: the way in for the user's own setup: the helper's one-time opener",
     ),
@@ -1227,6 +1232,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/cli/src/bin/atlas/update.rs",
         &["preflight", "update_finish_using"],
         "owner: what moving the desktop onto a new build takes",
+    ),
+    (
+        "crates/cli/src/frame_pipe/endpoint.rs",
+        &["bind"],
+        "owner: the frame pipe's endpoint, keyed for the user desktop by its two accounts",
     ),
     (
         "crates/cli/src/lib.rs",
@@ -1383,6 +1393,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: who proves which agent host a command came from",
     ),
     (
+        "crates/client/src/host_session/desktops.rs",
+        &["Bindings::choose", "Bindings::seed"],
+        "owner: what a session did before bindings, which only the user desktop's records at the output folder's root tell",
+    ),
+    (
         "crates/client/src/jobs.rs",
         &["daemon_listens", "started"],
         "owner: whether the daemon listens, and that a started job is the one asked for",
@@ -1398,14 +1413,34 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: the report of the desktop's readiness",
     ),
     (
+        "crates/client/src/sign_ins.rs",
+        &["Entry::desktop_key"],
+        "owner: accounts Atlas added before desktops were the Second Login's",
+    ),
+    (
         "crates/core/src/config.rs",
         &[
             "Config",
             "Config::desktop",
-            "Config::parse",
             "Config::same_helper",
+            "Config::settled",
         ],
         "exception: the flat settings file, which names one user",
+    ),
+    (
+        "crates/core/src/config.rs",
+        &["Config::load_user"],
+        "exception: the way in for the user's own setup, update and removal",
+    ),
+    (
+        "crates/core/src/config/desktops.rs",
+        &["Entry", "Settings::parse", "Settings::validate"],
+        "owner: the settings list, whose entries are each written by kind",
+    ),
+    (
+        "crates/core/src/config/desktops.rs",
+        &["Settings::user", "with_user"],
+        "exception: the way in for the user's own setup, update and removal",
     ),
     (
         "crates/core/src/desktop.rs",
@@ -1418,6 +1453,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "Desktop::left_may_run",
             "Desktop::orphans_run",
             "Desktop::prove",
+            "Desktop::record_key",
             "Kind",
             "impl From<crate::user::User> for Desktop",
         ],

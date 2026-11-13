@@ -190,6 +190,9 @@ fn preserved_record() -> Error {
 /// How session records are kept: written as far as the kernel, as every
 /// recorded command writes one, and waited for at most briefly, so
 /// recording never holds a command up.
+/// The most session records a one-time pass over all of them looks at.
+const EVERY: usize = 100_000;
+
 static SESSIONS: Records = Records {
     folder: "sessions",
     noun: "session",
@@ -216,6 +219,21 @@ impl Store {
     /// The copies `open` made, which its records name.
     pub fn copies(&self) -> &Copies {
         &self.copies
+    }
+
+    /// Whether anything is where `key`'s record goes: the session worked
+    /// here, even when its record no longer reads.
+    pub(crate) fn holds(&self, key: &Key) -> bool {
+        self.folder.holds(key)
+    }
+
+    /// Every session with a record here, for a one-time pass.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a folder too large or unreadable to list whole.
+    pub(crate) fn every(&self) -> Result<Vec<Key>> {
+        self.folder.every(EVERY)
     }
 
     /// One record, when it is there and reads.

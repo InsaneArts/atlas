@@ -836,15 +836,30 @@ pub fn refresh() -> Value {
 pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String {
     let version = atlas_core::VERSION;
 
-    let Ok(config) = Config::load(config_path) else {
-        return "Atlas is installed but not set up. If the person wants GUI testing, \
-                ask them to open Atlas to finish setup."
-            .to_owned();
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(error) if error.code == atlas_core::error::Code::Config => {
+            return "Atlas is installed but not set up. If the person wants GUI testing, \
+                    ask them to open Atlas to finish setup."
+                .to_owned();
+        }
+        // A desktop this session cannot use, or settings to repair: said as
+        // they are, never as setup still to do.
+        Err(error) => return format!("Atlas {version}: {}", error.error),
     };
 
     let Ok(client) = Client::new(config.clone()) else {
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
+
+    // A session a hook names is held to its own desktop before it is read
+    // or recorded.
+    if let Some(session) = session
+        && let Err(error) = atlas_client::host_session::desktops::Bindings::of_account()
+            .and_then(|bindings| bindings.confirm(config_path, session.key()))
+    {
+        return format!("Atlas {version}: {}", error.error);
+    }
 
     if let Some(session) = session {
         let _ = atlas_client::host_session::store::touch(&client, session);

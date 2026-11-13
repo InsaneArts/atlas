@@ -34,6 +34,51 @@ fn accounts_round_trip_and_the_same_one_is_listed_once() {
 }
 
 #[test]
+fn an_account_naming_the_second_login_is_the_same_as_one_naming_no_desktop() {
+    let home = tempfile::tempdir().unwrap();
+    assert!(add_in(home.path(), github(1)).unwrap());
+    let named = Entry {
+        desktop: Some(atlas_core::desktop::RecordKey::user()),
+        ..github(2)
+    };
+    assert!(!add_in(home.path(), named).unwrap());
+    let elsewhere = Entry {
+        desktop: atlas_core::desktop::RecordKey::parse("elsewhere"),
+        ..github(3)
+    };
+    assert!(add_in(home.path(), elsewhere).unwrap());
+}
+
+#[test]
+fn an_accounts_level_is_one_across_desktops() {
+    let home = tempfile::tempdir().unwrap();
+    add_in(home.path(), github(1)).unwrap();
+    let chrome = Some("com.google.Chrome");
+    set_level_in(
+        home.path(),
+        Kind::Site,
+        "github.com",
+        chrome,
+        Level::Trusted,
+    )
+    .unwrap();
+    let elsewhere = Entry {
+        desktop: atlas_core::desktop::RecordKey::parse("elsewhere"),
+        ..github(2)
+    };
+    add_in(home.path(), elsewhere).unwrap();
+    let levels = |home: &Path| {
+        let Listed::Accounts(accounts) = listed_in(home) else {
+            panic!("unread");
+        };
+        accounts.iter().map(|entry| entry.level).collect::<Vec<_>>()
+    };
+    assert_eq!(levels(home.path()), [Level::Trusted, Level::Trusted]);
+    set_level_in(home.path(), Kind::Site, "github.com", chrome, Level::Ask).unwrap();
+    assert_eq!(levels(home.path()), [Level::Ask, Level::Ask]);
+}
+
+#[test]
 fn the_record_is_private_to_the_person() {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();

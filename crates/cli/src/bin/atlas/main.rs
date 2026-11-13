@@ -131,7 +131,104 @@ fn main() -> ExitCode {
         };
     }
 
+    choose_desktop(&config, cli.desktop.take(), &command);
+
     run(config, command, policy, wait, cli.allow_disrupt, format)
+}
+
+/// The session this command's desktop was chosen for, so a session the
+/// helper's verification finds later is held to its own binding.
+static CHOSEN_FOR: std::sync::OnceLock<Option<atlas_core::host::Key>> = std::sync::OnceLock::new();
+
+/// Choose this command's desktop, once, before it does anything: the one
+/// `flag` names, then the one its parent Atlas process chose, then
+/// `ATLAS_DESKTOP`, then its agent session's, then the default. An agent
+/// session is bound at its first command, whatever that command is. The process keeps the choice, or why there is none, for every
+/// later settings load. `atlas stop` chooses nothing: it stops every
+/// desktop. The Second Login's own setup, update and removal work on
+/// it, whatever is chosen.
+fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Command) {
+    use atlas_client::host_session::desktops::Bindings;
+    use atlas_core::config::desktops::{self, Selection, Settings};
+
+    let selection = Selection::from_env(flag);
+    match command {
+        // A Stop is for every desktop. Workers that run inside the helper
+        // never read the controller's settings, its bindings or its locks.
+        Command::Stop
+        | Command::SetupHelper(_)
+        | Command::InputService(_)
+        | Command::EnvironmentWorker { .. }
+        | Command::SessionInfo
+        | Command::PermissionsInfo
+        | Command::ElementsInfo { .. } => return,
+        Command::Setup(_)
+        | Command::Update(_)
+        | Command::UpdateFinish
+        | Command::Init
+        | Command::Uninstall(_)
+        | Command::Onboarding { .. } => {
+            let user = Ok(atlas_core::desktop::RecordKey::user());
+            return desktops::choose_for_process(selection, user);
+        }
+        _ => {}
+    }
+    // Settings that do not load are this command's refusal, kept so a file
+    // that appears later in the process changes nothing; the commands that
+    // set Atlas up are above. The lock is never taken for them, so a
+    // helper-side command touches nothing of the helper's account.
+    if let Err(error) = Settings::load(config) {
+        return desktops::choose_for_process(selection, Err(error));
+    }
+    // Every command of an agent session is held to its binding, whether or
+    // not its work is attributed to the session. A child of another Atlas
+    // command acts on the desktop its parent chose and bound.
+    let session = selection
+        .parent
+        .is_none()
+        .then(atlas_core::host::HostSession::from_env)
+        .flatten()
+        .map(|session| session.key().clone());
+    let chosen = Bindings::of_account()
+        .and_then(|bindings| bindings.choose(config, &selection, session.as_ref()));
+    if selection.parent.is_none() {
+        let _ = CHOSEN_FOR.set(session);
+    }
+    // Never silent: with a choice of desktops, a session that took the
+    // default is told which and how to choose another.
+    if let Ok(chosen) = &chosen
+        && chosen.told
+    {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "This session uses the desktop \"{}\", the default. Name another with \
+             --desktop or ATLAS_DESKTOP.",
+            chosen.name
+        );
+    }
+    desktops::choose_for_process(selection, chosen.map(|chosen| chosen.key));
+}
+
+/// Hold `verified`, the session the helper's verification settled on, to
+/// its own binding when the choice was made for another, or for none.
+///
+/// # Errors
+///
+/// Returns the failure to choose for `verified`, or the refusal of a
+/// different desktop.
+fn confirm_desktop(
+    config: &std::path::Path,
+    verified: &atlas_core::host::HostSession,
+) -> Result<(), Error> {
+    use atlas_client::host_session::desktops::Bindings;
+
+    let Some(used) = CHOSEN_FOR.get() else {
+        return Ok(());
+    };
+    if used.as_ref() == Some(verified.key()) {
+        return Ok(());
+    }
+    Bindings::of_account()?.confirm(config, verified.key())
 }
 
 /// Keep runtime, interrupt ownership and result reporting alive for one command.
@@ -270,6 +367,10 @@ fn picture_after(config: &std::path::Path, before: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0);
+    // It pictures this command's desktop.
+    if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+        command.env(variable, key);
+    }
     // Not waited for: it ends on its own, a moment later.
     let _ = atlas_core::spawn::spawn(&mut command);
 }

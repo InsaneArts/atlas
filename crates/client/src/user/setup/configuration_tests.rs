@@ -266,3 +266,36 @@ fn a_new_configuration_creates_private_nested_directories() {
     );
     assert_eq!(Config::load(&path).unwrap(), config);
 }
+
+#[test]
+fn replacing_a_listed_second_login_changes_only_its_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let path = root.join("atlas.toml");
+    let previous = configuration_at(&root);
+    let listed = format!(
+        "# The person's note stays.\ndefault = \"second-login\"\noutput_dir = \"{}\"\n\n\
+         [[desktops]]\nname = \"second-login\"\nkind = \"user\"\nhelper_uid = {}\n\
+         socket_path = \"{}\"\nidentity_probe = \"{}\"\ninput_socket = \"{}\"\n",
+        previous.output_dir.display(),
+        previous.helper_uid,
+        previous.socket_path.display(),
+        previous.identity_probe.display(),
+        previous.input_socket.display(),
+    );
+    fs::write(&path, &listed).unwrap();
+    let replacement = Config {
+        helper_uid: 60002,
+        ..previous.clone()
+    };
+
+    replace_config(&path, &previous, &replacement).unwrap();
+
+    let written = fs::read_to_string(&path).unwrap();
+    assert!(
+        written.starts_with("# The person's note stays.\n"),
+        "{written}"
+    );
+    assert!(written.contains("[[desktops]]"), "{written}");
+    assert_eq!(Config::load_user(&path).unwrap(), replacement);
+}

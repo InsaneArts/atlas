@@ -5,6 +5,7 @@
 //! instance bound are ever removed.
 use atlas_core::{
     context::context,
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     files::{LockFile, LockOpen, open_lock_file},
     name::hex,
@@ -215,14 +216,18 @@ async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<
     }
 }
 
-/// Bind the broker's endpoint for `controller` and helper `helper`.
+/// Bind the broker's endpoint for `controller` and `desktop`.
 ///
 /// # Errors
 ///
 /// Refuses an unsafe folder or socket, a service that already runs, or a
 /// socket path too long for a Unix address; returns failures to bind.
-pub(crate) async fn bind(controller: u32, helper: u32) -> Result<(Listeners, Endpoint)> {
-    bind_in(Path::new(BASE), controller, helper).await
+pub(crate) async fn bind(controller: u32, desktop: &Desktop) -> Result<(Listeners, Endpoint)> {
+    match desktop.kind() {
+        // Keyed by the two accounts, as every earlier build keys it, so
+        // builds before and after this one still exclude each other.
+        Kind::User(user) => bind_in(Path::new(BASE), controller, user.uid).await,
+    }
 }
 
 async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners, Endpoint)> {

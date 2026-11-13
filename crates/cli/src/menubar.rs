@@ -194,6 +194,10 @@ impl Startup {
         if let Some(test) = &mut self.test {
             command = test.command.take().unwrap();
         }
+        // The service shows the desktop this command chose.
+        if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+            command.env(variable, key);
+        }
         self.child = Some(atlas_core::spawn::spawn(
             command
                 .arg("menubar")
@@ -992,8 +996,13 @@ async fn spawn(
     args: &[&str],
 ) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
+    let mut command = Command::new(&program.executable);
+    // The app's own Atlas commands act on the desktop this service shows.
+    if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+        command.env(variable, key);
+    }
     let mut child = atlas_core::spawn::spawn_async(
-        Command::new(&program.executable)
+        command
             .args(args)
             .env_remove("XPC_SERVICE_NAME")
             .env("ATLAS_CLI", cli)

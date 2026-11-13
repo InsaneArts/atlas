@@ -358,7 +358,7 @@ fn read_config(config_path: &Path) -> (Option<Config>, &'static str, Option<Stri
     if fs::symlink_metadata(config_path).is_err() {
         (None, "missing", None)
     } else {
-        match Config::load(config_path) {
+        match Config::load_user(config_path) {
             Ok(config) => (Some(config), "present", None),
             Err(error) => (None, "invalid", Some(error.error)),
         }

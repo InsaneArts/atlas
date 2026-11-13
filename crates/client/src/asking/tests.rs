@@ -10,6 +10,7 @@ fn github() -> Entry {
         added: 1,
         how: How::ByHand,
         level: Level::Ask,
+        desktop: None,
     }
 }
 

@@ -37,7 +37,7 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
     let executable = atlas_core::app_bundle::installed_executable()?;
 
     // Settings that exist but do not load name no helper, so its job stays.
-    let (client, unloaded) = match Config::load(config_path) {
+    let (client, unloaded) = match Config::load_user(config_path) {
         Ok(config) => (Some(Client::new(config)?), None),
         Err(error) if error.code == Code::ConfigInvalid => (None, Some(error.error)),
         Err(_) => (None, None),

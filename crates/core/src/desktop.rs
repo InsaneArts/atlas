@@ -24,9 +24,37 @@ pub enum Kind {
     User(crate::user::User),
 }
 
-/// The name a desktop's locks and records carry.
+/// The name a desktop's live state carries: its locks, Stop, pending
+/// outcomes and frames. It names the account or machine behind the
+/// desktop, so replacing that names another.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopId(String);
+
+crate::name::name_type! {
+    /// The name a desktop's records, sign-ins and session bindings carry:
+    /// a simple word that a repair of the desktop keeps.
+    pub struct RecordKey;
+    refused(text) = format!("{text} is not a desktop's record key");
+    display
+}
+
+impl RecordKey {
+    /// The longest record key.
+    const MAX: usize = 64;
+
+    /// The key of the one Second Login.
+    pub fn user() -> Self {
+        Self("user".to_owned())
+    }
+
+    /// `text` as a record key: 1 to 64 lowercase letters, digits and dashes.
+    pub fn parse(text: &str) -> Option<Self> {
+        let plain = text
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        ((1..=Self::MAX).contains(&text.len()) && plain).then(|| Self(text.to_owned()))
+    }
+}
 
 impl From<crate::user::User> for Desktop {
     fn from(user: crate::user::User) -> Self {
@@ -60,6 +88,14 @@ impl Desktop {
         };
         let digest = bytes_sha256(named.as_bytes());
         DesktopId(digest[..DesktopId::LENGTH].to_owned())
+    }
+
+    /// The name this desktop's records carry. There is one Second Login,
+    /// and replacing its account repairs it, so its records stay its own.
+    pub fn record_key(&self) -> RecordKey {
+        match &self.kind {
+            Kind::User(_) => RecordKey::user(),
+        }
     }
 
     /// Verify that `observation` describes this desktop, out of the

@@ -96,3 +96,43 @@ fn a_failed_entry_or_metadata_read_leaves_the_listing_incomplete() {
     assert!(!listing.complete);
     assert_eq!(listing.keys.len(), 1, "the unreadable record stays known");
 }
+
+#[test]
+fn every_record_is_listed_or_none_is() {
+    static RECORDS: Records = Records {
+        folder: "records",
+        noun: "test",
+        lock_wait: Duration::ZERO,
+        durability: Durability::Kernel,
+        bytes: 1024,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let folder = RecordFolder::<Key>::at(directory.path(), &RECORDS);
+    assert!(folder.every(10).unwrap().is_empty());
+    folder.make().unwrap();
+    for name in ["one", "two", "three"] {
+        folder.write(&Key::digest(name), b"{}").unwrap();
+    }
+    fs::write(folder.directory().join("notes.txt"), "").unwrap();
+    assert_eq!(folder.every(10).unwrap().len(), 3);
+    assert_eq!(folder.every(3).unwrap_err().code, Code::State);
+}
+
+#[test]
+fn a_link_in_place_of_the_folder_is_refused_even_dangling() {
+    static RECORDS: Records = Records {
+        folder: "records",
+        noun: "test",
+        lock_wait: Duration::ZERO,
+        durability: Durability::Kernel,
+        bytes: 1024,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        directory.path().join("gone"),
+        directory.path().join("records"),
+    )
+    .unwrap();
+    let folder = RecordFolder::<Key>::at(directory.path(), &RECORDS);
+    assert!(folder.every(10).is_err());
+}

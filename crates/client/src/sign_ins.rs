@@ -76,12 +76,28 @@ pub struct Entry {
     pub how: How,
     #[serde(default)]
     pub level: Level,
+    /// The desktop it was signed in on, by its record key; none is the
+    /// Second Login, as every account Atlas added before desktops is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<atlas_core::desktop::RecordKey>,
 }
 
 impl Entry {
-    /// Whether `self` and `other` are the same account: the same site in
-    /// the same browser, or the same app.
+    /// The desktop it was signed in on: the Second Login when it names none.
+    fn desktop_key(&self) -> atlas_core::desktop::RecordKey {
+        self.desktop
+            .clone()
+            .unwrap_or_else(atlas_core::desktop::RecordKey::user)
+    }
+
+    /// Whether `self` and `other` are the same account on the same desktop.
     fn same(&self, other: &Self) -> bool {
+        self.same_account(other) && self.desktop_key() == other.desktop_key()
+    }
+
+    /// Whether `self` and `other` are the same account: the same site in
+    /// the same browser, or the same app, on any desktop.
+    fn same_account(&self, other: &Self) -> bool {
         self.kind == other.kind && self.id == other.id && self.browser == other.browser
     }
 }
@@ -150,6 +166,11 @@ pub fn add_in(home: &Path, entry: Entry) -> Result<bool> {
     if accounts.iter().any(|listed| listed.same(&entry)) {
         return Ok(false);
     }
+    // The same account on another desktop keeps the level the person gave it.
+    let mut entry = entry;
+    if let Some(listed) = accounts.iter().find(|listed| listed.same_account(&entry)) {
+        entry.level = listed.level;
+    }
     if accounts.len() >= MOST {
         return Err(Error::new(
             Code::State,
@@ -198,15 +219,20 @@ pub fn set_level_in(
 ) -> Result<bool> {
     let _locked = locked(home)?;
     let mut accounts = writable(home)?;
-    let Some(entry) = accounts
+    // Levels are the person's for an account, whichever desktop it was
+    // signed in on.
+    let mut found = false;
+    for entry in accounts
         .iter_mut()
-        .find(|entry| entry.kind == kind && entry.id == id && entry.browser.as_deref() == browser)
-    else {
-        return Ok(false);
-    };
-    entry.level = level;
-    save(home, accounts)?;
-    Ok(true)
+        .filter(|entry| entry.kind == kind && entry.id == id && entry.browser.as_deref() == browser)
+    {
+        entry.level = level;
+        found = true;
+    }
+    if found {
+        save(home, accounts)?;
+    }
+    Ok(found)
 }
 
 /// The account a password typed where Atlas `seen` it belongs to, added at
@@ -222,6 +248,7 @@ pub fn account_of(seen: &Seen, now: u64) -> Entry {
             added: now,
             how: How::TakeControl,
             level: Level::default(),
+            desktop: None,
         },
         None => Entry {
             kind: Kind::App,
@@ -231,6 +258,7 @@ pub fn account_of(seen: &Seen, now: u64) -> Entry {
             added: now,
             how: How::TakeControl,
             level: Level::default(),
+            desktop: None,
         },
     }
 }

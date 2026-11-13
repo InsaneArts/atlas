@@ -152,6 +152,9 @@ pub(super) async fn execute(
     } else {
         None
     };
+    if let Some(host) = &host {
+        super::confirm_desktop(&config, host)?;
+    }
     let task = task_of(
         policy.makes(),
         host.as_ref(),
@@ -307,7 +310,7 @@ async fn carry_out(
                 .await
                 .map(|()| Value::Null)
         }
-        Command::Stop => client()?.hold(true).await,
+        Command::Stop => stop_everywhere(config, client).await,
         Command::Resume => client()?.hold(false).await,
         Command::Mcp(args) => mcp(config, client()?, args).await,
         Command::Monitor {
@@ -889,6 +892,8 @@ fn settings(
     client: &impl Fn() -> Result<Client>,
     args: &cli::Config,
 ) -> Result<Value> {
+    // A desktop the command cannot use refuses before the settings change.
+    client()?;
     if let Some(state) = args.pictures_before_actions {
         atlas_core::config::keep_pictures(config, state == cli::OnOff::On)?;
     }
@@ -916,9 +921,12 @@ fn settings(
 /// is nothing to choose here beyond whether to lock now.
 fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     // Without settings there is no desktop, and the accounts are this Mac's.
-    let Ok(config) = Config::load(config) else {
+    // Settings that load but name no desktop this command can use refuse:
+    // locking the screen is never the answer to a wrong desktop.
+    if atlas_core::config::desktops::Settings::load(config).is_err() {
         return crate::user::switch::switch_on_this_mac(None, args);
-    };
+    }
+    let config = Config::load(config)?;
     match config.desktop().kind() {
         desktop::Kind::User(login) => crate::user::switch::switch_on_this_mac(Some(login), args),
     }
@@ -939,6 +947,67 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Stop the agents on every desktop the settings at `config` list: a Stop
+/// is the person's, for the whole Mac, and no choice of desktop (a stale
+/// `ATLAS_DESKTOP`, a broken binding) keeps it from any of them. Each is
+/// told even when another could not be; the first failure is returned once
+/// all were tried, and with more than one desktop the reply says what each
+/// one said. The command's own client, when it has one, stops its desktop
+/// as it always has; the others get its labels.
+async fn stop_everywhere(config: &Path, client: &impl Fn() -> Result<Client>) -> Result<Value> {
+    let settings = atlas_core::config::desktops::Settings::load(config)?;
+    let own = client().ok();
+    let mut held = Vec::new();
+    for listed in settings.desktops() {
+        let mine = own
+            .as_ref()
+            .filter(|own| own.desktop().id() == listed.config.desktop().id());
+        let stopped = match mine {
+            Some(own) => own.hold(true).await,
+            None => match Client::new(listed.config.clone()) {
+                Ok(mut other) => {
+                    if let Some(own) = &own {
+                        other.actor = own.actor;
+                        other.doing = own.doing.clone();
+                        other.host_session = own.host_session.clone();
+                        other.controller = other.controller.labelled(own.host_session.as_ref());
+                    }
+                    other.hold(true).await
+                }
+                Err(error) => Err(error),
+            },
+        };
+        held.push((listed.name.clone(), stopped));
+    }
+    if held.len() == 1 {
+        return held.remove(0).1;
+    }
+
+    let each: Vec<Value> = held
+        .iter()
+        .map(|(name, stopped)| json!({"desktop": name, "reply": reply_of(stopped)}))
+        .collect();
+    let mut replies = held.into_iter().map(|(_, stopped)| stopped);
+    let first = replies.next().unwrap_or_else(|| Ok(json!({"ok": true})));
+    match first {
+        Err(error) => Err(error.with("desktops", json!(each))),
+        Ok(mut reply) => match replies.find_map(Result::err) {
+            Some(error) => Err(error.with("desktops", json!(each))),
+            None => {
+                reply["desktops"] = json!(each);
+                Ok(reply)
+            }
+        },
+    }
+}
+
+fn reply_of(held: &Result<Value>) -> Value {
+    match held {
+        Ok(reply) => reply.clone(),
+        Err(error) => json!(error),
+    }
 }
 
 #[cfg(test)]

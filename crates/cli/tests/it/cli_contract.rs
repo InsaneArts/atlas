@@ -57,6 +57,10 @@ impl Fixture {
                 ("TERM", "dumb"),
                 ("NO_COLOR", "1"),
             ])
+            .env(
+                atlas_client::host_session::desktops::TEST_HOME,
+                self.directory.path(),
+            )
             .env("ATLAS_CONFIG", self.config("broken.toml"))
             .stdin(Stdio::null());
         if let Some(config) = config {
@@ -506,9 +510,15 @@ fn pipelined_cursor_initialization_guards_an_imported_plain_mcp_connection() {
     )
     .unwrap();
     let mut child = atlas_core::spawn::spawn(
-        Command::new(env!("CARGO_BIN_EXE_atlas"))
+        without_a_session(Command::new(env!("CARGO_BIN_EXE_atlas")))
             .args(["--config", config.to_str().unwrap(), "mcp"])
             .env("HOME", fixture.directory.path())
+            .env(
+                atlas_client::host_session::desktops::TEST_HOME,
+                fixture.directory.path(),
+            )
+            .env_remove("ATLAS_DESKTOP")
+            .env_remove("ATLAS_DESKTOP_KEY")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
@@ -565,9 +575,15 @@ fn mcp_ends_on_a_signal_while_its_host_still_holds_the_pipe_open() {
     )
     .unwrap();
     let mut child = atlas_core::spawn::spawn(
-        Command::new(env!("CARGO_BIN_EXE_atlas"))
+        without_a_session(Command::new(env!("CARGO_BIN_EXE_atlas")))
             .args(["--config", config.to_str().unwrap(), "mcp"])
             .env("HOME", fixture.directory.path())
+            .env(
+                atlas_client::host_session::desktops::TEST_HOME,
+                fixture.directory.path(),
+            )
+            .env_remove("ATLAS_DESKTOP")
+            .env_remove("ATLAS_DESKTOP_KEY")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()),
@@ -601,4 +617,47 @@ fn mcp_ends_on_a_signal_while_its_host_still_holds_the_pipe_open() {
     };
     assert!(status.success());
     drop(input);
+}
+
+/// `command`, told of no agent session, as a server started by hand is.
+fn without_a_session(mut command: Command) -> Command {
+    for variable in atlas_core::host::Host::session_variables() {
+        command.env_remove(variable);
+    }
+    command
+}
+
+#[test]
+fn a_worker_inside_the_helper_touches_no_desktop_choice() {
+    let fixture = Fixture::new();
+    let config = fixture.config("atlas.toml");
+    std::fs::write(
+        &config,
+        "helper_uid = 60001\nsocket_path = \"absent.sock\"\nidentity_probe = \"absent\"\ninput_socket = \"input.sock\"\noutput_dir = \"out\"\n",
+    )
+    .unwrap();
+    for args in [["session-info"], ["permissions-info"]] {
+        let _ = atlas_core::spawn::spawn(
+            Command::new(env!("CARGO_BIN_EXE_atlas"))
+                .current_dir(fixture.directory.path())
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env(
+                    atlas_client::host_session::desktops::TEST_HOME,
+                    fixture.directory.path(),
+                )
+                .env("ATLAS_SESSION", "probe")
+                .args(["--config", config.to_str().unwrap()])
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .and_then(std::process::Child::wait_with_output)
+        .unwrap();
+        assert!(
+            !fixture.directory.path().join("Library").exists(),
+            "{args:?} made a binding or a lock"
+        );
+    }
 }
