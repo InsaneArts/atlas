@@ -43,6 +43,12 @@ pub(super) fn session_owner() -> Option<(i64, bool)> {
     Some((uid, done))
 }
 
+/// Whether macOS gives this process a mode for the main display, which
+/// ScreenCaptureKit needs.
+pub(super) fn display_has_mode() -> bool {
+    CGDisplayCopyDisplayMode(CGMainDisplayID()).is_some()
+}
+
 /// Whether the session is on the console. Unknown counts as on the console:
 /// nothing acts unless the session is known to be hidden.
 pub(super) fn on_console() -> bool {

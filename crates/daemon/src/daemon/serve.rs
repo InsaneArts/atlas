@@ -416,6 +416,17 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
+    // Started on the screen, it has no mode for the display it gets off it.
+    let started_on_screen = (daemon.screen.on_console)();
+    let restarter = daemon.clone();
+    let commands = daemon.clone();
+    let displaying = tokio::spawn(super::display_mode::restart_off_screen(
+        started_on_screen,
+        daemon.screen.on_console,
+        facts::display_has_mode,
+        async move || commands.runs.lock().await.is_empty(),
+        move || restarter.restarting.notify_one(),
+    ));
     let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
     // Kept paused from here until serving ends, however it ends: a daemon
     // that is gone must not leave it paused.
@@ -446,6 +457,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
 
     asking.abort();
     recording.abort();
+    displaying.abort();
     releasing.abort();
     // A keeper that has not ended by now is waited for once more as
     // `_keeping` is dropped.
