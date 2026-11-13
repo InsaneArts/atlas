@@ -1472,6 +1472,56 @@ fn with_jobs(on_console: bool) -> (tempfile::TempDir, Arc<Daemon>) {
 }
 
 #[tokio::test]
+async fn the_daemon_closes_to_new_commands_only_off_the_screen_with_none_running() {
+    assert!(!daemon(true).close_commands().await, "closed on the screen");
+
+    let daemon = daemon(false);
+    let running = daemon
+        .runs
+        .lock()
+        .await
+        .spawn(std::future::pending::<Result<()>>());
+    assert!(
+        !daemon.close_commands().await,
+        "closed with a command running"
+    );
+
+    // Finished but not collected: the listener is asked to collect it.
+    running.abort();
+    while !running.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !daemon.close_commands().await,
+        "closed before it was collected"
+    );
+    tokio::time::timeout(Duration::from_secs(5), daemon.collect_runs.notified())
+        .await
+        .expect("the listener was not asked to collect it");
+    while daemon.runs.lock().await.try_join_next().is_some() {}
+    assert!(daemon.close_commands().await);
+}
+
+#[tokio::test]
+async fn a_command_asked_for_once_the_daemon_closed_runs_nothing() {
+    let folder = tempfile::tempdir().unwrap();
+    let made = folder.path().join("made");
+    let daemon = daemon(false);
+    assert!(daemon.close_commands().await);
+
+    let request = json!({
+        "op": "run",
+        "argv": ["/usr/bin/touch", made],
+        "timeoutMs": 60000,
+    });
+    let replies = exchange(daemon, &request.to_string()).await;
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["code"], "busy");
+    assert_eq!(replies[0]["uncertain"], false);
+    assert!(!made.exists(), "the command ran");
+}
+
+#[tokio::test]
 async fn daemon_shutdown_observes_the_supervisor_outcome() {
     for stopping in [false, true] {
         let complete = tokio::spawn(async { Ok(()) });

@@ -110,7 +110,7 @@ async fn started(
             session: client.task.as_ref().map(|task| task.session().clone()),
         },
         uid: match client.desktop().kind() {
-            Kind::SecondLogin(login) => login.uid,
+            Kind::User(login) => login.uid,
         },
         pin,
     };
@@ -730,7 +730,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
 /// to it does not prove it keeps no jobs.
 pub(crate) fn daemon_listens(client: &Client) -> bool {
     match client.desktop().kind() {
-        Kind::SecondLogin(_) => client.transport.path.exists(),
+        Kind::User(login) => crate::user::service::daemon_listens_in(client, login),
     }
 }
 

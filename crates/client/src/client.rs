@@ -14,7 +14,7 @@ mod record;
 mod run;
 pub mod service;
 mod service_change;
-mod session;
+pub(crate) mod session;
 mod stop;
 #[cfg(test)]
 #[path = "client_tests.rs"]
@@ -36,19 +36,22 @@ use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
-    desktop::{Desktop, Kind, SecondLogin},
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
-    transport::{Transport, run_output},
+    transport::Transport,
 };
 pub(crate) use atlas_core::{screen::frame::Size, time::timestamp};
 use serde_json::{Value, json};
 
 use std::{path::Path, sync::Arc, time::Duration};
 
+/// What identifies an installed build without hashing it: its device,
+/// inode, size and modification time.
+pub(crate) type BuildKey = (u64, u64, u64, i64, i64);
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
-type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
+type BuildCache = Arc<std::sync::Mutex<Option<(BuildKey, String)>>>;
 
 #[cfg(test)]
 type AskShown = Arc<dyn Fn(&str) + Send + Sync>;
@@ -168,7 +171,7 @@ impl Client {
         // The command service: where it listens, and the account the
         // kernel must name at its end.
         let transport = match desktop.kind() {
-            Kind::SecondLogin(login) => {
+            Kind::User(login) => {
                 atlas_core::session::validate_uid(login.uid)?;
                 Transport {
                     path: config.socket_path.clone(),
@@ -304,7 +307,7 @@ impl Client {
 
         // Do not launch the probe into an unverified UID or the visible desktop.
         let answered_as_configured = match self.desktop().kind() {
-            Kind::SecondLogin(login) => hello["user"]["uid"].as_u64() == Some(login.uid.into()),
+            Kind::User(login) => hello["user"]["uid"].as_u64() == Some(login.uid.into()),
         };
         if hello["ok"] != true || !answered_as_configured || hello["session"]["onConsole"] != false
         {
@@ -339,35 +342,8 @@ impl Client {
             return Self::challenged_proof(&reply, &challenge);
         }
         match self.desktop().kind() {
-            Kind::SecondLogin(login) => self.session_proof_by_command(login).await,
+            Kind::User(login) => crate::user::session::session_proof_by_command(self, login).await,
         }
-    }
-
-    /// A fresh proof of the second login `login`'s session from a new run of
-    /// the shared Atlas command, which it runs from this disk.
-    async fn session_proof_by_command(&self, _login: &SecondLogin) -> Result<Value> {
-        let command = &self.config.identity_probe;
-        let request = json!({
-            "op": "run",
-            "argv": [command, "session-info"],
-            "timeoutMs": 3000,
-        });
-        let reply = self.transport.call(&request).await?;
-        if reply["ok"] != true || reply["exitCode"] != 0 || reply["timedOut"] != false {
-            return Err(Error::new(
-                Code::Identity,
-                format!(
-                    "The helper cannot run the shared Atlas command at {}. Run atlas \
-                     install.",
-                    command.display()
-                ),
-            ));
-        }
-
-        let output = run_output(&reply, 4096)
-            .map_err(|_| Error::new(Code::Identity, "Malformed or oversized identity output"))?;
-
-        Ok(serde_json::from_slice(&output)?)
     }
 
     /// The proof in `reply`, only when it answers `challenge`.
@@ -438,16 +414,7 @@ impl Client {
         atlas_core::files::probe_write(self.output_dir()?)?;
 
         match self.desktop().kind() {
-            // Builds and environment plans are staged beside the shared Atlas
-            // command for the second login to read; a missing folder is
-            // setup's concern, not this check's.
-            Kind::SecondLogin(_) => {
-                if let Some(shared) = self.config.identity_probe.parent()
-                    && shared.is_dir()
-                {
-                    atlas_core::files::probe_write(shared)?;
-                }
-            }
+            Kind::User(login) => crate::user::install::staging_writable_in(self, login)?,
         }
 
         Ok(())

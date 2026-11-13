@@ -273,20 +273,20 @@ async fn carry_out(
             unreachable!("main runs these before anything else")
         }
         Command::InputService(args) => input_service(args).await,
-        Command::SetupHelper(args) => setup_helper(&args),
+        Command::SetupHelper(args) => crate::user::setup::setup_helper(&args),
         Command::Update(args) => update::run(config, args, host, allow_disrupt).await,
         Command::UpdateFinish => update::update_finish(config, host, allow_disrupt).await,
         Command::PictureAfter { before, ended } => {
             client()?.picture_after(&before, ended).await?;
             Ok(json!({"ok": true}))
         }
-        Command::Init => super::init::run(config, allow_disrupt).await,
+        Command::Init => crate::user::init::run(config, allow_disrupt).await,
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => agents(config, host, action).await,
         Command::Uninstall(args) => super::uninstall::run(config, args).await,
         Command::Menubar(args) => menu_bar(config, client, args).await,
         Command::Switch(args) => switch(config, args),
-        Command::Setup(args) => setup(config, client, args).await,
+        Command::Setup(args) => crate::user::setup::setup(config, client, args).await,
         Command::Config(args) => settings(config, client, &args),
         Command::Status => Ok(client()?.status().await),
         Command::Sound { state: None } => atlas_client::sound::show(&client()?).await,
@@ -294,10 +294,10 @@ async fn carry_out(
             atlas_client::sound::set(&client()?, state == cli::OnOff::Off).await
         }
         Command::Activity(args) => activity(&client()?, host, &args),
-        Command::Doctor(args) if args.login_timing => atlas_core::login_log::timing(),
+        Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
         Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
         Command::VerifyNative { fixture } => {
-            atlas_client::capability::verify(&client()?, &fixture).await
+            atlas_client::user::capability::canary::verify(&client()?, &fixture).await
         }
         Command::Environment(args) => provision(client, args).await,
         Command::Install => client()?.install(),
@@ -397,30 +397,6 @@ fn guide(args: &cli::AgentGuide) -> Value {
     };
     print(&guide);
     Value::Null
-}
-
-fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
-    let guard = atlas_daemon::helper_setup::Guard {
-        account: Some(serde_json::from_str(&args.account)?),
-        logged_out: args.logged_out,
-    };
-    atlas_daemon::helper_setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
-}
-
-/// `atlas setup`: a preview, or the recorded setup applied.
-async fn setup(
-    config: &Path,
-    client: &impl Fn() -> Result<Client>,
-    args: cli::Setup,
-) -> Result<Value> {
-    if !args.apply {
-        return atlas_client::setup::preview(config, args.helper.as_deref()).await;
-    }
-
-    let client = client()?;
-    // Setup settles only mutations its own log records, and refuses others.
-    let ownership = client.service_change(true).await?;
-    atlas_client::setup::migrate::apply(config, &client, &ownership).await
 }
 
 fn activity(client: &Client, host: Option<&HostSession>, args: &cli::Activity) -> Result<Value> {
@@ -696,33 +672,45 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
     use atlas_cli::onboarding;
 
     match step {
-        OnboardingCommand::Status => onboarding::status(config).await,
-        OnboardingCommand::Choose { account } => onboarding::choose(config, &account),
+        OnboardingCommand::Status => atlas_cli::user::onboarding::status::status(config).await,
+        OnboardingCommand::Choose { account } => {
+            atlas_cli::user::onboarding::choose(config, &account)
+        }
         OnboardingCommand::Create { account, full_name } => {
-            onboarding::create(config, &account, &full_name)
+            atlas_cli::user::onboarding::create(config, &account, &full_name)
         }
         OnboardingCommand::Accept {
             controller_uid,
             controller_name,
-        } => onboarding::accept(controller_uid, &controller_name),
-        OnboardingCommand::AcceptWorker { ticket } => onboarding::accept_worker(&ticket).await,
-        OnboardingCommand::Window { state } => onboarding::window(state == WindowState::Open),
-        OnboardingCommand::Forget => onboarding::forget(config),
-        OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(config),
-        OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
-        OnboardingCommand::Finish => onboarding::finish(config).await,
+        } => atlas_cli::user::onboarding::accept(controller_uid, &controller_name),
+        OnboardingCommand::AcceptWorker { ticket } => {
+            atlas_cli::user::onboarding::acceptance::accept_worker(&ticket).await
+        }
+        OnboardingCommand::Window { state } => {
+            atlas_cli::user::onboarding::window(state == WindowState::Open)
+        }
+        OnboardingCommand::Forget => atlas_cli::user::onboarding::forget(config),
+        OnboardingCommand::Close { helper: false } => {
+            atlas_cli::user::onboarding::close_leftovers(config)
+        }
+        OnboardingCommand::Close { helper: true } => {
+            atlas_cli::user::onboarding::close_helper(config)
+        }
+        OnboardingCommand::Finish => atlas_cli::user::onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
         OnboardingCommand::Files { change } => {
             let change = change.map(|change| match change {
-                HomeFiles::Private => onboarding::HomeChange::Private,
-                HomeFiles::Open => onboarding::HomeChange::Open,
-                HomeFiles::Offered => onboarding::HomeChange::Offered,
+                HomeFiles::Private => atlas_cli::user::onboarding::HomeChange::Private,
+                HomeFiles::Open => atlas_cli::user::onboarding::HomeChange::Open,
+                HomeFiles::Offered => atlas_cli::user::onboarding::HomeChange::Offered,
             });
             let (config, by_person) = (config.to_path_buf(), actor() == Actor::Viewer);
             // `ls` and `chmod` wait on their own, off the command's async work.
-            tokio::task::spawn_blocking(move || onboarding::files(&config, change, by_person))
-                .await
-                .map_err(|error| Error::new(Code::Io, error.to_string()))?
+            tokio::task::spawn_blocking(move || {
+                atlas_cli::user::onboarding::files(&config, change, by_person)
+            })
+            .await
+            .map_err(|error| Error::new(Code::Io, error.to_string()))?
         }
         OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
             choice.map(|choice| choice == SignInCopies::Allow),
@@ -929,58 +917,10 @@ fn settings(
 fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     // Without settings there is no desktop, and the accounts are this Mac's.
     let Ok(config) = Config::load(config) else {
-        return switch_on_this_mac(None, args);
+        return crate::user::switch::switch_on_this_mac(None, args);
     };
     match config.desktop().kind() {
-        desktop::Kind::SecondLogin(login) => switch_on_this_mac(Some(login), args),
-    }
-}
-
-/// [`switch`] among this Mac's accounts, the second login `login` among
-/// them when there is one, and the one chosen when none is named.
-fn switch_on_this_mac(login: Option<&desktop::SecondLogin>, args: cli::Switch) -> Result<Value> {
-    use atlas_client::switch;
-
-    let accounts = switch::accounts(login.map(|login| login.uid))?;
-
-    if args.list {
-        return Ok(json!({"ok": true, "accounts": accounts}));
-    }
-
-    let target = match args.account {
-        Some(name) => Some(
-            accounts
-                .iter()
-                .find(|candidate| candidate.name == name)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::new(
-                        Code::Switch,
-                        format!("No account named {name} to switch to"),
-                    )
-                })?,
-        ),
-        None if args.lock => None,
-        None => accounts.iter().find(|candidate| candidate.helper).cloned(),
-    };
-
-    if !args.yes {
-        let question = match &target {
-            Some(account) => format!(
-                "Lock the screen so you can switch to {}?",
-                account.real_name.as_deref().unwrap_or(&account.name)
-            ),
-            None => "Lock the screen now?".to_owned(),
-        };
-
-        if !prompt::confirm(&question, true, "pass --yes")? {
-            return Err(prompt::cancelled());
-        }
-    }
-
-    match target {
-        Some(account) => switch::to(&account),
-        None => switch::lock_screen(),
+        desktop::Kind::User(login) => crate::user::switch::switch_on_this_mac(Some(login), args),
     }
 }
 

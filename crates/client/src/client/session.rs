@@ -3,7 +3,7 @@
 use super::{Client, Mutation, service::require_accessibility};
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Kind, SecondLogin},
+    desktop::Kind,
     error::{Code, Error, Result},
     session::{Observation, Session},
 };
@@ -17,7 +17,7 @@ use std::time::Duration;
 /// over. Only silence after two looks that found it gone, and a third look
 /// after that silence (the daemon's answer can take a while, and the login
 /// can come back meanwhile), ends the wait.
-pub(super) async fn gone_within<L, A>(
+pub(crate) async fn gone_within<L, A>(
     mut looked: impl FnMut() -> L,
     mut answers: impl FnMut() -> A,
     limit: Duration,
@@ -292,30 +292,8 @@ impl Client {
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
         match self.desktop().kind() {
-            Kind::SecondLogin(login) => self.second_login_gone(login, seconds).await,
+            Kind::User(login) => crate::user::session::user_gone(self, login, seconds).await,
         }
-    }
-
-    /// [`Client::desktop_gone`] for the second login `login`, whose
-    /// processes this Mac can see.
-    async fn second_login_gone(&self, login: &SecondLogin, seconds: u64) -> bool {
-        let uid = login.uid;
-        let looked = move || async move {
-            tokio::task::spawn_blocking(move || atlas_core::session::logged_out(uid))
-                .await
-                .ok()
-                .flatten()
-                == Some(true)
-        };
-        let answers = || async { self.transport.call(&json!({"op": "hello"})).await.is_ok() };
-
-        gone_within(
-            looked,
-            answers,
-            Duration::from_secs(seconds),
-            Duration::from_millis(500),
-        )
-        .await
     }
 }
 

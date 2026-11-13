@@ -3,7 +3,7 @@
 //! read from a small TOML file whose relative paths resolve against the
 //! file itself.
 use crate::context::context;
-use crate::desktop::{Desktop, SecondLogin};
+use crate::desktop::Desktop;
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -166,7 +166,7 @@ impl Config {
     /// The desktop these settings name: the hidden login of the helper
     /// account.
     pub fn desktop(&self) -> Desktop {
-        Desktop::from(SecondLogin {
+        Desktop::from(crate::user::User {
             uid: self.helper_uid,
         })
     }

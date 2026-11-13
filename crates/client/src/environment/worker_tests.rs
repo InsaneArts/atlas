@@ -1,11 +1,9 @@
 use super::*;
 use crate::environment::{
     STATE, problem,
-    stage::rolled_back,
-    tests::{Sandbox, stage_in, stop_apply},
+    tests::{Sandbox, stop_apply},
 };
-use atlas_core::error::Result;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     cell::Cell,
     fs,
@@ -321,43 +319,6 @@ fn selected_files_under_config_atlas_share_ancestors_with_private_state() {
     assert!(!sandbox.home.join(".config/atlas/environment.json").exists());
     assert!(!sandbox.home.join(".config/atlas/proof").exists());
     assert!(sandbox.home.join(STATE).is_dir());
-}
-
-/// A rollback's own folder goes once nothing in it is unconfirmed, also
-/// after a refusal (a mistyped ID); a frozen plan's folder goes only with
-/// a finished undo.
-#[test]
-fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
-    let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &atlas_core::files::token());
-    fs::write(stage.join("controller.lock"), b"").unwrap();
-    let refused: Result<Value> = Ok(json!({"ok": false, "error": worker::MISSING}));
-    let finished: Result<Value> =
-        Ok(json!({"ok": true, "phase": "rolledBack", "resumeRequired": false}));
-    let stopped: Result<Value> =
-        Ok(json!({"ok": false, "phase": "rollingBack", "resumeRequired": true}));
-
-    for apply in [false, true] {
-        assert!(rolled_back(&refused, apply, true, &stage), "apply {apply}");
-        assert!(
-            !rolled_back(&refused, apply, false, &stage),
-            "apply {apply}"
-        );
-    }
-
-    assert!(rolled_back(&Err(problem("refused")), true, true, &stage));
-    assert!(rolled_back(&finished, true, false, &stage));
-    assert!(!rolled_back(&finished, false, false, &stage));
-    assert!(!rolled_back(&stopped, true, false, &stage));
-
-    fs::create_dir(stage.join("request-ab12")).unwrap();
-    assert!(!rolled_back(&refused, true, true, &stage));
-    assert!(!rolled_back(
-        &Err(problem("lost").uncertain()),
-        true,
-        true,
-        &stage
-    ));
 }
 
 #[test]

@@ -11,7 +11,7 @@ use super::{
 use crate::client::{Client, Run, Seen, Verified, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
     actions::{Action, Batch, Button},
-    desktop::{Kind, SecondLogin},
+    desktop::Kind,
     error::{Code, Error, Result},
     protocol::{Crop, Part, Region},
     screen::{
@@ -330,16 +330,8 @@ pub(super) async fn app_elements_within(
 /// Run the daemon's probe over process `pid` as `run` says.
 async fn probe(client: &Client, run: Run<'_>, pid: i64) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => probe_in(client, login, run, pid).await,
+        Kind::User(login) => crate::user::elements::probe_in(client, login, run, pid).await,
     }
-}
-
-/// [`probe`] in the second login `login`, which runs the shared Atlas
-/// command from this disk.
-async fn probe_in(client: &Client, _login: &SecondLogin, run: Run<'_>, pid: i64) -> Result<Value> {
-    let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let argv = vec![probe, "elements-info".into(), pid.to_string()];
-    client.run(argv, run).await
 }
 
 /// The scan a probe's run `reply` printed.

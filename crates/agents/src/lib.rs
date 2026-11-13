@@ -867,9 +867,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
     }
 
     let ready = match config.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            atlas_client::capability::doctor(status, login)["ready"] == true
-        }
+        Kind::User(login) => atlas_client::user::capability::doctor(status, login)["ready"] == true,
     };
     if ready {
         let mut line = format!(

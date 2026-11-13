@@ -604,7 +604,7 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
     let stream = child
         .stderr
         .take()
-        .ok_or_else(|| super::account::problem("The command has no error output"))?;
+        .ok_or_else(|| super::problem("The command has no error output"))?;
     let mut receiver = forward(stream);
 
     let log_line = |bytes: &[u8]| {
@@ -656,11 +656,9 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
     if status.success() {
         // What the command said may have been cut short, a question included.
         return unread.map_or(Ok(()), |error| {
-            Err(
-                super::account::problem("Atlas could not read what the command said")
-                    .uncertain()
-                    .with_source(error),
-            )
+            Err(super::problem("Atlas could not read what the command said")
+                .uncertain()
+                .with_source(error))
         });
     }
 
@@ -668,7 +666,7 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
     let _ = terminal.write_all(&pending);
     let _ = terminal.write_all(&output);
 
-    Err(super::account::problem(why.to_owned()))
+    Err(super::problem(why.to_owned()))
 }
 
 /// Hold and claim synchronous setup before any worker can change the helper.
@@ -817,9 +815,7 @@ impl AdministratorRights {
         mut wait: impl FnMut(&std::sync::mpsc::Receiver<()>) -> bool + Send + 'static,
     ) -> AtlasResult<()> {
         if !consent()? {
-            return Err(super::account::problem(
-                "Administrator rights were not granted",
-            ));
+            return Err(super::problem("Administrator rights were not granted"));
         }
 
         if self.renewal.is_none() {

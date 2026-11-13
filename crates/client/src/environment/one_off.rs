@@ -5,8 +5,6 @@
 //! caller holds; its folder stays while its outcome is not known, as every
 //! change's does.
 use super::{
-    installs::ASKED,
-    model::*,
     reply::{InstallState, Installed, InstalledApp, WorkerReply},
     *,
 };
@@ -16,35 +14,10 @@ use atlas_core::files::Token;
 /// answer is a few hundred bytes.
 const INSTALLED_OUTPUT: usize = 64 * 1024;
 
-/// Send `request` to the helper account `helper` through a request folder
-/// of its own, under `held` when it changes the helper. A change may copy
-/// a large app, so it is given as long as any command; a read, a command's
-/// usual time.
-pub(super) async fn send(
-    client: &Client,
-    helper: &str,
-    held: Option<&Ownership>,
-    request: Request,
-) -> Result<Value> {
-    let stage = request_stage(client)?;
-    create_stage(&stage, helper)?;
-
-    let timeout = if request.changes_helper() {
-        crate::client::RUN_TIMEOUT_MAX
-    } else {
-        crate::client::RUN_TIMEOUT
-    };
-    let result = dispatch_as(client, held, helper, &stage, request, timeout).await;
-    if !delivery_uncertain(&result) && !requests(&stage) {
-        discard(&stage);
-    }
-    result
-}
-
 /// `answer`, a read's, when the helper accepted it and it holds the array
 /// `field`; a refusal keeps its code, and anything else is said as
 /// `malformed`, never read as an empty answer.
-pub(super) fn read(answer: Value, field: &str, malformed: &str) -> Result<Value> {
+pub(crate) fn read(answer: Value, field: &str, malformed: &str) -> Result<Value> {
     if answer["ok"] == false {
         return Err(atlas_core::transport::refusal(&answer));
     }
@@ -64,14 +37,9 @@ pub(crate) async fn install_app(
     name: &str,
 ) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            let helper = helper_name(login.uid)?;
-            let request = Request::InstallApp {
-                id: id.as_str().to_owned(),
-                source: source.to_owned(),
-                name: name.to_owned(),
-            };
-            send(client, &helper, Some(ownership), request).await
+        Kind::User(login) => {
+            crate::user::environment::install_app_in(client, login, ownership, id, source, name)
+                .await
         }
     }
 }
@@ -103,12 +71,8 @@ pub(crate) async fn remove_app(
     id: &Token,
 ) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            let helper = helper_name(login.uid)?;
-            let request = Request::RemoveApp {
-                id: id.as_str().to_owned(),
-            };
-            send(client, &helper, Some(ownership), request).await
+        Kind::User(login) => {
+            crate::user::environment::remove_app_in(client, login, ownership, id).await
         }
     }
 }
@@ -127,36 +91,10 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
         return Ok(Vec::new());
     }
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => install_states_in(client, login, &unique).await,
+        Kind::User(login) => {
+            crate::user::environment::install_states_in(client, login, &unique).await
+        }
     }
-}
-
-/// [`install_states`] of the installs `unique` in the second login `login`.
-async fn install_states_in(
-    client: &Client,
-    login: &SecondLogin,
-    unique: &[String],
-) -> Result<Vec<InstallState>> {
-    let helper = helper_name(login.uid)?;
-    let mut listed = Vec::new();
-    for batch in unique.chunks(ASKED) {
-        let request = Request::Installs {
-            ids: batch.to_vec(),
-        };
-        let answer = read(
-            send(client, &helper, None, request).await?,
-            "installs",
-            "The helper's word on its installs was malformed",
-        )?;
-        listed.extend(
-            answer["installs"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|install| serde_json::from_value(install.clone()).ok()),
-        );
-    }
-    Ok(listed)
 }
 
 #[cfg(test)]

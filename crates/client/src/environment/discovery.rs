@@ -175,7 +175,7 @@ pub(crate) struct Access {
 }
 
 impl Access {
-    pub(super) fn permits_reference(&self, writable: bool) -> bool {
+    pub(crate) fn permits_reference(&self, writable: bool) -> bool {
         (self.file || self.directory)
             && self.readable
             && (!self.directory || self.executable)
@@ -284,21 +284,21 @@ struct Variable {
 }
 
 #[derive(Serialize)]
-pub(super) struct Reference {
+pub(crate) struct Reference {
     path: PathBuf,
     host: Access,
-    pub(super) helper: Access,
+    pub(crate) helper: Access,
 }
 
 pub(crate) struct Discovery {
     pub(crate) selections: Vec<Candidate>,
     observed_uid: u32,
     environment: Vec<Variable>,
-    pub(super) references: Vec<Reference>,
+    pub(crate) references: Vec<Reference>,
 }
 
 impl Discovery {
-    pub(super) fn report(&self) -> Value {
+    pub(crate) fn report(&self) -> Value {
         let selections: Vec<_> = self.selections.iter().map(Candidate::report).collect();
         json!({
             "ok": true,

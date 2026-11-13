@@ -7,7 +7,7 @@ use atlas_client::{
     host_session::{Asker, Recovery},
     idle_time::{IdleTime, Look},
 };
-use atlas_core::desktop::{Kind, SecondLogin};
+use atlas_core::desktop::Kind;
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
 use std::io::IsTerminal;
@@ -37,103 +37,26 @@ const IDLE_LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(1_
 /// times in a row, a minute or more apart, and could not restart it.
 const RECORDER_TRIES: u64 = 3;
 
-/// Read and enrich the report, retaining full facts for people or verbose output.
-pub(super) async fn report(client: &Client, verbose: bool) -> Value {
-    match client.desktop().kind() {
-        Kind::SecondLogin(login) => second_login_report(client, login, verbose).await,
-    }
+/// What doctor sees of the desktop itself, before the checks every desktop
+/// shares: the report so far, the steps that come before every other,
+/// whether this shell may not reach it, and the Apple jobs restarting in it.
+pub(crate) struct Observed {
+    pub(crate) report: Value,
+    pub(crate) first_steps: Vec<String>,
+    pub(crate) shell_blocked: bool,
+    pub(crate) restarts: Option<Vec<console_agents::Restart>>,
 }
 
-/// [`report`] for the second login `login`, with what this Mac can tell of
-/// it: its account, why it is silent, the logins Atlas can close, the Apple
-/// agents restarting in it and the home folder it may read.
-async fn second_login_report(client: &Client, login: &SecondLogin, verbose: bool) -> Value {
-    let uid = login.uid;
-    let status = client.status().await;
-    let account = atlas_core::account::account_with_uid(uid).ok().flatten();
-
-    // Not answering because the helper is logged out or gone: only the
-    // person can log it in again.
-    let absence = if atlas_core::session::silent(&status) {
-        tokio::task::spawn_blocking(move || atlas_core::session::absence(uid))
-            .await
-            .ok()
-            .flatten()
-    } else {
-        None
+/// Read and enrich the report, retaining full facts for people or verbose output.
+pub(super) async fn report(client: &Client, verbose: bool) -> Value {
+    let Observed {
+        mut report,
+        mut first_steps,
+        shell_blocked,
+        restarts,
+    } = match client.desktop().kind() {
+        Kind::User(login) => crate::user::doctor::user_report(client, login).await,
     };
-
-    let shell_blocked = status["code"] == "blocked";
-    let sound = sound_warning(&status);
-    // Apple jobs restarting in the helper, from launchd's log; only when
-    // the helper itself answered, as a logged-out helper runs none.
-    let restarts = if !console_agents::answered(&status) {
-        None
-    } else {
-        tokio::task::spawn_blocking(move || console_agents::read_restarting(uid))
-            .await
-            .ok()
-            .flatten()
-    };
-    let mut report = atlas_client::capability::doctor(status, login);
-    if let Some(warning) = sound
-        && let Some(warnings) = report["warnings"].as_array_mut()
-    {
-        warnings.push(json!(warning));
-    }
-
-    if let Some(absence) = &absence {
-        absence.explain(&mut report);
-    }
-
-    // Both states make the helper unusable; init refuses them too.
-    let mut first_steps = Vec::new();
-
-    // A deleted account's login left running can stall the next login, or
-    // be mistaken for the helper's.
-    let sessions = tokio::task::spawn_blocking(move || atlas_core::session::sessions(Some(uid)))
-        .await
-        .ok()
-        .flatten();
-    let leftover = sessions.as_ref().map(|sessions| {
-        sessions
-            .leftover_uids(atlas_core::session::Kind::Orphan)
-            .into_iter()
-            .chain(sessions.leftover_uids(atlas_core::session::Kind::HelperLeftover))
-            .next()
-    });
-    let left = leftover.flatten().map(|uid| {
-        format!(
-            "A deleted account (user ID {uid}) is still logged in. Close it in Atlas › Settings › \
-             Helper, or run atlas init."
-        )
-    });
-    if let Some(checks) = report["checks"].as_array_mut() {
-        checks.push(json!({
-            "name": "No logins left by deleted accounts",
-            "ok": leftover.map(|uid| uid.is_none()),
-            "nextStep": left,
-        }));
-    }
-    if let Some(step) = left {
-        first_steps.push(step);
-    }
-
-    if let Some(account) = &account {
-        match atlas_core::account::administrator(&account.name) {
-            Some(false) => {}
-            Some(true) => first_steps.push(format!(
-                "{} must be a standard account, not an administrator: change it in System \
-                 Settings › Users & Groups.",
-                account.name
-            )),
-            None => first_steps.push(format!(
-                "macOS did not say whether {} is an administrator. Run atlas doctor outside \
-                 any sandbox.",
-                account.name
-            )),
-        }
-    }
 
     // Every command keeps a lock and screenshots in the person's Library;
     // a shell that may not write there cannot use the helper. (A shell
@@ -175,12 +98,8 @@ async fn second_login_report(client: &Client, login: &SecondLogin, verbose: bool
     idle_time_report(&mut report, &idle_time, asking);
     pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
-        // What the helper can open in the person's home folder: for the
-        // person, never in an agent's compact reply.
-        if let Ok(Ok(files)) =
-            tokio::task::spawn_blocking(move || atlas_client::home_privacy::status(uid)).await
-        {
-            report["files"] = json!(files);
+        match client.desktop().kind() {
+            Kind::User(login) => crate::user::doctor::user_files(login, &mut report).await,
         }
         // Account names are the person's: only when the person asks, in
         // text on a terminal, never in output an agent could read.
@@ -201,7 +120,7 @@ async fn second_login_report(client: &Client, login: &SecondLogin, verbose: bool
 /// reason, which names the one step that fixes it. A helper that did not
 /// answer, or cannot say, is reported elsewhere; sound turned on is the
 /// person's choice.
-fn sound_warning(status: &Value) -> Option<String> {
+pub(crate) fn sound_warning(status: &Value) -> Option<String> {
     let sound = &status["sound"];
     (sound["helperSound"] == "unavailable").then(|| {
         sound["reason"]

@@ -189,6 +189,13 @@ pub struct Daemon {
     /// Foreground commands outlive a cancelled socket handler until their
     /// process group and observed event writer have finished.
     runs: Mutex<JoinSet<Result<()>>>,
+    /// Set, under the `runs` lock, once a restart of its own is coming:
+    /// new foreground commands are then refused before they run, so the
+    /// restart ends none.
+    commands_closed: AtomicBool,
+    /// Asks the listener to collect finished commands now, which it
+    /// otherwise does only when something else wakes it.
+    collect_runs: Notify,
     /// The one live capture source; held through its native source's drain.
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
@@ -230,6 +237,8 @@ impl Daemon {
             stopping: watch::Sender::new(false),
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
+            commands_closed: AtomicBool::new(false),
+            collect_runs: Notify::new(),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
@@ -251,7 +260,7 @@ impl Daemon {
 
         let manager = facts::manager_name();
         require_graphical_session(uid, &manager)?;
-        atlas_core::login_log::mark(&format!("daemon.start uid={uid}"));
+        atlas_core::user::login_log::mark(&format!("daemon.start uid={uid}"));
         preferences::type_exactly();
         preferences::keep_desktop()?;
 
@@ -270,7 +279,8 @@ impl Daemon {
         // overlaps the input service's input, told beside its socket.
         let mut recorder = Recorder::new(recorder::System::real(), Some(uid));
         if let Some(home) = std::env::var_os("HOME") {
-            let input = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).input_socket();
+            let input =
+                crate::helper_paths::HelperPaths::new(uid, PathBuf::from(home)).input_socket();
             recorder = recorder.beside_input(atlas_native::native::activity::beside(&input));
         }
         // A recorder grown under an earlier version is restarted once, early;
@@ -295,7 +305,7 @@ impl Daemon {
         // The first hello of this login: Atlas answers in the helper.
         static GREETED: AtomicBool = AtomicBool::new(false);
         if !GREETED.swap(true, Ordering::Relaxed) {
-            atlas_core::login_log::mark("daemon.firstHello");
+            atlas_core::user::login_log::mark("daemon.firstHello");
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
             Ok(census) => {
@@ -315,7 +325,7 @@ impl Daemon {
         // where the helper's layout puts it: the configuration's input socket
         // comes from the same layout.
         let home = std::env::var_os("HOME")?;
-        let marker = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).stop_marker();
+        let marker = crate::helper_paths::HelperPaths::new(uid, PathBuf::from(home)).stop_marker();
         Some(tokio::spawn(job::supervise(
             self.jobs.clone()?,
             marker,
@@ -337,6 +347,24 @@ impl Daemon {
             .subscribe()
             .wait_for(|stopping| *stopping)
             .await;
+    }
+
+    /// Close to new foreground commands when none runs and the helper is off
+    /// the screen, so a restart that follows ends none. Says whether it
+    /// closed; once closed it stays so until this process ends. Commands
+    /// that finished but were not collected yet count until the listener,
+    /// asked here, collects them and sees what they came to.
+    async fn close_commands(&self) -> bool {
+        let runs = self.runs.lock().await;
+        if !runs.is_empty() {
+            self.collect_runs.notify_one();
+            return false;
+        }
+        if (self.screen.on_console)() {
+            return false;
+        }
+        self.commands_closed.store(true, Ordering::Release);
+        true
     }
 
     /// Completes once the helper is on the console, checked about once a
@@ -384,6 +412,9 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
 /// `controller_uid`. Returns when stopped; a `restart` request ends it with
 /// an error so launchd starts a fresh daemon.
 pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    // Read first: the setup below can take long enough for the person to
+    // switch away meanwhile.
+    let started_on_screen = facts::on_console();
     validate_target_uid(uid, controller_uid)?;
 
     let daemon = Daemon::installed(uid, &socket)?;
@@ -415,6 +446,16 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
+    // Started on the screen, it has no mode for the display it gets off it.
+    let restarter = daemon.clone();
+    let closer = daemon.clone();
+    let displaying = tokio::spawn(super::display_mode::restart_off_screen(
+        started_on_screen,
+        daemon.screen.on_console,
+        facts::display_has_mode,
+        async move || closer.close_commands().await,
+        move || restarter.restarting.notify_one(),
+    ));
     let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
     // Kept paused from here until serving ends, however it ends: a daemon
     // that is gone must not leave it paused.
@@ -445,6 +486,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
 
     asking.abort();
     recording.abort();
+    displaying.abort();
     releasing.abort();
     // A keeper that has not ended by now is waited for once more as
     // `_keeping` is dropped.
@@ -506,6 +548,8 @@ impl Serving {
                 () = daemon.restarting.notified() => {
                     return Err(Error::new(Code::Restart, "Restarting at the controller's request"));
                 }
+                // Finished commands are collected at the top of the loop.
+                () = daemon.collect_runs.notified() => {}
                 Some(result) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     if let Err(error) = connection_outcome(result, &mut self.connections, false) {
                         if error.code == Code::Job {
@@ -977,6 +1021,19 @@ async fn serve_run(
     let (start, registered) = oneshot::channel();
     let runner = daemon.clone();
     let mut runs = daemon.runs.lock().await;
+    // Read under the lock that closing takes: a command either registers
+    // before the daemon closes, which then waits for it, or is refused here
+    // with nothing run.
+    if daemon.commands_closed.load(Ordering::Acquire) {
+        drop(runs);
+        let (_, mut writer, remembering) = connection;
+        let reply = failure(
+            Code::Busy,
+            "The helper daemon is restarting; try again in a moment",
+        );
+        remember(remembering, &reply);
+        return write(&mut writer, &reply).await;
+    }
     runs.spawn(async move {
         if registered.await.is_err() {
             return Ok(());

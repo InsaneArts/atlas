@@ -22,7 +22,7 @@ fn silent(command: &mut Command) -> &mut Command {
 /// Where the note `name` is kept, which outlives this process.
 fn note(name: &str) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    Some(home.join(crate::helper_setup::ROOT).join(name))
+    Some(home.join(crate::helper_paths::ROOT).join(name))
 }
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
@@ -102,7 +102,7 @@ const FRESH_LOGIN: Duration = Duration::from_secs(90);
 /// runtime).
 async fn just_logged_in() -> bool {
     let uid = nix::unistd::getuid().as_raw();
-    tokio::task::spawn_blocking(move || atlas_core::session::login(uid))
+    tokio::task::spawn_blocking(move || atlas_core::user::logins::login(uid))
         .await
         .ok()
         .flatten()
@@ -184,8 +184,8 @@ async fn guided() -> bool {
     tokio::task::spawn_blocking(|| {
         let uid = nix::unistd::getuid().as_raw();
         atlas_core::config::home().is_ok_and(|home| {
-            crate::helper_setup::pairing::window_open(&home)
-                || crate::helper_setup::first_login::opener_waiting(&crate::helper_setup::Layout {
+            crate::user::setup::pairing::window_open(&home)
+                || crate::user::setup::first_login::opener_waiting(&crate::user::setup::Layout {
                     uid,
                     home,
                     guard: None,
@@ -467,7 +467,7 @@ fn arrival_notice(controller: u32, arrival: Arrival) {
         .ok()
         .flatten();
     let title = account.as_ref().map(|account| {
-        atlas_core::account::real_name(&account.name).unwrap_or_else(|| account.name.clone())
+        atlas_core::user::account::real_name(&account.name).unwrap_or_else(|| account.name.clone())
     });
     let (heading, message) = match arrival {
         Arrival::SetUp => ("Atlas is set up", done_message(title.as_deref())),
@@ -502,7 +502,7 @@ fn switch_back(title: &str) -> String {
 /// Where the login a notice was last shown in is kept: a daemon restarted
 /// to pick up Screen Recording never repeats what its predecessor showed.
 fn notice_record(home: &Path) -> PathBuf {
-    home.join(crate::helper_setup::ROOT).join("notice-shown")
+    home.join(crate::helper_paths::ROOT).join("notice-shown")
 }
 
 /// Whether a notice was shown already in the login with this loginwindow.
@@ -520,9 +520,10 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
         return;
     };
 
-    let login = atlas_core::session::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
+    let login =
+        atlas_core::user::logins::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
-    if crate::helper_setup::pairing::window_open(&home)
+    if crate::user::setup::pairing::window_open(&home)
         || login.is_some_and(|pid| shown_in(&home, pid))
     {
         return;

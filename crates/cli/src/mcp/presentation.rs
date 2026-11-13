@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const ANOTHER_SESSION: &str = "Another session";
 
 /// A tool result: `text` for the model, `facts` for the view.
-pub(super) fn tool_result(text: &str, facts: Value) -> Value {
+pub(crate) fn tool_result(text: &str, facts: Value) -> Value {
     json!({
         "content": [{"type": "text", "text": text}],
         "structuredContent": facts,

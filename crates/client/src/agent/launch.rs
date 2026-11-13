@@ -170,7 +170,7 @@ pub(super) async fn open_in(
     // Before the helper is asked anything: the person's sign-ins and secrets never reach it, by the path given (a link
     // named like a store) or the one it leads to.
     crate::credential_files::refuse(given_paths(app, targets, &wanted))?;
-    handoff::refuse_targets(&wanted)?;
+    handoff::refuse_targets(&wanted, copies)?;
     let started = Instant::now();
 
     // Copying, launching and pruning happen under one ownership, so no other

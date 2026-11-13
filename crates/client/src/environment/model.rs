@@ -3,7 +3,7 @@ use super::{reply::FileReport, *};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Identity {
+pub(crate) struct Identity {
     pub(super) uid: u32,
     pub(super) capture_pid: u32,
     pub(super) security_session_id: u64,
@@ -13,7 +13,7 @@ pub(super) struct Identity {
 }
 
 impl Identity {
-    pub(super) fn from_epoch(epoch: &atlas_core::session::Epoch) -> Self {
+    pub(crate) fn from_epoch(epoch: &atlas_core::session::Epoch) -> Self {
         Self {
             uid: epoch.uid,
             capture_pid: epoch.capture_pid,
@@ -43,15 +43,15 @@ impl Identity {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Packet {
-    pub(super) version: u32,
-    pub(super) expected: Identity,
-    pub(super) request: Request,
+pub(crate) struct Packet {
+    pub(crate) version: u32,
+    pub(crate) expected: Identity,
+    pub(crate) request: Request,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "camelCase", deny_unknown_fields)]
-pub(super) enum Request {
+pub(crate) enum Request {
     Preview {
         id: String,
         files: Vec<Payload>,
@@ -87,7 +87,7 @@ impl Request {
     /// Whether the worker may change the helper for this request. Every
     /// other request only reads, so it takes no control and leaves nothing
     /// pending; a new request must say which it is.
-    pub(super) fn changes_helper(&self) -> bool {
+    pub(crate) fn changes_helper(&self) -> bool {
         match self {
             Request::Preview { .. } | Request::Transactions { .. } | Request::Installs { .. } => {
                 false
@@ -101,7 +101,7 @@ impl Request {
     }
 
     /// Whether the worker's output is a command's own, not its JSON reply.
-    pub(super) fn command_output(&self) -> bool {
+    pub(crate) fn command_output(&self) -> bool {
         match self {
             Request::Run { .. } => true,
             Request::Preview { .. }
@@ -117,11 +117,11 @@ impl Request {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Payload {
-    pub(super) source: PathBuf,
-    pub(super) target: PathBuf,
-    pub(super) sha256: String,
-    pub(super) executable: bool,
+pub(crate) struct Payload {
+    pub(crate) source: PathBuf,
+    pub(crate) target: PathBuf,
+    pub(crate) sha256: String,
+    pub(crate) executable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,18 +213,18 @@ impl Ledger {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Plan {
+pub(crate) struct Plan {
     pub(super) version: u32,
-    pub(super) id: String,
-    pub(super) uid: u32,
-    pub(super) home: PathBuf,
-    pub(super) files: Vec<PlannedFile>,
+    pub(crate) id: String,
+    pub(crate) uid: u32,
+    pub(crate) home: PathBuf,
+    pub(crate) files: Vec<PlannedFile>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PlannedFile {
-    pub(super) payload: Payload,
+pub(crate) struct PlannedFile {
+    pub(crate) payload: Payload,
     pub(super) before: Option<Fingerprint>,
     pub(super) previous: Option<Entry>,
     pub(super) operation: Operation,
@@ -351,7 +351,7 @@ impl Transaction {
     }
 }
 
-pub(super) fn validate_id(id: &str) -> Result<()> {
+pub(crate) fn validate_id(id: &str) -> Result<()> {
     if !atlas_core::name::lower_hex(id, 48) {
         return Err(problem(
             "Expected a 48-character lowercase plan ID, the planId a preview (atlas \
@@ -362,13 +362,13 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     // Serde errors can include selected values; do not expose them in logs.
     serde_json::from_slice(bytes)
         .map_err(|cause| problem("Invalid environment record or schema").with_source(cause))
 }
 
-pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
+pub(crate) fn file_report(plan: &Plan) -> Vec<FileReport> {
     plan.files
         .iter()
         .map(|file| FileReport {

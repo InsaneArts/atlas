@@ -51,7 +51,10 @@ atlas-core = { workspace = true, features = ["test-support"] }
 atlas-daemon = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["fs", "poll"] }
+proc-macro2.workspace = true
+quote.workspace = true
 rand = { workspace = true, features = ["thread_rng"] }
+syn.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

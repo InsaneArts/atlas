@@ -12,6 +12,8 @@ mod console_agent;
 #[cfg(target_os = "macos")]
 mod crop;
 #[cfg(target_os = "macos")]
+mod display_mode;
+#[cfg(target_os = "macos")]
 pub mod facts;
 pub mod job;
 #[cfg(target_os = "macos")]

@@ -7,6 +7,7 @@
 use atlas_client::client::{Client, live::LiveStream};
 use atlas_control::Visible;
 use atlas_core::{
+    error::Code,
     frame_pipe::{
         budget::Budget,
         diagnostics::{Reason, Ring},
@@ -249,9 +250,27 @@ pub(crate) struct Live {
     client: Arc<Client>,
     longest: u32,
     backend: CaptureBackend,
-    stream: Option<LiveStream>,
+    /// The open stream and the backend it was opened with.
+    stream: Option<(LiveStream, CaptureBackend)>,
     ring: Ring,
     sequence: u64,
+}
+
+/// Why a reading failed, and, when the first picture of a stream opened for
+/// it failed and that stream was then stopped and confirmed, the error code
+/// behind it: only then may another backend take its place.
+struct Failure {
+    reason: Reason,
+    first_picture: Option<Code>,
+}
+
+impl From<Reason> for Failure {
+    fn from(reason: Reason) -> Self {
+        Self {
+            reason,
+            first_picture: None,
+        }
+    }
 }
 
 impl Live {
@@ -265,20 +284,22 @@ impl Live {
             sequence: 0,
         }
     }
-}
 
-impl Acquire for Live {
-    async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
-        let stream = match &mut self.stream {
-            Some(stream) => stream,
+    /// The next picture of the open stream, opening one with `backend`
+    /// first when none is open.
+    async fn read(&mut self, backend: CaptureBackend, budget: &Budget) -> Result<Picture, Failure> {
+        let opening = self.stream.is_none();
+        let (stream, backend) = match &mut self.stream {
+            Some(open) => open,
             None => {
-                let opened = LiveStream::connect(&self.client, self.longest, self.backend)
+                let opened = LiveStream::connect(&self.client, self.longest, backend)
                     .await
                     .map_err(|error| Reason::of(error.code))?
                     .ok_or(Reason::SourceStartFailed)?;
-                self.stream.insert(opened)
+                self.stream.insert((opened, backend))
             }
         };
+        let backend = *backend;
         match stream
             .next_reserved(&self.client, &mut self.ring, budget)
             .await
@@ -296,7 +317,7 @@ impl Acquire for Live {
                         measure(display.height)?,
                         measure(display.scale)?,
                     ],
-                    backend: match self.backend {
+                    backend: match backend {
                         CaptureBackend::CoreGraphics => Source::Cg,
                         CaptureBackend::ScreenCaptureKit => Source::Sck,
                     },
@@ -311,17 +332,44 @@ impl Acquire for Live {
                     .last()
                     .map_or(Reason::of(error.code), |record| record.reason);
                 // Only a stream left at a frame boundary is read again.
-                if !stream.can_retry(&error) {
-                    self.stop().await?;
+                if stream.can_retry(&error) {
+                    return Err(reason.into());
                 }
-                Err(reason)
+                self.stop().await?;
+                Err(Failure {
+                    reason,
+                    first_picture: opening.then_some(error.code),
+                })
             }
+        }
+    }
+}
+
+/// Whether a stream opened with `backend` whose first picture failed with
+/// `first_picture`, and was then stopped and confirmed, gives way to a
+/// CoreGraphics stream for the same reading: the helper could not capture
+/// its display through ScreenCaptureKit, as when its daemon has no mode for
+/// that display. A changed session, missing consent or a busy helper refuse
+/// either way, as does a stream that failed to open or was not confirmed
+/// stopped.
+fn falls_back(backend: CaptureBackend, first_picture: Option<Code>) -> bool {
+    backend == CaptureBackend::ScreenCaptureKit && first_picture == Some(Code::Capture)
+}
+
+impl Acquire for Live {
+    async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
+        match self.read(self.backend, budget).await {
+            Err(failure) if falls_back(self.backend, failure.first_picture) => self
+                .read(CaptureBackend::CoreGraphics, budget)
+                .await
+                .map_err(|failure| failure.reason),
+            read => read.map_err(|failure| failure.reason),
         }
     }
 
     async fn stop(&mut self) -> Result<(), Reason> {
         match self.stream.take() {
-            Some(mut stream) => stream
+            Some((mut stream, _)) => stream
                 .stop(&self.client)
                 .await
                 .map_err(|_| Reason::DrainUnconfirmed),

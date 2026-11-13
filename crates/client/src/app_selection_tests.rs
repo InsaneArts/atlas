@@ -124,7 +124,7 @@ fn closing_everything_spares_macos_and_atlas() {
     assert_eq!(
         left_open(
             &app_list(open),
-            &atlas_core::desktop::Desktop::from(atlas_core::desktop::SecondLogin { uid: 502 })
+            &atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 })
         ),
         ["Safari", "Opie QA"],
         "a held log-out names what close --all would quit"
@@ -173,13 +173,4 @@ fn closing_everything_spares_macos_and_atlas() {
     let other = json!({"executable": "/Applications/Other.app/x",
         "bundleId": "com.insanearts.atlasish"});
     assert!(!protected(&app_row(other), None));
-}
-
-#[test]
-fn an_app_is_installed_when_its_bundle_is_in_the_folder() {
-    let applications = tempfile::tempdir().unwrap();
-    assert!(!installed_in(applications.path(), "Firefox"));
-    std::fs::create_dir(applications.path().join("Firefox.app")).unwrap();
-    assert!(installed_in(applications.path(), "Firefox"));
-    assert!(!installed_in(applications.path(), "Google Chrome"));
 }

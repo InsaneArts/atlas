@@ -2,12 +2,12 @@ mod cli;
 mod dispatch;
 mod doctor;
 mod help;
-mod init;
 mod output;
 mod policy;
 mod prompt;
 mod uninstall;
 mod update;
+mod user;
 
 use atlas_cli::ui::{self, Format, render, style};
 use atlas_control::interrupt::{Interrupt, Stopped};
@@ -55,12 +55,8 @@ fn main() -> ExitCode {
     // once the desktop is up.
     let Some(command) = cli.command.take() else {
         if opened_as_app() {
-            if atlas_daemon::helper_setup::first_login::started_as_opener() {
-                // Its output goes nowhere; the next login tries again.
-                return match atlas_daemon::helper_setup::first_login::open_at_login() {
-                    Ok(_) => ExitCode::SUCCESS,
-                    Err(_) => ExitCode::FAILURE,
-                };
+            if let Some(opened) = crate::user::open::first_login_opener() {
+                return opened;
             }
             return open_app(&config);
         }
@@ -389,7 +385,7 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
 
     match config.desktop().kind() {
         // This Mac can see whether the second login is logged out.
-        Kind::SecondLogin(login) => match atlas_core::session::absence(login.uid) {
+        Kind::User(login) => match atlas_core::user::logins::absence(login.uid) {
             Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
                 Code::LoggedOut,
                 "The helper is logged out (after a restart or a log-out)",
@@ -425,16 +421,9 @@ fn open_app(config: &std::path::Path) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let me = nix::unistd::getuid().as_raw();
-    let helper_here = atlas_daemon::helper_setup::pairing::request()
-        .is_some_and(|pairing| pairing.helper_uid == me);
-    let finished = !helper_here
+    let finished = !crate::user::open::chosen_as_helper()
         && Config::load(config).is_ok_and(|config| match config.desktop().kind() {
-            Kind::SecondLogin(login) => {
-                atlas_client::setup::migrate::settled(login.uid)
-                    && atlas_core::account::account_with_uid(login.uid)
-                        .is_ok_and(|account| account.is_some())
-            }
+            Kind::User(login) => crate::user::open::set_up_in(login),
         });
     let error = if finished {
         viewer_command(&executable, config).exec()

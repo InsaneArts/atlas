@@ -2,11 +2,11 @@ use super::*;
 use serde_json::json;
 
 fn login(uid: u32) -> Desktop {
-    Desktop::from(SecondLogin { uid })
+    Desktop::from(crate::user::User { uid })
 }
 
 #[test]
-fn a_second_login_keeps_the_record_name_installs_already_use() {
+fn a_user_desktop_keeps_the_record_name_installs_already_use() {
     assert_eq!(login(502).id().as_str(), "c6a7efd7472129144451d113");
     assert_eq!(login(503).id().as_str(), "ae2892390aeb6c07f55a0eea");
 }
@@ -18,7 +18,7 @@ fn a_desktop_is_named_by_its_account_alone() {
 }
 
 #[test]
-fn a_second_login_is_proved_by_the_second_login_check() {
+fn a_user_desktop_is_proved_by_the_hidden_session_check() {
     for value in [
         json!({"ok": false}),
         json!({"ok": true, "user": {"uid": 503}}),
@@ -31,24 +31,6 @@ fn a_second_login_is_proved_by_the_second_login_check() {
         assert_eq!(refused.error, expected.error, "{value}");
         assert!(!login(502).input_current(&observation, 1), "{value}");
     }
-}
-
-#[test]
-fn a_full_look_finds_work_whose_group_leader_is_gone() {
-    let process = |pid, pgid| Info {
-        instance: process::Instance::new(pid, [1, 0]),
-        ppid: 1,
-        pgid,
-        uid: 501,
-        ruid: 501,
-        svuid: 501,
-        zombie: false,
-        stopped: false,
-        name: "sleep".to_owned(),
-    };
-    assert!(!orphaned(&[process(10, 10), process(11, 10)]));
-    assert!(orphaned(&[process(10, 10), process(12, 99)]));
-    assert!(!orphaned(&[]));
 }
 
 #[test]
@@ -70,7 +52,7 @@ fn a_process_has_exited_only_once_its_instance_is_gone() {
 }
 
 #[test]
-fn a_second_login_is_asked_about_its_own_account_alone() {
+fn a_user_desktop_is_asked_about_its_own_account_alone() {
     use std::os::unix::process::CommandExt;
 
     let uid = nix::unistd::getuid().as_raw();

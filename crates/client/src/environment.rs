@@ -1,42 +1,35 @@
 //! Explicit, frozen file snapshots for an existing hidden login.
 //! This is a resumable transaction, not a watcher or an account clone.
 pub mod discovery;
-mod files;
-mod installs;
-mod list;
-mod model;
+pub(crate) mod files;
+pub(crate) mod installs;
+pub(crate) mod list;
+pub(crate) mod model;
 
 pub use model::Phase;
-mod one_off;
+pub(crate) mod one_off;
 pub mod profile;
-mod reply;
-mod runner;
-mod stage;
+pub(crate) mod reply;
+pub(crate) mod runner;
+pub(crate) mod stage;
 mod state;
 pub use stage::WORKER_REFUSED;
-pub use stage::leftovers;
-use stage::*;
 #[cfg(test)]
 #[path = "environment_tests.rs"]
-mod tests;
-mod undo;
-mod worker;
+pub(crate) mod tests;
+pub(crate) mod undo;
+pub(crate) mod worker;
 
-use crate::{
-    client::{Client, Run},
-    task::{self, Claims},
-};
+use crate::{client::Client, task};
 use atlas_control::Ownership;
 use atlas_core::{
     account::helper_search_path,
     config::parse_toml,
-    desktop::{Kind, SecondLogin},
+    desktop::Kind,
     error::{Code, Error, Result},
-    files::LockFile,
     transport::{OutputError, run_output},
 };
 use files::*;
-use fs2::FileExt;
 pub use installs::HELD_DAYS;
 pub use list::list;
 use model::*;
@@ -48,7 +41,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::{DirBuilderExt, MetadataExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -57,13 +50,13 @@ pub(crate) use undo::PlanPhase;
 pub(crate) use undo::{PlanState, Undone, plan_states, undo_plan};
 pub use worker::worker;
 
-const MAX_FILE: u64 = 128 * 1024 * 1024;
-const MAX_RECORD: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_FILE: u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_RECORD: u64 = 4 * 1024 * 1024;
 /// The largest manifest or profile read.
 const MAX_MANIFEST: u64 = 16 * 1024;
 /// How many files one plan may copy.
-const MAX_SELECTIONS: usize = 32;
-const STATE: &str = ".config/atlas/provisioning";
+pub(crate) const MAX_SELECTIONS: usize = 32;
+pub(crate) const STATE: &str = ".config/atlas/provisioning";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,14 +66,14 @@ struct Manifest {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Selection {
-    source: PathBuf,
-    target: PathBuf,
+pub(crate) struct Selection {
+    pub(crate) source: PathBuf,
+    pub(crate) target: PathBuf,
     #[serde(default)]
-    executable: bool,
+    pub(crate) executable: bool,
 }
 
-fn problem(message: impl Into<String>) -> Error {
+pub(crate) fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Environment, message)
 }
 
@@ -113,8 +106,15 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
         .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
     let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            freeze(client, login, &manifest, selection.files, apply_now).await
+        Kind::User(login) => {
+            crate::user::environment::stage::freeze(
+                client,
+                login,
+                &manifest,
+                selection.files,
+                apply_now,
+            )
+            .await
         }
     }
 }
@@ -127,11 +127,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 /// Unacknowledged worker effects retain their transaction and pending ownership.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            let helper = helper_name(login.uid)?;
-            tidy(client);
-            apply_frozen(client, login, &helper, plan_id).await
-        }
+        Kind::User(login) => crate::user::environment::apply_in(client, login, plan_id).await,
     }
 }
 
@@ -143,40 +139,10 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
 /// kept, and unknown restoration stays pending.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => rollback_in(client, login, transaction_id, apply).await,
+        Kind::User(login) => {
+            crate::user::environment::rollback_in(client, login, transaction_id, apply).await
+        }
     }
-}
-
-/// [`rollback`] in the second login `login`.
-async fn rollback_in(
-    client: &Client,
-    login: &SecondLogin,
-    transaction_id: &str,
-    apply: bool,
-) -> Result<Value> {
-    let stage = stage_path(client, transaction_id)?;
-    let helper = helper_name(login.uid)?;
-    tidy(client);
-    let (lock, created) = open_stage(&stage, &helper)?;
-    let result = dispatch(
-        client,
-        &helper,
-        &stage,
-        Request::Rollback {
-            id: transaction_id.into(),
-            apply,
-        },
-    )
-    .await;
-    if rolled_back(&result, apply, created, &stage) {
-        discard(&stage);
-    }
-
-    drop(lock);
-    operation(
-        retained(result, transaction_id, &stage),
-        if apply { "rollback" } else { "rollbackPreview" },
-    )
 }
 
 /// Execute a command with the installed helper-local profile, stopping it
@@ -190,34 +156,6 @@ async fn rollback_in(
 pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => run_in(client, login, argv, timeout).await,
+        Kind::User(login) => crate::user::environment::run_in(client, login, argv, timeout).await,
     }
-}
-
-/// [`run`] in the second login `login`, once its arguments are valid.
-async fn run_in(
-    client: &Client,
-    login: &SecondLogin,
-    argv: Vec<String>,
-    timeout: Duration,
-) -> Result<Value> {
-    let stage = request_stage(client)?;
-    let helper = helper_name(login.uid)?;
-    tidy(client);
-    create_stage(&stage, &helper)?;
-
-    let request = Request::Run { argv };
-    let mut result = dispatch_as(client, None, &helper, &stage, request, timeout).await;
-    if delivery_uncertain(&result) {
-        match &mut result {
-            Ok(value) => value["retainedRequest"] = json!(stage),
-            Err(error) => error
-                .error
-                .push_str(&format!(" Retained request: {}.", stage.display())),
-        }
-    } else {
-        let _ = fs::remove_dir_all(&stage);
-    }
-
-    result
 }

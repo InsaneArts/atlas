@@ -4,6 +4,32 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+#[test]
+fn only_a_screencapturekit_stream_the_helper_could_not_capture_gives_way_to_coregraphics() {
+    assert!(falls_back(
+        CaptureBackend::ScreenCaptureKit,
+        Some(Code::Capture)
+    ));
+    for code in [
+        Code::SessionChanged,
+        Code::OnConsole,
+        Code::Identity,
+        Code::Permission,
+        Code::Busy,
+        Code::Transport,
+    ] {
+        assert!(
+            !falls_back(CaptureBackend::ScreenCaptureKit, Some(code)),
+            "{code:?} gave way"
+        );
+    }
+    assert!(!falls_back(CaptureBackend::ScreenCaptureKit, None));
+    assert!(!falls_back(
+        CaptureBackend::CoreGraphics,
+        Some(Code::Capture)
+    ));
+}
+
 /// What a scripted source did, in order.
 #[derive(Default)]
 struct Log(Mutex<Vec<&'static str>>);

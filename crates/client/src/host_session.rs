@@ -16,8 +16,7 @@ pub(crate) use atlas_core::process::Instance;
 pub use recovery::{Asker, Recovery};
 
 use crate::client::Client;
-use atlas_core::desktop::{Kind, SecondLogin};
-use serde_json::json;
+use atlas_core::desktop::Kind;
 
 /// The host session of this process's command, resolved locally, asking the
 /// daemon when ancestry or the previous host's exit needs proof. Failure
@@ -27,28 +26,10 @@ pub async fn from_env_verified(client: &Client) -> Option<HostSession> {
     match client.desktop().kind() {
         // The second login's daemon shares this Mac's kernel, so it can look
         // at this command's ancestry.
-        Kind::SecondLogin(login) => verified_by_second_login(client, login, local).await,
-    }
-}
-
-/// [`from_env_verified`], asking the second login's daemon for the proof
-/// `local` lacks.
-async fn verified_by_second_login(
-    client: &Client,
-    _login: &SecondLogin,
-    local: Option<HostSession>,
-) -> Option<HostSession> {
-    let mut claims = atlas_core::host::verification::from_env();
-    if let Ok(output) = client.output_dir() {
-        let store = store::Store::at(output);
-        for claim in &mut claims {
-            claim.previous = store
-                .read(&claim.key())
-                .and_then(|record| record.host_process);
+        Kind::User(login) => {
+            crate::user::host_session::verified_by_user(client, login, local).await
         }
     }
-    let request = json!({"op": "host-session", "claims": claims});
-    HostSession::verify_with(local, &claims, client.transport.call(&request)).await
 }
 
 #[cfg(test)]

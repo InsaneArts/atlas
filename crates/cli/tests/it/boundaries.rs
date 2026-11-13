@@ -4,7 +4,7 @@ use atlas_core::screen::{frame::Size, png::png_dimensions};
 use atlas_core::{
     actions,
     config::Config,
-    desktop::{Desktop, SecondLogin},
+    desktop::Desktop,
     error::Code,
     session::{Display, InputEpoch, Observation, diagnosis, require_hidden},
     transport::Transport,
@@ -1050,7 +1050,8 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
 /// Whether `status` shows input service `pid` current in the hidden login
 /// of user ID 502.
 fn input_current(status: &Value, pid: u32) -> bool {
-    Desktop::from(SecondLogin { uid: 502 }).input_current(&Observation::decode(status), pid)
+    Desktop::from(atlas_core::user::User { uid: 502 })
+        .input_current(&Observation::decode(status), pid)
 }
 
 #[test]

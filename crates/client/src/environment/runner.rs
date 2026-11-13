@@ -7,7 +7,7 @@ use std::{os::unix::process::CommandExt, process::Command};
 pub(crate) const NO_PROFILE: Code = Code::NoEnvironment;
 
 /// Where a helper's environment profile is, in its home.
-pub(super) const ENVIRONMENT_TARGET: &str = ".config/atlas/environment.json";
+pub(crate) const ENVIRONMENT_TARGET: &str = ".config/atlas/environment.json";
 
 /// The profile a command runs with. Its fields stay in the order the file
 /// has always been written in.

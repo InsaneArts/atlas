@@ -24,82 +24,57 @@ pub(super) const SHOWN: usize = 50;
 /// unknown transaction ownership.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::SecondLogin(login) => {
-            let helper = helper_name(login.uid)?;
-            list_as(client, login, &helper, all).await
-        }
+        Kind::User(login) => crate::user::environment::list_in(client, login, all).await,
     }
 }
 
-/// [`list`] for the second login `login`, whose account ACLs name `helper`.
-pub(super) async fn list_as(
+/// The listing of `here` and `there`, each labelled with the session and
+/// task that made it.
+pub(crate) fn labelled(
     client: &Client,
-    login: &SecondLogin,
-    helper: &str,
+    here: &[Frozen],
+    there: &Transactions,
     all: bool,
 ) -> Result<Value> {
-    let here = frozen(shared_folder(client)?, login.uid);
-    let there = transactions(client, helper, all, &here).await?;
     let work = task::everyone(client.output_dir()?);
-    Ok(listing(&here, &there, &Labels::new(&work, client), all))
-}
-
-/// The most frozen plans the helper is asked about by ID.
-pub(super) const ASKED: usize = 200;
-
-/// The helper's own list of its transactions, with those rolled back when
-/// `all`, and whatever it has of the newest frozen plans in `here`; asked
-/// through a request folder of its own that goes once the answer is in.
-async fn transactions(
-    client: &Client,
-    helper: &str,
-    all: bool,
-    here: &[Frozen],
-) -> Result<Transactions> {
-    let mut newest: Vec<&Frozen> = here.iter().collect();
-    newest.sort_by_key(|plan| std::cmp::Reverse(plan.updated));
-    let ids = newest
-        .into_iter()
-        .take(ASKED)
-        .map(|plan| plan.id.clone())
-        .collect();
-    ask(client, helper, all, ids).await
-}
-
-/// The helper's own list of its transactions, with those rolled back when
-/// `all`, and whatever it has of each of `ids` whatever its phase and age.
-pub(super) async fn ask(
-    client: &Client,
-    helper: &str,
-    all: bool,
-    ids: Vec<String>,
-) -> Result<Transactions> {
-    if ids.len() > ASKED {
-        return Err(problem("Too many plans were asked about"));
-    }
-    let malformed = "The helper's list of its copies was malformed";
-    let answer = one_off::send(client, helper, None, Request::Transactions { all, ids }).await?;
-    let answer = one_off::read(answer, "transactions", malformed)?;
-    serde_json::from_value(answer)
-        .map_err(|cause| Error::new(Code::Protocol, malformed).with_source(cause))
+    Ok(listing(here, there, &Labels::new(&work, client), all))
 }
 
 /// A plan folder beside the shared command, as `list` reports it.
-pub(super) struct Frozen {
-    pub(super) id: String,
+pub(crate) struct Frozen {
+    pub(crate) id: String,
     /// The plan's files, when it holds a plan for this helper.
     files: Option<Vec<ShownFile>>,
     /// Whether it keeps a request whose outcome is not known.
     request: bool,
     /// Whether a command holds its lock right now.
-    pub(super) running: bool,
+    pub(crate) running: bool,
     /// When the folder last changed, in milliseconds since 1970.
-    updated: u64,
+    pub(crate) updated: u64,
 }
 
 impl Frozen {
+    /// A plan folder named `id`: its plan's files when it holds one for
+    /// this helper, whether it keeps a request whose outcome is not known,
+    /// whether a command holds its lock and when it last changed.
+    pub(crate) fn new(
+        id: String,
+        files: Option<Vec<ShownFile>>,
+        request: bool,
+        running: bool,
+        updated: u64,
+    ) -> Self {
+        Self {
+            id,
+            files,
+            request,
+            running,
+            updated,
+        }
+    }
+
     /// How far it got, as one the helper never started.
-    pub(super) fn state(&self) -> PlanPhase {
+    pub(crate) fn state(&self) -> PlanPhase {
         if self.running {
             PlanPhase::Running
         } else if self.request {
@@ -110,7 +85,7 @@ impl Frozen {
     }
 
     /// The targets its plan copies into the helper.
-    pub(super) fn targets(&self) -> Vec<String> {
+    pub(crate) fn targets(&self) -> Vec<String> {
         self.files
             .iter()
             .flatten()
@@ -119,43 +94,8 @@ impl Frozen {
     }
 }
 
-/// The plan folders beside the shared command in `shared` that hold a plan
-/// for helper `uid` or a request whose outcome is unknown.
-pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
-    leftovers(shared)
-        .into_iter()
-        .filter_map(|stage| {
-            let name = stage.file_name()?.to_str()?.to_owned();
-            let id = name.strip_prefix("environment-plan-")?.to_owned();
-            let files = kept_plan(&stage, &id, uid)
-                .map(|plan| file_report(&plan).iter().map(ShownFile::from).collect());
-            let request = requests(&stage);
-            if files.is_none() && !request {
-                return None;
-            }
-            Some(Frozen {
-                running: held(&stage),
-                updated: changed_ms(&stage).unwrap_or(0),
-                id,
-                files,
-                request,
-            })
-        })
-        .collect()
-}
-
-/// Whether a command holds the lock of the plan folder `stage` right now.
-/// It is looked at with a shared lock let go of at once; a command that
-/// takes the lock in that instant waits it out.
-fn held(stage: &Path) -> bool {
-    match open_regular(&stage.join("controller.lock"), false) {
-        Ok(Some(lock)) => FileExt::try_lock_shared(&LockFile(lock).0).is_err(),
-        Ok(None) | Err(_) => false,
-    }
-}
-
 /// Which session and task made each plan, from their records.
-pub(super) struct Labels<'a> {
+pub(crate) struct Labels<'a> {
     pub(super) work: &'a [task::Work],
     /// The task of the command listing.
     pub(super) task: Option<&'a task::Task>,
@@ -199,7 +139,7 @@ impl<'a> Labels<'a> {
 /// `all`; `more` counts those not shown or not looked at, and `unreadable`
 /// those the helper or this side could not read, so an empty list is
 /// never taken for proof that nothing was copied.
-pub(super) fn listing(here: &[Frozen], there: &Transactions, labels: &Labels, all: bool) -> Value {
+pub(crate) fn listing(here: &[Frozen], there: &Transactions, labels: &Labels, all: bool) -> Value {
     let running = |id: &str| here.iter().any(|plan| plan.id == id && plan.running);
     let (mut hidden, mut unreadable) = (there.hidden, there.unreadable);
     let mut plans: Vec<(u64, Value)> = Vec::new();

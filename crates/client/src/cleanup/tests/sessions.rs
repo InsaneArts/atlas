@@ -67,7 +67,7 @@ async fn a_cleanup_of_the_session_covers_every_task_and_what_its_record_lists() 
         &host,
         crate::host_session::store::Kind::Open,
         Some(&crate::doing::Doing::new("open")),
-        &Ok(json!({"ok": true, "copied": [{"to": format!("{}/{recorded}/a.rtf", crate::handoff::ROOT)}]})),
+        &Ok(json!({"ok": true, "copied": [{"to": format!("{}/{recorded}/a.rtf", crate::user::copies::ROOT)}]})),
     )
     .unwrap();
     let place = Place {

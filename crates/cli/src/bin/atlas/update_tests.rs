@@ -159,6 +159,8 @@ async fn finishing_an_update_needs_settings_that_load() {
 /// daemon to move: the update finishes, and atlas init does the rest.
 #[tokio::test]
 async fn finishing_an_update_skips_a_helper_with_no_job() {
+    use std::os::unix::fs::PermissionsExt;
+
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("config.toml");
     std::fs::write(
@@ -168,6 +170,11 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
              output_dir = \"runs\"\n",
     )
     .unwrap();
+    // With its records folder found, the menu bar is looked for there, not
+    // among this account's processes, where other tests run copies of this one.
+    let output = dir.path().join("runs");
+    std::fs::create_dir(&output).unwrap();
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let finished = update_finish_using(&settings, None, false, temporary_client)
         .await
@@ -177,10 +184,6 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
         json!({"ok": true, "completedSteps": [], "next": "atlas init", "menubarRestarted": null}),
         "no menu bar ran to move"
     );
-
-    assert!(has_helper_job(true, false), "a recorded setup");
-    assert!(has_helper_job(false, true), "a daemon that answers");
-    assert!(!has_helper_job(false, false));
 }
 
 /// What a child that exited with `code` wrote.

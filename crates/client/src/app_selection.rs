@@ -5,11 +5,6 @@ use atlas_core::{
     name::same_text,
 };
 use serde_json::{Value, json};
-use std::path::Path;
-
-/// Where a second login's apps are installed: this Mac's Applications
-/// folder, which it shares.
-const APPLICATIONS: &str = "/Applications";
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
@@ -54,33 +49,19 @@ fn app_program(executable: &str) -> bool {
 }
 
 /// Atlas's own app bundle in `desktop`, whose processes `close` leaves
-/// alone. A second login runs Atlas from the same app as this Mac.
+/// alone.
 pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
     match desktop.kind() {
-        Kind::SecondLogin(_) => atlas_bundle(),
+        Kind::User(login) => crate::user::shared::atlas_bundle(login),
     }
 }
 
-/// Whether the app `name` is installed in `desktop`'s Applications folder:
-/// for a second login, whether `/Applications/{name}.app` is a folder. Apps
-/// elsewhere are not looked for.
+/// Whether the app `name` is installed in `desktop`'s Applications folder.
+/// Apps elsewhere are not looked for.
 pub fn installed(desktop: &Desktop, name: &str) -> bool {
     match desktop.kind() {
-        Kind::SecondLogin(_) => installed_in(Path::new(APPLICATIONS), name),
+        Kind::User(login) => crate::user::shared::in_applications(login, name),
     }
-}
-
-/// Whether the app `name` is installed in the folder `applications`.
-fn installed_in(applications: &Path, name: &str) -> bool {
-    applications.join(format!("{name}.app")).is_dir()
-}
-
-/// The app bundle this process runs from.
-fn atlas_bundle() -> Option<String> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| atlas_core::app_bundle::app_of(&exe))
-        .map(|bundle| bundle.to_string_lossy().into_owned())
 }
 
 /// Which running apps `close` quits.

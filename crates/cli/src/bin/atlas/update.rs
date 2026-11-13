@@ -4,6 +4,7 @@ use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
     config::Config,
+    desktop::Kind,
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
@@ -226,10 +227,10 @@ async fn preflight(
     program: &std::path::Path,
     client: Option<&Client>,
 ) -> Result<()> {
-    if let Some(loaded) = set_up(config)?
-        && atlas_client::setup::migrate::in_effect(loaded.desktop().second_login().uid)
-    {
-        atlas_client::setup::migrate::preflight_apply(config, program).await?;
+    if let Some(loaded) = set_up(config)? {
+        match loaded.desktop().kind() {
+            Kind::User(login) => crate::user::update::preflight_in(config, program, login).await?,
+        }
     }
     if let Some(client) = client {
         client.require_service_idle().await?;
@@ -268,20 +269,10 @@ async fn update_finish_using(
     client.require_service_idle().await?;
     let daemon = client.status().await["daemon"]["pid"].is_number();
     let executable = std::env::current_exe()?;
-    let finished = if has_helper_job(
-        atlas_client::setup::migrate::recorded(loaded.desktop().second_login().uid),
-        daemon,
-    ) {
-        // The daemon restarts first: a daemon whose app was swapped under it
-        // can no longer vouch (to TCC) for a new input service it starts,
-        // while the input service it already runs is cleaned up by the
-        // restart itself.
-        let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
-
-        if atlas_client::setup::migrate::in_effect(loaded.desktop().second_login().uid) {
-            steps.push(&["setup", "--apply"]);
-        }
-
+    let steps = match loaded.desktop().kind() {
+        Kind::User(login) => crate::user::update::helper_steps_in(login, daemon),
+    };
+    let finished = if let Some(steps) = steps {
         let done = match run_steps(&steps, |step| {
             let mut command = std::process::Command::new(&executable);
             command.args(step);
@@ -358,12 +349,6 @@ fn acknowledged(output: &std::process::Output, who: &str) -> std::result::Result
 /// to stderr.
 fn child_reply(output: &std::process::Output) -> serde_json::Result<Value> {
     serde_json::from_slice(&output.stdout).or_else(|_| serde_json::from_slice(&output.stderr))
-}
-
-/// Whether the helper has a job to move onto a new version: a setup is
-/// recorded, or its daemon answers (setup stopped after installing it).
-fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
-    recorded || daemon_answers
 }
 
 #[cfg(test)]

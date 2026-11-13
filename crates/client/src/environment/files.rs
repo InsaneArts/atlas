@@ -26,10 +26,9 @@ use std::{
         fs::{MetadataExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
-    process::Command,
 };
 
-pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = open_regular(path, false)?.ok_or_else(|| problem("Environment file is missing"))?;
     read_file(file, limit)
 }
@@ -50,7 +49,7 @@ pub(super) fn read_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>> {
+pub(crate) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>> {
     let Some(parent) = directory(
         path.parent().ok_or_else(|| problem("Missing parent"))?,
         false,
@@ -152,7 +151,7 @@ pub(super) fn fingerprint(path: &Path) -> Result<Option<Fingerprint>> {
 }
 
 /// When `path` last changed, in milliseconds since 1970, when that can be told.
-pub(super) fn changed_ms(path: &Path) -> Option<u64> {
+pub(crate) fn changed_ms(path: &Path) -> Option<u64> {
     changed_ms_of(&fs::symlink_metadata(path).ok()?)
 }
 
@@ -178,7 +177,7 @@ fn component(name: &std::ffi::OsStr) -> Result<CString> {
     CString::new(name.as_bytes()).map_err(|_| problem("Invalid filesystem component"))
 }
 
-pub(super) fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
@@ -217,7 +216,7 @@ fn relative_path(path: &Path, directory: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
+pub(crate) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
     let mut seen = Vec::<&Path>::new();
 
     for path in targets {
@@ -251,7 +250,7 @@ pub(super) fn overlap(first: &Path, second: &Path) -> bool {
         || second.starts_with(&format!("{first}/"))
 }
 
-pub(super) fn has_acl(path: &Path) -> Result<bool> {
+pub(crate) fn has_acl(path: &Path) -> Result<bool> {
     acl::present(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::InvalidData => problem("Invalid filesystem ACL"),
         _ => error.into(),
@@ -259,7 +258,7 @@ pub(super) fn has_acl(path: &Path) -> Result<bool> {
 }
 
 /// Clear the ACL a new folder inherited from its parent.
-pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
+pub(crate) fn remove_inherited_acl(path: &Path) -> Result<()> {
     let folder =
         directory(path, false)?.ok_or_else(|| problem("Missing provisioning directory"))?;
     acl::clear(&folder).map_err(|error| {
@@ -300,7 +299,7 @@ pub(super) fn open_directory(path: &Path) -> Result<fs::File> {
     directory(path, true)?.ok_or_else(|| problem("Missing provisioning directory"))
 }
 
-pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
+pub(crate) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
     if !path.is_absolute() {
         return Err(problem("Provisioning paths must be absolute"));
     }
@@ -343,7 +342,7 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
     Ok(Some(directory))
 }
 
-pub(super) fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     atomic_install(path, bytes, mode, false)
 }
 
@@ -568,7 +567,7 @@ pub(super) fn open_store(
     Ok(Some(lock))
 }
 
-pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
+pub(crate) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
     let metadata = file.metadata()?;
     if metadata.uid() != nix::unistd::getuid().as_raw()
         || (directory && !metadata.is_dir())
@@ -585,7 +584,7 @@ pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
+pub(crate) fn installation_parent(directory: &fs::File) -> Result<()> {
     let metadata = directory.metadata()?;
     if metadata.uid() != nix::unistd::getuid().as_raw()
         || metadata.mode() & 0o022 != 0
@@ -639,61 +638,6 @@ fn acl_entries(file: &fs::File) -> Result<Vec<acl::Entry>> {
 
 fn descriptor_acl(file: &fs::File) -> Result<bool> {
     Ok(!acl_entries(file)?.is_empty())
-}
-
-/// The helper's short name, as an ACL entry names it. Resolved once per
-/// operation and passed to every allow_helper of it.
-pub(super) fn helper_name(uid: u32) -> Result<String> {
-    let identity = atlas_core::bounded::output(
-        Command::new("/usr/bin/id").args(["-un", &uid.to_string()]),
-        atlas_core::bounded::LOOKUP,
-    )?;
-    let name =
-        String::from_utf8(identity.stdout).map_err(|_| problem("Invalid helper short name"))?;
-    let name = name.trim();
-    if !identity.status.success() || !acl_name(name) {
-        return Err(problem("Could not resolve helper UID to an ACL identity"));
-    }
-
-    Ok(name.to_owned())
-}
-
-fn acl_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-}
-
-/// Let the helper named `helper` (from helper_name) read `path`.
-pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Result<()> {
-    if !acl_name(helper) {
-        return Err(problem("Could not resolve helper UID to an ACL identity"));
-    }
-
-    let rights = if executable {
-        "read,execute,readattr,readsecurity"
-    } else {
-        "read,readattr,readsecurity"
-    };
-
-    let output = atlas_core::bounded::output(
-        Command::new("/bin/chmod")
-            .args(["+a", &format!("user:{helper} allow {rights}")])
-            .arg(path),
-        atlas_core::bounded::FILE,
-    )?;
-    if !output.status.success() {
-        let reason = String::from_utf8_lossy(&output.stderr);
-        let reason = reason.trim();
-        return Err(problem(if reason.is_empty() {
-            "Could not grant the helper access to staged files".to_owned()
-        } else {
-            format!("Could not grant the helper access to staged files: {reason}")
-        }));
-    }
-
-    Ok(())
 }
 
 fn writable_acl(directory: &fs::File) -> Result<bool> {

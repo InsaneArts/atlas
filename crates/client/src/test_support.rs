@@ -55,7 +55,7 @@ pub fn claim_in(store: Store, task: Task, owned: &Owned, state: State) -> Result
 
 /// Whether a process exists, whoever owns it.
 pub fn process_exists(pid: u32) -> bool {
-    crate::client::service::process_exists(pid)
+    crate::user::service::process_exists(pid)
 }
 
 /// Talk with the approved step over `stream` until it ends.

@@ -93,7 +93,7 @@ impl Client {
     /// name at its end.
     pub(crate) fn input_transport(&self) -> Transport {
         match self.desktop().kind() {
-            Kind::SecondLogin(login) => {
+            Kind::User(login) => {
                 #[cfg(any(test, feature = "test-support"))]
                 let peer_uid = self.input_peer_uid.unwrap_or(login.uid);
                 #[cfg(not(any(test, feature = "test-support")))]

@@ -1,5 +1,5 @@
 //! The terminal command that links to the installed app.
-use super::account::problem;
+use super::problem;
 use atlas_core::{
     app_bundle::{INSTALL_COMMAND, app_executable, developer_id},
     config,

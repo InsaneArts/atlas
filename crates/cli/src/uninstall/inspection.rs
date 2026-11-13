@@ -1,20 +1,20 @@
 use super::*;
 
 /// What uninstall finds before it asks.
-pub(super) struct Found {
+pub(crate) struct Found {
     pub(super) app: PathBuf,
-    pub(super) executable: PathBuf,
+    pub(crate) executable: PathBuf,
     /// For the settings, when they load.
-    pub(super) client: Option<Client>,
+    pub(crate) client: Option<Client>,
     /// Why settings that exist do not load: they name no helper, so its
     /// job stays.
     pub(super) unloaded: Option<String>,
     /// The helper account's name, when it still exists and is not known
     /// to be another account.
-    pub(super) helper: Option<String>,
+    pub(crate) helper: Option<String>,
     /// Whether the account with the helper's user ID is the one recorded;
     /// `None` without settings or an account.
-    pub(super) known: Option<Standing>,
+    pub(crate) known: Option<Standing>,
     pub(super) data: PathBuf,
     pub(super) leftovers: Vec<PathBuf>,
 }
@@ -44,18 +44,10 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
     };
 
     let config = client.as_ref().map(|client| &client.config);
-    let account = config.and_then(|config| {
-        account::account_with_uid(config.desktop().second_login().uid)
-            .ok()
-            .flatten()
-    });
-    let known = account.as_ref().map(helper_setup::identity::standing_of);
-    let helper = account
-        .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
-        .map(|account| account.name);
+    let (helper, known) = config.map_or((None, None), crate::user::uninstall::helper_account);
     let data = config::home()?.join("Library/Application Support/Atlas");
     let leftovers = config
-        .map(|config| handed_over(&config.identity_probe))
+        .map(|config| crate::user::uninstall::handed_over(&config.identity_probe))
         .unwrap_or_default();
 
     Ok(Found {

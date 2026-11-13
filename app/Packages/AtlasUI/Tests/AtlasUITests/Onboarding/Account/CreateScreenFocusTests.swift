@@ -83,6 +83,48 @@ struct CreateScreenFocusTests {
     #expect(editor.delegate === password, "the password, the first empty field, has the focus")
   }
 
+  @Test("Return in the password moves the focus to verify, not selecting what was typed")
+  func returnMovesToTheNextField() async throws {
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: OnboardingLayout.card),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    // Every field filled in, so none takes the focus as the form appears: only Return moves it.
+    let form = OnboardingAccountForm(fullName: "Atlas", accountName: "atlas", password: "secret", verify: "secret")
+    let host = NSHostingView(
+      rootView: CreateScreen(state: PreviewStates.onboardingCreateScreen, form: .constant(form))
+        .environment(\.animatesArrivals, false)
+    )
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+    let secure = Self.fields(in: host)
+      .filter { $0 is NSSecureTextField }
+    let password = try #require(secure.first, "the password field")
+    let verify = try #require(secure.last, "the verify field")
+    window.makeFirstResponder(password)
+    for _ in 0..<Self.turns where (window.firstResponder as? NSText)?.delegate !== password {
+      await Task.yield()
+    }
+    let editor = try #require(window.firstResponder as? NSText, "the password has the focus")
+
+    editor.insertNewline(nil)
+    for _ in 0..<Self.turns where (window.firstResponder as? NSText)?.delegate !== verify {
+      await Task.yield()
+    }
+    let moved = try #require(window.firstResponder as? NSText, "a field has the focus")
+    #expect(moved.delegate === verify, "Return left the focus in the password")
+  }
+
+  @Test("Return moves down the form one field at a time and nowhere after the last")
+  func theFieldAfterEach() {
+    #expect(CreateScreen.field(after: .fullName) == .accountName)
+    #expect(CreateScreen.field(after: .accountName) == .password)
+    #expect(CreateScreen.field(after: .password) == .verify)
+    #expect(CreateScreen.field(after: .verify) == nil)
+  }
+
   /// How many turns of the main actor the focus may take to land.
   private static let turns = 20
 

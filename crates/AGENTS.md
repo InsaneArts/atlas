@@ -51,12 +51,16 @@ that layer's crate. Shipped builds never carry the feature. `cargo test` does bu
   input execution, cancellation, grants and held-input recovery.
 - `screen` owns portable observed geometry, windows, elements and selection.
   Interpreting an observation must not introduce a native effect.
-- `environment` owns staging, application and rollback. Reuse its existing
-  concrete transaction and record owners rather than adding a persistence layer.
-- `helper_setup` owns the helper's layout, launchd actions, first login and
-  pairing, runs inside the helper and never reaches `client`. `setup` owns the
-  controller's side: the executor, configuration and migration. `onboarding`
-  orchestrates their workflow. Terminal prompts belong in `cli/src/bin/atlas`.
+- `environment` owns the model, the worker, application and rollback that every
+  desktop shares; a desktop's staging hands it plans and requests. Reuse its
+  existing concrete transaction and record owners rather than adding a
+  persistence layer.
+- In the user desktop, `daemon`'s `user::setup` owns the helper's layout,
+  launchd actions, first login and pairing, runs inside the helper and never
+  reaches `client`. `client`'s `user::setup` owns the controller's side:
+  configuration, migration and requests to the helper; the executor stays
+  shared in `client`'s `setup`. `cli`'s `user::onboarding` orchestrates their
+  workflow. Terminal prompts belong in `cli/src/bin/atlas`.
 - `viewer` owns its HTTP service and personal-control lifetime; `mcp` adapts its
   declared tools; `terminal` draws the viewer in a Kitty graphics terminal and
   sends input only through the viewer's routes. `ui` formats output; domain
@@ -66,6 +70,29 @@ that layer's crate. Shipped builds never carry the feature. `cargo test` does bu
   Atlas is installed and who signed it in `app_bundle`. A leaf never reaches up
   to `client`, `setup` or a domain owner. Keep observation, wire projections
   and durable recovery models distinct.
+
+## Desktop kinds
+
+A desktop is where agents' apps run; `core`'s `desktop::Kind` names each kind.
+Today there is one, `user`: a hidden user on this Mac, which people know as
+Second Login. Each kind's code lives in one module per target, at its root:
+`user.rs` and `user/` in `core`, `daemon`, `client`, `cli`'s library and
+`cli/src/bin/atlas`. A root declares its children, which hold that desktop's
+complete operations, grouped by domain; `core`'s also holds `User` and its
+identity and process operations.
+
+Outside the listed exceptions, shared code reaches a kind through an owner: a
+function that matches on the desktop's kind, or on its own private place enum,
+and hands each kind its operation, naming it by its full path
+(`atlas_client::user::…`), never through `use`, a rename or a glob. The kind's
+module may use shared code freely. Types that shared code stores or reads stay
+shared, and `User` is `core`'s, so other crates add functions taking it, never
+methods. `cli/tests/it/desktop_boundaries.rs` guards the kind's names and
+imports item by item, and lists every owner, declaration and exception with
+why. Its kept list names what still assumes the user desktop on purpose (the
+settings name one user, the link is a local socket, every desktop is a user,
+and the rest), and checks only that each still exists. Read it before adding a
+kind, and resolve those assumptions before that kind ships.
 
 Use the narrowest visibility that real binary, tooling or supported library
 callers require. Tests alone do not justify a shipping forwarding adapter.
@@ -206,7 +233,7 @@ compatibility decision; never forward arbitrary internal causes or request bodie
 ### Setting
 
 Update `core/src/config.rs`, defaults, validation/path normalization, the installed
-constructor in `client/src/setup/configuration.rs`, its consumer, examples and fixtures.
+constructor in `client/src/user/setup/configuration.rs`, its consumer, examples and fixtures.
 The exhaustive destructuring in `Config::same_helper` and `Config::parse` requires a
 reload-identity and a normalization decision. Documentation is a manual obligation. Test absent,
 invalid, relative-path and reload behavior as applicable. Never manufacture a

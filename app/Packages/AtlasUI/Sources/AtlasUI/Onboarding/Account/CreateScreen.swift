@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The form for a new helper account, in one group. Its four fields edit the window's `OnboardingAccountForm` in
 /// place, and the first empty one takes the focus as the form appears; a field the status is about washes orange and
-/// takes the focus. While the account is made the form dims. Create Account is the footer's.
+/// takes the focus. Return moves to the next field. While the account is made the form dims. Create Account is the
+/// footer's, and Return presses it once the form is complete.
 struct CreateScreen: View {
   /// What the screen shows around the form.
   let state: OnboardingCreateScreenState
@@ -10,6 +11,8 @@ struct CreateScreen: View {
   @Binding var form: OnboardingAccountForm
   /// The field the person types in, if any, which a flag never takes the focus from.
   @State private var typingIn: AccountFormField?
+  /// The field Return asked to take the focus, until it takes it.
+  @State private var requested: AccountFormField?
 
   /// The form, the status under it in its kept place, then why macOS will ask for a password.
   var body: some View {
@@ -23,10 +26,14 @@ struct CreateScreen: View {
           placeholder: field.placeholder,
           isFlagged: field.isFlagged(state.flagged),
           isOtherFieldFocused: typingIn.map { $0 != field } ?? false,
-          focusesOnAppear: field == Self.firstEmpty(form)
-        ) { focused in
-          typingIn = Self.typingIn(after: typingIn, field: field, focused: focused)
-        }
+          focusesOnAppear: field == Self.firstEmpty(form),
+          isFocusRequested: requested == field,
+          focusChanged: { focused in
+            typingIn = Self.typingIn(after: typingIn, field: field, focused: focused)
+            if focused, requested == field { requested = nil }
+          },
+          submitted: { requested = Self.field(after: field) }
+        )
       }
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.muted)
@@ -44,6 +51,17 @@ struct CreateScreen: View {
   static func firstEmpty(_ form: OnboardingAccountForm) -> AccountFormField? {
     AccountFormField.allCases
       .first { form[keyPath: $0.value].isEmpty }
+  }
+
+  /// The field Return in `field` moves to: the next one down, none after the last.
+  ///
+  /// - Parameter field: The field the person pressed Return in.
+  /// - Returns: The next field, or nil after the last.
+  static func field(after field: AccountFormField) -> AccountFormField? {
+    let fields = AccountFormField.allCases
+    return fields.firstIndex(of: field)
+      .map { fields.index(after: $0) }
+      .flatMap { fields.indices.contains($0) ? fields[$0] : nil }
   }
 
   /// Where the person types once a field takes or loses the focus.
