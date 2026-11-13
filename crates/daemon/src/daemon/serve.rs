@@ -189,6 +189,10 @@ pub struct Daemon {
     /// Foreground commands outlive a cancelled socket handler until their
     /// process group and observed event writer have finished.
     runs: Mutex<JoinSet<Result<()>>>,
+    /// Set, under the `runs` lock, once a restart of its own is coming:
+    /// new foreground commands are then refused before they run, so the
+    /// restart ends none.
+    commands_closed: AtomicBool,
     /// The one live capture source; held through its native source's drain.
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
@@ -230,6 +234,7 @@ impl Daemon {
             stopping: watch::Sender::new(false),
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
+            commands_closed: AtomicBool::new(false),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
@@ -340,6 +345,18 @@ impl Daemon {
             .await;
     }
 
+    /// Close to new foreground commands when none runs and the helper is off
+    /// the screen, so a restart that follows ends none. Says whether it
+    /// closed; once closed it stays so until this process ends.
+    async fn close_commands(&self) -> bool {
+        let runs = self.runs.lock().await;
+        if !runs.is_empty() || (self.screen.on_console)() {
+            return false;
+        }
+        self.commands_closed.store(true, Ordering::Release);
+        true
+    }
+
     /// Completes once the helper is on the console, checked about once a
     /// second.
     async fn on_screen(&self) {
@@ -385,6 +402,9 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
 /// `controller_uid`. Returns when stopped; a `restart` request ends it with
 /// an error so launchd starts a fresh daemon.
 pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    // Read first: the setup below can take long enough for the person to
+    // switch away meanwhile.
+    let started_on_screen = facts::on_console();
     validate_target_uid(uid, controller_uid)?;
 
     let daemon = Daemon::installed(uid, &socket)?;
@@ -417,14 +437,13 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
         watcher.restarting.notify_one();
     }));
     // Started on the screen, it has no mode for the display it gets off it.
-    let started_on_screen = (daemon.screen.on_console)();
     let restarter = daemon.clone();
-    let commands = daemon.clone();
+    let closer = daemon.clone();
     let displaying = tokio::spawn(super::display_mode::restart_off_screen(
         started_on_screen,
         daemon.screen.on_console,
         facts::display_has_mode,
-        async move || commands.runs.lock().await.is_empty(),
+        async move || closer.close_commands().await,
         move || restarter.restarting.notify_one(),
     ));
     let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
@@ -990,6 +1009,19 @@ async fn serve_run(
     let (start, registered) = oneshot::channel();
     let runner = daemon.clone();
     let mut runs = daemon.runs.lock().await;
+    // Read under the lock that closing takes: a command either registers
+    // before the daemon closes, which then waits for it, or is refused here
+    // with nothing run.
+    if daemon.commands_closed.load(Ordering::Acquire) {
+        drop(runs);
+        let (_, mut writer, remembering) = connection;
+        let reply = failure(
+            Code::Busy,
+            "The helper daemon is restarting; try again in a moment",
+        );
+        remember(remembering, &reply);
+        return write(&mut writer, &reply).await;
+    }
     runs.spawn(async move {
         if registered.await.is_err() {
             return Ok(());

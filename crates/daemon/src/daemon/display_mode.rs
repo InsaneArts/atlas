@@ -13,13 +13,15 @@ const CHECK: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_secs(2);
 
 /// Restart this process once the helper is off the screen, when it started
-/// on it and then has no mode for its display. Waits while commands run,
-/// as a restart would end them; background jobs go on regardless.
+/// on it and then has no mode for its display. `close` closes the daemon to
+/// new commands when none runs and the helper is still off the screen, and
+/// says whether it did, so the restart ends no command; background jobs go
+/// on regardless.
 pub(super) async fn restart_off_screen(
     started_on_screen: bool,
     on_console: fn() -> bool,
     has_mode: fn() -> bool,
-    idle: impl AsyncFn() -> bool,
+    close: impl AsyncFn() -> bool,
     restart: impl Fn(),
 ) {
     watch(
@@ -28,7 +30,7 @@ pub(super) async fn restart_off_screen(
         || tokio::time::sleep(SETTLE),
         on_console,
         has_mode,
-        idle,
+        close,
         restart,
     )
     .await;
@@ -37,10 +39,10 @@ pub(super) async fn restart_off_screen(
 async fn watch<Pause, Settle>(
     started_on_screen: bool,
     mut pause: impl FnMut() -> Pause,
-    settle: impl FnOnce() -> Settle,
+    mut settle: impl FnMut() -> Settle,
     on_console: impl Fn() -> bool,
     has_mode: impl Fn() -> bool,
-    idle: impl AsyncFn() -> bool,
+    close: impl AsyncFn() -> bool,
     restart: impl Fn(),
 ) where
     Pause: Future<Output = ()>,
@@ -49,20 +51,25 @@ async fn watch<Pause, Settle>(
     if !started_on_screen {
         return;
     }
-    while on_console() {
-        pause().await;
-    }
-    settle().await;
-    if has_mode() {
-        return;
-    }
     loop {
-        if !on_console() && idle().await {
-            restart();
+        while on_console() {
+            pause().await;
+        }
+        settle().await;
+        // Back on the screen meanwhile: its display there says nothing of
+        // the one it has off it, so wait until it leaves again.
+        if on_console() {
+            continue;
+        }
+        if has_mode() {
             return;
         }
+        break;
+    }
+    while !close().await {
         pause().await;
     }
+    restart();
 }
 
 #[cfg(test)]
