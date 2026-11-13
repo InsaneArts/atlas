@@ -20,8 +20,12 @@ struct FieldRow: View {
   /// Whether the field takes the focus as it appears, such as a form's first empty field, unless the person is
   /// typing in another field by then.
   var focusesOnAppear = false
+  /// Whether the form asks the field to take the focus, as Return in the field before it does.
+  var isFocusRequested = false
   /// Called as the field takes or loses the focus, so the form knows where the person types.
   var focusChanged: @MainActor (Bool) -> Void = { _ in }
+  /// Called as the person presses Return in the field.
+  var submitted: @MainActor () -> Void = {}
   @FocusState private var isFocused: Bool
   /// ``isOtherFieldFocused`` as it is now, which the flag's deferred focus reads once its turn comes: the view value
   /// the task captured holds it as it was when the flag arrived.
@@ -41,6 +45,7 @@ struct FieldRow: View {
         .textStyle(.body)
         .foregroundStyle(Color.textPrimary)
         .focused($isFocused)
+        .onSubmit(submitted)
         .accessibilityLabel(label)
       if isFlagged {
         OutcomeMark(kind: .problem, side: IconSize.xsPlus)
@@ -74,6 +79,7 @@ struct FieldRow: View {
       isFocused = true
     }
     .onChange(of: isOtherFieldFocused, initial: true) { _, focused in otherFieldFocusedNow = focused }
+    .onChange(of: isFocusRequested) { _, requested in if requested { isFocused = true } }
     .onChange(of: isFocused) { _, focused in focusChanged(focused) }
   }
 
