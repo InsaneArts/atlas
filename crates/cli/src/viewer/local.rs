@@ -40,26 +40,43 @@ pub(crate) fn process(reply: &Value) -> Option<u32> {
         .and_then(|pid| u32::try_from(pid).ok())
 }
 
-/// The viewer recorded at `record`, if it serves `port` and answers there
-/// now as the very process the record names. It blocks for up to a second:
-/// call it off the async runtime.
+/// The viewer recorded at `record`, if it serves `port`, answers there now
+/// as the very process the record names, and serves this version. It blocks
+/// for up to a second: call it off the async runtime.
 pub(crate) fn running(record: &Path, port: u16) -> Option<Value> {
-    read_record(record).filter(|running| {
-        serves(running, port)
-            && process(running)
-                .is_some_and(|recorded| address(running).and_then(answering) == Some(recorded))
-    })
+    identified(record, port)
+        .filter(|(_, identity)| compatible(identity))
+        .map(|(record, _)| record)
+}
+
+/// The viewer recorded at `record`, if it serves `port` and answers there
+/// now as the very process the record names, whatever its version, with
+/// what it said it is: one reply for both.
+fn identified(record: &Path, port: u16) -> Option<(Value, Value)> {
+    let running = read_record(record).filter(|running| serves(running, port))?;
+    let recorded = process(&running)?;
+    let identity = address(&running).and_then(identity)?;
+    (process(&identity) == Some(recorded)).then_some((running, identity))
+}
+
+/// Whether a viewer that says `identity` serves this version.
+fn compatible(identity: &Value) -> bool {
+    identity["protocol"].as_u64() == Some(super::PROTOCOL)
 }
 
 /// The process serving the viewer that answers at `url` (its private
 /// address) right now; `None` when no viewer answers there.
 pub(crate) fn answering(url: &str) -> Option<u32> {
+    identity(url).and_then(|reply| process(&reply))
+}
+
+/// What the viewer that answers at `url` says it is, when one does.
+fn identity(url: &str) -> Option<Value> {
     exchange(url, "GET", "", None, Duration::from_secs(1), REPLY_LIMIT)
         .ok()
         .filter(|reply| reply.status == 200)
         .and_then(|reply| serde_json::from_slice::<Value>(&reply.body).ok())
         .filter(|reply| reply["service"] == SERVICE)
-        .and_then(|reply| process(&reply))
 }
 
 /// Whether the menu bar's viewer is recorded in `output` as serving `port`
@@ -76,8 +93,27 @@ pub(crate) fn recorded(output: &Path, port: u16) -> bool {
 /// as the process its record names. It blocks for up to a second: call it
 /// off the async runtime.
 pub(crate) fn local(output: &Path, port: u16) -> Option<String> {
-    running(&output.join(MENUBAR_RECORD), port)
-        .and_then(|running| address(&running).map(str::to_owned))
+    local_checked(output, port).ok().flatten()
+}
+
+/// [`local`], refusing a menu bar's viewer of another version, which this
+/// command cannot talk to: one from before an update, still running.
+///
+/// # Errors
+///
+/// Returns a menu bar error saying to restart Atlas.
+pub(crate) fn local_checked(output: &Path, port: u16) -> Result<Option<String>> {
+    match identified(&output.join(MENUBAR_RECORD), port) {
+        Some((running, identity)) if compatible(&identity) => {
+            Ok(address(&running).map(str::to_owned))
+        }
+        Some(_) => Err(Error::new(
+            Code::Menubar,
+            "Atlas in the menu bar is from another version. Restart Atlas: atlas menubar \
+             --stop, then atlas menubar.",
+        )),
+        None => Ok(None),
+    }
 }
 
 /// What the local viewer at `url` serves at `route`, read within `deadline`

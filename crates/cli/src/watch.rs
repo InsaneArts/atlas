@@ -370,9 +370,12 @@ pub(crate) async fn read(
 async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Reading, &'static str)> {
     let output = output.to_path_buf();
     let viewer = tokio::task::spawn_blocking(move || {
-        let Some(url) = crate::viewer::local(&output, port) else {
+        let url = match crate::viewer::local_checked(&output, port) {
+            Ok(Some(url)) => url,
             // Recorded and running, but slow to answer: busy, not gone.
-            return crate::viewer::recorded(&output, port).then_some(None);
+            Ok(None) => return crate::viewer::recorded(&output, port).then_some(None),
+            // Of another version: the helper is read directly instead.
+            Err(_) => return None,
         };
         let status = crate::viewer::fetch(&url, "status.json", VIEWER_DEADLINE, STATUS_LIMIT)
             .ok()

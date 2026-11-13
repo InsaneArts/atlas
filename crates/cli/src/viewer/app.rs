@@ -60,6 +60,8 @@ pub async fn serve(
     // One menu bar keeps its record in a folder, on whatever port, until
     // the record is gone; another is refused before it launches or records.
     *unpoisoned(&viewer.alone) = Some(crate::menubar::alone(&output)?);
+    // And one service runs for this account, whatever its settings.
+    let _station = super::station::Station::claim(&program.config, port, &viewer.incarnation)?;
     viewer.idle_leave.give();
 
     // Stopping it any of these ways releases control and removes its record.
@@ -72,6 +74,11 @@ pub async fn serve(
     // anything is served, so no request finds it unheld; a service that
     // cannot take it over does not serve.
     viewer.adopt_interrupted()?;
+    // Control an earlier service held when it died is let go by the helper's
+    // input service once it runs out: waited for, a short while, so the
+    // person's next Take Control finds it gone. An outcome it left unknown
+    // stays pending for recovery whatever happens here.
+    let _ = tokio::time::timeout(DEAD_CONTROL, viewer.client().wait_for_no_control()).await;
 
     // The frame service lives as long as this viewer and follows its helper.
     // Without it the app reads pictures over this viewer's address as before.
@@ -137,6 +144,10 @@ pub async fn serve(
 
     Ok(Value::Null)
 }
+
+/// How long a starting service waits for control a service that died held
+/// to be let go.
+const DEAD_CONTROL: Duration = Duration::from_secs(10);
 
 /// Keep a frame service for the helper `viewer` serves now, until told to
 /// stop: when its settings name another helper, the old service ends, its

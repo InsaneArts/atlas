@@ -47,6 +47,19 @@ impl Client {
         Ok(json!({ "ok": true, outcome: true, "pid": pid }))
     }
 
+    /// Wait while the helper's input service says control is active,
+    /// looking again every quarter second; one that does not answer holds
+    /// none to wait for. Unbounded: the caller bounds it.
+    pub async fn wait_for_no_control(&self) {
+        while Observation::decode(&self.status().await)
+            .native
+            .control_active
+            == Some(true)
+        {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     /// Make the input service ready again, reset or started anew, for a
     /// caller that already holds the helper's exclusion, which this keeps
     /// throughout. A running service of another build is reset, never

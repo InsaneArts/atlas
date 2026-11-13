@@ -93,10 +93,9 @@ impl Server {
         let port = self.port;
         let found = {
             let output = output.clone();
-            tokio::task::spawn_blocking(move || crate::viewer::local(&output, port))
+            tokio::task::spawn_blocking(move || crate::viewer::local_checked(&output, port))
                 .await
-                .ok()
-                .flatten()
+                .map_err(|_| Error::new(Code::Menubar, "Atlas could not look for the menu bar"))??
         };
 
         match found {

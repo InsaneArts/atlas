@@ -659,7 +659,7 @@ fn startup_requires_a_matching_record_and_socket_reply() {
                     request.extend_from_slice(&byte);
                     assert!(request.len() < 4096);
                 }
-                let body = serde_json::json!({"ok":true,"service":"atlas-viewer","pid":answering})
+                let body = serde_json::json!({"ok":true,"service":"atlas-viewer","pid":answering,"protocol":1})
                     .to_string();
                 write!(
                     stream,

@@ -316,7 +316,7 @@ async fn result_flags_match_offered_tools_on_successful_and_failed_calls() {
         .unwrap();
         let app = Router::new()
             .route("/viewer/", get(|| async {
-                Json(json!({"service": "atlas-viewer", "pid": std::process::id()}))
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
             }))
             .route("/viewer/status.json", get(|| async {
                 Json(json!({"overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}}))

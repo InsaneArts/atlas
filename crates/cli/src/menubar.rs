@@ -74,6 +74,12 @@ pub(crate) fn alone(output: &Path) -> Result<atlas_core::files::LockFile> {
 /// Returns configuration, lock, spawn, readiness or cleanup failures. Cancellation keeps
 /// the startup worker responsible for its child; unknown termination retains exclusion.
 pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
+    // A service of another version still running is never started over:
+    // the person restarts Atlas.
+    let (looked, at) = (output.to_owned(), port);
+    tokio::task::spawn_blocking(move || crate::viewer::local_checked(&looked, at))
+        .await
+        .map_err(|_| startup_worker_failed())??;
     launch_startup(Startup {
         config: config.to_owned(),
         output: output.to_owned(),

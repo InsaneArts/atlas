@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, watch},
+    sync::{Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore, watch},
 };
 
 /// How many requests the viewer serves at once.
@@ -109,10 +109,12 @@ pub(super) fn configured(
         sign_in: Mutex::new(None),
         interrupted: std::sync::Mutex::new(None),
         resolving: Mutex::new(()),
+        pinned: tokio::sync::RwLock::new(()),
         #[cfg(test)]
         recovery_pause: super::interrupted::Pause::default(),
         app_process: std::sync::Mutex::new(None),
         app_secret: atlas_core::name::random_hex(64),
+        incarnation: atlas_core::name::random_hex(32),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         alone: std::sync::Mutex::new(None),
@@ -434,6 +436,18 @@ impl Route {
 /// Answer one request: only from the viewer's own origin and private
 /// address, within a free slot, and for a known route.
 pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
+    let incarnation = viewer.incarnation.clone();
+    let mut response = reply_to(viewer, request).await;
+    if let Ok(value) = axum::http::HeaderValue::from_str(&incarnation) {
+        response
+            .headers_mut()
+            .insert(super::INCARNATION_HEADER, value);
+    }
+    response
+}
+
+/// The reply to `request`, before it names this viewer's incarnation.
+async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
     let origin = format!("http://{}", viewer.authority);
     if header(request.headers(), "host") != Some(&viewer.authority)
         || (request.method() == Method::POST
@@ -453,7 +467,14 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     if route == Some(Route::Service) {
         return json_response(
             200,
-            json!({"ok": true, "service": SERVICE, "pid": std::process::id()}),
+            json!({
+                "ok": true,
+                "service": SERVICE,
+                "pid": std::process::id(),
+                "protocol": super::PROTOCOL,
+                "capabilities": super::CAPABILITIES,
+                "incarnation": viewer.incarnation,
+            }),
         );
     }
 
@@ -478,9 +499,18 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     };
 
     match route {
-        Some(Route::Read(read)) => answer(&viewer, read, request.uri().query(), app).await,
+        Some(Route::Read(read)) => {
+            let named = named_in_query(request.uri().query()).map(|named| json!(named));
+            let Some(_pinned) = viewer.pin(named.as_ref()).await else {
+                return json_response(409, json!(another_desktop()));
+            };
+            answer(&viewer, read, request.uri().query(), app).await
+        }
         Some(Route::OpenViewer) => match read_body(request).await {
-            Ok(_) => open_app_viewer(&viewer),
+            Ok(body) => match viewer.pin(body.get("desktop")).await {
+                Some(_pinned) => open_app_viewer(&viewer),
+                None => json_response(409, json!(another_desktop())),
+            },
             Err(response) => response,
         },
         Some(Route::Change(change)) => match read_body(request).await {
@@ -488,10 +518,65 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             Ok(body) if change == Change::Hold && body["on"] == false && !app => {
                 json_response(403, json!(not_the_app()))
             }
-            Ok(body) => apply(&viewer, change, &body).await,
+            // A Stop is for every desktop; anything else, Resume included, is
+            // for the one named, and a desktop named by anything but its ID
+            // is refused.
+            Ok(body) if change == Change::Hold && body["on"] == true => {
+                apply(&viewer, change, &body).await
+            }
+            Ok(body) => {
+                let Some(_pinned) = viewer.pin(body.get("desktop")).await else {
+                    return json_response(409, json!(another_desktop()));
+                };
+                apply(&viewer, change, &body).await
+            }
             Err(response) => response,
         },
         Some(Route::Service) | None => refused(404, "Unknown operation"),
+    }
+}
+
+/// The desktop `query` names, as `desktop=` its ID.
+fn named_in_query(query: Option<&str>) -> Option<&str> {
+    query?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("desktop="))
+}
+
+/// The refusal of a request for a desktop this service does not serve.
+fn another_desktop() -> Error {
+    Error::new(
+        Code::ConfigInvalid,
+        "This Atlas serves another desktop than the one asked for",
+    )
+}
+
+impl Viewer {
+    /// Whether a request naming the desktop `named` by its ID, or none,
+    /// is for the desktop this viewer serves: one that names none means
+    /// the only one.
+    fn serves(&self, named: Option<&str>) -> bool {
+        named.is_none_or(|named| named == self.client().desktop().id().as_str())
+    }
+
+    /// Hold the desktop a request names, `named`, for as long as the
+    /// request runs: the settings are followed first, then the helper does
+    /// not change until it ends. None when this viewer serves another
+    /// desktop, or `named` is anything but an ID; a request that names none
+    /// is for the only one, and holds nothing.
+    async fn pin(
+        self: &Arc<Self>,
+        named: Option<&Value>,
+    ) -> Option<Option<RwLockReadGuard<'_, ()>>> {
+        let Some(named) = named else {
+            return Some(None);
+        };
+        let Value::String(named) = named else {
+            return None;
+        };
+        self.follow_settings().await;
+        let pinned = self.pinned.read().await;
+        self.serves(Some(named)).then_some(Some(pinned))
     }
 }
 
@@ -633,7 +718,13 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
         Read::Screenshots => read_reply(viewer.screenshots().await),
         Read::Screenshot => viewer.screenshot(query).await,
         Read::Asks => json_response(200, super::accounts::asks(&viewer.client())),
-        Read::Pipe => match unpoisoned(&viewer.pipe).clone() {
+        // The frame service of the helper served now: one still serving the
+        // helper the settings named before is not offered while it is
+        // replaced.
+        Read::Pipe => match unpoisoned(&viewer.pipe)
+            .clone()
+            .filter(|descriptor| descriptor["helperUID"] == viewer.client().transport.peer_uid)
+        {
             Some(descriptor) => json_response(200, descriptor),
             None => json_response(
                 404,

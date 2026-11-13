@@ -299,7 +299,9 @@ impl Viewer {
         let app = Router::new()
             .route(
                 "/viewer/",
-                get(|| async { Json(json!({"service": "atlas-viewer", "pid": std::process::id()})) }),
+                get(|| async {
+                    Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
+                }),
             )
             .route(
                 "/viewer/status.json",

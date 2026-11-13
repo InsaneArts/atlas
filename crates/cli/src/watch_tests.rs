@@ -245,7 +245,9 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
     let app = Router::new()
         .route(
             "/viewer/",
-            get(|| async { Json(json!({"service": "atlas-viewer", "pid": std::process::id()})) }),
+            get(|| async {
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
+            }),
         )
         .route(
             "/viewer/status.json",

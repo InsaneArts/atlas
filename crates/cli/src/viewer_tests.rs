@@ -3165,3 +3165,83 @@ async fn a_second_menu_bar_on_another_port_refuses_and_leaves_the_running_ones_r
     );
     assert_eq!(std::fs::read(&record).unwrap(), written);
 }
+
+#[tokio::test]
+async fn the_service_names_its_version_and_this_start_of_it_in_every_reply() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+
+    let (status, identity) = read_json(&viewer, "").await;
+    assert_eq!(status, 200);
+    assert_eq!(identity["protocol"], PROTOCOL);
+    assert_eq!(identity["incarnation"], viewer.incarnation.as_str());
+    assert!(
+        identity["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("incarnation"))
+    );
+
+    let request = Request::builder()
+        .uri(format!("{}status.json", viewer.prefix))
+        .header("host", &viewer.authority)
+        .body(Body::empty())
+        .unwrap();
+    let reply = respond(viewer.clone(), request).await;
+    assert_eq!(
+        reply.headers()[INCARNATION_HEADER],
+        viewer.incarnation.as_str()
+    );
+}
+
+#[tokio::test]
+async fn a_request_for_another_desktop_is_refused_and_one_naming_none_is_for_this_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let own = viewer.client().desktop().id();
+
+    let (status, reply) = read_json(&viewer, "activity.json?desktop=elsewhere").await;
+    assert_eq!(status, 409, "{reply}");
+    assert_eq!(reply["code"], "config-invalid");
+    let (status, _) = read_json(&viewer, &format!("activity.json?desktop={}", own.as_str())).await;
+    assert_eq!(status, 200);
+
+    let (status, reply) = posted(
+        &viewer,
+        "control/release",
+        &json!({"desktop": "elsewhere", "lease": "x"}),
+    )
+    .await;
+    assert_eq!(status, 409, "{reply}");
+    // A Stop is for every desktop, whichever one a request names; Resume is
+    // for the one named.
+    let (status, _) = posted(
+        &viewer,
+        "control/hold",
+        &json!({"desktop": "elsewhere", "on": true}),
+    )
+    .await;
+    assert_ne!(status, 409);
+    let (status, _) = posted_as(
+        &viewer,
+        "control/hold",
+        &json!({"desktop": "elsewhere", "on": false}),
+        &viewer.app_secret,
+    )
+    .await;
+    assert_eq!(status, 409);
+    for named in [
+        json!(null),
+        json!(7),
+        json!([own.as_str()]),
+        json!({"id": own.as_str()}),
+    ] {
+        let (status, _) = posted(
+            &viewer,
+            "control/release",
+            &json!({"desktop": named, "lease": "x"}),
+        )
+        .await;
+        assert_eq!(status, 409, "{named}");
+    }
+}

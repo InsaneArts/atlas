@@ -81,6 +81,10 @@ impl Viewer {
         self.release_shortly().await;
 
         {
+            // Never under a request that holds the helper it named.
+            let Ok(_switching) = self.pinned.try_write() else {
+                return;
+            };
             let mut lease = self.lease.lock().await;
             // A sign-in taken over stays this viewer's helper until the
             // person finishes or cancels it: that helper's hold and

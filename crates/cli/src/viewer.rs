@@ -12,14 +12,15 @@ mod local;
 mod reads;
 mod settings;
 mod sign_in;
+mod station;
 mod terminal;
 
 pub(crate) use app::{launched_url, open_viewer};
 pub use app::{monitor, render_menubar, serve};
 pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
-    SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, post_local, process,
-    read_record, recorded, recorded_port, running,
+    SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, local_checked,
+    post_local, process, read_record, recorded, recorded_port, running,
 };
 pub(crate) use reads::{Named, activity_of};
 pub(crate) use terminal::{TerminalFrames, TerminalService};
@@ -40,6 +41,16 @@ const LEASE_SECONDS: u64 = 10;
 /// What the viewer's own address answers, so it is told apart from any
 /// other program on its port.
 const SERVICE: &str = "atlas-viewer";
+
+/// The version of what the viewer serves: the app and the command line
+/// refuse a viewer that names no version, or another.
+pub(crate) const PROTOCOL: u64 = 1;
+
+/// What this viewer serves beyond its version, for readers to look for.
+const CAPABILITIES: &[&str] = &["incarnation", "interrupted-sign-in"];
+
+/// The header every reply names this viewer's incarnation in.
+const INCARNATION_HEADER: &str = "x-atlas-incarnation";
 
 /// The record of the running viewer, in the output folder.
 pub(crate) const MENUBAR_RECORD: &str = "menubar.json";
@@ -112,6 +123,9 @@ struct Viewer {
     /// A sign-in an earlier service was holding when it died, taken over
     /// until the person finishes or cancels it.
     interrupted: std::sync::Mutex<Option<interrupted::Interrupted>>,
+    /// Held by each request that names its desktop, for as long as it runs:
+    /// the helper does not change under it.
+    pinned: RwLock<()>,
     /// Held through one finishing or cancelling of it, from its first step
     /// to its last, so no two run at once.
     resolving: Mutex<()>,
@@ -124,6 +138,10 @@ struct Viewer {
     /// The secret the app names itself by, given only to the app this
     /// viewer starts, on its standard input; never written anywhere.
     app_secret: String,
+    /// This start of the viewer: a reply naming another came from a viewer
+    /// that started before or after, whose leases and frames are not this
+    /// one's.
+    incarnation: String,
     /// The menu bar's hold on the folder its record is kept in, while it
     /// serves: taken before the record moves into another, after `record`.
     alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,
