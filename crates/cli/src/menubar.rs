@@ -918,9 +918,14 @@ pub(crate) fn forget_login() {
 }
 
 /// The app to run, and the configuration its commands must use.
+#[derive(Clone)]
 pub struct Program {
     pub(crate) executable: PathBuf,
     pub(crate) config: PathBuf,
+    /// Whether it is the app shipped and signed in Atlas.app, which attaches
+    /// to the service itself; one built in a checkout is the service's child
+    /// and reads what it needs on standard input.
+    pub(crate) attaches: bool,
 }
 
 impl Program {
@@ -931,10 +936,45 @@ impl Program {
     /// Returns configuration, installed-app or executable-location failures while selecting a
     /// viewer program.
     pub fn new(config: &Path) -> Result<Self> {
+        let shipped = shipped_app()?;
         Ok(Self {
-            executable: app_program()?,
+            attaches: shipped.is_some(),
+            executable: shipped.map_or_else(development, Ok)?,
             config: fs::canonicalize(config)?,
         })
+    }
+
+    /// Start the app as a process of its own, which attaches to the service
+    /// and outlives it; one already running keeps running in its place.
+    /// `ended` is called once the process it started ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to start it.
+    pub(crate) fn start_attaching(&self, ended: impl FnOnce() + Send + 'static) -> Result<()> {
+        use std::os::unix::process::CommandExt;
+
+        let cli = std::env::current_exe().and_then(fs::canonicalize)?;
+        let mut command = std::process::Command::new(&self.executable);
+        if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+            command.env(variable, key);
+        }
+        command
+            .arg("--attach")
+            .env_remove("XPC_SERVICE_NAME")
+            .env("ATLAS_CLI", cli)
+            .env("ATLAS_CONFIG", &self.config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = atlas_core::spawn::spawn(&mut command)?;
+        // Reaped when it ends, so no exited app lingers; never killed here.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            ended();
+        });
+        Ok(())
     }
 }
 
@@ -1042,7 +1082,7 @@ pub(crate) enum Line {
 }
 
 impl Line {
-    fn text(self) -> &'static str {
+    pub(crate) fn text(self) -> &'static str {
         match self {
             Self::Viewer => "viewer\n",
         }

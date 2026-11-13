@@ -58,6 +58,8 @@ enum AtlasApp {
       drawMenuBar(to: folder)
     case .app(let render, let dark):
       app(configuration: configuration, loginItem: loginItem, clock: clock, render: render, dark: dark)
+    case .attach:
+      attached(configuration: configuration, loginItem: loginItem, clock: clock, executable: executable)
     }
   }
 
@@ -110,6 +112,49 @@ enum AtlasApp {
     // Unstructured, so the line is handled once the app runs, as every later one is.
     if secret == nil, let next { Task { @MainActor in delegate.received(next) } }
     input.listen(received: { line in delegate.received(line) }, closed: { delegate.parentClosed() })
+    withExtendedLifetime(delegate) { app.run() }
+  }
+
+  /// The app as its own process, attaching to the Atlas service beside it in its bundle and attaching again whenever
+  /// that service starts anew; it never quits because the service did. A second one finds the first running and
+  /// leaves.
+  ///
+  /// - Parameters:
+  ///   - configuration: What the app took from its environment.
+  ///   - loginItem: The app's login item.
+  ///   - clock: The one live clock.
+  ///   - executable: This app's executable, beside which the service's runs.
+  static func attached(
+    configuration: AppConfiguration,
+    loginItem: OpenAtLogin,
+    clock: any Clock<Duration>,
+    executable: URL
+  ) {
+    guard AppLock.claim(waiting: AppLock.handover) else { exit(0) }
+    let connection = ServiceConnection()
+    let app = NSApplication.shared
+    DockIcon.settle(windowOpen: false)
+    let delegate = AppDelegate(
+      container: AppContainer(
+        commands: configuration.commands,
+        service: connection,
+        loginItem: loginItem,
+        clock: clock
+      )
+    )
+    app.delegate = delegate
+    let service = executable.deletingLastPathComponent()
+      .appending(path: "atlas")
+    let settings = configuration.settings
+    Thread.detachNewThread {
+      ServiceAttaching.run(
+        connection,
+        service: service,
+        settings: settings,
+        received: { line in delegate.received(line) },
+        ended: { await delegate.serviceEnded() }
+      )
+    }
     withExtendedLifetime(delegate) { app.run() }
   }
 

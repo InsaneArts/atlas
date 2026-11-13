@@ -76,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
   }
 
+  /// The service went away: the control, pictures and requests the app had of it are gone with it, so the panel
+  /// forgets them and the windows close, and open on the next service when the person asks. Returns once they did.
+  func serviceEnded() async {
+    container.panel?.forgetService()
+    await container.coordinator.closeAllWindowsAnswered()
+  }
+
   /// Standard input closed: the service is gone, so the app goes too.
   func parentClosed() {
     NSApp.terminate(nil)

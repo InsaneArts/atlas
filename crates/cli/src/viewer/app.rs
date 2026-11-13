@@ -84,10 +84,27 @@ pub async fn serve(
     // Without it the app reads pictures over this viewer's address as before.
     let (pipe_stop, pipe) = keep_pipe(viewer.clone());
 
-    // The record names a viewer with an app; none is left when the app
-    // does not start.
-    let mut app = App::launch(&program, &viewer.url, &viewer.app_secret, receiver).await?;
-    *unpoisoned(&viewer.app_process) = app.process();
+    // The shipped app attaches itself and outlives this service; one built
+    // in a checkout is its child, as before. The record names a viewer with
+    // an app; none is left when the app does not start.
+    let (mut app, attaching) = if program.attaches {
+        let attach = super::attach::Attach::bind().await?;
+        // Started by whoever asks for the window or the menu bar, and by
+        // the login that brings the menu bar; never by another start of this
+        // service, so a service started again does not bring back an app the
+        // person quit.
+        viewer.attaching.program(program.clone());
+        let attaching =
+            tokio::spawn(attach.serve(viewer.clone(), program.executable.clone(), receiver));
+        if crate::menubar::started_at_login() {
+            viewer.attaching.ensure()?;
+        }
+        (None, Some(attaching))
+    } else {
+        let app = App::launch(&program, &viewer.url, &viewer.app_secret, receiver).await?;
+        *unpoisoned(&viewer.app_process) = app.process();
+        (Some(app), None)
+    };
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
@@ -115,7 +132,8 @@ pub async fn serve(
             _ = tokio::signal::ctrl_c() => {}
             _ = terminated.recv() => {}
             _ = hung_up.recv() => {}
-            () = app.exited() => {}
+            // An app that attaches may quit and come back: the service goes on.
+            () = child_exited(&mut app) => {}
         }
 
         // No restart of the person's idle time begins from here; one under
@@ -130,6 +148,9 @@ pub async fn serve(
 
     expiry.abort();
     pictures.abort();
+    if let Some(attaching) = attaching {
+        attaching.abort();
+    }
     viewer.close().await;
     let _ = viewer.release(None).await;
     let _ = pipe_stop.send(());
@@ -148,6 +169,15 @@ pub async fn serve(
 /// How long a starting service waits for control a service that died held
 /// to be let go.
 const DEAD_CONTROL: Duration = Duration::from_secs(10);
+
+/// The app this service started as its child ending; never, for an app that
+/// attaches.
+async fn child_exited(app: &mut Option<App>) {
+    match app {
+        Some(app) => app.exited().await,
+        None => std::future::pending().await,
+    }
+}
 
 /// Keep a frame service for the helper `viewer` serves now, until told to
 /// stop: when its settings name another helper, the old service ends, its
@@ -322,6 +352,21 @@ pub(crate) async fn launched_url(config: &Path, port: u16, output: &Path) -> Res
     address(&record)
         .map(str::to_owned)
         .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))
+}
+
+/// Have the app run beside the menu bar's service recorded as `record`:
+/// started again when the person quit it.
+///
+/// # Errors
+///
+/// Returns a record that names no service, and the service's refusal or
+/// failure to start the app.
+pub async fn keep_app(record: &Value) -> Result<()> {
+    let url = address(record)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))?;
+    blocking(move || post_local(&url, "app/viewer", &json!({"window": false}))).await?;
+    Ok(())
 }
 
 /// Open the viewer window in the menu bar app, starting the menu bar first

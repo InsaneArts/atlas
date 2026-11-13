@@ -819,6 +819,9 @@ async fn menu_bar(
         None => {
             let output = client.output_dir()?.to_path_buf();
             let (already, record) = menubar::launch(config, args.port, &output).await?;
+            // The menu bar is the app's: started now, or again should the
+            // person have quit it.
+            viewer::keep_app(&record).await?;
             output::started_menu_bar(already, &record);
             Ok(Value::Null)
         }

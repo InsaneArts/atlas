@@ -3,3 +3,4 @@
 
 pub mod approval;
 pub mod native;
+pub mod peer;

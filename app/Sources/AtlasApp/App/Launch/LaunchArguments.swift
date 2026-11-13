@@ -17,6 +17,9 @@ enum LaunchArguments {
     if arguments.contains("--onboarding") {
       return .onboarding
     }
+    if arguments.contains("--attach") {
+      return .attach
+    }
     let dark = arguments.contains("--dark")
     if let folder = value(after: "--render-onboarding", in: arguments) {
       return .renderOnboarding(folder, dark: dark)

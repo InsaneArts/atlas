@@ -157,23 +157,40 @@ final class WindowCoordinator {
   /// Closes every Atlas window and the panel, keeping the app and its menu bar item running. The main window stays
   /// open until the service has answered its release; unlike termination, closing windows has no release ceiling.
   func closeAllWindows() {
-    guard !closingWindows else { return }
+    guard beginClosingAll() else { return }
+    // Unstructured, as the menu's action is synchronous: the windows close once the release is answered.
+    Task { await closeEach() }
+  }
+
+  /// ``closeAllWindows()``, returning once the windows are closed; at once when they are closing already.
+  func closeAllWindowsAnswered() async {
+    guard beginClosingAll() else { return }
+    await closeEach()
+  }
+
+  /// Marks every window closing, so none reopens meanwhile; false when they are closing already.
+  ///
+  /// - Returns: Whether this call closes them.
+  private func beginClosingAll() -> Bool {
+    guard !closingWindows else { return false }
     closingWindows = true
     reopeningOnboarding = false
-    // Unstructured, as the menu's action is synchronous: the windows close once the release is answered.
-    Task {
-      defer { closingWindows = false }
-      repeat {
-        releaseViewerControl()
-        _ = await controlBarrier?.settle()
-      } while viewerHoldsControl
-      parts?.closePanel()
-      viewer?.window.dismiss()
-      settings?.window.dismiss()
-      onboarding?.window.dismiss()
-      alert?.window.dismiss()
-      alert = nil
-    }
+    return true
+  }
+
+  /// Gives the main window's control back, then closes the panel and every window.
+  private func closeEach() async {
+    defer { closingWindows = false }
+    repeat {
+      releaseViewerControl()
+      _ = await controlBarrier?.settle()
+    } while viewerHoldsControl
+    parts?.closePanel()
+    viewer?.window.dismiss()
+    settings?.window.dismiss()
+    onboarding?.window.dismiss()
+    alert?.window.dismiss()
+    alert = nil
   }
 
   /// Quit Atlas, from the panel's Quit: the main window's control goes back first, through the

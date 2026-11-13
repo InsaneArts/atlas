@@ -3154,6 +3154,7 @@ async fn a_second_menu_bar_on_another_port_refuses_and_leaves_the_running_ones_r
     let program = crate::menubar::Program {
         executable: dir.path().join("never started"),
         config: dir.path().join("u.toml"),
+        attaches: false,
     };
     let error = serve(client, 0, program, |_| panic!("a second menu bar started"))
         .await

@@ -17,4 +17,6 @@ enum LaunchMode: Equatable {
   /// The app that reads the viewer's URL on standard input: the menu bar, or with `render`, one drawing of the
   /// panel, or of an alert, in light or dark.
   case app(render: String?, dark: Bool)
+  /// The app, attaching to the Atlas service itself rather than reading it from standard input.
+  case attach
 }

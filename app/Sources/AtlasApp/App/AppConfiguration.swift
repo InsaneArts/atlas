@@ -7,6 +7,8 @@ struct AppConfiguration {
   let commands: Commands
   /// How a panel render differs from the live panel, for design checks.
   let renderOverrides: PanelRenderOverrides
+  /// The settings file the app's commands use (`ATLAS_CONFIG`); nil for the installed one.
+  let settings: String?
 
   /// Reads the configuration.
   ///
@@ -22,6 +24,7 @@ struct AppConfiguration {
       commands = Commands.beside(executable, environment: environment)
     }
     renderOverrides = PanelRenderOverrides(environment: environment)
+    settings = environment["ATLAS_CONFIG"].flatMap { $0.isEmpty ? nil : $0 }
   }
 
   /// Reads the configuration from this process's environment.

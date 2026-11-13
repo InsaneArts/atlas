@@ -113,6 +113,7 @@ pub(super) fn configured(
         #[cfg(test)]
         recovery_pause: super::interrupted::Pause::default(),
         app_process: std::sync::Mutex::new(None),
+        attaching: Arc::default(),
         app_secret: atlas_core::name::random_hex(64),
         incarnation: atlas_core::name::random_hex(32),
         input_started: std::sync::Mutex::new(None),
@@ -508,7 +509,7 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
         }
         Some(Route::OpenViewer) => match read_body(request).await {
             Ok(body) => match viewer.pin(body.get("desktop")).await {
-                Some(_pinned) => open_app_viewer(&viewer),
+                Some(_pinned) => open_app_viewer(&viewer, body["window"] != false),
                 None => json_response(409, json!(another_desktop())),
             },
             Err(response) => response,
@@ -581,7 +582,18 @@ impl Viewer {
 }
 
 /// Ask the app to open its viewer window.
-fn open_app_viewer(viewer: &Viewer) -> Response {
+fn open_app_viewer(viewer: &Viewer, window: bool) -> Response {
+    // The app the person quit is started again; the window waits for it,
+    // asked for again of each app that comes until one takes it up.
+    if window {
+        viewer.attaching.want_window();
+    }
+    if let Err(error) = viewer.attaching.ensure() {
+        return json_response(409, json!(error));
+    }
+    if !window {
+        return json_response(200, json!({"ok": true}));
+    }
     match viewer.send(Line::Viewer) {
         Ok(()) => json_response(200, json!({"ok": true, "viewer": "open"})),
         Err(error) => json_response(409, json!(error)),

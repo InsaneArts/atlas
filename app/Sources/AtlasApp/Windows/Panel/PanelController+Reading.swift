@@ -135,4 +135,18 @@ extension PanelController {
     // A failed capture never leaves an old screen on show.
     picture = decoded
   }
+
+  /// Forgets what the last service start said and showed: its status, its picture and the panel's pause of it. Any
+  /// reading still under way is overtaken, so nothing of that start comes back; the next readings are the new one's.
+  func forgetService() {
+    statusReading += 1
+    frameReading += 1
+    status = ViewerStatus()
+    answered = nil
+    picture = nil
+    if session.paused {
+      session.paused = false
+      if isOpen { watch(open: true) }
+    }
+  }
 }

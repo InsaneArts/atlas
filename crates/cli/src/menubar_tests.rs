@@ -53,6 +53,7 @@ printf '%s' "$$" > "$directory/pid"
             program: Program {
                 executable,
                 config: fs::canonicalize(config).unwrap(),
+                attaches: false,
             },
             owned: Cell::new(None),
         }

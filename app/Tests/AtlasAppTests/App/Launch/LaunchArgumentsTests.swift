@@ -17,6 +17,12 @@ struct LaunchArgumentsTests {
     #expect(LaunchArguments.mode(["app", "--notice", "Title"]) == .app(render: nil, dark: false), "no message")
   }
 
+  @Test("--attach starts the app that attaches to the service itself, after the flag modes")
+  func attachStartsTheAttachingApp() {
+    #expect(LaunchArguments.mode(["app", "--attach"]) == .attach)
+    #expect(LaunchArguments.mode(["app", "--onboarding", "--attach"]) == .onboarding)
+  }
+
   @Test("flag modes are chosen in today's order before the app that reads standard input")
   func flagModesComeFirstInOrder() {
     #expect(

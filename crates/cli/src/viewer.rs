@@ -4,6 +4,7 @@
 //! directory so `atlas monitor` and the login item can find it.
 mod accounts;
 mod app;
+mod attach;
 mod control;
 mod frames;
 mod http;
@@ -15,8 +16,8 @@ mod sign_in;
 mod station;
 mod terminal;
 
+pub use app::{keep_app, monitor, render_menubar, serve};
 pub(crate) use app::{launched_url, open_viewer};
-pub use app::{monitor, render_menubar, serve};
 pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, local_checked,
@@ -132,6 +133,8 @@ struct Viewer {
     /// Where a test holds the helper's recovery under way.
     #[cfg(test)]
     recovery_pause: interrupted::Pause,
+    /// The app that attaches to this service, when it is the shipped one.
+    attaching: Arc<attach::Attaching>,
     /// The app this viewer serves, as macOS names its process once started:
     /// the frame service shows it the screen while agents may not see it.
     app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,
