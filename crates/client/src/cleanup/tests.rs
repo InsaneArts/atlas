@@ -5,6 +5,7 @@ use crate::task::record::CleanupState;
 use crate::{
     app_selection::Process,
     environment::{InstallState, PlanState, Undone},
+    handoff::Copies,
     host_session::{Host, HostSession},
     task::{Claims, store::Store as Tasks},
 };
@@ -33,7 +34,7 @@ mod settlement;
 /// folder: a cleanup is given none.
 #[derive(Default)]
 struct Fake {
-    root: PathBuf,
+    copies: Option<Copies>,
     app_reads: Cell<usize>,
     plan_reads: Cell<usize>,
     install_reads: Cell<usize>,
@@ -74,7 +75,7 @@ struct Fake {
 impl Fake {
     fn at(root: &Path) -> Self {
         Self {
-            root: root.to_owned(),
+            copies: Some(Copies::in_folder(root)),
             ..Self::default()
         }
     }
@@ -91,8 +92,10 @@ impl Fake {
 }
 
 impl Hands for Fake {
-    fn copies(&self) -> &Path {
-        &self.root
+    fn copies(&self) -> &Copies {
+        self.copies
+            .as_ref()
+            .expect("a stand-in made at a copy root")
     }
 
     async fn apps(&self) -> Result<AppList> {

@@ -224,7 +224,8 @@ pub(crate) fn settle_rolled_back(
     kind: Kind,
     result: &Result<Value>,
 ) -> Result<()> {
-    settle_rolled_back_facts(client, &ReplyFacts::new(kind, result))
+    let copies = crate::handoff::Copies::of(&client.desktop());
+    settle_rolled_back_facts(client, &ReplyFacts::new(kind, result, &copies))
 }
 
 /// Settle the plan and kept outcome decoded by `dispatch::note_outcome`.

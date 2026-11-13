@@ -1,7 +1,15 @@
 //! Shared application-selection policy for close-all and held logout.
 use crate::client::{AppList, AppRow};
-use atlas_core::name::same_text;
+use atlas_core::{
+    desktop::{Desktop, Kind},
+    name::same_text,
+};
 use serde_json::{Value, json};
+use std::path::Path;
+
+/// Where a second login's apps are installed: this Mac's Applications
+/// folder, which it shares.
+const APPLICATIONS: &str = "/Applications";
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
@@ -45,8 +53,30 @@ fn app_program(executable: &str) -> bool {
         .any(|inside| bundle.contains(inside))
 }
 
-/// Atlas's own app bundle, whose processes `close` leaves alone.
-pub(crate) fn atlas_bundle() -> Option<String> {
+/// Atlas's own app bundle in `desktop`, whose processes `close` leaves
+/// alone. A second login runs Atlas from the same app as this Mac.
+pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
+    match desktop.kind() {
+        Kind::SecondLogin(_) => atlas_bundle(),
+    }
+}
+
+/// Whether the app `name` is installed in `desktop`'s Applications folder:
+/// for a second login, whether `/Applications/{name}.app` is a folder. Apps
+/// elsewhere are not looked for.
+pub fn installed(desktop: &Desktop, name: &str) -> bool {
+    match desktop.kind() {
+        Kind::SecondLogin(_) => installed_in(Path::new(APPLICATIONS), name),
+    }
+}
+
+/// Whether the app `name` is installed in the folder `applications`.
+fn installed_in(applications: &Path, name: &str) -> bool {
+    applications.join(format!("{name}.app")).is_dir()
+}
+
+/// The app bundle this process runs from.
+fn atlas_bundle() -> Option<String> {
     std::env::current_exe()
         .ok()
         .and_then(|exe| atlas_core::app_bundle::app_of(&exe))
@@ -121,10 +151,10 @@ pub(crate) fn selected(apps: &AppList, closing: Closing, atlas: Option<&str>) ->
         .collect()
 }
 
-/// The apps someone opened in the helper and left open, by name: what
+/// The apps someone opened in `desktop` and left open, by name: what
 /// `close --all` would quit.
-pub(crate) fn left_open(apps: &AppList) -> Vec<String> {
-    selected(apps, Closing::All, atlas_bundle().as_deref())
+pub(crate) fn left_open(apps: &AppList, desktop: &Desktop) -> Vec<String> {
+    selected(apps, Closing::All, atlas_bundle_in(desktop).as_deref())
         .into_iter()
         .filter(|process| !process.protected)
         .map(|process| process.name)

@@ -12,6 +12,7 @@ use crate::{
     client::{Actor, AppList, Client},
     collect::{self, Intact},
     environment::{self, InstallState, PlanState, RemovalReply, Undone},
+    handoff::Copies,
     host_session::Key,
 };
 use atlas_control::Ownership;
@@ -20,17 +21,14 @@ use atlas_core::{
     files::Token,
     protocol::{JobId, Shown},
 };
-use std::{
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub(super) struct Live<'a> {
     client: &'a Client,
     /// The control a cleanup that acts holds; none for a preview, which
     /// only reads.
     ownership: Option<&'a Ownership>,
-    copies: PathBuf,
+    copies: Copies,
     /// Whether an earlier outcome was unknown when control was taken.
     unknown: bool,
 }
@@ -41,7 +39,7 @@ impl<'a> Live<'a> {
         Self {
             client,
             ownership: None,
-            copies: PathBuf::from(crate::handoff::ROOT),
+            copies: Copies::of(&client.desktop()),
             unknown: false,
         }
     }
@@ -62,7 +60,7 @@ impl<'a> Live<'a> {
 }
 
 impl Hands for Live<'_> {
-    fn copies(&self) -> &Path {
+    fn copies(&self) -> &Copies {
         &self.copies
     }
 

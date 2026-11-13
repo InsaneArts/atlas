@@ -3,7 +3,7 @@
 //! match on it.
 #[cfg(target_os = "macos")]
 use crate::error::Error;
-use crate::{error::Code, host::Key, time::ms};
+use crate::{error::Code, files::Token, host::Key, time::ms};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{ops::RangeInclusive, time::Duration};
@@ -338,6 +338,18 @@ requests! { request =>
             value.as_bool().ok_or_else(|| bad("\"muted\" must be true or false"))
         })?,
     }),
+    /// What became of a change this daemon was asked for.
+    "outcome" Outcome { change: Token } = Ok(Request::Outcome {
+        change: change(request)?.ok_or_else(|| bad("outcome requires the \"change\" it asks about"))?,
+    }),
+}
+
+/// One request line: what it asks, and the name it gives the change it
+/// asks for, when it brings one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub request: Request,
+    pub change: Option<Token>,
 }
 
 /// Admission and lost-reply handling are chosen together for every request.
@@ -392,6 +404,7 @@ impl Request {
             Self::Job(JobRequest::Show { .. } | JobRequest::Log { .. }) => (Any, None, Read("job")),
             Self::Sound { muted: None } => (Any, None, Read("sound")),
             Self::Sound { muted: Some(_) } => (Any, None, Mutation("sound")),
+            Self::Outcome { .. } => (Any, None, Read("outcome")),
         };
         Policy {
             console,
@@ -474,12 +487,13 @@ fn bad(error: impl Into<String>) -> Value {
     failure(Code::BadRequest, error)
 }
 
-/// Parse one request line, or the reply that refuses it.
+/// Parse one request line, or the reply that refuses it. A change badly
+/// named is refused after everything else the request holds.
 ///
 /// # Errors
 ///
 /// Returns the reply that refuses the line.
-pub fn parse(line: &[u8]) -> Result<Request, Value> {
+pub fn parse(line: &[u8]) -> Result<Asked, Value> {
     if line.len() > MAX_REQUEST {
         return Err(bad("request exceeds 1 MiB"));
     }
@@ -493,7 +507,20 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
     let op = request["op"]
         .as_str()
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
-    decode(op, &request)
+    Ok(Asked {
+        request: decode(op, &request)?,
+        change: change(&request)?,
+    })
+}
+
+/// A request's `change`, the name it gives the change it asks for.
+fn change(request: &Value) -> Result<Option<Token>, Value> {
+    optional(&request["change"], |value| {
+        value
+            .as_str()
+            .and_then(Token::parse)
+            .ok_or_else(|| bad("\"change\" must be 48 lowercase hex digits"))
+    })
 }
 
 /// What `decode` makes of `value`, unless it is absent or null.

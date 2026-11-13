@@ -7,6 +7,7 @@ pub(crate) use sessions::service_blocker_with;
 use super::Client;
 use atlas_control::Ownership;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Holder, Result},
     protocol::{JobState, Shown},
 };
@@ -72,13 +73,17 @@ impl Client {
             return Err(busy(message));
         }
 
-        // The daemon creates its directory before accepting jobs and keeps
-        // it across shutdowns. Only an absent directory establishes a first
-        // setup; a missing socket can leave background jobs running.
-        if self.transport.path.parent().is_some_and(|directory| {
-            std::fs::symlink_metadata(directory)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        }) {
+        let first_setup = match self.desktop().kind() {
+            // The daemon creates its directory before accepting jobs and
+            // keeps it across shutdowns. Only an absent directory establishes
+            // a first setup; a missing socket can leave background jobs
+            // running.
+            Kind::SecondLogin(_) => self.transport.path.parent().is_some_and(|directory| {
+                std::fs::symlink_metadata(directory)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            }),
+        };
+        if first_setup {
             return Ok(());
         }
 

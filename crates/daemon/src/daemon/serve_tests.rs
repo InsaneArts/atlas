@@ -95,6 +95,169 @@ async fn a_lost_mutation_reply_keeps_recovery_pending() {
     .await;
 }
 
+/// A name a change may give itself.
+const CHANGE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// What `daemon` says the change named [`CHANGE`] came to.
+async fn outcome(daemon: &Arc<Daemon>) -> Value {
+    let request = format!(r#"{{"op":"outcome","change":"{CHANGE}"}}"#);
+    exchange(daemon.clone(), &request).await.remove(0)
+}
+
+#[tokio::test]
+async fn a_change_that_named_itself_is_remembered_when_its_reply_is_lost() {
+    let daemon = daemon(false);
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "unknown"})
+    );
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client
+        .write_all(format!("{{\"op\":\"restart\",\"change\":\"{CHANGE}\"}}\n").as_bytes())
+        .await
+        .unwrap();
+    nix::sys::socket::shutdown(server.as_raw_fd(), nix::sys::socket::Shutdown::Write).unwrap();
+    let phase = watch::channel(ConnectionPhase::Refusal).0;
+    let lost = handle(server, daemon.clone(), true, phase).await;
+    assert!(lost.is_err(), "its reply could not be written");
+
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "done", "reply": {"ok": true, "op": "restart"}})
+    );
+}
+
+#[tokio::test]
+async fn a_restart_cut_before_it_happened_is_not_remembered_as_done() {
+    let daemon = daemon(false);
+    // The client reads nothing, and the kernel takes no more for it: the
+    // reply can only wait.
+    let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+    server.set_nonblocking(true).unwrap();
+    let mut filled = 0;
+    let full = loop {
+        match std::io::Write::write(&mut &server, &[0; 65536]) {
+            Ok(written) => filled += written,
+            Err(error) => break error,
+        }
+    };
+    assert!(filled > 0);
+    assert_eq!(full.kind(), std::io::ErrorKind::WouldBlock);
+    let (_reader, mut writer) = UnixStream::from_std(server).unwrap().into_split();
+    let change = atlas_core::files::Token::parse(CHANGE).unwrap();
+    let remembering = daemon.outcomes.begin(change);
+    let restarted = AtomicBool::new(false);
+    {
+        let acknowledging = acknowledge(&mut writer, "restart", remembering, || {
+            restarted.store(true, Ordering::SeqCst);
+        });
+        tokio::pin!(acknowledging);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            acknowledging.as_mut().poll(&mut context).is_pending(),
+            "it waits to write its reply"
+        );
+        // Cut there, as a handler that is stopped is.
+    }
+
+    assert!(!restarted.load(Ordering::SeqCst));
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "unknown"})
+    );
+    drop(client);
+}
+
+#[tokio::test]
+async fn a_change_asked_for_twice_is_carried_out_once() {
+    let daemon = daemon(false);
+    let request =
+        format!(r#"{{"op":"run","argv":["/usr/bin/true"],"timeoutMs":60000,"change":"{CHANGE}"}}"#);
+    let first = exchange(daemon.clone(), &request).await;
+    assert_eq!(first.last().unwrap()["exitCode"], 0);
+
+    let second = exchange(daemon.clone(), &request).await;
+    assert_eq!(
+        second,
+        [json!({
+            "ok": false,
+            "code": "bad-request",
+            "error": "The helper was already asked for this change; ask for its outcome",
+            "uncertain": false,
+        })]
+    );
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "done", "reply": first.last().unwrap()})
+    );
+}
+
+#[tokio::test]
+async fn a_command_under_way_is_running_until_the_daemon_knows_what_it_came_to() {
+    let daemon = daemon(false);
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let phase = watch::channel(ConnectionPhase::Refusal).0;
+    let served = tokio::spawn(handle(server, daemon.clone(), true, phase));
+    let request = format!(
+        r#"{{"op":"run","argv":["/usr/bin/tail","-f","/dev/null"],"timeoutMs":60000,"change":"{CHANGE}"}}"#
+    );
+    client
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(client).lines();
+    let started: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(started["event"], "started");
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "running"})
+    );
+
+    // The client leaves, which ends the command: the daemon remembers
+    // that it cannot say how far it got.
+    drop(lines);
+    assert!(served.await.unwrap().is_err());
+    let remembered = outcome(&daemon).await;
+    assert_eq!(remembered["outcome"], "done");
+    assert_eq!(remembered["reply"]["ok"], false);
+    assert_eq!(remembered["reply"]["uncertain"], true);
+}
+
+#[tokio::test]
+async fn a_change_refused_while_the_helper_is_on_screen_is_remembered_as_refused() {
+    let daemon = daemon(true);
+    let request = format!(r#"{{"op":"logout","change":"{CHANGE}"}}"#);
+    let refusal = exchange(daemon.clone(), &request).await.remove(0);
+    assert_eq!(refusal["code"], "on-console");
+
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "done", "reply": refusal})
+    );
+}
+
+#[tokio::test]
+async fn a_read_that_names_a_change_is_not_remembered_and_may_be_asked_again() {
+    let daemon = daemon(false);
+    let request = format!(r#"{{"op":"windows","change":"{CHANGE}"}}"#);
+    for _ in 0..2 {
+        assert_eq!(exchange(daemon.clone(), &request).await[0]["ok"], true);
+    }
+
+    assert_eq!(
+        outcome(&daemon).await,
+        json!({"ok": true, "outcome": "unknown"})
+    );
+}
+
+#[tokio::test]
+async fn only_the_controller_is_told_what_a_change_came_to() {
+    let request = format!(r#"{{"op":"outcome","change":"{CHANGE}"}}"#);
+    let refusal = exchange_as(daemon(false), &request, false).await.remove(0);
+    assert_eq!(refusal["code"], "permission");
+}
+
 #[tokio::test]
 async fn a_lost_run_reply_does_not_refuse_the_next_command() {
     let daemon = daemon(false);
@@ -1448,6 +1611,7 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
             "helper-sound",
+            "outcomes-v1",
             "jobs"
         ])
     );
@@ -1513,6 +1677,7 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
             "helper-sound",
+            "outcomes-v1",
             "jobs"
         ])
     );
@@ -1537,6 +1702,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
             "helper-sound",
+            "outcomes-v1",
         ]),
         "no jobs without their folder"
     );
@@ -1557,6 +1723,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
             "helper-sound",
+            "outcomes-v1",
             "jobs"
         ])
     );

@@ -14,7 +14,7 @@ use atlas_core::{
         SESSION_PROOF, SessionPin,
     },
     session::{Epoch, InputEpoch},
-    transport::{connect_socket, refusal},
+    transport::refusal,
 };
 use serde_json::{Value, json};
 use std::{
@@ -193,18 +193,15 @@ impl LiveStream {
         let high_res = offers(RGB_STREAM_HIGH_RES);
         let limit = if high_res { limit } else { limit.min(1600) };
         let epoch = verified.session.epoch.clone();
-        let socket = tokio::time::timeout(DEADLINE, connect_socket(&client.transport.path, setup))
+        let lane = tokio::time::timeout(DEADLINE, client.transport.lane(epoch.capture_pid, setup))
             .await
             .map_err(|_| invalid("Preview connection timed out"))??;
-        let peer = socket.peer_cred()?;
-        if peer.uid() != client.transport.peer_uid
-            || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(epoch.capture_pid)
-        {
+        let Some(socket) = lane else {
             return Err(Error::new(
                 Code::Identity,
                 "The preview peer is not the verified helper daemon",
             ));
-        }
+        };
         let mut stream = Self {
             socket,
             epoch,
@@ -248,10 +245,7 @@ impl LiveStream {
             stream.producer = Some(Served {
                 daemon,
                 generation,
-                instance: i32::try_from(daemon)
-                    .ok()
-                    .and_then(|pid| atlas_core::process::info(pid).ok().flatten())
-                    .map(|info| info.instance),
+                instance: client.desktop().instance(daemon),
             });
         }
         Ok(Some(stream))
@@ -407,7 +401,7 @@ impl LiveStream {
         let _ = tokio::time::timeout_at(until, self.socket.shutdown()).await;
         loop {
             // A daemon that exited took its native source with it.
-            if exited(instance) {
+            if instance.is_some_and(|instance| client.desktop().exited(instance)) {
                 return Ok(());
             }
             let query = atlas_core::files::token()[..32].to_owned();
@@ -594,16 +588,6 @@ struct Served {
     instance: Option<atlas_core::process::Instance>,
 }
 
-/// Whether the daemon in `instance` has exited: its PID is gone, a zombie,
-/// or another process's. Unknown is not exited.
-fn exited(instance: Option<atlas_core::process::Instance>) -> bool {
-    instance.is_some_and(|instance| match atlas_core::process::info(instance.pid) {
-        Ok(None) => true,
-        Ok(Some(info)) => info.instance.start != instance.start || info.zombie,
-        Err(_) => false,
-    })
-}
-
 /// One acquisition's record as it goes: the stage it is in and when that
 /// stage began, so a stage that fails or times out keeps its elapsed time.
 struct Progress {
@@ -681,16 +665,12 @@ async fn drain_query(
     query: &str,
     until: tokio::time::Instant,
 ) -> Result<Value> {
-    let mut socket = connect_socket(&client.transport.path, until).await?;
-    let peer = socket.peer_cred()?;
-    if peer.uid() != client.transport.peer_uid
-        || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(daemon)
-    {
+    let Some(mut socket) = client.transport.lane(daemon, until).await? else {
         return Err(Error::new(
             Code::Identity,
             "The drain answer did not come from the helper daemon that ran the stream",
         ));
-    }
+    };
     let mut line = serde_json::to_vec(&json!({"op": "stream-drain-status", "daemonPID": daemon,
         "producerGeneration": generation, "queryID": query}))?;
     line.push(b'\n');

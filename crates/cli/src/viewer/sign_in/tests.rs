@@ -5,7 +5,7 @@ use atlas_client::{
     test_support::{Helper, completed, exited},
 };
 use atlas_core::test_support::UID;
-use std::sync::Mutex;
+use std::{path::Path, sync::Mutex};
 
 #[test]
 fn a_typed_address_opens_as_typed_and_is_listed_by_its_site() {
@@ -92,25 +92,15 @@ fn each_hold_opens_the_browsers_own_page_for_it() {
 
 #[test]
 fn chrome_is_chosen_when_installed_and_firefox_otherwise() {
-    let applications = tempfile::tempdir().unwrap();
-    assert_eq!(Browser::installed_in(applications.path()), None);
-    fs_dir(applications.path(), "Firefox.app");
+    assert_eq!(Browser::first_installed(|_| false), None);
     assert_eq!(
-        Browser::installed_in(applications.path()),
+        Browser::first_installed(|app| app == "Firefox"),
         Some(Browser::Firefox)
     );
-    fs_dir(applications.path(), "Google Chrome.app");
-    assert_eq!(
-        Browser::installed_in(applications.path()),
-        Some(Browser::Chrome)
-    );
+    assert_eq!(Browser::first_installed(|_| true), Some(Browser::Chrome));
     assert_eq!(Browser::of("com.google.Chrome"), Some(Browser::Chrome));
     assert_eq!(Browser::of("org.mozilla.firefox"), Some(Browser::Firefox));
     assert_eq!(Browser::of("com.apple.Safari"), None);
-}
-
-fn fs_dir(parent: &Path, name: &str) {
-    std::fs::create_dir(parent.join(name)).unwrap();
 }
 
 /// How the stand-in helper answers a sign-in's steps.
@@ -669,12 +659,13 @@ async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone
     let controller = viewer.client().controller.clone();
     // What `atlas run sh -c '(sleep 30; open …) &'` leaves: its shell is
     // gone, and the work it handed on runs in its group. It runs as this
-    // account, which the stand-in helper's is not, so it is checked as this
-    // account's, in the person's words.
+    // account, which the stand-in helper's is not, so it is checked by a
+    // controller of this account's, in the person's words.
     let group = atlas_client::test_support::leftover_group();
     let me = nix::unistd::getuid().as_raw();
-    controller.note_run_group(group, me).unwrap();
-    let refused = command_running(controller.require_no_run_left(me).unwrap_err());
+    let own = atlas_control::Controller::at(me, &directory.path().join("own"));
+    own.note_run_group(group).unwrap();
+    let refused = command_running(own.require_no_run_left().unwrap_err());
     assert_eq!(refused.code, Code::Busy);
     assert_eq!(
         refused.error,

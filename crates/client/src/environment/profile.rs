@@ -1,7 +1,7 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
 use super::{
-    Selection, discovery, freeze, problem,
+    Kind, SecondLogin, Selection, discovery, freeze, problem,
     runner::{ENVIRONMENT_TARGET, Environment},
     selectable_variable,
 };
@@ -176,6 +176,21 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     let profile = load(&path)?;
     refuse_credentials(&path, &profile)?;
     let bytes = selected_environment(&profile)?;
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => sync_in(client, login, path, profile, bytes, apply).await,
+    }
+}
+
+/// [`sync`] of `profile`, read from `path`, whose selected values are
+/// `bytes`, in the second login `login`.
+async fn sync_in(
+    client: &Client,
+    login: &SecondLogin,
+    path: PathBuf,
+    profile: Profile,
+    bytes: Vec<u8>,
+    apply: bool,
+) -> Result<Value> {
     let readiness = readiness(client, &profile).await?;
 
     // Owned from the moment it is made, so it goes even when this future is
@@ -201,7 +216,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
             executable: false,
         });
 
-        let mut result = freeze(client, &path, selections, apply).await?;
+        let mut result = freeze(client, login, &path, selections, apply).await?;
         result["profileVersion"] = json!(2);
         result["environmentNames"] = json!(profile.environment);
         result["readinessBeforeApply"] = readiness;

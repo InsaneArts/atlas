@@ -7,6 +7,7 @@ use super::{Actor, Client, Mutation, Verified, service::require_accessibility};
 use atlas_control::{Beside, Ownership, SharedLease};
 use atlas_core::{
     actions::{self, Expect},
+    desktop::Kind,
     error::{Code, Error, Holder, Result},
     session::{
         ASKS, ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
@@ -88,14 +89,21 @@ fn native_refusal(result: &Value) -> Error {
 }
 
 impl Client {
+    /// The input service: where it listens, and the account the kernel must
+    /// name at its end.
     pub(crate) fn input_transport(&self) -> Transport {
-        let peer_uid = self.config.helper_uid;
-        #[cfg(any(test, feature = "test-support"))]
-        let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
-        Transport {
-            path: self.config.input_socket.clone(),
-            timeout: Duration::from_secs(5),
-            peer_uid,
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => {
+                #[cfg(any(test, feature = "test-support"))]
+                let peer_uid = self.input_peer_uid.unwrap_or(login.uid);
+                #[cfg(not(any(test, feature = "test-support")))]
+                let peer_uid = login.uid;
+                Transport {
+                    path: self.config.input_socket.clone(),
+                    timeout: Duration::from_secs(5),
+                    peer_uid,
+                }
+            }
         }
     }
 
@@ -335,7 +343,7 @@ impl Client {
         check: Option<Expect>,
     ) -> Result<Value> {
         let observation = Observation::decode(status);
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(&observation)?;
         // An input service older than this one may call a password field a
         // plain one: no text typed through it is kept.
         if !observation.native.has_capability(TYPED_FIELDS)

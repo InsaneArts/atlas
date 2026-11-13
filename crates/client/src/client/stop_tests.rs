@@ -51,6 +51,8 @@ async fn a_running_command_hears_of_a_stop_from_its_saved_marker() {
 async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
     let (_dir, mut person, input, _session) = native_client();
     person.actor = Actor::Viewer;
+    // No daemon runs, so none keeps jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let mut stopping = Box::pin(person.hold(true));
     let mut hello = dispatched(&mut stopping, &input, "hello").await;
     answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
@@ -77,6 +79,8 @@ async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
 async fn a_stop_returns_ok_with_uncertainty_and_a_warning_when_native_hold_is_uncertain() {
     let (_dir, mut person, input, _session) = native_client();
     person.actor = Actor::Viewer;
+    // No daemon runs, so none keeps jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let mut stopping = Box::pin(person.hold(true));
     let mut hello = dispatched(&mut stopping, &input, "hello").await;
     answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;

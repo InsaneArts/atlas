@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     client::AppList,
-    handoff,
+    handoff::Copies,
     host_session::{
         Key,
         names::{name_of, names},
@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 /// A step as replies show it: its number, what it does and what to.
-pub(super) fn described(copies: &Path, entry: &Entry, copied_app: Option<String>) -> Value {
+pub(super) fn described(copies: &Copies, entry: &Entry, copied_app: Option<String>) -> Value {
     let mut value = json!({"n": entry.n});
     match &entry.step {
         Step::CheckOutputs { outputs } => {
@@ -45,7 +45,7 @@ pub(super) fn described(copies: &Path, entry: &Entry, copied_app: Option<String>
         }
         Step::RemoveCopy { copy } => {
             value["do"] = json!("remove-copy");
-            value["path"] = json!(handoff::copy_folder(copies, copy));
+            value["path"] = json!(copies.location(copy));
             value["app"] = json!(copied_app);
         }
     }
@@ -115,7 +115,7 @@ pub(super) fn add_untraced<'a>(left: &mut Vec<Value>, apps: impl IntoIterator<It
 /// The reply to a cleanup that ran: `ok` exactly when it is complete, kept
 /// steps included, and `uncertain` exactly when it is uncertain.
 pub(super) fn applied(
-    copies: &Path,
+    copies: &Copies,
     output: &Path,
     scope: &Scope,
     loaded: &Loaded,

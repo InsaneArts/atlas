@@ -36,6 +36,7 @@ use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
+    desktop::{Desktop, Kind, SecondLogin},
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
@@ -163,14 +164,22 @@ impl Client {
     /// Rejects an invalid or non-distinct helper UID and failures creating the local controller
     /// identity. Construction does not verify a running helper session.
     pub fn new(config: Config) -> Result<Self> {
-        atlas_core::session::validate_uid(config.helper_uid)?;
+        let desktop = config.desktop();
+        // The command service: where it listens, and the account the
+        // kernel must name at its end.
+        let transport = match desktop.kind() {
+            Kind::SecondLogin(login) => {
+                atlas_core::session::validate_uid(login.uid)?;
+                Transport {
+                    path: config.socket_path.clone(),
+                    timeout: Duration::from_secs(30),
+                    peer_uid: login.uid,
+                }
+            }
+        };
         Ok(Self {
-            controller: Controller::new(config.helper_uid)?,
-            transport: Transport {
-                path: config.socket_path.clone(),
-                timeout: Duration::from_secs(30),
-                peer_uid: config.helper_uid,
-            },
+            controller: Controller::new(&desktop)?,
+            transport,
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -190,6 +199,11 @@ impl Client {
             ask_shown: None,
             config,
         })
+    }
+
+    /// The desktop this client acts on, as its configuration names it.
+    pub fn desktop(&self) -> Desktop {
+        self.config.desktop()
     }
 
     /// What the person allowed this command once, for its next attempt.
@@ -289,9 +303,10 @@ impl Client {
         let mut hello = self.transport.call(&json!({"op": "hello"})).await?;
 
         // Do not launch the probe into an unverified UID or the visible desktop.
-        if hello["ok"] != true
-            || hello["user"]["uid"].as_u64() != Some(self.config.helper_uid.into())
-            || hello["session"]["onConsole"] != false
+        let answered_as_configured = match self.desktop().kind() {
+            Kind::SecondLogin(login) => hello["user"]["uid"].as_u64() == Some(login.uid.into()),
+        };
+        if hello["ok"] != true || !answered_as_configured || hello["session"]["onConsole"] != false
         {
             return Ok(hello);
         }
@@ -323,9 +338,18 @@ impl Client {
                 .await?;
             return Self::challenged_proof(&reply, &challenge);
         }
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.session_proof_by_command(login).await,
+        }
+    }
+
+    /// A fresh proof of the second login `login`'s session from a new run of
+    /// the shared Atlas command, which it runs from this disk.
+    async fn session_proof_by_command(&self, _login: &SecondLogin) -> Result<Value> {
+        let command = &self.config.identity_probe;
         let request = json!({
             "op": "run",
-            "argv": [self.config.identity_probe, "session-info"],
+            "argv": [command, "session-info"],
             "timeoutMs": 3000,
         });
         let reply = self.transport.call(&request).await?;
@@ -335,7 +359,7 @@ impl Client {
                 format!(
                     "The helper cannot run the shared Atlas command at {}. Run atlas \
                      install.",
-                    self.config.identity_probe.display()
+                    command.display()
                 ),
             ));
         }
@@ -379,7 +403,7 @@ impl Client {
     /// [`Client::identity`] does.
     pub(crate) async fn verify(&self) -> Result<Verified> {
         let observation = self.observed().await;
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(&observation)?;
         Ok(Verified {
             session,
             observation,
@@ -413,13 +437,17 @@ impl Client {
         self.controller.writable()?;
         atlas_core::files::probe_write(self.output_dir()?)?;
 
-        // Builds and environment plans are staged beside the shared Atlas
-        // command for the helper to read; a missing folder is setup's
-        // concern, not this check's.
-        if let Some(shared) = self.config.identity_probe.parent()
-            && shared.is_dir()
-        {
-            atlas_core::files::probe_write(shared)?;
+        match self.desktop().kind() {
+            // Builds and environment plans are staged beside the shared Atlas
+            // command for the second login to read; a missing folder is
+            // setup's concern, not this check's.
+            Kind::SecondLogin(_) => {
+                if let Some(shared) = self.config.identity_probe.parent()
+                    && shared.is_dir()
+                {
+                    atlas_core::files::probe_write(shared)?;
+                }
+            }
         }
 
         Ok(())

@@ -2,17 +2,14 @@
 //! still the one listed, and waited for until none is left; closing one app
 //! or every app also removes the copies `open` made of them.
 use crate::{
-    app_selection::{Closing, Process, atlas_bundle, selected},
+    app_selection::{Closing, Process, atlas_bundle_in, selected},
     client::{AppList, Client},
     handoff, task,
 };
 use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 /// The names of the selected processes that were (or, with `quit` false,
 /// were not) among the `signalled` ones, sorted, each once.
@@ -177,14 +174,14 @@ pub(super) fn unconfirmed(mut error: Error, names: &[String]) -> Error {
 /// Returns selection, ownership, identity or close failures. A refusal can follow earlier
 /// completed closes; unknown outcomes retain their recovery records.
 pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
-    close_in(client, closing, Path::new(handoff::ROOT)).await
+    close_in(client, closing, &handoff::Copies::of(&client.desktop())).await
 }
 
-/// [`close`], with `open`'s copies under `copies`.
+/// [`close`], with `open`'s `copies`.
 pub(super) async fn close_in(
     client: &Client,
     closing: Closing<'_>,
-    copies: &Path,
+    copies: &handoff::Copies,
 ) -> Result<Value> {
     if let Closing::App(app) = closing
         && app.contains('/')
@@ -197,7 +194,7 @@ pub(super) async fn close_in(
 
     let ownership = client.controller.acquire_beside_commands()?;
     let started = Instant::now();
-    let atlas = atlas_bundle();
+    let atlas = atlas_bundle_in(&client.desktop());
     let apps = client.running_apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
     // Keep only identity, before the app disappears from the running list.
@@ -274,7 +271,7 @@ pub(super) async fn close_in(
 /// Remove the copies of `names`, once `after` proved those apps gone.
 fn remove_copies(
     client: &Client,
-    copies: &Path,
+    copies: &handoff::Copies,
     names: &[String],
     after: &AppList,
 ) -> handoff::Removed {
@@ -284,7 +281,7 @@ fn remove_copies(
     let session = client.host_session.as_ref().map(|session| session.key());
     let mut removed = handoff::Removed::default();
     for name in names {
-        let gone = handoff::remove_copies_in(copies, name, after.rows(), session);
+        let gone = copies.remove_of_app(name, after.rows(), session);
         removed.folders.extend(gone.folders);
         removed.kept_others += gone.kept_others;
         removed.failed.extend(gone.failed);

@@ -195,7 +195,7 @@ pub async fn restart_helper(client: &Client) -> Result<()> {
     let transport = atlas_core::transport::Transport {
         path: client.config.socket_path.clone(),
         timeout: Duration::from_secs(10),
-        peer_uid: client.config.helper_uid,
+        peer_uid: client.desktop().second_login().uid,
     };
 
     let pending = client.controller.quarantine()?;

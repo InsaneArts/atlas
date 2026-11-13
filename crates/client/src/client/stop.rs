@@ -3,7 +3,9 @@
 //! Agents' commands read it before they change the helper, and a command
 //! under way hears of it from either side's saved marker.
 use super::{Actor, Client};
+use crate::jobs;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     protocol::JobReply,
     session::{HOLD, has_capability},
@@ -11,7 +13,7 @@ use atlas_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 impl Client {
     /// Stop agents in the helper (`on`), or let them go on. Stopping ends
@@ -53,10 +55,10 @@ impl Client {
     /// could not be told. A daemon that is not running, or that keeps no
     /// jobs, has none to end.
     async fn end_jobs_for_stop(&self) -> (Option<Value>, Option<String>) {
+        // The daemon, answering within two seconds.
         let daemon = Transport {
-            path: self.config.socket_path.clone(),
             timeout: Duration::from_secs(2),
-            peer_uid: self.transport.peer_uid,
+            ..self.transport.clone()
         };
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
         let unconfirmed = || {
@@ -89,9 +91,7 @@ impl Client {
             Ok(reply) if reply["code"] == "job" => unconfirmed(),
             // A removed socket does not acknowledge a request already sent.
             Err(error)
-                if error.code == Code::Io
-                    && !error.uncertain
-                    && !self.config.socket_path.exists() =>
+                if error.code == Code::Io && !error.uncertain && !jobs::daemon_listens(self) =>
             {
                 (None, None)
             }
@@ -119,7 +119,7 @@ impl Client {
 
         let unreachable = |why: &str| {
             if !on {
-                if !matches!(self.stop_marker().try_exists(), Ok(false)) {
+                if !matches!(self.service_stop_saved(), Ok(false)) {
                     return Err(Error::new(
                         Code::Stopped,
                         format!("{why} Recover input before agents can resume."),
@@ -209,12 +209,20 @@ impl Client {
     /// Whether a Stop is saved on either side: the input service's own
     /// marker, or the person's note.
     pub(crate) fn stop_marked(&self) -> bool {
-        self.stop_marker().exists() || self.controller.stop_noted()
+        matches!(self.service_stop_saved(), Ok(true)) || self.controller.stop_noted()
     }
 
-    /// Where the input service saves a Stop.
-    fn stop_marker(&self) -> PathBuf {
-        self.config.input_socket.with_extension("stopped")
+    /// Whether the input service has a Stop saved, as it keeps one across
+    /// its restarts: for a second login, a file beside its socket on this
+    /// disk.
+    fn service_stop_saved(&self) -> std::io::Result<bool> {
+        match self.desktop().kind() {
+            Kind::SecondLogin(_) => self
+                .config
+                .input_socket
+                .with_extension("stopped")
+                .try_exists(),
+        }
     }
 }
 

@@ -42,7 +42,14 @@ pub async fn open(
     targets: &[String],
     environment: &[String],
 ) -> Result<Value> {
-    open_in(client, app, targets, environment, Path::new(handoff::ROOT)).await
+    open_in(
+        client,
+        app,
+        targets,
+        environment,
+        &handoff::Copies::of(&client.desktop()),
+    )
+    .await
 }
 
 /// Open `url` in the browser `app` (by its name) for the person, under the
@@ -143,13 +150,13 @@ async fn launch_for_person(
     Ok(json!({"ok": true, "opened": true}))
 }
 
-/// [`open`], pruning `open`'s old copies under `copies`.
+/// [`open`], pruning `open`'s old `copies`.
 pub(super) async fn open_in(
     client: &Client,
     app: Option<&str>,
     targets: &[String],
     environment: &[String],
-    copies: &Path,
+    copies: &handoff::Copies,
 ) -> Result<Value> {
     if app.is_none() && targets.is_empty() {
         return Err(Error::new(
@@ -173,7 +180,7 @@ pub(super) async fn open_in(
     let verified = client.verify().await?;
     let listed = client.apps_in(&verified).await?;
     let running = listed.rows();
-    task::settle_copies_gone(client, handoff::prune_in(copies, running));
+    task::settle_copies_gone(client, copies.prune(running));
 
     let handed = handoff::hand_over(client, &ownership, wanted, running).await?;
     let copied = handed.copied;

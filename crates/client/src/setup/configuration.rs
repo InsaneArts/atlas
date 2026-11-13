@@ -161,7 +161,7 @@ pub fn configure_helper(
     // The account the settings name was deleted, or its user ID now belongs
     // to another account than the helper Atlas recorded: choose (or create)
     // another, before anything is changed or recorded.
-    let account = account::account_with_uid(config.helper_uid)?;
+    let account = account::account_with_uid(config.desktop().second_login().uid)?;
     let gone = account.is_none();
     let other = match &account {
         Some(account) if choice.is_none() => replaced(account)?,
@@ -176,7 +176,10 @@ pub fn configure_helper(
         } else {
             ("The account".to_owned(), "is not the helper Atlas set up")
         };
-        say(&format!("  {who} (user ID {}) {what}.", config.helper_uid));
+        say(&format!(
+            "  {who} (user ID {}) {what}.",
+            config.desktop().second_login().uid
+        ));
 
         let (helper, identity) = choose_helper()?;
         let replacement = proposed(&helper)?;

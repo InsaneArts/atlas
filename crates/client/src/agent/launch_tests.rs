@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::tests::refused;
-use crate::handoff::Copied;
+use crate::handoff::{Copied, Copies};
 use atlas_core::files::Token;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, time::Duration};
 
@@ -109,7 +109,13 @@ async fn web_pages_for_a_running_browser_open_in_a_window_of_their_own() {
 
         helper
             .serve(
-                open_in(&client, Some("Google Chrome"), &targets, &[], &copies),
+                open_in(
+                    &client,
+                    Some("Google Chrome"),
+                    &targets,
+                    &[],
+                    &Copies::in_folder(&copies),
+                ),
                 |request| {
                     if request["op"] == "apps" {
                         return Some(json!({"ok": true, "apps": apps}));
@@ -198,7 +204,10 @@ async fn an_app_opened_by_name_is_listed_for_the_task_and_nothing_else_is() {
         (Some("TextEdit"), Vec::new()),
     ] {
         let opened = helper
-            .serve(open_in(&client, app, &targets, &[], &copies), answer)
+            .serve(
+                open_in(&client, app, &targets, &[], &Copies::in_folder(&copies)),
+                answer,
+            )
             .await
             .unwrap();
         assert_eq!(opened["opened"], true);
@@ -235,7 +244,13 @@ async fn an_open_whose_list_is_refused_copies_prunes_and_launches_nothing() {
 
     let error = helper
         .serve(
-            open_in(&client, Some("TextEdit"), &targets, &[], directory.path()),
+            open_in(
+                &client,
+                Some("TextEdit"),
+                &targets,
+                &[],
+                &Copies::in_folder(directory.path()),
+            ),
             |request| {
                 if request["op"] == "run" {
                     ran.push(request.clone());
@@ -287,7 +302,13 @@ async fn an_app_launch_services_cannot_find_opens_from_the_tasks_own_install() {
 
     let opened = helper
         .serve(
-            open_in(&client, Some("Probe"), &[], &[], &copies),
+            open_in(
+                &client,
+                Some("Probe"),
+                &[],
+                &[],
+                &Copies::in_folder(&copies),
+            ),
             |request| {
                 if request["op"] == "apps" {
                     return Some(json!({"ok": true, "apps": []}));
@@ -346,7 +367,13 @@ async fn an_app_no_task_installed_is_not_found_by_name_and_nothing_else_is_tried
 
     let opened = helper
         .serve(
-            open_in(&client, Some("Probe"), &[], &[], &copies),
+            open_in(
+                &client,
+                Some("Probe"),
+                &[],
+                &[],
+                &Copies::in_folder(&copies),
+            ),
             |request| {
                 if request["op"] == "apps" {
                     return Some(json!({"ok": true, "apps": []}));
@@ -388,7 +415,7 @@ async fn an_open_records_the_launched_apps_identity_without_keeping_its_window_t
                 Some("TextEdit"),
                 &[],
                 &[],
-                &directory.path().join("copies"),
+                &Copies::in_folder(&directory.path().join("copies")),
             ),
             |request| {
                 Some(if request["op"] == "apps" {
@@ -447,7 +474,7 @@ async fn an_open_stays_successful_when_its_identity_read_fails_or_the_session_ch
                     Some("TextEdit"),
                     &[],
                     &[],
-                    &directory.path().join("copies"),
+                    &Copies::in_folder(&directory.path().join("copies")),
                 ),
                 |request| {
                     Some(if request["op"] == "apps" {
@@ -498,9 +525,15 @@ async fn opening_a_store_or_a_file_url_to_one_is_refused_before_control_is_taken
         numeric_host,
         lone_percent,
     ] {
-        let error = open_in(&client, None, std::slice::from_ref(&target), &[], &copies)
-            .await
-            .unwrap_err();
+        let error = open_in(
+            &client,
+            None,
+            std::slice::from_ref(&target),
+            &[],
+            &Copies::in_folder(&copies),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.code, Code::Credentials, "{target}: {error}");
     }
     assert!(!copies.exists(), "old copies were pruned");
@@ -523,7 +556,7 @@ async fn opening_a_link_named_like_a_store_is_refused_though_it_leads_elsewhere(
         None,
         &[link.display().to_string()],
         &[],
-        &directory.path().join("copies"),
+        &Copies::in_folder(&directory.path().join("copies")),
     )
     .await
     .unwrap_err();
@@ -540,7 +573,7 @@ async fn opening_a_file_reference_url_is_refused_before_the_helper_is_asked() {
         None,
         std::slice::from_ref(&reference),
         &[],
-        &directory.path().join("copies"),
+        &Copies::in_folder(&directory.path().join("copies")),
     )
     .await
     .unwrap_err();
@@ -568,7 +601,7 @@ async fn opening_a_path_named_like_a_store_that_does_not_exist_is_refused_before
             None,
             std::slice::from_ref(&missing),
             &[],
-            &directory.path().join("copies"),
+            &Copies::in_folder(&directory.path().join("copies")),
         )
         .await
         .unwrap_err();

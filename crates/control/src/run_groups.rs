@@ -12,15 +12,9 @@ use super::{Controller, Pending, Purpose, busy::busy_command};
 use atlas_core::{
     error::{Code, Error, Result},
     files::{read_own, write_atomic},
-    protocol::left_may_run,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs,
-    io::ErrorKind,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path};
 
 /// The most groups kept. One more marks the record overflowing; none that
 /// runs is ever let go.
@@ -43,27 +37,27 @@ struct Record {
 
 impl Controller {
     /// Keep `group`, the process group of a command an agent ran that just
-    /// finished, when anything in it still runs as `helper`. Groups whose
+    /// finished, when anything in it still runs in this desktop. Groups whose
     /// processes all ended go meanwhile; past [`KEPT`] running ones, the
     /// record is marked overflowing instead.
     ///
     /// # Errors
     ///
     /// Returns the failure to read or write the record.
-    pub fn note_run_group(&self, group: i32, helper: u32) -> Result<()> {
-        if group <= 0 || !left_may_run(&[], Some(group), helper) {
+    pub fn note_run_group(&self, group: i32) -> Result<()> {
+        if group <= 0 || !self.desktop.left_may_run(&[], Some(group)) {
             return Ok(());
         }
         let _lock = self.lock_marker()?;
-        self.keep_run_group(group, helper)
+        self.keep_run_group(group)
     }
 
     /// [`Controller::note_run_group`] while the caller holds the marker lock.
-    fn keep_run_group(&self, group: i32, helper: u32) -> Result<()> {
+    fn keep_run_group(&self, group: i32) -> Result<()> {
         let mut record = read::<Record>(&self.run_groups)?.unwrap_or_default();
         record
             .groups
-            .retain(|kept| *kept != group && left_may_run(&[], Some(*kept), helper));
+            .retain(|kept| *kept != group && self.desktop.left_may_run(&[], Some(*kept)));
         if record.groups.len() < KEPT {
             record.groups.push(group);
         } else {
@@ -88,7 +82,7 @@ impl Controller {
     }
 
     /// Record the groups of commands earlier settles could not record, and
-    /// settle their claims: one whose group still runs as the helper joins
+    /// settle their claims: one whose group still runs in the desktop joins
     /// the record, one whose group ended is settled as it is. What fails
     /// stays as it was, for the next look.
     pub(crate) fn settle_unrecorded_runs(&self) {
@@ -102,8 +96,8 @@ impl Controller {
             let mut settled = Vec::new();
             let mut left = BTreeMap::new();
             for (generation, group) in unrecorded {
-                let kept = !left_may_run(&[], Some(group), self.helper)
-                    || self.keep_run_group(group, self.helper).is_ok();
+                let kept = !self.desktop.left_may_run(&[], Some(group))
+                    || self.keep_run_group(group).is_ok();
                 if kept {
                     settled.push(generation);
                 } else {
@@ -121,18 +115,18 @@ impl Controller {
     }
 
     /// Refuse while a group [`Controller::note_run_group`] kept still runs
-    /// anything as `helper`, as the person's sign-in must; those that ended
+    /// anything in this desktop, as the person's sign-in must; those that ended
     /// go. An overflowing record refuses until it keeps fewer than
     /// [`KEPT`] running groups and a full look finds no process of the
-    /// helper's left in a group whose leader is gone, as a command's
+    /// desktop's left in a group whose leader is gone, as a command's
     /// leftover work is.
     ///
     /// # Errors
     ///
     /// Returns `busy`, held by an agent with `running` `command`, while one
-    /// runs, and the failure to read the record or the helper's processes:
+    /// runs, and the failure to read the record or the desktop's processes:
     /// a group it can't account for may run.
-    pub fn require_no_run_left(&self, helper: u32) -> Result<()> {
+    pub fn require_no_run_left(&self) -> Result<()> {
         self.settle_unrecorded_runs();
         let _lock = self.lock_marker()?;
         let record = read::<Record>(&self.run_groups)?.unwrap_or_default();
@@ -140,9 +134,9 @@ impl Controller {
             .groups
             .iter()
             .copied()
-            .filter(|group| left_may_run(&[], Some(*group), helper))
+            .filter(|group| self.desktop.left_may_run(&[], Some(*group)))
             .collect();
-        let overflow = record.overflow && (running.len() >= KEPT || orphans_run(helper)?);
+        let overflow = record.overflow && (running.len() >= KEPT || self.desktop.orphans_run()?);
         if running.len() != record.groups.len() || overflow != record.overflow {
             // Forgetting what ended is tidying: a failure keeps it for later.
             let _ = self.write_run_groups(&Record {
@@ -163,25 +157,6 @@ impl Controller {
         }
         write_record(&self.run_groups, record)
     }
-}
-
-/// Whether a process of `helper`'s runs in a group whose leader is gone, as
-/// work a finished command left does: an app the helper opened leads its
-/// own group.
-fn orphans_run(helper: u32) -> Result<bool> {
-    Ok(orphaned(&atlas_core::process::of_user(helper)?))
-}
-
-/// Whether one of `processes` runs in a group whose leader isn't among them.
-fn orphaned(processes: &[atlas_core::process::Info]) -> bool {
-    let alive: HashSet<i32> = processes
-        .iter()
-        .filter(|process| !process.zombie)
-        .map(|process| process.instance.pid)
-        .collect();
-    processes
-        .iter()
-        .any(|process| !process.zombie && process.pgid > 0 && !alive.contains(&process.pgid))
 }
 
 /// The record at `path`: None when there is none.

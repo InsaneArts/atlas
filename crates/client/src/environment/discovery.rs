@@ -292,7 +292,7 @@ pub(super) struct Reference {
 
 pub(crate) struct Discovery {
     pub(crate) selections: Vec<Candidate>,
-    helper_uid: u32,
+    observed_uid: u32,
     environment: Vec<Variable>,
     pub(super) references: Vec<Reference>,
 }
@@ -303,7 +303,7 @@ impl Discovery {
         json!({
             "ok": true,
             "readOnly": true,
-            "helperUID": self.helper_uid,
+            "helperUID": self.observed_uid,
             "selections": selections,
             "environment": self.environment,
             "references": self.references,
@@ -421,7 +421,7 @@ pub(crate) async fn inspect(
     selection(tools, apps, environment, references)?;
 
     let status = Observation::decode(&client.status().await);
-    let session = status.require_hidden(client.config.helper_uid)?;
+    let session = client.desktop().prove(&status)?;
     let helper_home = status.helper_home()?.to_owned();
     let home = atlas_core::config::home()?;
     let mut selections = candidates(tools, apps, &home, &helper_home);
@@ -470,7 +470,7 @@ pub(crate) async fn inspect(
         .collect();
     Ok(Discovery {
         selections,
-        helper_uid: session.epoch.uid,
+        observed_uid: session.epoch.uid,
         environment,
         references,
     })

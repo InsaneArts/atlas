@@ -3,6 +3,7 @@
 //! read from a small TOML file whose relative paths resolve against the
 //! file itself.
 use crate::context::context;
+use crate::desktop::{Desktop, SecondLogin};
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -162,6 +163,14 @@ pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T>
 }
 
 impl Config {
+    /// The desktop these settings name: the hidden login of the helper
+    /// account.
+    pub fn desktop(&self) -> Desktop {
+        Desktop::from(SecondLogin {
+            uid: self.helper_uid,
+        })
+    }
+
     /// Only output placement and what the activity keeps can change without
     /// ending control in the current helper.
     /// Destructuring makes every added setting choose its reload behavior here.

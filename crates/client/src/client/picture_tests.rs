@@ -43,6 +43,8 @@ fn input_service(client: &Client, saved: bool, request: &Value) -> Option<Value>
             let performed = request["actions"].as_array().unwrap().len();
             Some(json!({"ok": true, "performed": performed}))
         }
+        // Asked only once a reply was lost, of a service that kept nothing.
+        Some("outcome") => Some(json!({"ok": true, "outcome": "unknown"})),
         other => panic!("nothing else is asked: {other:?}"),
     }
 }

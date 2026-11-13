@@ -13,6 +13,7 @@ use atlas_cli::ui::{self, Format, render, style};
 use atlas_control::interrupt::{Interrupt, Stopped};
 use atlas_core::{
     config::Config,
+    desktop::Kind,
     error::{Code, Error},
 };
 use clap::FromArgMatches;
@@ -386,12 +387,15 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
         return error;
     };
 
-    match atlas_core::session::absence(config.helper_uid) {
-        Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
-            Code::LoggedOut,
-            "The helper is logged out (after a restart or a log-out)",
-        ),
-        _ => error,
+    match config.desktop().kind() {
+        // This Mac can see whether the second login is logged out.
+        Kind::SecondLogin(login) => match atlas_core::session::absence(login.uid) {
+            Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
+                Code::LoggedOut,
+                "The helper is logged out (after a restart or a log-out)",
+            ),
+            _ => error,
+        },
     }
 }
 
@@ -425,10 +429,12 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     let helper_here = atlas_daemon::helper_setup::pairing::request()
         .is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
-        && Config::load(config).is_ok_and(|config| {
-            atlas_client::setup::migrate::settled(config.helper_uid)
-                && atlas_core::account::account_with_uid(config.helper_uid)
-                    .is_ok_and(|account| account.is_some())
+        && Config::load(config).is_ok_and(|config| match config.desktop().kind() {
+            Kind::SecondLogin(login) => {
+                atlas_client::setup::migrate::settled(login.uid)
+                    && atlas_core::account::account_with_uid(login.uid)
+                        .is_ok_and(|account| account.is_some())
+            }
         });
     let error = if finished {
         viewer_command(&executable, config).exec()

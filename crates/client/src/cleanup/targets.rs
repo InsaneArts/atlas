@@ -5,7 +5,7 @@
 //! destination still holds the exact folder Atlas placed. Each carries the
 //! node its bundle was proven to have, which the helper checks again
 //! before it signals.
-use super::plan::Bundle;
+use super::{plan::Bundle, run::Hands};
 use crate::{
     app_selection::{Process, Within},
     client::AppList,
@@ -52,7 +52,7 @@ pub(super) fn install_in<'a>(installs: &'a [InstallState], id: &Token) -> Option
 /// the other processes `installs` (the helper's word on them) says run
 /// from a proven install.
 pub(super) fn targets(
-    copies: &Path,
+    hands: &impl Hands,
     session: &Key,
     bundles: &[Bundle],
     installs: &[InstallState],
@@ -62,11 +62,9 @@ pub(super) fn targets(
     let mut targets = Targets::default();
     for bundle in bundles {
         let within = match bundle {
-            Bundle::Copy(token) => handoff::copy_node(copies, token, session).map(|node| Within {
-                folder: handoff::copy_folder(copies, token)
-                    .to_string_lossy()
-                    .into_owned(),
-                node,
+            Bundle::Copy(token) => hands.copies().identity(token, session).map(|copy| Within {
+                folder: copy.folder,
+                node: copy.node,
             }),
             Bundle::Install(id) => install_in(installs, id).and_then(proven_install),
         };

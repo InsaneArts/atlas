@@ -24,6 +24,7 @@ use atlas_client::{
 use atlas_core::host::Key;
 use atlas_core::{
     account::{Title, asked_real_name},
+    desktop::Kind,
     error::{Code, Error, Result},
 };
 use axum::{body::Body, response::Response};
@@ -156,7 +157,12 @@ impl Viewer {
         atlas_client::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
-            let title = account_title(&self.account_name, name, asked_real_name).await;
+            // A second login's account is one of this Mac's, named here.
+            let title = match client.desktop().kind() {
+                Kind::SecondLogin(_) => {
+                    account_title(&self.account_name, name, asked_real_name).await
+                }
+            };
             status.value["overview"]["accountName"] = json!(title);
         }
 
@@ -246,7 +252,7 @@ impl Viewer {
                         .leftovers(&seen.record, &[])
                         .copies
                         .iter()
-                        .map(|token| atlas_client::handoff::copy_app(store.copies(), token))
+                        .map(|token| store.copies().app(token))
                         .collect();
                     (seen.record.key.clone(), apps)
                 })
@@ -391,7 +397,7 @@ impl Viewer {
             && native.held_input != Some(true)
             && session.accessibility == Some(true);
         let hidden = starts
-            .then(|| session.require_hidden(client.config.helper_uid).ok())
+            .then(|| client.desktop().prove(session).ok())
             .flatten()
             .filter(|hidden| !hidden.input);
         let (Some(hidden), Some(daemon)) = (hidden, session.capture_pid) else {

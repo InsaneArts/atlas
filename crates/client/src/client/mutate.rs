@@ -10,6 +10,8 @@ use atlas_control::{Lease, Ownership, Pending, SharedLease};
 use atlas_core::{
     actions::{Batch, Expect, Verification},
     error::{Code, Error, Result},
+    files::Token,
+    outcomes::Outcome,
     protocol::{
         Expected, JobId, JobReply, JobStart, JobState, JobView, SessionPin, StopCameTo, Stopped,
     },
@@ -21,6 +23,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
+
+/// How long a service is given to say what a change came to, once its
+/// reply was lost.
+const OUTCOME_WAIT: Duration = Duration::from_secs(2);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -314,7 +320,14 @@ impl Client {
             None => None,
         };
         let mut claim = self.claim(&mutation, lease.is_some(), command)?;
-        let request = mutation.request();
+        // The change goes by one name on both sides: its own claim's, when
+        // it has one, so what is pending here is what the helper remembers.
+        let change = claim
+            .as_ref()
+            .and_then(|claim| Token::parse(claim.generation()))
+            .unwrap_or_default();
+        let mut request = mutation.request();
+        request["change"] = json!(change);
         let sent = self.send(connection, &request, claim.as_ref()).await?;
 
         drop(authorization);
@@ -327,7 +340,7 @@ impl Client {
             self.run_to_its_end(sent, &request, command, &mut claim, started)
                 .await
         } else {
-            self.answer(sent).await
+            self.answer_or_ask(sent, &mutation, &change, started).await
         };
         // A request the person must be asked about, or that a Look Only
         // account refused, sent nothing: no picture is kept for it, and the
@@ -490,6 +503,63 @@ impl Client {
         }
     }
 
+    /// [`Client::answer`] to `mutation`, sent under the name `change`. When
+    /// its reply never arrives whole, the service that took it is asked
+    /// what the change came to, and a reply it remembers stands for the one
+    /// that was lost, with the time since `started` for how long it took;
+    /// anything else it says leaves the loss as it was. A reply that
+    /// arrived and was wrong is never asked for again, and a signal's stop
+    /// cuts the question as it cuts the wait.
+    async fn answer_or_ask(
+        &self,
+        sent: transport::Pending,
+        mutation: &Mutation<'_>,
+        change: &Token,
+        started: Instant,
+    ) -> Result<Value> {
+        let interrupt = self.controller.interrupt();
+        let answered = async {
+            match sent.finish().await {
+                Err(lost) if transport::reply_lost(&lost) => {
+                    let Some(mut reply) = self.remembered(mutation, change).await else {
+                        return Err(lost);
+                    };
+                    reply["elapsedMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+                    Ok(reply)
+                }
+                reply => reply,
+            }
+        };
+        tokio::select! {
+            biased;
+            reply = answered => reply,
+            signal = interrupt.cut() => Err(interrupt.cut_short(signal)),
+        }
+    }
+
+    /// The final reply the service `mutation` went to remembers for
+    /// `change`, when it remembers one. A command started with `run` is
+    /// never asked about: its reply is its output and the group it started,
+    /// which no remembered reply holds, and the helper ends it when its
+    /// connection goes.
+    async fn remembered(&self, mutation: &Mutation<'_>, change: &Token) -> Option<Value> {
+        match mutation {
+            Mutation::Run { .. } => return None,
+            Mutation::Input { .. }
+            | Mutation::JobStart { .. }
+            | Mutation::JobStop { .. }
+            | Mutation::Restart
+            | Mutation::Logout { .. } => {}
+        }
+        let mut transport = self.transport_for(mutation);
+        transport.timeout = OUTCOME_WAIT;
+        let answer = transport
+            .call(&json!({"op": "outcome", "change": change}))
+            .await
+            .ok()?;
+        Outcome::remembered(&answer)
+    }
+
     /// The reply to an agent's sent command, which is written as started
     /// first. It runs until it ends, unless the person stops agents: then
     /// the connection is dropped, which ends the command in the helper. What
@@ -558,9 +628,7 @@ impl Client {
         if request["op"] == "run"
             && reply["uncertain"] != true
             && let Some(group) = started_group(&reply)
-            && let Err(error) = self
-                .controller
-                .note_run_group(group, self.config.helper_uid)
+            && let Err(error) = self.controller.note_run_group(group)
         {
             if let Some(claim) = claim.take() {
                 self.controller.keep_unrecorded_run(claim, group);

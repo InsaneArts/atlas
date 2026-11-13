@@ -105,6 +105,7 @@ pub(super) fn hello(
         SCK_EXPERIMENTAL,
         RGB_STREAM_STOP,
         SOUND,
+        atlas_core::outcomes::OUTCOMES,
     ];
     if jobs.is_some() {
         capabilities.push(JOBS);

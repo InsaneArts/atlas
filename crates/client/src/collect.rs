@@ -17,6 +17,7 @@ use crate::{
     task::{Task, record::OutputEntry, store::Store},
 };
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     files::write_private,
     protocol::{
@@ -96,7 +97,11 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
             "Give a size such as 200M, at most 1G",
         ));
     }
-    let person = atlas_core::config::home().ok();
+    // A second login shares this disk, so a path in the person's own home
+    // is the shell's `~`, never the helper's file.
+    let person = match client.desktop().kind() {
+        Kind::SecondLogin(_) => atlas_core::config::home().ok(),
+    };
     for source in files {
         if let Some(refused) = given(source, person.as_deref()) {
             return Err(

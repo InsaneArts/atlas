@@ -23,13 +23,22 @@ pub(super) const SHOWN: usize = 50;
 /// Returns private-storage, identity or helper-observation failures rather than dropping
 /// unknown transaction ownership.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
-    let helper = helper_name(client.config.helper_uid)?;
-    list_as(client, &helper, all).await
+    match client.desktop().kind() {
+        Kind::SecondLogin(login) => {
+            let helper = helper_name(login.uid)?;
+            list_as(client, login, &helper, all).await
+        }
+    }
 }
 
-/// [`list`] for the helper account `helper`.
-pub(super) async fn list_as(client: &Client, helper: &str, all: bool) -> Result<Value> {
-    let here = frozen(shared_folder(client)?, client.config.helper_uid);
+/// [`list`] for the second login `login`, whose account ACLs name `helper`.
+pub(super) async fn list_as(
+    client: &Client,
+    login: &SecondLogin,
+    helper: &str,
+    all: bool,
+) -> Result<Value> {
+    let here = frozen(shared_folder(client)?, login.uid);
     let there = transactions(client, helper, all, &here).await?;
     let work = task::everyone(client.output_dir()?);
     Ok(listing(&here, &there, &Labels::new(&work, client), all))

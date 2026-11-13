@@ -1046,6 +1046,8 @@ async fn a_successful_but_uncertain_release_keeps_its_original_claim() {
 async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value) {
     let (dir, mut client, input, _session) = native_client();
     client.actor = Actor::Viewer;
+    // As in use, commands go to the daemon's socket.
+    client.transport.path = client.config.socket_path.clone();
     let daemon = UnixListener::bind(&client.config.socket_path).unwrap();
     let mut caller = Box::pin(client.hold(true));
     let mut hello = dispatched(&mut caller, &input, "hello").await;
@@ -1309,6 +1311,8 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
     let helper = UnixListener::bind(&client.transport.path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
+    // The person's Stop finds no daemon keeping jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let run = || run_of(&["true"], 1000);
     let ownership = acting.controller.acquire(false).unwrap();
@@ -1551,6 +1555,8 @@ async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fa
     let helper = UnixListener::bind(&client.transport.path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
+    // The person's Stop finds no daemon keeping jobs to end.
+    person.transport.path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let ownership = acting.controller.acquire(false).unwrap();
     let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));
@@ -1794,6 +1800,10 @@ async fn a_lost_preparation_reply_stays_pending_after_acknowledged_release() {
     let (input, request) = received(&mut caller, &listener, "input").await;
     assert_eq!(request["expect"], json!({"pid":812,"window":42}));
     drop(input);
+    // The service is asked what the input came to, and does not know.
+    let (mut asked, question) = received(&mut caller, &listener, "outcome").await;
+    assert_eq!(question["change"], request["change"]);
+    answer(&mut asked, json!({"ok": true, "outcome": "unknown"})).await;
     let mut release = dispatched(&mut caller, &listener, "release").await;
     answer(&mut release, json!({"ok":true})).await;
     assert!(caller.await.unwrap_err().uncertain);
@@ -1803,6 +1813,96 @@ async fn a_lost_preparation_reply_stays_pending_after_acknowledged_release() {
         other.controller.acquire(false).unwrap_err().code,
         Code::Uncertain
     );
+}
+
+/// Input whose reply is lost, driven until the service has been asked what
+/// it came to: the caller, and the question's connection.
+async fn input_with_a_lost_reply<'a>(
+    client: &'a Client,
+    listener: &UnixListener,
+    session: &'a Session,
+) -> (
+    std::pin::Pin<Box<impl Future<Output = Result<Value>> + 'a>>,
+    BufReader<UnixStream>,
+) {
+    let mut caller = Box::pin(checked_input(client, session, None));
+    let mut acquire = dispatched(&mut caller, listener, "acquire").await;
+    answer(&mut acquire, json!({"ok":true})).await;
+    let (input, request) = received(&mut caller, listener, "input").await;
+    drop(input);
+    let (asked, question) = received(&mut caller, listener, "outcome").await;
+    assert_eq!(question["change"], request["change"]);
+    assert_eq!(question.as_object().unwrap().len(), 2, "{question}");
+    (caller, asked)
+}
+
+#[tokio::test]
+async fn a_lost_reply_the_service_remembers_settles_its_input() {
+    let (_dir, client, listener, session) = native_client();
+    let (mut caller, mut asked) = input_with_a_lost_reply(&client, &listener, &session).await;
+    answer(
+        &mut asked,
+        json!({"ok": true, "outcome": "done", "reply": {"ok": true, "performed": 1}}),
+    )
+    .await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+
+    let reply = caller.await.unwrap();
+    assert_eq!(reply["performed"], 1);
+    assert!(reply["elapsedMs"].is_number());
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_remembered_reply_proves_no_more_than_one_that_arrived() {
+    // It ran, and the service itself cannot say how far.
+    let cut = json!({"ok": false, "code": "input", "error": "cut", "uncertain": true});
+    // It does not confirm the one key that was asked for.
+    let unconfirmed = json!({"ok": true, "performed": 0});
+    for (remembered, said) in [
+        (cut, "cut"),
+        (unconfirmed, "Helper did not confirm operation completion"),
+    ] {
+        let (dir, client, listener, session) = native_client();
+        let (mut caller, mut asked) = input_with_a_lost_reply(&client, &listener, &session).await;
+        answer(
+            &mut asked,
+            json!({"ok": true, "outcome": "done", "reply": remembered}),
+        )
+        .await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok":true})).await;
+
+        // What is said is the remembered reply's own, never the loss's.
+        let (uncertain, words) = match caller.await {
+            Ok(reply) => (
+                reply["uncertain"] == true,
+                reply["error"]
+                    .as_str()
+                    .expect("a remembered refusal says why")
+                    .to_owned(),
+            ),
+            Err(error) => (error.uncertain, error.error),
+        };
+        assert!(uncertain, "{said}");
+        assert_eq!(words, said);
+        let other = another(&client, dir.path());
+        assert_eq!(other.controller.pending().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn input_still_under_way_in_the_service_stays_pending() {
+    let (dir, client, listener, session) = native_client();
+    let (mut caller, mut asked) = input_with_a_lost_reply(&client, &listener, &session).await;
+    answer(&mut asked, json!({"ok": true, "outcome": "running"})).await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+
+    assert!(caller.await.unwrap_err().uncertain);
+    let other = another(&client, dir.path());
+    assert_eq!(other.controller.pending().unwrap().len(), 1);
 }
 
 #[tokio::test]

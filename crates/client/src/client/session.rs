@@ -3,6 +3,7 @@
 use super::{Client, Mutation, service::require_accessibility};
 use atlas_control::Ownership;
 use atlas_core::{
+    desktop::{Kind, SecondLogin},
     error::{Code, Error, Result},
     session::{Observation, Session},
 };
@@ -168,7 +169,7 @@ impl Client {
             tokio::time::sleep(Duration::from_millis(150)).await;
             let status = self.status().await;
             let observation = Observation::decode(&status);
-            let Ok(session) = observation.require_hidden(self.config.helper_uid) else {
+            let Ok(session) = self.desktop().prove(&observation) else {
                 continue;
             };
 
@@ -228,7 +229,7 @@ impl Client {
     /// out yet.
     pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
         let observation = self.observed().await;
-        observation.require_hidden(self.config.helper_uid)?;
+        self.desktop().prove(&observation)?;
         let claim = self.controller.quarantine()?;
 
         // Background jobs are stopped first, so none outlives the login it
@@ -270,7 +271,7 @@ impl Client {
         let open = self
             .running_apps()
             .await
-            .map(|reply| crate::app_selection::left_open(&reply))
+            .map(|reply| crate::app_selection::left_open(&reply, &self.desktop()))
             .unwrap_or_default();
         let still = if open.is_empty() {
             String::new()
@@ -290,7 +291,15 @@ impl Client {
     /// apart (a Dock alone can restart in a login that lives on), and its
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
-        let uid = self.config.helper_uid;
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.second_login_gone(login, seconds).await,
+        }
+    }
+
+    /// [`Client::desktop_gone`] for the second login `login`, whose
+    /// processes this Mac can see.
+    async fn second_login_gone(&self, login: &SecondLogin, seconds: u64) -> bool {
+        let uid = login.uid;
         let looked = move || async move {
             tokio::task::spawn_blocking(move || atlas_core::session::logged_out(uid))
                 .await

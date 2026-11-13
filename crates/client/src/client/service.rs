@@ -3,8 +3,9 @@
 //! authenticated shutdown when its build is stale.
 use super::Client;
 use atlas_core::{
+    desktop::{Kind, SecondLogin},
     error::{Code, Error, Result},
-    session::{Observation, SHUTDOWN, input_current, require_hidden},
+    session::{Observation, SHUTDOWN},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -72,7 +73,7 @@ impl Client {
         self.identity().await?;
         let status = self.status().await;
         let observation = Observation::decode(&status);
-        observation.require_hidden(self.config.helper_uid)?;
+        self.desktop().prove(&observation)?;
 
         if observation.native.ok && !observation.input_build_current() {
             return self.upgrade_input_for(&status, false).await;
@@ -88,7 +89,7 @@ impl Client {
         &self,
         observation: &Observation,
     ) -> Result<(u32, &'static str)> {
-        let session = observation.require_hidden(self.config.helper_uid)?;
+        let session = self.desktop().prove(observation)?;
         if session.input {
             return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
@@ -163,7 +164,10 @@ impl Client {
 
         let pid = self.spawn_input().await?;
         let state = self.status().await;
-        if !input_current(&state, self.config.helper_uid, pid) {
+        if !self
+            .desktop()
+            .input_current(&Observation::decode(&state), pid)
+        {
             return Err(Error::new(
                 Code::Uncertain,
                 "The replacement input service is not confirmed current with nothing held",
@@ -208,14 +212,20 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(5);
 
         loop {
-            let closed = matches!(
-                tokio::net::UnixStream::connect(&self.config.input_socket).await,
-                Err(error) if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                )
-            );
-            if closed && !process_exists(pid) {
+            // Gone once nothing listens on its socket and its process has
+            // ended, both as this Mac sees them.
+            let exited = match self.desktop().kind() {
+                Kind::SecondLogin(_) => {
+                    matches!(
+                        tokio::net::UnixStream::connect(&self.config.input_socket).await,
+                        Err(error) if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                        )
+                    ) && !process_exists(pid)
+                }
+            };
+            if exited {
                 return Ok(());
             }
 
@@ -231,9 +241,10 @@ impl Client {
         }
     }
 
-    /// Start the installed executable as the helper's input service. The caller
-    /// records the launch as a pending mutation and settles it on success.
-    async fn spawn_input(&self) -> Result<u32> {
+    /// Launch the shared Atlas command, installed on this disk, as the input
+    /// service of the second login `login`, for this account: its process
+    /// ID, before it is known to be ready.
+    async fn launch_input_in(&self, login: &SecondLogin) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
@@ -245,19 +256,34 @@ impl Client {
             "argv": [
                 "/bin/sh", "-c", script, "sh",
                 self.config.identity_probe,
-                self.config.helper_uid.to_string(),
+                login.uid.to_string(),
                 controller_uid.to_string(),
                 self.config.input_socket,
             ],
             "timeoutMs": 3000,
         });
-        let child = launched_pid(&self.transport.call(&request).await?)?;
+        launched_pid(&self.transport.call(&request).await?)
+    }
 
+    /// Start the installed executable as the helper's input service. The caller
+    /// records the launch as a pending mutation and settles it on success.
+    async fn spawn_input(&self) -> Result<u32> {
+        match self.desktop().kind() {
+            Kind::SecondLogin(login) => self.spawn_input_in(login).await,
+        }
+    }
+
+    /// [`Client::spawn_input`] in the second login `login`: launched, then
+    /// waited for until it is ready.
+    async fn spawn_input_in(&self, login: &SecondLogin) -> Result<u32> {
+        let child = self.launch_input_in(login).await?;
         let deadline = Instant::now() + Duration::from_secs(6);
 
         loop {
             let state = self.status().await;
-            if require_hidden(&state, self.config.helper_uid)
+            if self
+                .desktop()
+                .prove(&Observation::decode(&state))
                 .is_ok_and(|session| session.input && session.epoch.input_pid == child)
             {
                 return Ok(child);

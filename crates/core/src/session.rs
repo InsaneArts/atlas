@@ -422,12 +422,6 @@ pub fn has_capability(native: &Value, name: &str) -> bool {
         .any(|capability| capability == name)
 }
 
-/// Whether `status` shows input service `pid` ready in the hidden helper with
-/// no controller and nothing held, running the installed build.
-pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
-    Observation::decode(status).input_current(uid, pid)
-}
-
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;

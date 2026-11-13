@@ -29,7 +29,7 @@ fn the_live_request_is_accepted_by_the_helpers_session_pinned_protocol() {
     ] {
         let bytes = serde_json::to_vec(&request(&epoch(), 640, backend)).unwrap();
         assert_eq!(
-            atlas_core::protocol::parse(&bytes).unwrap(),
+            atlas_core::protocol::parse(&bytes).unwrap().request,
             atlas_core::protocol::Request::Stream {
                 max_dimension: 640,
                 backend,

@@ -15,6 +15,7 @@ use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account,
     config::{self, Config},
+    desktop::{Desktop, SecondLogin},
     error::{Code, Error, Result},
 };
 use atlas_daemon::{
@@ -322,7 +323,10 @@ pub async fn run(
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<Value> {
     let found = survey(config_path)?;
-    let uid = found.client.as_ref().map(|client| client.config.helper_uid);
+    let uid = found
+        .client
+        .as_ref()
+        .map(|client| client.desktop().second_login().uid);
     let other = found.not_the_helper();
     let facts = Facts {
         settings: uid.is_some(),
@@ -461,7 +465,7 @@ impl Teardown for Live<'_> {
         self.found
             .client
             .as_ref()
-            .is_some_and(|client| logged_out_twice(client.config.helper_uid))
+            .is_some_and(|client| logged_out_twice(client.desktop().second_login().uid))
     }
 
     async fn log_out(&mut self) -> Result<()> {
@@ -469,7 +473,7 @@ impl Teardown for Live<'_> {
             return Err(problem("Atlas lost control of the helper"));
         };
         let target = match (&self.found.helper, retiring(self.found.known.as_ref())) {
-            (None, _) => Some(Target::Orphan(client.config.helper_uid)),
+            (None, _) => Some(Target::Orphan(client.desktop().second_login().uid)),
             (Some(_), Some(identity)) => Some(Target::Helper(identity.clone())),
             (Some(_), None) => None,
         };
@@ -511,12 +515,13 @@ impl Teardown for Live<'_> {
                 ));
                 self.warnings.push(format!(
                     "The helper account (user ID {}) no longer exists, so no job was stopped",
-                    config.helper_uid
+                    config.desktop().second_login().uid
                 ));
             }
         }
         // Archive evidence only after the job is gone; it must stop counting as setup.
-        if let Err(error) = setup::migrate::archive_uninstalled(config.helper_uid) {
+        if let Err(error) = setup::migrate::archive_uninstalled(config.desktop().second_login().uid)
+        {
             self.warnings.push(format!(
                 "The setup record was not set aside: {}",
                 error.error
@@ -764,7 +769,8 @@ impl Live<'_> {
         let client = self.found.client.as_ref();
         let Some(pairing) = atlas_daemon::helper_setup::pairing::request().filter(|pairing| {
             pairing.controller_uid == me
-                && client.is_none_or(|client| client.config.helper_uid != pairing.helper_uid)
+                && client
+                    .is_none_or(|client| client.desktop().second_login().uid != pairing.helper_uid)
         }) else {
             return;
         };
@@ -777,7 +783,8 @@ impl Live<'_> {
             self.warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
             return;
         };
-        let outcome = Controller::new(account.uid).and_then(|controller| {
+        let desktop = Desktop::from(SecondLogin { uid: account.uid });
+        let outcome = Controller::new(&desktop).and_then(|controller| {
             setup::executor::setup_transaction(&controller, || {
                 setup::request_as_helper(
                     &self.found.executable,
@@ -1032,7 +1039,7 @@ async fn settle(
         &client.controller,
         warnings,
         async {
-            let uid = client.config.helper_uid;
+            let uid = client.desktop().second_login().uid;
             let exists = account::account_with_uid(uid)?.is_some();
             let status = client.status().await;
             let pid = setup::reported_pid(&status["inputService"]["pid"]);

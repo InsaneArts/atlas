@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UnixStream,
     time::{Instant, sleep, sleep_until, timeout_at},
 };
@@ -46,8 +46,11 @@ pub struct Transport {
     pub peer_uid: u32,
 }
 
-pub struct Pending {
-    stream: UnixStream,
+/// A request under way on a verified connection: sent with
+/// [`Pending::dispatch`], answered by [`Pending::finish`]. It works over any
+/// stream of bytes; [`Transport::connect`] gives one over a Unix socket.
+pub struct Pending<S = UnixStream> {
+    stream: S,
     deadline: Instant,
     started: Instant,
 }
@@ -136,6 +139,29 @@ impl Transport {
         }
     }
 
+    /// A connection of its own to this transport's service, for a lane that
+    /// reads its own reply, when the kernel says process `pid` of this
+    /// transport's account is at its other end; none when another process
+    /// is. A denied connection is tried again only until `until`; the
+    /// caller bounds the whole wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to connect, then the failure to read the peer.
+    pub async fn lane(&self, pid: u32, until: Instant) -> Result<Option<UnixStream>> {
+        let stream = connect_socket(&self.path, until).await?;
+        Ok(self.served_by(&stream, pid)?.then_some(stream))
+    }
+
+    /// Whether the kernel says the peer of `stream` is this transport's
+    /// account, and process `pid` of it: what a lane that reads its own
+    /// reply checks before it trusts one.
+    fn served_by(&self, stream: &UnixStream, pid: u32) -> io::Result<bool> {
+        let peer = stream.peer_cred()?;
+        Ok(peer.uid() == self.peer_uid
+            && peer.pid().and_then(|pid| u32::try_from(pid).ok()) == Some(pid))
+    }
+
     /// Exchange one request with the verified socket peer within this transport's deadline.
     ///
     /// # Errors
@@ -215,7 +241,7 @@ fn refused(path: &Path, error: io::Error) -> Error {
     .with_source(error)
 }
 
-impl Pending {
+impl<S: AsyncRead + AsyncWrite + Unpin> Pending<S> {
     /// # Errors
     ///
     /// Returns an error for an oversized request, or the failure to send it in
@@ -248,7 +274,9 @@ impl Pending {
 
         Err(self.waiting_refusal().await.unwrap_or(failed))
     }
+}
 
+impl<S: AsyncRead + Unpin> Pending<S> {
     /// A definite refusal the peer sent before it hung up, if one is waiting.
     async fn waiting_refusal(mut self) -> Option<Error> {
         self.deadline = self.deadline.min(Instant::now() + WAITING);
@@ -289,7 +317,10 @@ impl Pending {
         timeout_at(deadline, self.receive_each(each))
             .await
             .map_err(|_| {
-                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
+                lost(Error::new(
+                    Code::Transport,
+                    "Helper exceeded the request deadline",
+                ))
             })?
             .map_err(Error::uncertain)
     }
@@ -306,12 +337,16 @@ impl Pending {
         let mut buffer = vec![0; 65536];
 
         loop {
-            let count = self.stream.read(&mut buffer).await?;
+            let count = self
+                .stream
+                .read(&mut buffer)
+                .await
+                .map_err(|cause| lost(cause.into()))?;
             if count == 0 {
-                return Err(Error::new(
+                return Err(lost(Error::new(
                     Code::Protocol,
                     "Connection ended without a final reply",
-                ));
+                )));
             }
 
             total += count;
@@ -358,9 +393,46 @@ impl Pending {
     }
 }
 
+/// Why no final reply was read: its connection ended or stalled before one
+/// arrived whole, for the cause it wraps when there is one. The peer may
+/// have carried the request out all the same, and may remember what it
+/// came to.
+#[derive(Debug)]
+struct ReplyLost(Option<Box<dyn std::error::Error + Send + Sync>>);
+
+impl std::fmt::Display for ReplyLost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the reply did not arrive")
+    }
+}
+
+impl std::error::Error for ReplyLost {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0
+            .as_deref()
+            .map(|cause| cause as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// `failure` to read a reply, as one that never arrived whole: of unknown
+/// outcome, with [`ReplyLost`] for its cause.
+fn lost(mut failure: Error) -> Error {
+    let cause = failure.source.take();
+    failure.uncertain().with_source(ReplyLost(cause))
+}
+
+/// Whether `failure` is of a reply that never arrived whole, rather than
+/// one that arrived and was wrong.
+pub fn reply_lost(failure: &Error) -> bool {
+    failure
+        .source
+        .as_deref()
+        .is_some_and(|cause| cause.is::<ReplyLost>())
+}
+
 /// Whether `row` is the final reply, the one that says `ok`. Its flags must
 /// be booleans: a caller decides uncertainty by them.
-fn final_row(row: &Map<String, Value>) -> Result<bool> {
+pub(crate) fn final_row(row: &Map<String, Value>) -> Result<bool> {
     let Some(ok) = row.get("ok") else {
         return Ok(false);
     };

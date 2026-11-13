@@ -21,6 +21,7 @@ use atlas_client::{
 };
 use atlas_core::{
     config::Config,
+    desktop,
     error::{Code, Error, Result},
     transport::with_output,
 };
@@ -237,7 +238,8 @@ fn note_outcome(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) {
-    let facts = host_session::store::ReplyFacts::new(kind, result);
+    let copies = atlas_client::handoff::Copies::of(&client.desktop());
+    let facts = host_session::store::ReplyFacts::new(kind, result, &copies);
     if let Some(host) = host {
         let _ = host_session::store::note_facts(client, host, doing, &facts);
     }
@@ -925,10 +927,21 @@ fn settings(
 /// named). macOS asks for that account's password on the lock screen; there
 /// is nothing to choose here beyond whether to lock now.
 fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
+    // Without settings there is no desktop, and the accounts are this Mac's.
+    let Ok(config) = Config::load(config) else {
+        return switch_on_this_mac(None, args);
+    };
+    match config.desktop().kind() {
+        desktop::Kind::SecondLogin(login) => switch_on_this_mac(Some(login), args),
+    }
+}
+
+/// [`switch`] among this Mac's accounts, the second login `login` among
+/// them when there is one, and the one chosen when none is named.
+fn switch_on_this_mac(login: Option<&desktop::SecondLogin>, args: cli::Switch) -> Result<Value> {
     use atlas_client::switch;
 
-    let helper = Config::load(config).ok().map(|config| config.helper_uid);
-    let accounts = switch::accounts(helper)?;
+    let accounts = switch::accounts(login.map(|login| login.uid))?;
 
     if args.list {
         return Ok(json!({"ok": true, "accounts": accounts}));

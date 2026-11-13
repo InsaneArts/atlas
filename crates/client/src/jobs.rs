@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use atlas_core::{
+    desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     host::Key,
     lenient::Lenient,
@@ -108,7 +109,9 @@ async fn started(
             task: client.task.as_ref().map(|task| task.key().clone()),
             session: client.task.as_ref().map(|task| task.session().clone()),
         },
-        uid: client.config.helper_uid,
+        uid: match client.desktop().kind() {
+            Kind::SecondLogin(login) => login.uid,
+        },
         pin,
     };
     let reply = mutate(client, mutation).await?;
@@ -516,10 +519,7 @@ pub async fn require_none(client: &Client) -> Result<()> {
         )
         .with_source(cause)
     })?;
-    if jobs
-        .iter()
-        .any(|job| may_run(job, client.config.helper_uid))
-    {
+    if jobs.iter().any(|job| may_run(job, &client.desktop())) {
         return Err(Error::new(Code::Busy, JOB_RUNNING)
             .held_by(atlas_core::error::Holder::Agent)
             .with("running", json!("job")));
@@ -527,17 +527,15 @@ pub async fn require_none(client: &Client) -> Result<()> {
     Ok(())
 }
 
-/// Whether the job `shown` may still have processes in helper account
-/// `helper`. Only a job that ended, with every process it left gone or now
-/// another account's, has none.
-fn may_run(shown: &Shown, helper: u32) -> bool {
+/// Whether the job `shown` may still have processes in `desktop`. Only a
+/// job that ended, with every process it left gone or no longer the
+/// desktop's, has none.
+fn may_run(shown: &Shown, desktop: &Desktop) -> bool {
     let Some(job) = shown.job() else {
         return true;
     };
     match (job.state, job.ended()) {
-        (JobState::Ended, Some(ended)) => {
-            atlas_core::protocol::left_may_run(&ended.left, job.pgid, helper)
-        }
+        (JobState::Ended, Some(ended)) => desktop.left_may_run(&ended.left, job.pgid),
         _ => true,
     }
 }
@@ -728,6 +726,14 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     stopped_every(client, client.transport.call(&request)).await
 }
 
+/// Whether the desktop's daemon may be listening, so a failed connection
+/// to it does not prove it keeps no jobs.
+pub(crate) fn daemon_listens(client: &Client) -> bool {
+    match client.desktop().kind() {
+        Kind::SecondLogin(_) => client.transport.path.exists(),
+    }
+}
+
 /// [`stop_every`] once `asked` brings the helper's reply to its request.
 async fn stopped_every(
     client: &Client,
@@ -737,9 +743,7 @@ async fn stopped_every(
         Ok(reply) if reply["ok"] == true => reply,
         // A helper with no daemon running keeps none. A removed socket does
         // not acknowledge a request already sent.
-        Err(error)
-            if error.code == Code::Io && !error.uncertain && !client.transport.path.exists() =>
-        {
+        Err(error) if error.code == Code::Io && !error.uncertain && !daemon_listens(client) => {
             return Everyone::default();
         }
         Ok(reply) => return Everyone::failed(refused(&reply).error),
