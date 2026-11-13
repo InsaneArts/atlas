@@ -534,4 +534,5 @@ fn unescaped(name: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "home_privacy_tests.rs"]
 mod tests;

@@ -342,7 +342,7 @@ impl Client {
             return Self::challenged_proof(&reply, &challenge);
         }
         match self.desktop().kind() {
-            Kind::User(login) => self.session_proof_by_command(login).await,
+            Kind::User(login) => crate::user::session::session_proof_by_command(self, login).await,
         }
     }
 
@@ -414,7 +414,7 @@ impl Client {
         atlas_core::files::probe_write(self.output_dir()?)?;
 
         match self.desktop().kind() {
-            Kind::User(login) => self.staging_writable_in(login)?,
+            Kind::User(login) => crate::user::install::staging_writable_in(self, login)?,
         }
 
         Ok(())

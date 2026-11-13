@@ -1,4 +1,3 @@
-use super::status::permissions_from;
 use atlas_client::setup::executor::without;
 #[test]
 fn settings_are_absent_only_when_the_configuration_is_missing() {
@@ -220,16 +219,6 @@ fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
 }
 
 use super::*;
-
-#[test]
-fn permissions_without_the_jobs_answer_are_unknown_never_off() {
-    assert_eq!(permissions_from(None), Value::Null);
-    let hello = json!({"permissions": {"screenCapture": true, "accessibility": false}});
-    assert_eq!(
-        permissions_from(Some(&hello)),
-        json!({"screenCapture": true, "accessibility": false})
-    );
-}
 
 #[test]
 fn a_secret_is_one_short_plain_line() {

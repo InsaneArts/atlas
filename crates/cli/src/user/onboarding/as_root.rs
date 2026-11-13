@@ -411,7 +411,7 @@ pub(super) fn create(
 /// Close orphan logins and create an account in one approved terminal run.
 /// The caller holds each orphan's controller and durable claim throughout.
 /// sysadminctl asks for the new password directly, without putting it in argv.
-pub(crate) fn create_in_terminal(
+pub(super) fn create_in_terminal(
     name: &str,
     uid: u32,
     full_name: &str,
@@ -555,7 +555,7 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    pub(crate) fn uid(&self) -> u32 {
+    pub(super) fn uid(&self) -> u32 {
         match self {
             Self::Orphan(uid) => *uid,
             Self::Leftover { helper, .. } | Self::Helper(helper) => helper.uid,
@@ -581,7 +581,7 @@ impl Target {
 /// exit proves it cannot act again: a reply that was lost, or that stopped
 /// short, leaves a run that may still act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Exit {
+pub(super) enum Exit {
     /// It was not seen to exit.
     Unknown,
     /// It exited without acting on anything.
@@ -603,8 +603,8 @@ impl Exit {
 /// Why logins were not closed, and how the run that was to close them ended.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Unclosed {
-    pub(crate) refusal: Refusal,
-    pub(crate) exit: Exit,
+    pub(super) refusal: Refusal,
+    pub(super) exit: Exit,
 }
 
 /// Close the logins `targets`, all in one run as root, so macOS asks the

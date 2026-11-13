@@ -8,7 +8,7 @@ use atlas_daemon::identity::{Identity, Standing};
 
 /// One way of logging the helper out, gentlest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Way {
+enum Way {
     /// Through the helper's Atlas, as Log Out does: an app may hold it up.
     Ask,
     /// Through the helper's Atlas, ending the login at once: the helper
@@ -20,7 +20,7 @@ pub(super) enum Way {
 
 /// What came of one way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Came {
+enum Came {
     /// The helper's login is gone.
     Gone,
     /// An app in the helper holds the log-out up.
@@ -32,7 +32,7 @@ pub(super) enum Came {
 
 /// What follows a way that came to something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Next {
+enum Next {
     /// The helper is logged out.
     Done,
     /// Ask the person whether to end the login past the app holding it up.
@@ -46,7 +46,7 @@ pub(super) enum Next {
 /// What to do after `way` came to `came`. Root acts only once the helper's
 /// own Atlas could not log it out; forcing past an app needs `yes` or the
 /// person's word.
-pub(super) fn after(way: Way, came: Came, yes: bool) -> Next {
+fn after(way: Way, came: Came, yes: bool) -> Next {
     match (way, came) {
         (Way::Ask | Way::Force | Way::Root, Came::Gone) => Next::Done,
         (Way::Ask, Came::Held) if yes => Next::Try(Way::Force),
@@ -137,7 +137,7 @@ pub(super) fn logged_out_twice(uid: u32) -> bool {
 
 /// What a way came to, once the helper's user ID was looked at strictly
 /// (`logged_out`): only that look says it is gone.
-pub(super) fn strictly(came: Came, logged_out: bool) -> Came {
+fn strictly(came: Came, logged_out: bool) -> Came {
     match came {
         Came::Gone | Came::Held | Came::Stayed if logged_out => Came::Gone,
         Came::Gone | Came::Stayed => Came::Stayed,
@@ -186,3 +186,7 @@ fn root_log_out(
         Err(_) => Came::Stayed,
     }
 }
+
+#[cfg(test)]
+#[path = "log_out_tests.rs"]
+mod tests;

@@ -74,7 +74,7 @@ impl Client {
         }
 
         let first_setup = match self.desktop().kind() {
-            Kind::User(login) => self.first_setup_in(login),
+            Kind::User(login) => crate::user::service::first_setup_in(self, login),
         };
         if first_setup {
             return Ok(());

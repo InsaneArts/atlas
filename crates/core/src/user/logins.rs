@@ -18,15 +18,15 @@ pub fn absence(uid: u32) -> Option<Absence> {
 
 /// One process, as `ps` lists it.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Process {
-    pub(super) uid: u32,
-    pub(super) pid: u32,
-    pub(super) running: Duration,
-    pub(super) command: String,
+struct Process {
+    uid: u32,
+    pid: u32,
+    running: Duration,
+    command: String,
 }
 
 /// Every process on this Mac, or `None` when they could not be listed.
-pub(super) fn processes() -> Option<Vec<Process>> {
+fn processes() -> Option<Vec<Process>> {
     let output = crate::bounded::output(
         std::process::Command::new("/bin/ps").args(["-axo", "uid=,pid=,etime=,comm="]),
         crate::bounded::LOOKUP,
@@ -40,7 +40,7 @@ pub(super) fn processes() -> Option<Vec<Process>> {
 }
 
 /// `ps -o uid=,pid=,etime=,comm=` lines; the command is the rest of a line.
-pub(super) fn parse_processes(listing: &str) -> Option<Vec<Process>> {
+fn parse_processes(listing: &str) -> Option<Vec<Process>> {
     let mut processes = Vec::new();
     for line in listing.lines() {
         let mut words = line.split_whitespace();
@@ -79,7 +79,7 @@ pub fn logged_out(uid: u32) -> Option<bool> {
     Some(logged_out_in(&processes()?, uid))
 }
 
-pub(super) fn logged_out_in(listed: &[Process], uid: u32) -> bool {
+fn logged_out_in(listed: &[Process], uid: u32) -> bool {
     !runs_as(listed, uid, "/loginwindow") && !runs_as(listed, uid, "/Dock")
 }
 
@@ -91,7 +91,7 @@ pub fn desktop_runs(uid: u32) -> Option<bool> {
 }
 
 /// Whether a process of `uid` whose command ends with `name` runs.
-pub(super) fn runs_as(listed: &[Process], uid: u32, name: &str) -> bool {
+fn runs_as(listed: &[Process], uid: u32, name: &str) -> bool {
     listed
         .iter()
         .any(|process| process.uid == uid && process.command.ends_with(name))
@@ -99,7 +99,7 @@ pub(super) fn runs_as(listed: &[Process], uid: u32, name: &str) -> bool {
 
 /// Whether macOS is still updating an account for its login: its
 /// UserAccountUpdater runs, as root and as the account.
-pub(super) fn updating(listed: &[Process]) -> bool {
+fn updating(listed: &[Process]) -> bool {
     listed
         .iter()
         .any(|process| process.command.ends_with("/UserAccountUpdater"))
@@ -113,7 +113,7 @@ pub fn desktop_up(uid: u32) -> Option<bool> {
     Some(desktop_up_in(&processes()?, uid))
 }
 
-pub(super) fn desktop_up_in(listed: &[Process], uid: u32) -> bool {
+fn desktop_up_in(listed: &[Process], uid: u32) -> bool {
     !updating(listed)
         && !runs_as(listed, uid, "/Setup Assistant")
         && runs_as(listed, uid, "/Dock")
@@ -146,19 +146,19 @@ pub struct Window {
 
 /// What directory services say of one user ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Record {
+struct Record {
     /// Found by `getpwuid`, which asks every directory macOS uses.
-    pub(crate) passwd: bool,
+    passwd: bool,
     /// Found by a search of every directory (`dscl /Search`), network and
     /// mobile accounts included. Searched only when `getpwuid` found none.
-    pub(crate) directory: bool,
+    directory: bool,
     /// How long ago the account was made, when that is known.
-    pub(crate) age: Option<Duration>,
+    age: Option<Duration>,
 }
 
 impl Record {
     /// Whether any directory has an account with this user ID.
-    pub(crate) fn exists(&self) -> bool {
+    fn exists(&self) -> bool {
         self.passwd || self.directory
     }
 }
@@ -200,7 +200,7 @@ const REUSED_SLACK: Duration = Duration::from_secs(10);
 /// Each login in `windows` with whose it is, given what directory services
 /// say of each user ID (`accounts`), this account (`me`), the helper (or
 /// the account about to be made it), and who owns the screen (`console`).
-pub(crate) fn classify(
+fn classify(
     windows: &[Window],
     accounts: impl Fn(u32) -> Record,
     me: u32,
@@ -276,13 +276,13 @@ impl Blocker {
 }
 
 /// How long a login may go without a desktop before it counts as stuck.
-pub(super) const STUCK_AFTER: Duration = Duration::from_secs(120);
+const STUCK_AFTER: Duration = Duration::from_secs(120);
 
 /// What would make a new login hang, from the classified logins and the
 /// process list: a deleted account's login, a login of another account
 /// with no Dock and no Setup Assistant for too long, or macOS updating an
 /// account.
-pub(super) fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec<Blocker> {
+fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec<Blocker> {
     let mut found: Vec<Blocker> = classified
         .iter()
         .filter_map(|(window, kind)| match kind {
@@ -307,7 +307,7 @@ pub(super) fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec
 }
 
 /// The loginwindow processes in a process list.
-pub(super) fn loginwindows_in(listed: &[Process]) -> Vec<Window> {
+fn loginwindows_in(listed: &[Process]) -> Vec<Window> {
     listed
         .iter()
         .filter(|process| process.command.ends_with("/loginwindow"))
@@ -333,13 +333,13 @@ pub fn console_owner() -> Option<u32> {
 /// made when `aged` (only the helper's age is ever compared). A lookup that
 /// fails counts as an account found: an unknown is never taken for a
 /// deleted account.
-pub(crate) fn record(uid: u32, aged: bool) -> Record {
+fn record(uid: u32, aged: bool) -> Record {
     record_with(uid, aged, crate::account::account_with_uid(uid), searched)
 }
 
 /// Whether a search of every directory finds an account with `uid`. A
 /// search that fails or takes too long counts as one found.
-pub(super) fn searched(uid: u32) -> bool {
+fn searched(uid: u32) -> bool {
     crate::bounded::output(
         std::process::Command::new("/usr/bin/dscl").args([
             "/Search",
@@ -357,7 +357,7 @@ pub(super) fn searched(uid: u32) -> bool {
 
 /// [`record`] from `account`, what `getpwuid` gave. Every directory is
 /// searched only when it found none: the answer cannot matter otherwise.
-pub(super) fn record_with(
+fn record_with(
     uid: u32,
     aged: bool,
     account: crate::error::Result<Option<crate::account::Account>>,
@@ -437,7 +437,7 @@ pub fn blockers_now(helper: Option<u32>) -> Option<Vec<Blocker>> {
 
 /// How long a login with its desktop up may go without Atlas answering
 /// before its login counts as left behind rather than still starting.
-pub(super) const STALE_AFTER: Duration = Duration::from_secs(180);
+const STALE_AFTER: Duration = Duration::from_secs(180);
 
 /// Whether `uid`'s login is up and settled: its loginwindow has run for
 /// over three minutes and its Dock runs. Called for a helper whose Atlas is
@@ -447,7 +447,7 @@ pub fn stale(uid: u32) -> Option<bool> {
     Some(stale_in(&processes()?, uid))
 }
 
-pub(super) fn stale_in(listed: &[Process], uid: u32) -> bool {
+fn stale_in(listed: &[Process], uid: u32) -> bool {
     loginwindows_in(listed)
         .iter()
         .any(|window| window.uid == uid && window.age > STALE_AFTER)
@@ -464,7 +464,7 @@ pub fn confirm_gone(uids: &[u32]) -> bool {
     })
 }
 
-pub(super) fn gone_twice(
+fn gone_twice(
     uids: &[u32],
     mut listed: impl FnMut() -> Option<Vec<Process>>,
     mut pause: impl FnMut(),
@@ -476,7 +476,7 @@ pub(super) fn gone_twice(
 }
 
 /// How long ago account `name` was created, from its directory record.
-pub(super) fn account_age(name: &str) -> Option<Duration> {
+fn account_age(name: &str) -> Option<Duration> {
     account_created(name)?.elapsed().ok()
 }
 
@@ -502,7 +502,7 @@ fn account_created(name: &str) -> Option<SystemTime> {
 }
 
 /// `ps` elapsed time (`[[days-]hours:]minutes:seconds`) as a duration.
-pub(super) fn running_for(elapsed: &str) -> Option<Duration> {
+fn running_for(elapsed: &str) -> Option<Duration> {
     let (days, clock) = match elapsed.split_once('-') {
         Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
         None => (0, elapsed),

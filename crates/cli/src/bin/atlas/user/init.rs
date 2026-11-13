@@ -68,7 +68,7 @@ fn choose_helper() -> Result<(account::Account, Identity)> {
         "Short name for the new account",
         "atlas",
         |name| {
-            atlas_client::user::setup::validate_account_name(name)?;
+            atlas_client::user::setup::account::validate_account_name(name)?;
             match account::account_named(name) {
                 Ok(Some(_)) => Err(format!(
                     "{name} already exists; choose it from the list instead."
@@ -381,7 +381,7 @@ pub(crate) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     permissions_step(&client, &config, &name).await?;
     let mut spinner = None;
     let refreshed =
-        atlas_client::user::setup::refresh_helper(&client, &helper, &expected, |notice| {
+        atlas_client::user::setup::job::refresh_helper(&client, &helper, &expected, |notice| {
             match notice {
                 atlas_client::user::setup::Progress::Administrator(why) => {
                     administrator_rights(&mut rights, why)?
@@ -411,8 +411,11 @@ fn helper_step(
     config_path: &Path,
     rights: &mut setup::AdministratorRights,
 ) -> Result<(Config, account::Account, Identity)> {
-    let (config, helper, identity) =
-        atlas_client::user::setup::configure_helper(config_path, choose_helper, say)?;
+    let (config, helper, identity) = atlas_client::user::setup::configuration::configure_helper(
+        config_path,
+        choose_helper,
+        say,
+    )?;
     if atlas_cli::user::onboarding::close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
         say(
@@ -547,7 +550,8 @@ async fn log_in_once(
     // login. Only a convenience: a refusal leaves them to the person,
     // and the step says what came of it.
     if !installed {
-        let step = match atlas_client::user::setup::first_login_setup(client, helper, expected) {
+        let step = match atlas_client::user::setup::job::first_login_setup(client, helper, expected)
+        {
             Ok(reply) => json!({"step": "firstLogin", "answered": reply["answered"]}),
             Err(error) => json!({"step": "firstLogin", "error": error.error}),
         };
@@ -603,7 +607,7 @@ async fn install_job(
     }
 
     let spinner = Spinner::new("Installing the helper's background job…");
-    let log = atlas_client::user::setup::prepare_helper(client, helper, expected).await?;
+    let log = atlas_client::user::setup::job::prepare_helper(client, helper, expected).await?;
 
     spinner.set("Starting the helper…");
     let answered =
@@ -704,7 +708,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
                 wait_until_back(client, config.desktop().user().uid, &client.status().await)
                     .await?;
                 let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
-                atlas_client::user::setup::restart_helper(client).await?;
+                atlas_client::user::setup::job::restart_helper(client).await?;
             }
 
             let lacking = missing(&client.status().await);

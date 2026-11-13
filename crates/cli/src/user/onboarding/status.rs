@@ -192,7 +192,8 @@ async fn helper_side(
         let _ = acceptance::signal(pairing);
     }
     let running = layout.as_ref().is_ok_and(|layout| {
-        atlas_daemon::user::setup::job_pid(layout, atlas_daemon::user::setup::LABEL).is_some()
+        atlas_daemon::user::setup::launchd::job_pid(layout, atlas_daemon::user::setup::LABEL)
+            .is_some()
     });
 
     // macOS counts a process the window starts as the window's own, so only
@@ -231,7 +232,7 @@ async fn helper_side(
 
 /// The two permissions as the job's `hello` reports them, or unknown
 /// (`null`) without one, never off.
-pub(super) fn permissions_from(hello: Option<&Value>) -> Value {
+fn permissions_from(hello: Option<&Value>) -> Value {
     hello.map_or(Value::Null, |hello| {
         json!({
             "screenCapture": hello["permissions"]["screenCapture"] == true,
@@ -283,3 +284,7 @@ fn helper_job_here(uid: u32) -> bool {
             .exists()
     })
 }
+
+#[cfg(test)]
+#[path = "status_tests.rs"]
+mod tests;

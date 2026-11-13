@@ -28,94 +28,97 @@ pub(crate) fn daemon_listens_in(client: &Client, _login: &atlas_core::user::User
     client.transport.path.exists()
 }
 
-impl Client {
-    /// Whether the second login `login` has never been set up. Its daemon
-    /// creates its directory before accepting jobs and keeps it across
-    /// shutdowns. Only an absent directory establishes a first setup; a
-    /// missing socket can leave background jobs running.
-    pub(crate) fn first_setup_in(&self, _login: &atlas_core::user::User) -> bool {
-        self.transport.path.parent().is_some_and(|directory| {
-            std::fs::symlink_metadata(directory)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        })
-    }
+/// Whether the second login `login` has never been set up. Its daemon
+/// creates its directory before accepting jobs and keeps it across
+/// shutdowns. Only an absent directory establishes a first setup; a
+/// missing socket can leave background jobs running.
+pub(crate) fn first_setup_in(client: &Client, _login: &atlas_core::user::User) -> bool {
+    client.transport.path.parent().is_some_and(|directory| {
+        std::fs::symlink_metadata(directory)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    })
+}
 
-    /// Whether the input service `pid` of the second login `login` is gone:
-    /// nothing listens on its socket and its process has ended, both as this
-    /// Mac sees them.
-    pub(crate) async fn input_exited_in(&self, _login: &atlas_core::user::User, pid: u32) -> bool {
-        matches!(
-            tokio::net::UnixStream::connect(&self.config.input_socket).await,
-            Err(error) if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-            )
-        ) && !process_exists(pid)
-    }
+/// Whether the input service `pid` of the second login `login` is gone:
+/// nothing listens on its socket and its process has ended, both as this
+/// Mac sees them.
+pub(crate) async fn input_exited_in(
+    client: &Client,
+    _login: &atlas_core::user::User,
+    pid: u32,
+) -> bool {
+    matches!(
+        tokio::net::UnixStream::connect(&client.config.input_socket).await,
+        Err(error) if matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        )
+    ) && !process_exists(pid)
+}
 
-    /// Whether the input service of the second login `login` has a Stop
-    /// saved: a file beside its socket on this disk.
-    pub(crate) fn service_stop_saved_in(
-        &self,
-        _login: &atlas_core::user::User,
-    ) -> std::io::Result<bool> {
-        self.config
-            .input_socket
-            .with_extension("stopped")
-            .try_exists()
-    }
+/// Whether the input service of the second login `login` has a Stop
+/// saved: a file beside its socket on this disk.
+pub(crate) fn service_stop_saved_in(
+    client: &Client,
+    _login: &atlas_core::user::User,
+) -> std::io::Result<bool> {
+    client
+        .config
+        .input_socket
+        .with_extension("stopped")
+        .try_exists()
+}
 
-    /// Launch the shared Atlas command, installed on this disk, as the input
-    /// service of the second login `login`, for this account: its process
-    /// ID, before it is known to be ready.
-    async fn launch_input_in(&self, login: &atlas_core::user::User) -> Result<u32> {
-        // Arguments stay separate from shell syntax, including configured paths.
-        let script = concat!(
-            "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
-            ">\"$HOME/Library/Logs/Atlas-input.log\" 2>&1 </dev/null & echo $!",
-        );
-        let controller_uid = nix::unistd::getuid().as_raw();
-        let request = json!({
-            "op": "run",
-            "argv": [
-                "/bin/sh", "-c", script, "sh",
-                self.config.identity_probe,
-                login.uid.to_string(),
-                controller_uid.to_string(),
-                self.config.input_socket,
-            ],
-            "timeoutMs": 3000,
-        });
-        launched_pid(&self.transport.call(&request).await?)
-    }
+/// Launch the shared Atlas command, installed on this disk, as the input
+/// service of the second login `login`, for this account: its process
+/// ID, before it is known to be ready.
+async fn launch_input_in(client: &Client, login: &atlas_core::user::User) -> Result<u32> {
+    // Arguments stay separate from shell syntax, including configured paths.
+    let script = concat!(
+        "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
+        ">\"$HOME/Library/Logs/Atlas-input.log\" 2>&1 </dev/null & echo $!",
+    );
+    let controller_uid = nix::unistd::getuid().as_raw();
+    let request = json!({
+        "op": "run",
+        "argv": [
+            "/bin/sh", "-c", script, "sh",
+            client.config.identity_probe,
+            login.uid.to_string(),
+            controller_uid.to_string(),
+            client.config.input_socket,
+        ],
+        "timeoutMs": 3000,
+    });
+    launched_pid(&client.transport.call(&request).await?)
+}
 
-    /// [`Client::spawn_input`] in the second login `login`: launched, then
-    /// waited for until it is ready.
-    pub(crate) async fn spawn_input_in(&self, login: &atlas_core::user::User) -> Result<u32> {
-        let child = self.launch_input_in(login).await?;
-        let deadline = Instant::now() + Duration::from_secs(6);
+/// [`Client::spawn_input`] in the second login `login`: launched, then
+/// waited for until it is ready.
+pub(crate) async fn spawn_input_in(client: &Client, login: &atlas_core::user::User) -> Result<u32> {
+    let child = launch_input_in(client, login).await?;
+    let deadline = Instant::now() + Duration::from_secs(6);
 
-        loop {
-            let state = self.status().await;
-            if self
-                .desktop()
-                .prove(&Observation::decode(&state))
-                .is_ok_and(|session| session.input && session.epoch.input_pid == child)
-            {
-                return Ok(child);
-            }
-
-            if Instant::now() >= deadline {
-                return Err(Error::new(
-                    Code::Startup,
-                    "Input service did not become ready. Check ~/Library/Logs/Atlas-input.log \
-                     in the helper account and confirm that identity_probe points to the current Rust binary.",
-                )
-                .uncertain());
-            }
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
+    loop {
+        let state = client.status().await;
+        if client
+            .desktop()
+            .prove(&Observation::decode(&state))
+            .is_ok_and(|session| session.input && session.epoch.input_pid == child)
+        {
+            return Ok(child);
         }
+
+        if Instant::now() >= deadline {
+            return Err(Error::new(
+                Code::Startup,
+                "Input service did not become ready. Check ~/Library/Logs/Atlas-input.log \
+                 in the helper account and confirm that identity_probe points to the current Rust binary.",
+            )
+            .uncertain());
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

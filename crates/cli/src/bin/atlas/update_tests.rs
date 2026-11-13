@@ -177,10 +177,6 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
         json!({"ok": true, "completedSteps": [], "next": "atlas init", "menubarRestarted": null}),
         "no menu bar ran to move"
     );
-
-    assert!(has_helper_job(true, false), "a recorded setup");
-    assert!(has_helper_job(false, true), "a daemon that answers");
-    assert!(!has_helper_job(false, false));
 }
 
 /// What a child that exited with `code` wrote.

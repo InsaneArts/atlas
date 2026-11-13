@@ -9,7 +9,7 @@ use std::{
 };
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Job {
+pub(super) enum Job {
     Absent,
     Loaded { pid: Option<u32>, path: PathBuf },
 }
@@ -20,8 +20,8 @@ pub enum Job {
 pub struct JobReport {
     pub loaded: Option<bool>,
     pub pid: Option<u64>,
-    pub(crate) path: Option<String>,
-    pub(crate) plist: Option<String>,
+    path: Option<String>,
+    plist: Option<String>,
     pub sha256: Option<String>,
     pub definition: Definition,
 }
@@ -77,7 +77,7 @@ impl JobReport {
 
 /// Parse `launchctl print` for a job: its pid, if running, and the definition
 /// path launchd recorded, which a loaded job must have.
-pub(super) fn parse_job(text: &str) -> Result<Job> {
+fn parse_job(text: &str) -> Result<Job> {
     let field = |key: &str| {
         text.lines()
             .find_map(|line| line.trim().strip_prefix(key).map(str::to_owned))
@@ -174,3 +174,7 @@ pub(super) fn as_loaded(job: Job) -> Option<(Option<u32>, PathBuf)> {
         Job::Absent => None,
     }
 }
+
+#[cfg(test)]
+#[path = "launchd_tests.rs"]
+mod tests;

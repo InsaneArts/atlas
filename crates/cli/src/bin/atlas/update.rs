@@ -351,12 +351,6 @@ fn child_reply(output: &std::process::Output) -> serde_json::Result<Value> {
     serde_json::from_slice(&output.stdout).or_else(|_| serde_json::from_slice(&output.stderr))
 }
 
-/// Whether the helper has a job to move onto a new version: a setup is
-/// recorded, or its daemon answers (setup stopped after installing it).
-pub(crate) fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
-    recorded || daemon_answers
-}
-
 #[cfg(test)]
 #[path = "update_tests.rs"]
 mod tests;

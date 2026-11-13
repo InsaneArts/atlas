@@ -216,7 +216,7 @@ impl Client {
     /// its restarts.
     fn service_stop_saved(&self) -> std::io::Result<bool> {
         match self.desktop().kind() {
-            Kind::User(login) => self.service_stop_saved_in(login),
+            Kind::User(login) => crate::user::service::service_stop_saved_in(self, login),
         }
     }
 }

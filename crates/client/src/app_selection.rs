@@ -5,7 +5,6 @@ use atlas_core::{
     name::same_text,
 };
 use serde_json::{Value, json};
-use std::path::Path;
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
@@ -63,11 +62,6 @@ pub fn installed(desktop: &Desktop, name: &str) -> bool {
     match desktop.kind() {
         Kind::User(login) => crate::user::shared::in_applications(login, name),
     }
-}
-
-/// Whether the app `name` is installed in the folder `applications`.
-pub(crate) fn installed_in(applications: &Path, name: &str) -> bool {
-    applications.join(format!("{name}.app")).is_dir()
 }
 
 /// Which running apps `close` quits.

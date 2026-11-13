@@ -82,7 +82,7 @@ pub fn install_job(
         uid,
         labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
     })?;
-    let earlier = atlas_daemon::user::setup::JobReport::from(
+    let earlier = atlas_daemon::user::setup::launchd::JobReport::from(
         &inspected["jobs"][atlas_daemon::user::setup::LABEL],
     );
     let expected = agent.plist_sha256(logs);

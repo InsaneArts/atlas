@@ -274,24 +274,24 @@ fn on_screen(uid: u32, session: impl FnOnce() -> Result<Value>) -> Result<bool> 
 
 /// What the switch needs to know of the account it switches to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Target {
+struct Target {
     /// Its user ID.
-    pub uid: u32,
+    uid: u32,
     /// It is the configured helper, whose account must be fit for Atlas.
-    pub helper: bool,
+    helper: bool,
     /// It is the person this account is the helper of: switching to it is
     /// switching back.
-    pub back: bool,
+    back: bool,
     /// Its desktop already runs: its loginwindow and its Dock.
-    pub logged_in: bool,
+    logged_in: bool,
     /// Its account exists.
-    pub exists: bool,
+    exists: bool,
     /// Its home folder exists and belongs to it.
-    pub home_owned: bool,
+    home_owned: bool,
     /// Whether it administers this Mac; unknown when `None`.
-    pub administrator: Option<bool>,
+    administrator: Option<bool>,
     /// It is on screen already.
-    pub on_console: bool,
+    on_console: bool,
 }
 
 /// The refusal for a switch that must wait, after "Atlas can't switch yet:".
@@ -307,7 +307,7 @@ fn not_ready(why: &str) -> Error {
 /// is never kept in the helper; even then a deleted account's login under
 /// the helper's user ID, or anything about the person's own login, stops
 /// it.
-pub(crate) fn ready_to_switch(
+fn ready_to_switch(
     target: &Target,
     blockers: Option<&[atlas_core::user::logins::Blocker]>,
 ) -> Result<()> {

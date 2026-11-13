@@ -127,11 +127,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 /// Unacknowledged worker effects retain their transaction and pending ownership.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::User(login) => {
-            let helper = crate::user::environment::helper_name(login.uid)?;
-            crate::user::environment::stage::tidy(client);
-            crate::user::environment::stage::apply_frozen(client, login, &helper, plan_id).await
-        }
+        Kind::User(login) => crate::user::environment::apply_in(client, login, plan_id).await,
     }
 }
 

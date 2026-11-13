@@ -292,7 +292,7 @@ impl Client {
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
         match self.desktop().kind() {
-            Kind::User(login) => self.user_gone(login, seconds).await,
+            Kind::User(login) => crate::user::session::user_gone(self, login, seconds).await,
         }
     }
 }

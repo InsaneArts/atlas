@@ -39,6 +39,63 @@ use std::{
     time::Duration,
 };
 
+/// [`apply`] in the second login `login`.
+pub(crate) async fn apply_in(
+    client: &Client,
+    login: &atlas_core::user::User,
+    plan_id: &str,
+) -> Result<Value> {
+    let helper = helper_name(login.uid)?;
+    tidy(client);
+    apply_frozen(client, login, &helper, plan_id).await
+}
+
+/// [`list`](crate::environment::list()) in the second login `login`: its
+/// frozen plans here and its own transactions, labelled.
+pub(crate) async fn list_in(
+    client: &Client,
+    login: &atlas_core::user::User,
+    all: bool,
+) -> Result<Value> {
+    let helper = helper_name(login.uid)?;
+    let (here, there) = list_as(client, login, &helper, all).await?;
+    crate::environment::list::labelled(client, &here, &there, all)
+}
+
+/// Install the bundle at `source`, which the second login `login` can read,
+/// as `~/Applications/NAME` for install `id`, under `ownership`.
+pub(crate) async fn install_app_in(
+    client: &Client,
+    login: &atlas_core::user::User,
+    ownership: &Ownership,
+    id: &Token,
+    source: &Path,
+    name: &str,
+) -> Result<Value> {
+    let helper = helper_name(login.uid)?;
+    let request = Request::InstallApp {
+        id: id.as_str().to_owned(),
+        source: source.to_owned(),
+        name: name.to_owned(),
+    };
+    send(client, &helper, Some(ownership), request).await
+}
+
+/// Remove install `id` from the second login `login`, when it is unchanged
+/// and nothing runs from it, under `ownership`.
+pub(crate) async fn remove_app_in(
+    client: &Client,
+    login: &atlas_core::user::User,
+    ownership: &Ownership,
+    id: &Token,
+) -> Result<Value> {
+    let helper = helper_name(login.uid)?;
+    let request = Request::RemoveApp {
+        id: id.as_str().to_owned(),
+    };
+    send(client, &helper, Some(ownership), request).await
+}
+
 /// [`rollback`] in the second login `login`.
 pub(crate) async fn rollback_in(
     client: &Client,
@@ -101,7 +158,7 @@ pub(crate) async fn run_in(
 
 /// The helper's short name, as an ACL entry names it. Resolved once per
 /// operation and passed to every allow_helper of it.
-pub(crate) fn helper_name(uid: u32) -> Result<String> {
+fn helper_name(uid: u32) -> Result<String> {
     let identity = atlas_core::bounded::output(
         Command::new("/usr/bin/id").args(["-un", &uid.to_string()]),
         atlas_core::bounded::LOOKUP,
@@ -158,7 +215,7 @@ fn allow_helper(path: &Path, helper: &str, executable: bool) -> Result<()> {
 /// of its own, under `held` when it changes the helper. A change may copy
 /// a large app, so it is given as long as any command; a read, a command's
 /// usual time.
-pub(crate) async fn send(
+async fn send(
     client: &Client,
     helper: &str,
     held: Option<&Ownership>,
@@ -209,7 +266,7 @@ pub(crate) async fn install_states_in(
 
 /// What [`list`](crate::environment::list()) lists of the second login `login`, whose account ACLs name
 /// `helper`: the frozen plans here, and the helper's own transactions.
-pub(crate) async fn list_as(
+async fn list_as(
     client: &Client,
     login: &atlas_core::user::User,
     helper: &str,

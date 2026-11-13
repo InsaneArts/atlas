@@ -1138,10 +1138,21 @@ impl<'ast> Visit<'ast> for Nested {
     }
 }
 
-/// Whether the macro payload `tokens` imports a kind or the desktop's names.
-fn imports_in_macro(tokens: &[Token]) -> bool {
+/// Whether the macro payload `tokens` imports or aliases a kind or the
+/// desktop's names, or a path its caller passes in (a `$` parameter),
+/// which may be one of them.
+fn imports_or_aliases_in_macro(tokens: &[Token]) -> bool {
     let has = |word: &str| tokens.iter().any(|token| identifier(token) == Some(word));
-    has("use") && (KINDS.iter().any(|kind| has(kind)) || GUARDED.iter().any(|name| has(name)))
+    // A `use` or `type` up to its `;` that takes a `$` parameter.
+    let parameter = tokens.iter().enumerate().any(|(at, token)| {
+        matches!(identifier(token), Some("use" | "type"))
+            && tokens[at..]
+                .iter()
+                .take_while(|token| **token != Token::Punctuation(';'))
+                .any(|token| *token == Token::Punctuation('$'))
+    });
+    (has("use") || has("type"))
+        && (parameter || KINDS.iter().any(|kind| has(kind)) || GUARDED.iter().any(|name| has(name)))
 }
 
 /// What in the item `key`, of `tokens`, this check cannot follow: an
@@ -1444,9 +1455,54 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
 /// name the user desktop, so each is only checked to still exist.
 const KEPT: &[(&str, &str, &str)] = &[
     (
+        "crates/agents/src/guide.rs",
+        "GUIDE",
+        "the agents' guide says the helper is a login on this Mac: its servers, processes, volumes and logs are this Mac's",
+    ),
+    (
+        "crates/agents/src/project.rs",
+        "PROJECT_SECTION",
+        "a project's section calls the desktop a second login on this Mac",
+    ),
+    (
+        "crates/cli/src/frame_pipe/endpoint.rs",
+        "owner_key",
+        "the frame pipe is keyed by the controller's and the helper's user IDs, not by a desktop",
+    ),
+    (
+        "crates/cli/src/frame_pipe/service.rs",
+        "start",
+        "the frame pipe is keyed by the controller's and the helper's user IDs, not by a desktop",
+    ),
+    (
+        "crates/cli/src/mcp/resources.rs",
+        "tools! #1",
+        "switching to the helper is offered as locking this Mac's screen, here and in the view's script",
+    ),
+    (
         "crates/cli/src/ui/render/act.rs",
         "opened",
         "the link: copies are made on a shared disk, and these words name its folder",
+    ),
+    (
+        "crates/cli/src/ui/render/manage.rs",
+        "switch",
+        "a switch is told as this Mac's screen locked",
+    ),
+    (
+        "crates/cli/src/viewer/app.rs",
+        "keep_pipe",
+        "a frame service is kept while the link's user ID and path stay the same, not by a desktop",
+    ),
+    (
+        "crates/cli/src/viewer/local.rs",
+        "frame_service",
+        "the frame pipe is keyed by the controller's and the helper's user IDs, not by a desktop",
+    ),
+    (
+        "crates/client/src/agent/launch.rs",
+        "not_opened",
+        "an app that would not open is told as held by another account on this Mac",
     ),
     (
         "crates/client/src/client.rs",
@@ -1522,6 +1578,16 @@ const KEPT: &[(&str, &str, &str)] = &[
         "crates/core/src/desktop.rs",
         "Desktop::user",
         "every desktop is a user: the way in for its setup, update and removal",
+    ),
+    (
+        "crates/core/src/error/advice.rs",
+        "fix",
+        "recovery advice tells the person to log in to the helper and switch back on this Mac",
+    ),
+    (
+        "crates/core/src/error/advice.rs",
+        "next",
+        "recovery advice tells the person to log in to the helper and switch back on this Mac",
     ),
     (
         "crates/core/src/host/verification.rs",
@@ -1741,9 +1807,13 @@ fn findings(
         if reached.kind.is_some() {
             continue;
         }
-        if nested.macros.iter().any(|tokens| imports_in_macro(tokens)) {
+        if nested
+            .macros
+            .iter()
+            .any(|tokens| imports_or_aliases_in_macro(tokens))
+        {
             found.problems.push(format!(
-                "{path}: a macro imports a kind or the desktop's names, which this check cannot follow"
+                "{path}: a macro imports or aliases a kind or the desktop's names, which this check cannot follow"
             ));
         }
         for (_, import) in &nested.imports {
@@ -2377,7 +2447,35 @@ fn an_import_inside_a_macro_that_reaches_the_desktop_is_refused() {
     assert_eq!(
         check(&files, &[]),
         [
-            "problem: crates/a/src/lib.rs: a macro imports a kind or the desktop's names, which this check cannot follow"
+            "problem: crates/a/src/lib.rs: a macro imports or aliases a kind or the desktop's names, which this check cannot follow"
+        ]
+    );
+}
+
+#[test]
+fn an_alias_inside_a_macro_that_reaches_the_desktop_is_refused() {
+    let files = [(
+        "src/lib.rs",
+        "macro_rules! alias { () => { type K = atlas_core::desktop::Kind; }; }\nalias!();",
+    )];
+    assert_eq!(
+        check(&files, &[]),
+        [
+            "problem: crates/a/src/lib.rs: a macro imports or aliases a kind or the desktop's names, which this check cannot follow"
+        ]
+    );
+}
+
+#[test]
+fn an_alias_a_macro_makes_of_the_path_it_is_given_is_refused() {
+    let files = [(
+        "src/lib.rs",
+        "macro_rules! alias { ($t:ty) => { type K = $t; }; }\nalias!(atlas_core::desktop::Kind);",
+    )];
+    assert_eq!(
+        check(&files, &[]),
+        [
+            "problem: crates/a/src/lib.rs: a macro imports or aliases a kind or the desktop's names, which this check cannot follow"
         ]
     );
 }
@@ -2524,7 +2622,7 @@ fn an_import_in_a_macro_inside_a_function_is_refused() {
     assert_eq!(
         check(&files, &[]),
         [
-            "problem: crates/a/src/lib.rs: a macro imports a kind or the desktop's names, which this check cannot follow"
+            "problem: crates/a/src/lib.rs: a macro imports or aliases a kind or the desktop's names, which this check cannot follow"
         ]
     );
 }

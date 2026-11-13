@@ -27,7 +27,8 @@ impl User {
     }
 
     /// [`crate::desktop::Desktop::left_may_run`] for this user: its
-    /// processes in this kernel.
+    /// processes run in this Mac's kernel, so the check every daemon makes
+    /// of its own processes can be made from here.
     pub(crate) fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
         protocol::left_may_run(left, group, self.uid)
     }

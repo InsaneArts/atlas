@@ -5,7 +5,6 @@
 //! caller holds; its folder stays while its outcome is not known, as every
 //! change's does.
 use super::{
-    model::*,
     reply::{InstallState, Installed, InstalledApp, WorkerReply},
     *,
 };
@@ -39,13 +38,8 @@ pub(crate) async fn install_app(
 ) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => {
-            let helper = crate::user::environment::helper_name(login.uid)?;
-            let request = Request::InstallApp {
-                id: id.as_str().to_owned(),
-                source: source.to_owned(),
-                name: name.to_owned(),
-            };
-            crate::user::environment::send(client, &helper, Some(ownership), request).await
+            crate::user::environment::install_app_in(client, login, ownership, id, source, name)
+                .await
         }
     }
 }
@@ -78,11 +72,7 @@ pub(crate) async fn remove_app(
 ) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => {
-            let helper = crate::user::environment::helper_name(login.uid)?;
-            let request = Request::RemoveApp {
-                id: id.as_str().to_owned(),
-            };
-            crate::user::environment::send(client, &helper, Some(ownership), request).await
+            crate::user::environment::remove_app_in(client, login, ownership, id).await
         }
     }
 }

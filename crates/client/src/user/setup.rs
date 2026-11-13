@@ -9,9 +9,6 @@ pub mod job;
 pub mod migrate;
 
 pub mod account;
-pub use account::validate_account_name;
-pub use configuration::configure_helper;
-pub use job::{first_login_setup, prepare_helper, refresh_helper, restart_helper};
 
 /// Notices emitted while a complete helper operation retains ownership.
 pub enum Progress<'a> {

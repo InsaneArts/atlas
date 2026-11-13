@@ -71,7 +71,7 @@ fn retire_helper_job(
 
     // The definition there now, else (none there) the one this Atlas
     // would write, whose backup a retired job leaves.
-    let sha256 = atlas_daemon::user::setup::JobReport::from(
+    let sha256 = atlas_daemon::user::setup::launchd::JobReport::from(
         &inspected["jobs"][atlas_daemon::user::setup::LABEL],
     )
     .sha256

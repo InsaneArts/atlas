@@ -534,14 +534,15 @@ impl Migration {
             labels: vec![plan.label.clone()],
         })
         .await?;
-        let job = atlas_daemon::user::setup::JobReport::from(&observed["jobs"][&plan.label]);
+        let job =
+            atlas_daemon::user::setup::launchd::JobReport::from(&observed["jobs"][&plan.label]);
         let expected = self.agent().plist_sha256(&self.layout().paths().logs());
         let expected_definition = match job.definition {
-            atlas_daemon::user::setup::Definition::Absent => true,
-            atlas_daemon::user::setup::Definition::Regular => {
+            atlas_daemon::user::setup::launchd::Definition::Absent => true,
+            atlas_daemon::user::setup::launchd::Definition::Regular => {
                 job.sha256.as_deref() == Some(expected.as_str())
             }
-            atlas_daemon::user::setup::Definition::Other => false,
+            atlas_daemon::user::setup::launchd::Definition::Other => false,
         };
         let elsewhere = !job.defined_at(&self.layout().agent_plist(&plan.label));
         if !expected_definition || job.loaded == Some(true) && elsewhere {
@@ -855,14 +856,14 @@ pub(crate) async fn fresh_pass(
 ///
 /// Returns the failure to verify the helper or to read the job through its
 /// daemon.
-pub async fn managed_job(client: &Client) -> Result<atlas_daemon::user::setup::JobReport> {
+pub async fn managed_job(client: &Client) -> Result<atlas_daemon::user::setup::launchd::JobReport> {
     let request = atlas_daemon::user::setup::Request::Inspect {
         uid: client.desktop().user().uid,
         labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
     };
     let expected = setup_identity(client.desktop().user().uid)?;
 
-    Ok(atlas_daemon::user::setup::JobReport::from(
+    Ok(atlas_daemon::user::setup::launchd::JobReport::from(
         &inspect(client, &request, &expected).await?["jobs"][atlas_daemon::user::setup::LABEL],
     ))
 }

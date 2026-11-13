@@ -8,8 +8,7 @@
 //! evidence, and records the outcome tagged with the session generation it
 //! observed. Doctor reports a pass only while that generation is unchanged,
 //! the observation is fresh, and both Save and Open passed.
-mod canary;
-pub use canary::verify;
+pub mod canary;
 
 use crate::capability::{Doctor, NativeState, with_capabilities};
 use atlas_core::{

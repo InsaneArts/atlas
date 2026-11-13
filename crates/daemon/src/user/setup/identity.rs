@@ -60,7 +60,7 @@ pub fn current(account: &Account) -> Option<Identity> {
     })
 }
 
-pub(crate) fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
+fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
     match (on_file, now) {
         (OnFile::Unreadable, _) | (_, None) => Standing::Unknown,
         (OnFile::Nothing, Some(now)) => Standing::Unrecorded(now.clone()),

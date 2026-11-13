@@ -44,7 +44,7 @@ pub(super) const DISCARDED: &str = ".environment-discarded-";
 
 /// What a stage is made under before it is locked and moved into place, so
 /// no command sees it unlocked. A sweep never looks at it.
-pub(super) const STAGING: &str = ".environment-staging-";
+const STAGING: &str = ".environment-staging-";
 
 /// Remove a frozen plan the helper no longer needs, called under its lock:
 /// it is moved to a discarded name first, so its own name is gone at once
@@ -90,7 +90,7 @@ pub(super) const STARTING: Duration = Duration::from_secs(10 * 60);
 
 /// Remove what earlier environment commands left behind that nothing can
 /// use: [`prune_runs`], [`sweep`] and [`clear_discarded`].
-pub(crate) fn tidy(client: &Client) {
+pub(super) fn tidy(client: &Client) {
     if let Some(shared) = client.config.identity_probe.parent() {
         prune_runs(shared);
         sweep(shared);
@@ -176,7 +176,7 @@ pub(super) async fn prune(client: &Client, login: &atlas_core::user::User, helpe
 /// Remove the folders of commands run older than UNUSED. A command kept
 /// its folder only when it was stopped or its reply was lost; no command
 /// runs longer than ten minutes, so a week-old folder is no longer read.
-pub(super) fn prune_runs(shared: &Path) {
+fn prune_runs(shared: &Path) {
     for (_, stage) in older(shared, "environment-run-", UNUSED) {
         discard(&stage);
     }
@@ -184,7 +184,7 @@ pub(super) fn prune_runs(shared: &Path) {
 
 /// Atlas's folders beside the shared command named with `prefix` and older
 /// than `age`, with their IDs.
-pub(super) fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, PathBuf)> {
+fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, PathBuf)> {
     leftovers(shared)
         .into_iter()
         .filter_map(|stage| {
@@ -205,13 +205,13 @@ pub(super) fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, 
 /// Whether `stage` is a preview cut short: copies of the selected files but
 /// no plan, so nothing can apply it, and no request whose outcome is
 /// unknown, so the helper has nothing to recover from it.
-pub(super) fn abandoned(stage: &Path) -> bool {
+fn abandoned(stage: &Path) -> bool {
     !planned(stage) && !requests(stage)
 }
 
 /// Whether the helper may be asked about the plan in `stage`: a readable
 /// plan for this ID and helper, with no request whose outcome is unknown.
-pub(super) fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
+fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
     kept_plan(stage, id, uid).is_some() && !requests(stage)
 }
 
@@ -283,13 +283,13 @@ pub(super) fn create_stage(stage: &Path, helper: &str) -> Result<()> {
 /// Make a private folder the helper may read at `stage`, holding its lock.
 /// It is made and locked under a name no sweep looks at, then moved into
 /// place, so no other command ever finds it unlocked.
-pub(super) fn create_locked_stage(stage: &Path, helper: &str) -> Result<LockFile> {
+fn create_locked_stage(stage: &Path, helper: &str) -> Result<LockFile> {
     create_locked_stage_with(stage, helper, |_| {})
 }
 
 /// [`create_locked_stage`], calling `made` with the folder once it is made
 /// and before it is locked.
-pub(super) fn create_locked_stage_with(
+fn create_locked_stage_with(
     stage: &Path,
     helper: &str,
     made: impl FnOnce(&Path),
@@ -337,7 +337,7 @@ pub(super) fn lock_stage(stage: &Path) -> Result<LockFile> {
 
 /// What a request folder that may change the helper is named with: one
 /// left behind holds a step whose outcome is not known yet.
-pub(super) const CHANGE: &str = "request-";
+const CHANGE: &str = "request-";
 
 /// What a read-only request folder is named with: one left behind (its
 /// command killed mid-read) holds nothing to recover.
@@ -483,7 +483,7 @@ pub(super) async fn freeze_as(
 /// preview reads and changes nothing, so a stage it never wrote a plan into
 /// (a refusal or an error on the way) can never be applied, and is removed
 /// with its copies of the selected files.
-pub(super) fn previewed(result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
+fn previewed(result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
     if !planned(stage) {
         discard(stage);
     }
@@ -496,7 +496,7 @@ pub(super) fn planned(stage: &Path) -> bool {
     stage.join("plan.json").try_exists().unwrap_or(true)
 }
 
-pub(crate) async fn apply_frozen(
+pub(super) async fn apply_frozen(
     client: &Client,
     login: &atlas_core::user::User,
     helper: &str,
@@ -689,7 +689,7 @@ async fn change(
 
 /// Write one request (its packet and, for a loose build, the executable that
 /// runs it) into `invocation`: the argv that runs it in the helper.
-pub(super) fn stage_request(
+fn stage_request(
     invocation: &Path,
     helper: &str,
     packet: &Packet,

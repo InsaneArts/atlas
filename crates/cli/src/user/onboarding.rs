@@ -11,11 +11,9 @@
 //! are never stored, logged or put in a command line: the one Atlas handles
 //! (a new account's) goes from the window, through a pipe, straight into
 //! macOS's own password prompt.
-mod acceptance;
-mod status;
-pub use status::status;
+pub mod acceptance;
 pub(crate) mod as_root;
-pub use acceptance::accept_worker;
+pub mod status;
 
 use as_root::{Exit, Target};
 use atlas_client::{
@@ -862,7 +860,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 /// Rejects invalid account names or an unsuitable account and returns privileged
 /// account-creation or identity-record failures.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
-    atlas_client::user::setup::validate_account_name(name).map_err(problem)?;
+    atlas_client::user::setup::account::validate_account_name(name).map_err(problem)?;
 
     if full_name.is_empty()
         || full_name.chars().count() > 64

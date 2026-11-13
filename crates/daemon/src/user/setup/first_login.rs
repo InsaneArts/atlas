@@ -375,7 +375,7 @@ pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
 /// `setup-helper`'s action that takes a waiting opener away: its plist
 /// removed first (a plist left behind would run at the next login), then
 /// the job unloaded if launchd has it. Only a regular file is removed.
-pub(crate) fn forget_opener(layout: &Layout) -> Result<Value> {
+pub(super) fn forget_opener(layout: &Layout) -> Result<Value> {
     let path = layout.agent_plist(OPENER);
     let removed = match file(&path)? {
         File::Absent => false,

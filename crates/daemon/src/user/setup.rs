@@ -8,7 +8,7 @@
 //! these actions from the other side.
 pub mod first_login;
 pub mod identity;
-mod launchd;
+pub mod launchd;
 pub mod pairing;
 
 use crate::helper_paths::HelperPaths;
@@ -19,7 +19,7 @@ use atlas_core::{
     digest::file_sha256,
     error::{Code, Error, Result},
 };
-pub use launchd::{Definition, Job, JobReport, job_pid};
+use launchd::{Job, job_pid};
 use launchd::{as_loaded, job, launchctl, wait_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -228,14 +228,14 @@ fn require_sha256(value: &str) -> Result<()> {
     }
 }
 
-pub(super) fn escape(text: &str) -> String {
+fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
 /// The common XML envelope; callers own the dictionary's exact entries.
-pub(super) fn document(body: &str) -> String {
+fn document(body: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -276,7 +276,7 @@ pub fn plist(agent: &Agent, logs: &Path) -> String {
     ))
 }
 
-pub(crate) fn text_sha256(text: &str) -> String {
+fn text_sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
@@ -300,7 +300,7 @@ impl Layout {
 
     /// Revalidate the worker's account and home after all waiting checks,
     /// immediately before a filesystem or launchd mutation.
-    pub(super) fn check(&self) -> Result<()> {
+    fn check(&self) -> Result<()> {
         if let Some(guard) = &self.guard {
             let account = checked_account(
                 guard,
@@ -486,14 +486,14 @@ fn kickstart(layout: &Layout, uid: u32) -> Result<Value> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum File {
+enum File {
     Absent,
     Regular(String),
     /// A symlink, directory or anything else; never followed or replaced.
     Other,
 }
 
-pub(super) fn file(path: &Path) -> Result<File> {
+fn file(path: &Path) -> Result<File> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(File::Absent),
         Err(error) => Err(error.into()),
@@ -664,7 +664,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
 
 /// Load `label` from `path` unless launchd has it already; its pid, once
 /// running. A job loaded from another definition is an error.
-pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
+fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
     let (pid, from) = match as_loaded(job(layout, label)?) {
         Some(loaded) => loaded,
         None => {
@@ -684,7 +684,7 @@ pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option
     Ok(pid)
 }
 
-pub(super) fn unload(layout: &Layout, label: &str) -> Result<()> {
+fn unload(layout: &Layout, label: &str) -> Result<()> {
     if job(layout, label)? != Job::Absent {
         bootout(layout, label)?;
     }

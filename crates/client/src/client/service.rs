@@ -177,7 +177,7 @@ impl Client {
 
         loop {
             let exited = match self.desktop().kind() {
-                Kind::User(login) => self.input_exited_in(login, pid).await,
+                Kind::User(login) => crate::user::service::input_exited_in(self, login, pid).await,
             };
             if exited {
                 return Ok(());
@@ -199,7 +199,7 @@ impl Client {
     /// records the launch as a pending mutation and settles it on success.
     async fn spawn_input(&self) -> Result<u32> {
         match self.desktop().kind() {
-            Kind::User(login) => self.spawn_input_in(login).await,
+            Kind::User(login) => crate::user::service::spawn_input_in(self, login).await,
         }
     }
 }

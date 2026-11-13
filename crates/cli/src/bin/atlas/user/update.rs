@@ -1,6 +1,5 @@
 //! An update's steps in the user desktop: checking a migration before
 //! the app is replaced, and moving the helper onto the new build.
-use crate::update::has_helper_job;
 use atlas_core::error::Result;
 
 /// The update's check before the app is replaced, for the second login
@@ -42,3 +41,13 @@ pub(crate) fn helper_steps_in(
 
     Some(steps)
 }
+
+/// Whether the helper has a job to move onto a new version: a setup is
+/// recorded, or its daemon answers (setup stopped after installing it).
+fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
+    recorded || daemon_answers
+}
+
+#[cfg(test)]
+#[path = "update_tests.rs"]
+mod tests;

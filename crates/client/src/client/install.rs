@@ -27,7 +27,7 @@ impl Client {
 
     fn install_probe(&self, recovery: bool) -> Result<Value> {
         match self.desktop().kind() {
-            Kind::User(login) => self.install_on_this_disk(login, recovery),
+            Kind::User(login) => crate::user::install::install_on_this_disk(self, login, recovery),
         }
     }
 
@@ -35,7 +35,7 @@ impl Client {
     /// device, inode, size or modification time changes.
     pub fn installed_build(&self) -> Option<String> {
         let key = match self.desktop().kind() {
-            Kind::User(login) => self.build_key_on_this_disk(login)?,
+            Kind::User(login) => crate::user::install::build_key_on_this_disk(self, login)?,
         };
         if let Some((cached, build)) = self.installed.lock().ok()?.as_ref()
             && *cached == key
@@ -47,7 +47,7 @@ impl Client {
         // failed read is not cached: permissions may be repaired without
         // changing the identity key.
         let build = match self.desktop().kind() {
-            Kind::User(login) => self.build_on_this_disk(login)?,
+            Kind::User(login) => crate::user::install::build_on_this_disk(self, login)?,
         };
 
         if let Ok(mut cache) = self.installed.lock() {

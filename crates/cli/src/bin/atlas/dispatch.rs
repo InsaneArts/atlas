@@ -297,7 +297,7 @@ async fn carry_out(
         Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
         Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
         Command::VerifyNative { fixture } => {
-            atlas_client::user::capability::verify(&client()?, &fixture).await
+            atlas_client::user::capability::canary::verify(&client()?, &fixture).await
         }
         Command::Environment(args) => provision(client, args).await,
         Command::Install => client()?.install(),
@@ -672,7 +672,7 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
     use atlas_cli::onboarding;
 
     match step {
-        OnboardingCommand::Status => atlas_cli::user::onboarding::status(config).await,
+        OnboardingCommand::Status => atlas_cli::user::onboarding::status::status(config).await,
         OnboardingCommand::Choose { account } => {
             atlas_cli::user::onboarding::choose(config, &account)
         }
@@ -684,7 +684,7 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
             controller_name,
         } => atlas_cli::user::onboarding::accept(controller_uid, &controller_name),
         OnboardingCommand::AcceptWorker { ticket } => {
-            atlas_cli::user::onboarding::accept_worker(&ticket).await
+            atlas_cli::user::onboarding::acceptance::accept_worker(&ticket).await
         }
         OnboardingCommand::Window { state } => {
             atlas_cli::user::onboarding::window(state == WindowState::Open)

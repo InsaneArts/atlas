@@ -26,7 +26,7 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
     })
 }
 
-pub(crate) fn managed(config: &Config, layout: &atlas_daemon::user::setup::Layout) -> Config {
+fn managed(config: &Config, layout: &atlas_daemon::user::setup::Layout) -> Config {
     Config {
         socket_path: layout.paths().socket(),
         input_socket: layout.paths().input_socket(),

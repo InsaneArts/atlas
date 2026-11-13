@@ -294,13 +294,13 @@ impl ObservedHelper {
         Ok(self.directory.path().join("receipt.json"))
     }
 
-    async fn job(&self) -> Result<atlas_daemon::user::setup::JobReport> {
+    async fn job(&self) -> Result<atlas_daemon::user::setup::launchd::JobReport> {
         if self.inspection_unavailable.replace(false) {
             return Err(problem("The helper is not answering"));
         }
         let path = self.directory.path().join("job.json");
         let value: Value = serde_json::from_slice(&fs::read(path)?)?;
-        Ok(atlas_daemon::user::setup::JobReport::from(&value))
+        Ok(atlas_daemon::user::setup::launchd::JobReport::from(&value))
     }
 
     async fn resume(&self, pairing: atlas_daemon::user::setup::pairing::Pairing) -> Result<()> {
@@ -394,7 +394,7 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
         let initial = initial.unwrap();
         assert_eq!(
             initial.definition,
-            atlas_daemon::user::setup::JobReport::from(&json!({"plistKind": plist_kind}))
+            atlas_daemon::user::setup::launchd::JobReport::from(&json!({"plistKind": plist_kind}))
                 .definition
         );
         assert_eq!(initial.loaded, Some(loaded));
@@ -409,7 +409,7 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
     let repaired = runtime.block_on(observed.job()).unwrap();
     assert_eq!(
         repaired.definition,
-        atlas_daemon::user::setup::Definition::Regular,
+        atlas_daemon::user::setup::launchd::Definition::Regular,
         "repair restores the plist"
     );
     assert_eq!(repaired.loaded, Some(true), "repair loads the helper job");

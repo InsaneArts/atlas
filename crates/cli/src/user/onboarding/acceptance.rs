@@ -281,7 +281,7 @@ fn serve_channel(
 
 /// The person's status loop observes acceptance and finishes setup through the
 /// worker. Only this account opens Controller::new and its durable claims.
-pub(super) async fn resume(
+async fn resume(
     config: &atlas_core::config::Config,
     pairing: atlas_daemon::user::setup::pairing::Pairing,
 ) -> Result<()> {
@@ -427,7 +427,7 @@ async fn reconcile(
     accepted: bool,
     receipt: Result<PathBuf>,
     pairing: atlas_daemon::user::setup::pairing::Pairing,
-    job: impl AsyncFnOnce() -> Result<atlas_daemon::user::setup::JobReport>,
+    job: impl AsyncFnOnce() -> Result<atlas_daemon::user::setup::launchd::JobReport>,
     resume: impl AsyncFnOnce(atlas_daemon::user::setup::pairing::Pairing) -> Result<()>,
     pending: impl FnOnce() -> Result<Vec<String>>,
 ) -> Value {

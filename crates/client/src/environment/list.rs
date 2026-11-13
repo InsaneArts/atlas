@@ -24,12 +24,7 @@ pub(super) const SHOWN: usize = 50;
 /// unknown transaction ownership.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
-        Kind::User(login) => {
-            let helper = crate::user::environment::helper_name(login.uid)?;
-            let (here, there) =
-                crate::user::environment::list_as(client, login, &helper, all).await?;
-            labelled(client, &here, &there, all)
-        }
+        Kind::User(login) => crate::user::environment::list_in(client, login, all).await,
     }
 }
 
