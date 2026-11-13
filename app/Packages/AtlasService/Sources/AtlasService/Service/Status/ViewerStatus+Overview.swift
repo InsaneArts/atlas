@@ -56,6 +56,8 @@ extension ViewerStatus {
     public var allowed: [AllowedGrant] = []
     /// The held sign-in under way, while one is; nil for none.
     public var signingIn: SigningIn?
+    /// A sign-in the service was holding when it ended, until the person finishes or cancels it; nil for none.
+    public var signInInterrupted: InterruptedSignIn?
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
@@ -116,7 +118,7 @@ extension ViewerStatus {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
         commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound, accounts, accountNote, asks,
-        allowed, signingIn
+        allowed, signingIn, signInInterrupted
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -156,6 +158,7 @@ extension ViewerStatus {
       asks = container.lenientList(Ask.self, forKey: .asks)
       allowed = container.lenientList(AllowedGrant.self, forKey: .allowed)
       signingIn = try? container.decodeIfPresent(SigningIn.self, forKey: .signingIn)
+      signInInterrupted = try? container.decodeIfPresent(InterruptedSignIn.self, forKey: .signInInterrupted)
     }
   }
 }

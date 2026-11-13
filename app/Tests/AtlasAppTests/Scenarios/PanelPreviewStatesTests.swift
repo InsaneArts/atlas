@@ -130,6 +130,14 @@
       #expect(PreviewStates.panel(sample, applying: .lockForWrongAccount) == sample)
     }
 
+    @Test("the interrupted sign-in preview goes on Done or Cancel")
+    func theInterruptedSignInPreviewHandlesItsEvents() throws {
+      let sample = try #require(PreviewStates.panel.first { $0.name == "Sign-in interrupted" }).value
+      #expect(sample.interruptedSignIn == PanelInterruptedSignIn(site: "github.com", canFinish: true, id: "a1"))
+      #expect(PreviewStates.panel(sample, applying: .finishInterruptedSignIn(id: "a1")).interruptedSignIn == nil)
+      #expect(PreviewStates.panel(sample, applying: .cancelInterruptedSignIn(id: "a1")).interruptedSignIn == nil)
+    }
+
     @Test("each panel sample is what the panel shows for the same facts")
     func samplesMatchThePresenter() throws {
       var paused = try snapshot("observing", state: "idle")
@@ -150,6 +158,13 @@
       idleNoteQuit.status.idleTime = ViewerStatus.IdleTime(state: .held, app: "Terminal")
       var wrongAccount = try snapshot("observing", state: "idle")
       wrongAccount.status.consoleName = ViewerStatus.ConsoleName(state: .another, name: "atlas")
+      var signInInterrupted = try snapshot("observing", state: "idle")
+      signInInterrupted.status.overview.signInInterrupted = ViewerStatus.InterruptedSignIn(
+        site: "github.com",
+        kind: .signIn,
+        canFinish: true,
+        id: "a1"
+      )
       var accounts = try snapshot("observing", state: "idle")
       accounts.status.overview.accounts = [
         ViewerStatus.Account(kind: .site, key: "github.com", name: "github.com", added: 1),
@@ -190,6 +205,7 @@
         "Service note": serviceNote,
         "Idle note, quit an app": idleNoteQuit,
         "Wrong account": wrongAccount,
+        "Sign-in interrupted": signInInterrupted,
         "Accounts": accounts,
         "Waiting, a message": try asking(Self.ask("a1", kind: .sendKey, message: message)),
         "Waiting, a click": try asking(Self.ask("a2", kind: .click, element: "Send", frame: send), picture: "ask-a2"),

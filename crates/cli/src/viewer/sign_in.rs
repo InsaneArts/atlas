@@ -138,9 +138,23 @@ impl Viewer {
             .take_control_beside(&client, &current.epoch, Beside::Nothing)
             .await
             .map_err(command_running)?;
+        // One interrupted earlier is the person's to finish or cancel
+        // first: a new one would take its place and leave it unresolved.
+        if client.controller.interrupted_hold().is_some() {
+            self.abandon_start(&client, &lease).await;
+            return Err(Error::new(
+                Code::Busy,
+                "Finish or cancel the sign-in that was interrupted first",
+            )
+            .held_by(Holder::Person));
+        }
         let signing = SignIn {
             lease: lease.clone(),
-            hold: PrivateHold { site, kind },
+            hold: PrivateHold {
+                site,
+                kind,
+                browser: Some(browser.bundle().to_owned()),
+            },
             browser,
         };
         let page = browser.page(kind, &address, &signing.hold.site);

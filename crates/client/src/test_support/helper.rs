@@ -63,6 +63,9 @@ pub struct Helper {
     /// what that service says it can do.
     input: Option<UnixListener>,
     capabilities: Vec<String>,
+    /// What the input service says of control, held input and input left
+    /// to record; none says nothing of them.
+    input_state: Option<[Option<bool>; 3]>,
     uid: u32,
     /// How many identity proofs name the first session before the rest
     /// name another, as after the helper logged in again.
@@ -97,6 +100,7 @@ impl Helper {
             listener: UnixListener::bind(&client.transport.path).unwrap(),
             input: None,
             capabilities: Vec::new(),
+            input_state: None,
             uid,
             moves_after: None,
             proofs: AtomicUsize::new(0),
@@ -309,6 +313,22 @@ impl Helper {
         self
     }
 
+    /// This helper, its input service saying it holds no control, no input
+    /// and nothing left to record (`settled`), or all of them.
+    #[must_use]
+    pub fn input_settled(self, settled: bool) -> Self {
+        let held = Some(!settled);
+        self.input_state([held, held, held])
+    }
+
+    /// This helper, its input service saying `state`: whether control is
+    /// active, input held and input left to record, each unsaid when none.
+    #[must_use]
+    pub fn input_state(mut self, state: [Option<bool>; 3]) -> Self {
+        self.input_state = Some(state);
+        self
+    }
+
     /// The session this helper is in now: the one its proofs name next.
     fn session(&self) -> u64 {
         let given = self.proofs.load(Ordering::Relaxed);
@@ -420,9 +440,15 @@ impl Helper {
     /// The input service's hello: ready in the session the next proof names.
     fn input_hello(&self) -> Value {
         let next = self.proofs.load(Ordering::Relaxed) + 1;
-        json!({"ok": true, "protocolVersion": 1, "pid": 456, "ready": true,
+        let mut hello = json!({"ok": true, "protocolVersion": 1, "pid": 456, "ready": true,
             "accessibility": true, "session": self.session_proof(next),
-            "capabilities": self.capabilities})
+            "capabilities": self.capabilities});
+        if let Some([control, held, unsettled]) = self.input_state {
+            hello["controlActive"] = json!(control);
+            hello["heldInput"] = json!(held);
+            hello["unsettled"] = json!(unsettled);
+        }
+        hello
     }
 }
 

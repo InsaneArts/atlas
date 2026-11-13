@@ -47,6 +47,22 @@ impl Client {
         Ok(json!({ "ok": true, outcome: true, "pid": pid }))
     }
 
+    /// Make the input service ready again, reset or started anew, for a
+    /// caller that already holds the helper's exclusion, which this keeps
+    /// throughout. A running service of another build is reset, never
+    /// replaced: replacing it is a service change of its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns helper-identity, permission, service-start or readiness
+    /// failures.
+    pub async fn start_input_held(&self) -> Result<Value> {
+        self.identity().await?;
+        let observation = Observation::decode(&self.status().await);
+        let (pid, outcome) = self.ensure_input(&observation).await?;
+        Ok(json!({ "ok": true, outcome: true, "pid": pid }))
+    }
+
     /// Make a ready input service exist without replacing a running one:
     /// reuse it, reset it, or start the installed build.
     pub(super) async fn ensure_input(

@@ -107,6 +107,10 @@ pub(super) fn configured(
         account_name: std::sync::Mutex::new(None),
         accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
         sign_in: Mutex::new(None),
+        interrupted: std::sync::Mutex::new(None),
+        resolving: Mutex::new(()),
+        #[cfg(test)]
+        recovery_pause: super::interrupted::Pause::default(),
         app_process: std::sync::Mutex::new(None),
         app_secret: atlas_core::name::random_hex(64),
         input_started: std::sync::Mutex::new(None),
@@ -345,6 +349,9 @@ routes! {
         SignInRenew => "sign-in/renew",
         SignInDone => "sign-in/done",
         SignInCancel => "sign-in/cancel",
+        // Finishing or cancelling a sign-in an earlier service was holding
+        // when it died.
+        SignInInterrupted => "sign-in/interrupted",
     }
 }
 
@@ -369,7 +376,8 @@ impl Route {
                 | Change::ResetStart
                 | Change::SignInRenew
                 | Change::SignInDone
-                | Change::SignInCancel,
+                | Change::SignInCancel
+                | Change::SignInInterrupted,
             ) => true,
             Self::Service
             | Self::Read(_)
@@ -398,7 +406,8 @@ impl Route {
                 | Change::Revoke
                 | Change::Answer
                 | Change::SignInDone
-                | Change::SignInCancel,
+                | Change::SignInCancel
+                | Change::SignInInterrupted,
             ) => true,
             Self::Service
             | Self::Read(_)
@@ -533,6 +542,7 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
         Change::SignInRenew => viewer.sign_in_renew(lease).await,
         Change::SignInDone => viewer.sign_in_done(lease).await,
         Change::SignInCancel => viewer.sign_in_cancel(lease).await,
+        Change::SignInInterrupted => viewer.sign_in_interrupted(body).await,
     };
 
     mutation_reply(viewer, owner, outcome).await

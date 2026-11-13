@@ -26,6 +26,7 @@ enum PanelPresenter {
       showsServiceNote: SlowServiceNote.shows(snapshot.status, dismissed: snapshot.serviceNoteDismissed),
       idleNote: idleNote(snapshot),
       wrongAccount: WrongAccountNote.name(snapshot.status, dismissed: snapshot.wrongAccountDismissed),
+      interruptedSignIn: interruptedSignIn(snapshot),
       isMoreOpen: snapshot.session.moreOpen,
       ask: mode.kind == .connecting
         ? nil
@@ -44,6 +45,16 @@ enum PanelPresenter {
       controls: controls(snapshot, mode: mode),
       announcement: snapshot.session.announcement
     )
+  }
+
+  /// The sign-in Atlas was holding when it stopped, while the person has not finished or cancelled it: it shows until
+  /// then, and offers Done only when the service says it can still record it.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The note, or nil when no sign-in was interrupted.
+  static func interruptedSignIn(_ snapshot: PanelSnapshot) -> PanelInterruptedSignIn? {
+    snapshot.status.overview.signInInterrupted
+      .map { PanelInterruptedSignIn(site: $0.site, canFinish: $0.canFinish, id: $0.id) }
   }
 
   /// The note that the person's apps think they are away, by the step that fixes it, while it shows.

@@ -62,6 +62,9 @@ pub struct NativeObservation {
     pub control_active: Option<bool>,
     pub held: bool,
     pub held_input: Option<bool>,
+    /// Whether input is held or its record not yet written; None when not
+    /// answered.
+    pub unsettled: Option<bool>,
     build: Option<String>,
     replaced: bool,
     capabilities: Vec<String>,
@@ -87,6 +90,7 @@ impl NativeObservation {
             control_active: value["controlActive"].as_bool(),
             held: value["held"] == true,
             held_input: value["heldInput"].as_bool(),
+            unsettled: value["unsettled"].as_bool(),
             build: value["build"].as_str().map(str::to_owned),
             replaced: value["replaced"] == true,
             capabilities: capability_names(value),

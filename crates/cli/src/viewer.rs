@@ -7,6 +7,7 @@ mod app;
 mod control;
 mod frames;
 mod http;
+mod interrupted;
 mod local;
 mod reads;
 mod settings;
@@ -108,6 +109,15 @@ struct Viewer {
     accounts_home: std::sync::Mutex<Option<PathBuf>>,
     /// The sign-in under way, while its lease holds; it ends with the lease.
     sign_in: Mutex<Option<sign_in::SignIn>>,
+    /// A sign-in an earlier service was holding when it died, taken over
+    /// until the person finishes or cancels it.
+    interrupted: std::sync::Mutex<Option<interrupted::Interrupted>>,
+    /// Held through one finishing or cancelling of it, from its first step
+    /// to its last, so no two run at once.
+    resolving: Mutex<()>,
+    /// Where a test holds the helper's recovery under way.
+    #[cfg(test)]
+    recovery_pause: interrupted::Pause,
     /// The app this viewer serves, as macOS names its process once started:
     /// the frame service shows it the screen while agents may not see it.
     app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,

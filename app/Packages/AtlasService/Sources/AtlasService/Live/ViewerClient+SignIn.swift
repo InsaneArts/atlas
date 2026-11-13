@@ -65,4 +65,21 @@ extension ViewerClient {
   public func cancelSignIn(lease: String) async throws {
     _ = try await post("sign-in/cancel", SignInLease(lease: lease))
   }
+
+  /// Posts to `sign-in/interrupted`.
+  ///
+  /// - Parameters:
+  ///   - id: Which one, as the status names it.
+  ///   - done: Whether the person finished it.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  public func settleInterruptedSignIn(id: String, done: Bool) async throws {
+    /// The request body.
+    struct Body: Encodable {
+      /// Which one.
+      let id: String
+      /// Whether the person finished it.
+      let done: Bool
+    }
+    _ = try await post("sign-in/interrupted", Body(id: id, done: done))
+  }
 }

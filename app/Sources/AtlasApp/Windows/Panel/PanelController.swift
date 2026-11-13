@@ -201,6 +201,8 @@ final class PanelController {
     case .dismissIdleNote: idleNoteDismissed = true
     case .dismissWrongAccountNote: wrongAccountDismissed = true
     case .lockForWrongAccount: Task { await lockForWrongAccount() }
+    case .finishInterruptedSignIn(let id): Task { await settleInterruptedSignIn(id: id, done: true) }
+    case .cancelInterruptedSignIn(let id): Task { await settleInterruptedSignIn(id: id, done: false) }
     case .showMore: break
     }
   }

@@ -50,6 +50,14 @@ public enum PanelEvent: Equatable, Sendable {
   case lockForWrongAccount
   /// OK on the wrong account note: hide it until macOS names the person again.
   case dismissWrongAccountNote
+  /// Done on the interrupted sign-in note: the person finished it, so its site joins the accounts.
+  ///
+  /// - Parameter id: Which one, as the status names it.
+  case finishInterruptedSignIn(id: String)
+  /// Cancel on the interrupted sign-in note: the person gave it up.
+  ///
+  /// - Parameter id: Which one, as the status names it.
+  case cancelInterruptedSignIn(id: String)
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

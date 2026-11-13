@@ -82,12 +82,24 @@ impl Viewer {
 
         {
             let mut lease = self.lease.lock().await;
+            // A sign-in taken over stays this viewer's helper until the
+            // person finishes or cancels it: that helper's hold and
+            // exclusion are this viewer's to keep.
+            let mut interrupted = unpoisoned(&self.interrupted);
             let mut client = unpoisoned(&self.client);
-            if lease.active() || client.config == next.config {
+            if lease.active() || interrupted.is_some() || client.config == next.config {
                 return;
             }
+            // The next helper's own interrupted sign-in is taken over before
+            // it is served; one that can't be stays on the current helper.
+            let next = Arc::new(next);
+            match self.take_over_for(&next) {
+                Ok(taken) => *interrupted = taken,
+                Err(_) => return,
+            }
+            drop(interrupted);
 
-            *client = Arc::new(next);
+            *client = next;
             *unpoisoned(&self.settings_text) = Some(text);
         }
 

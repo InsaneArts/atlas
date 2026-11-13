@@ -779,6 +779,7 @@ fn signing_in(client: &Client) -> atlas_control::Lease {
     let hold = atlas_control::PrivateHold {
         site: "github.com".to_owned(),
         kind: atlas_control::HoldKind::SignIn,
+        browser: None,
     };
     lease
         .hide_screen(&client.controller, &token, &hold)

@@ -1,12 +1,19 @@
 //! The private hold: while the person signs the helper in to an account,
 //! the helper's screen is hidden from agents. A marker beside the person's
 //! note names the lease it was set under (its holder's process and the
-//! lease's generation) and is honoured only while that process lives and
-//! the note still names that generation, so a viewer killed mid-sign-in, or
-//! a later lease, leaves nothing hidden. A generation counter beside it goes
-//! up each time a hold begins or ends and is never removed: a read of the
-//! screen admitted before either is never kept.
-use super::{Controller, busy::busy_private};
+//! lease's generation). While that process lives, the hold is honoured as
+//! long as the note still names that generation, so a later lease of the
+//! same viewer leaves nothing hidden. When its holder died, or the marker
+//! cannot be read, the hold was *interrupted*: the screen stays hidden from
+//! agents and their changes are refused until the person finishes or
+//! cancels it in Atlas, and taking control again never clears it. A
+//! generation counter beside it goes up each time a hold begins or ends and
+//! is never removed: a read of the screen admitted before either is never
+//! kept.
+use super::{
+    Controller, Ownership,
+    busy::{busy_interrupted, busy_private},
+};
 use atlas_core::{
     error::{Code, Error, Result},
     files::{read_own, write_atomic},
@@ -38,6 +45,33 @@ pub enum HoldKind {
 pub struct PrivateHold {
     pub site: String,
     pub kind: HoldKind,
+    /// The bundle identifier of the browser it opened, so an interrupted
+    /// sign-in can still record its account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
+}
+
+/// A hold whose holder died, or whose marker cannot be read: what is known
+/// of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Interrupted {
+    /// The hold, when its marker can be read.
+    pub hold: Option<PrivateHold>,
+}
+
+/// An interrupted hold taken over by this process: the desktop's exclusion,
+/// with the person's note naming the hold's lease again, so the hold is
+/// honoured as a live one by every client, and nobody can take control and
+/// clear it, until [`Adopted::end`].
+pub struct Adopted {
+    /// The desktop the hold is on, whatever the settings later name.
+    controller: Controller,
+    /// Held for as long as the hold is: dropped, it lets the exclusion go.
+    ownership: Option<Ownership>,
+    /// Whether the hold was ended; one dropped unended is interrupted again.
+    ended: bool,
+    /// What is known of the hold.
+    pub hold: Option<PrivateHold>,
 }
 
 /// The marker as it is kept: the hold, and the lease it was set under.
@@ -63,8 +97,8 @@ pub struct Visible(u64);
 enum Found {
     Nothing,
     Live(PrivateHold),
-    /// A marker that can't be read while the person has control.
-    Unreadable,
+    /// Its holder died, or it can't be read (no hold).
+    Interrupted(Option<PrivateHold>),
 }
 
 impl Controller {
@@ -75,8 +109,72 @@ impl Controller {
     pub fn private_hold(&self) -> Option<PrivateHold> {
         match self.found() {
             Found::Live(hold) => Some(hold),
-            Found::Nothing | Found::Unreadable => None,
+            Found::Nothing | Found::Interrupted(_) => None,
         }
+    }
+
+    /// The interrupted hold, when there is one no process holds.
+    pub fn interrupted_hold(&self) -> Option<Interrupted> {
+        match self.found() {
+            Found::Interrupted(hold) => Some(Interrupted { hold }),
+            Found::Nothing | Found::Live(_) => None,
+        }
+    }
+
+    /// Refuse an agent's change while a hold is interrupted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `busy`, held by the person, while one is.
+    pub(crate) fn require_not_interrupted(&self) -> Result<()> {
+        match self.found() {
+            Found::Interrupted(_) => Err(busy_interrupted()),
+            Found::Nothing | Found::Live(_) => Ok(()),
+        }
+    }
+
+    /// Take over an interrupted hold, before serving anything: this
+    /// process takes the desktop's exclusion, notes the person's lease of
+    /// the hold again, and becomes the marker's holder, so the hold stays in
+    /// force for every client while it is resolved. None when no hold is
+    /// interrupted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal to take the exclusion, and failures writing the
+    /// note or the marker; the hold then stays interrupted.
+    pub fn adopt_interrupted(&self) -> Result<Option<Adopted>> {
+        if !matches!(self.found(), Found::Interrupted(_)) {
+            return Ok(None);
+        }
+        let mut ownership = self.owning(self.take_lock()?);
+        // Read again under the exclusion: the hold may have been resolved.
+        let Found::Interrupted(hold) = self.found() else {
+            return Ok(None);
+        };
+        let marker = read_own(&self.private, LIMIT)
+            .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok());
+        let lease = match &marker {
+            Some(marker) => marker.lease.clone(),
+            None => atlas_core::files::token(),
+        };
+        fs::write(&self.person, lease.as_bytes())
+            .map_err(|error| Error::writing(&self.person, error))?;
+        ownership.person = Some(self.person.clone());
+        ownership.generation = Some(lease.clone());
+        if let Some(marker) = marker {
+            let holder = Instance::current().ok_or_else(|| {
+                Error::new(Code::State, "macOS did not describe this process to Atlas")
+            })?;
+            let adopted = Marker { holder, ..marker };
+            write_atomic(&self.private, &serde_json::to_vec(&adopted)?, 0o600)?;
+        }
+        Ok(Some(Adopted {
+            controller: self.clone(),
+            ownership: Some(ownership),
+            ended: false,
+            hold,
+        }))
     }
 
     /// Whether the screen may be read now, and its generation then: what
@@ -89,7 +187,8 @@ impl Controller {
     /// and `state` when the generation can't be read.
     pub fn screen_visible(&self) -> Result<Visible> {
         match self.found() {
-            Found::Live(_) | Found::Unreadable => Err(busy_private()),
+            Found::Live(_) => Err(busy_private()),
+            Found::Interrupted(_) => Err(busy_interrupted()),
             Found::Nothing => self.generation().map(Visible),
         }
     }
@@ -142,53 +241,87 @@ impl Controller {
     }
 
     /// Clear a marker no lease can hold any longer, under the controller's
-    /// exclusion and before the person's next lease is noted: one left by
-    /// a holder that ended or was killed, readable or not. The generation
-    /// goes up when one was there, so a read admitted under it is dropped.
+    /// exclusion and before the person's next lease is noted: one an
+    /// earlier lease of a holder still running left. An interrupted hold is
+    /// never cleared here; only the person ends it. The generation goes up
+    /// when one was cleared, so a read admitted under it is dropped.
     pub(crate) fn clear_stale_private(&self) -> Result<()> {
         match fs::symlink_metadata(&self.private) {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(Error::writing(&self.private, error)),
             Ok(_) => {}
         }
-        self.end_private()
+        match self.found() {
+            Found::Interrupted(_) => Ok(()),
+            Found::Nothing | Found::Live(_) => self.end_private(),
+        }
     }
 
-    /// End the private hold: the marker goes, then the generation goes up,
-    /// so a read admitted during the hold is never kept.
+    /// End the private hold: the generation goes up, then the marker goes,
+    /// so no step that can fail comes after the screen is shown again.
     ///
     /// # Errors
     ///
-    /// Returns the failure to remove the marker or to write the generation.
-    /// A marker left behind is honoured no longer than the lease it names.
+    /// Returns the failure to write the generation or remove the marker. A
+    /// marker left behind is honoured as long as the lease it names, or,
+    /// once its holder is gone, until the person ends it.
     pub fn end_private(&self) -> Result<()> {
+        // The generation first: should it fail, the marker still hides the
+        // screen, so no step that can fail comes after the screen is shown.
+        self.bump_generation()?;
         match fs::remove_file(&self.private) {
             Err(error) if error.kind() != ErrorKind::NotFound => {
-                return Err(Error::writing(&self.private, error));
+                Err(Error::writing(&self.private, error))
             }
-            _ => {}
+            _ => Ok(()),
         }
-        self.bump_generation()
+    }
+
+    /// Where the marker is kept, for a test to damage it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn private_path_for_test(&self) -> &Path {
+        &self.private
+    }
+
+    /// Leave `hold` interrupted, as a service killed while holding it
+    /// leaves it: its marker names a process that is gone.
+    ///
+    /// # Panics
+    ///
+    /// When the marker cannot be written.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn interrupt_for_test(&self, hold: &PrivateHold) {
+        self.make_directory().unwrap();
+        let marker = Marker {
+            hold: hold.clone(),
+            holder: gone(),
+            lease: atlas_core::files::token(),
+            since: now_ms(),
+        };
+        write_atomic(&self.private, &serde_json::to_vec(&marker).unwrap(), 0o600).unwrap();
     }
 
     /// The marker, as far as it is in force.
     fn found(&self) -> Found {
-        if fs::symlink_metadata(&self.private).is_err() {
-            return Found::Nothing;
+        match fs::symlink_metadata(&self.private) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Found::Nothing,
+            // A marker that can't even be looked at may hold a hold.
+            Err(_) => return Found::Interrupted(None),
+            Ok(_) => {}
         }
-        let Some(person) = read_own(&self.person, LIMIT) else {
-            // No person holds control: nothing they began is in force.
-            return Found::Nothing;
-        };
         let marker = read_own(&self.private, LIMIT)
             .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok());
-        match marker {
-            Some(marker) if marker.lease.as_bytes() == person && marker.holder.running() => {
-                Found::Live(marker.hold)
-            }
-            Some(_) => Found::Nothing,
-            // Unreadable while the person has control: hidden until it ends.
-            None => Found::Unreadable,
+        let Some(marker) = marker else {
+            return Found::Interrupted(None);
+        };
+        if !marker.holder.running() {
+            return Found::Interrupted(Some(marker.hold));
+        }
+        match read_own(&self.person, LIMIT) {
+            Some(person) if marker.lease.as_bytes() == person => Found::Live(marker.hold),
+            // Its holder runs under another lease, or none: a hold that
+            // lease ended.
+            _ => Found::Nothing,
         }
     }
 
@@ -213,6 +346,69 @@ impl Controller {
             .wrapping_add(1);
         write_atomic(&self.private_generation, next.to_string().as_bytes(), 0o600)
     }
+}
+
+impl Adopted {
+    /// End the hold on its own desktop, so the screen is shown again;
+    /// dropping this afterwards lets the desktop's exclusion go.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to write the generation or remove the marker.
+    /// Keep this held then: letting the exclusion go would show the screen
+    /// while the hold was never ended.
+    pub fn end(&mut self) -> Result<()> {
+        self.controller.end_private()?;
+        self.ended = true;
+        Ok(())
+    }
+}
+
+impl Drop for Adopted {
+    /// A hold dropped before it ended, as a service shutting down drops it,
+    /// is interrupted again before the exclusion goes: its marker names a
+    /// process that is gone, so it stays hidden with no person's note. When
+    /// that cannot be written, the exclusion and the person's note are kept
+    /// until this process exits, which interrupts the hold all the same.
+    fn drop(&mut self) {
+        let Some(ownership) = self.ownership.take() else {
+            return;
+        };
+        if self.ended || self.controller.interrupt_again() {
+            drop(ownership);
+        } else {
+            std::mem::forget(ownership);
+        }
+    }
+}
+
+impl Controller {
+    /// Name a process that is gone as the holder of the marker this process
+    /// holds, so its hold is interrupted once its exclusion goes. Whether
+    /// the hold is interrupted, or unreadable and so interrupted anyway.
+    fn interrupt_again(&self) -> bool {
+        // A marker that could not be read now may still name this process:
+        // only one that reads, as a hold or as nothing, can be let go.
+        let Some(bytes) = read_own(&self.private, LIMIT) else {
+            return false;
+        };
+        let Ok(marker) = serde_json::from_slice::<Marker>(&bytes) else {
+            // Unreadable as a hold, it is interrupted whoever holds it.
+            return true;
+        };
+        let interrupted = Marker {
+            holder: gone(),
+            ..marker
+        };
+        serde_json::to_vec(&interrupted)
+            .ok()
+            .is_some_and(|bytes| write_atomic(&self.private, &bytes, 0o600).is_ok())
+    }
+}
+
+/// A process that is not running: no process has this PID and start.
+fn gone() -> Instance {
+    Instance::new(i32::MAX, [1, 1])
 }
 
 /// The generation kept at `path`: 0 when there is none, None when it can't

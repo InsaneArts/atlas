@@ -280,11 +280,17 @@ impl Service {
 
     async fn hello(&self) -> Result<Value> {
         self.operations.reap().await?;
-        let held_input = self
-            .engine
-            .try_lock()
-            .ok()
-            .map(|engine| engine.held_input());
+        // Control and the engine are looked at under one guard, so no input
+        // pressed in between can read as settled; the engine's are unknown
+        // while another request has it.
+        let (control_active, held_input, unsettled) = match self.engine.try_lock() {
+            Ok(engine) => (
+                self.gate.active()?,
+                Some(engine.held_input()),
+                Some(engine.unsettled()),
+            ),
+            Err(_) => (self.gate.active()?, None, None),
+        };
 
         Ok(json!({
             "ok": true,
@@ -298,9 +304,10 @@ impl Service {
             "ready": self.check().is_ok(),
             "enforcedEpoch": self.epoch()?,
             "session": session_info()?,
-            "controlActive": self.gate.active()?,
+            "controlActive": control_active,
             "held": self.gate.held()?,
             "heldInput": held_input,
+            "unsettled": unsettled,
             "streaming": true,
         }))
     }

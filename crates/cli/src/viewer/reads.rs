@@ -184,10 +184,17 @@ impl Viewer {
         status.value["overview"]["allowed"] = allowed;
         // While the person signs in, so the app keeps the lease through its
         // window losing focus or being covered.
-        status.value["overview"]["signingIn"] = client
-            .controller
-            .private_hold()
-            .map_or(Value::Null, |hold| json!(hold));
+        // A sign-in an earlier service died holding is the person's to
+        // finish or cancel, not one under way.
+        let interrupted = self.interrupted_for_status();
+        status.value["overview"]["signingIn"] = match interrupted {
+            Value::Null => client
+                .controller
+                .private_hold()
+                .map_or(Value::Null, |hold| json!(hold)),
+            _ => Value::Null,
+        };
+        status.value["overview"]["signInInterrupted"] = interrupted;
 
         if !person && let Some(fields) = status.value.as_object_mut() {
             fields.remove("consoleName");

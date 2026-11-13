@@ -359,6 +359,18 @@ public final class ScriptedService: ViewerService {
     leaseHeld = false
   }
 
+  /// Records finishing or cancelling an interrupted sign-in, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - id: Which one.
+  ///   - done: Whether the person finished it.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func settleInterruptedSignIn(id: String, done: Bool) async throws {
+    log.append(done ? "interrupted done \(id)" : "interrupted cancel \(id)")
+    try await pause("sign-in/interrupted")
+  }
+
   /// Records an answer and takes its question off `askList`, unless held or failed.
   ///
   /// - Parameters:

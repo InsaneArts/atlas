@@ -131,6 +131,15 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses.
   func cancelSignIn(lease: String) async throws
 
+  /// Finishes or cancels a sign-in the service was holding when it ended: done adds a site signed in to the accounts;
+  /// either way the helper's screen is shown to agents again.
+  ///
+  /// - Parameters:
+  ///   - id: Which one, as the status names it.
+  ///   - done: Whether the person finished it.
+  /// - Throws: ``ServiceError`` when the service refuses, as for one it no longer holds.
+  func settleInterruptedSignIn(id: String, done: Bool) async throws
+
   /// Sends input to the helper under a lease.
   ///
   /// - Parameters:

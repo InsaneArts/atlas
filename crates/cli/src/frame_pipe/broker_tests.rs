@@ -164,6 +164,7 @@ impl Running {
         let hold = atlas_control::PrivateHold {
             site: "github.com".to_owned(),
             kind: atlas_control::HoldKind::SignIn,
+            browser: None,
         };
         lease.hide_screen(&self.controller, &token, &hold).unwrap();
     }

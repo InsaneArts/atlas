@@ -2924,6 +2924,7 @@ async fn only_the_app_may_answer_change_accounts_sign_in_or_revoke() {
         "sign-in/renew",
         "sign-in/done",
         "sign-in/cancel",
+        "sign-in/interrupted",
         "control/revoke",
     ] {
         for secret in [None, Some(wrong.as_str()), Some("short")] {
@@ -2971,6 +2972,7 @@ async fn signing_in_hides_the_screen_from_ordinary_viewer_reads() {
     let hold = atlas_control::PrivateHold {
         site: "github.com".to_owned(),
         kind: atlas_control::HoldKind::SignIn,
+        browser: None,
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
 

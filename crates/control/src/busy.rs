@@ -84,3 +84,13 @@ pub(super) const SCREEN_HIDDEN: &str =
 pub(super) fn busy_private() -> Error {
     Error::new(Code::Busy, SCREEN_HIDDEN).held_by(Holder::Person)
 }
+
+/// The words of [`busy_interrupted`].
+pub(super) const SIGN_IN_INTERRUPTED: &str = "A sign-in in the helper was interrupted; the screen \
+     stays hidden and changes wait until the person finishes or cancels it in Atlas.";
+
+/// Busy because a sign-in was interrupted and the person has not finished
+/// or cancelled it yet.
+pub(super) fn busy_interrupted() -> Error {
+    Error::new(Code::Busy, SIGN_IN_INTERRUPTED).held_by(Holder::Person)
+}

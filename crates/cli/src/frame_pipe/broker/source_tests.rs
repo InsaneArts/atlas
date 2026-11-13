@@ -362,6 +362,7 @@ async fn a_picture_is_marked_with_the_privacy_it_was_read_under() {
     let hold = atlas_control::PrivateHold {
         site: "github.com".to_owned(),
         kind: atlas_control::HoldKind::SignIn,
+        browser: None,
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
     let (hidden, _) = next(&mut handle).await;

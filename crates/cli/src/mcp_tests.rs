@@ -1614,6 +1614,7 @@ async fn the_views_screen_is_refused_while_the_person_signs_in() {
     let hold = atlas_control::PrivateHold {
         site: "github.com".to_owned(),
         kind: atlas_control::HoldKind::SignIn,
+        browser: None,
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
 

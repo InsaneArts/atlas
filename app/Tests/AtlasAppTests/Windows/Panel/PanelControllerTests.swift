@@ -214,6 +214,46 @@ struct PanelControllerTests {
     #expect(opened == 1)
   }
 
+  @Test("an interrupted sign-in shows until the person finishes it, and Done asks the service")
+  func anInterruptedSignInShowsUntilFinished() async throws {
+    let service = ScriptedService()
+    service.reply = [
+      "overview": ["signInInterrupted": ["site": "github.com", "kind": "signIn", "canFinish": true, "id": "a1"]]
+    ]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.interruptedSignIn == PanelInterruptedSignIn(site: "github.com", canFinish: true, id: "a1"))
+    service.reply = [:]
+    controller.send(.finishInterruptedSignIn(id: "a1"))
+    try await settle("Done never reached the service") { service.log.contains("interrupted done a1") }
+    try await settle("the note never went") { controller.state.interruptedSignIn == nil }
+  }
+
+  @Test("an interrupted sign-in Atlas can't tell offers Cancel alone, and Cancel asks the service")
+  func anUnknownInterruptedSignInOffersCancelAlone() async throws {
+    let service = ScriptedService()
+    service.reply = ["overview": ["signInInterrupted": ["canFinish": false, "id": "a1"]]]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.interruptedSignIn == PanelInterruptedSignIn(site: nil, canFinish: false, id: "a1"))
+    controller.send(.cancelInterruptedSignIn(id: "a1"))
+    try await settle("Cancel never reached the service") { service.log.contains("interrupted cancel a1") }
+  }
+
+  @Test("a refused Done says why in place of the line and keeps the note")
+  func aRefusedDoneSaysWhy() async {
+    let service = ScriptedService()
+    service.reply = [
+      "overview": ["signInInterrupted": ["site": "github.com", "kind": "signIn", "canFinish": true, "id": "a1"]]
+    ]
+    service.fail = ["sign-in/interrupted"]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    await controller.settleInterruptedSignIn(id: "a1", done: true)
+    #expect(controller.state.notice == "sign-in/interrupted failed.")
+    #expect(controller.state.interruptedSignIn != nil)
+  }
+
   @Test("stopping the agent asks the service, and resuming lets it go on")
   func stoppingTheAgent() async {
     let service = ScriptedService()

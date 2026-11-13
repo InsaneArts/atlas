@@ -33,6 +33,10 @@
         var next = state
         next.wrongAccount = nil
         return next
+      case .finishInterruptedSignIn, .cancelInterruptedSignIn:
+        var next = state
+        next.interruptedSignIn = nil
+        return next
       case .answerAsk:
         var next = state
         next.ask = nil

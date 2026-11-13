@@ -33,6 +33,22 @@ extension PanelController {
     await readStatus()
   }
 
+  /// Done or Cancel on the interrupted sign-in note: asks the service to finish or cancel it, then reads the status; a
+  /// refusal says why.
+  ///
+  /// - Parameters:
+  ///   - id: Which one, as the status named it.
+  ///   - done: Whether the person finished it.
+  func settleInterruptedSignIn(id: String, done: Bool) async {
+    session.notice = nil
+    do {
+      try await service.settleInterruptedSignIn(id: id, done: done)
+    } catch {
+      session.notice = Words.sentence(error.localizedDescription)
+    }
+    await readStatus()
+  }
+
   /// Give Back: ends the control Atlas's main window holds, which sends its release through the app's control
   /// barrier, then reads the status.
   func giveBack() {

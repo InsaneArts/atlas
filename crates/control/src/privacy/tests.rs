@@ -7,7 +7,25 @@ fn github() -> PrivateHold {
     PrivateHold {
         site: "github.com".to_owned(),
         kind: HoldKind::SignIn,
+        browser: Some("com.google.Chrome".to_owned()),
     }
+}
+
+/// A process that is gone: a child that was started and killed.
+fn killed() -> Instance {
+    let mut child =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
+    let pid = i32::try_from(child.id()).unwrap();
+    let holder = Instance::new(pid, atlas_core::process::start(pid).unwrap());
+    child.kill().unwrap();
+    child.wait().unwrap();
+    holder
+}
+
+fn interrupted(error: &Error) {
+    assert_eq!(error.code, "busy");
+    assert_eq!(error.holder, Some(Holder::Person));
+    assert_eq!(error.error, crate::busy::SIGN_IN_INTERRUPTED);
 }
 
 /// Write the marker as `holder` would have under the person's lease now.
@@ -69,22 +87,140 @@ fn ending_a_hold_shows_the_screen_again_while_control_is_still_held() {
 }
 
 #[test]
-fn a_hold_whose_holder_was_killed_is_ignored() {
+fn a_hold_whose_holder_died_stays_hidden_and_refuses_agents() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
-    let _person = controller.acquire_for_person(Beside::Commands).unwrap();
-    let mut child =
-        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
-    let pid = i32::try_from(child.id()).unwrap();
-    let holder = Instance::new(pid, atlas_core::process::start(pid).unwrap());
-    marker_of(&controller, holder);
-    hidden(&controller.screen_visible().unwrap_err());
+    let person = controller.acquire_for_person(Beside::Commands).unwrap();
+    marker_of(&controller, killed());
+    drop(person);
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    interrupted(&controller.screen_visible().unwrap_err());
+    assert_eq!(controller.private_hold(), None);
+    assert_eq!(
+        controller.interrupted_hold(),
+        Some(Interrupted {
+            hold: Some(github())
+        })
+    );
+    interrupted(&controller.acquire(false).unwrap_err());
+    interrupted(&controller.acquire_beside_commands().unwrap_err());
+    interrupted(&controller.acquire_for_cleanup().unwrap_err());
+    interrupted(
+        &controller
+            .acquire_for_service_change(false, Duration::from_millis(10))
+            .unwrap_err(),
+    );
+}
+
+#[test]
+fn taking_control_again_never_clears_an_interrupted_hold() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let earlier = controller.acquire_for_person(Beside::Commands).unwrap();
+    marker_of(&controller, killed());
+    drop(earlier);
+
+    let later = controller.acquire_for_person(Beside::Commands).unwrap();
+
+    assert!(controller.private.exists());
+    interrupted(&controller.screen_visible().unwrap_err());
+    drop(later);
+    assert!(controller.interrupted_hold().is_some());
+}
+
+#[test]
+fn an_adopted_hold_is_live_for_every_reader_and_holds_the_exclusion_until_it_ends() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let person = controller.acquire_for_person(Beside::Commands).unwrap();
+    marker_of(&controller, killed());
+    drop(person);
+
+    let mut adopted = controller.adopt_interrupted().unwrap().unwrap();
+
+    assert_eq!(adopted.hold, Some(github()));
+    assert_eq!(controller.private_hold(), Some(github()), "live again");
+    assert_eq!(controller.interrupted_hold(), None);
+    hidden(&controller.screen_visible().unwrap_err());
+    let other = Controller::at(505, directory.path());
+    assert_eq!(other.acquire(false).unwrap_err().code, "busy", "held");
+
+    adopted.end().unwrap();
+    drop(adopted);
 
     assert!(controller.screen_visible().is_ok());
-    assert_eq!(controller.private_hold(), None);
+    assert!(!controller.private.exists());
+    assert!(other.acquire(false).is_ok());
+}
+
+#[test]
+fn an_adopted_hold_dropped_before_it_ends_is_interrupted_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.interrupt_for_test(&github());
+
+    let adopted = controller.adopt_interrupted().unwrap().unwrap();
+    hidden(&controller.screen_visible().unwrap_err());
+    drop(adopted);
+
+    interrupted(&controller.screen_visible().unwrap_err());
+    assert!(controller.interrupted_hold().is_some());
+}
+
+#[test]
+fn a_hold_that_cannot_be_interrupted_again_stays_held_until_the_process_exits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.interrupt_for_test(&github());
+    let adopted = controller.adopt_interrupted().unwrap().unwrap();
+    // The folder can't be written: the marker can't name a gone holder.
+    let folder = controller.private.parent().unwrap().to_owned();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+
+    drop(adopted);
+
+    hidden(&controller.screen_visible().unwrap_err());
+    assert_eq!(
+        Controller::at(505, directory.path())
+            .acquire(false)
+            .unwrap_err()
+            .code,
+        "busy",
+        "the exclusion is kept"
+    );
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn ending_a_hold_moves_the_generation_before_the_screen_is_shown() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.interrupt_for_test(&github());
+    let mut adopted = controller.adopt_interrupted().unwrap().unwrap();
+    // A generation that can't be written: a folder in its place.
+    fs::remove_file(&controller.private_generation).ok();
+    fs::create_dir(&controller.private_generation).unwrap();
+
+    assert!(adopted.end().is_err());
+
+    assert!(controller.private.exists(), "the screen stays hidden");
+    assert!(controller.screen_visible().is_err());
+    fs::remove_dir(&controller.private_generation).unwrap();
+    adopted.end().unwrap();
+    assert!(controller.screen_visible().is_ok());
+}
+
+#[test]
+fn nothing_is_adopted_when_no_hold_is_interrupted() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    assert!(controller.adopt_interrupted().unwrap().is_none());
+    let _person = controller.acquire_for_person(Beside::Commands).unwrap();
+    marker_of(&controller, Instance::current().unwrap());
+    let other = Controller::at(505, directory.path());
+    assert!(other.adopt_interrupted().unwrap().is_none(), "a live hold");
 }
 
 #[test]
@@ -109,19 +245,37 @@ fn a_hold_from_an_earlier_lease_is_ignored_under_a_later_one() {
 }
 
 #[test]
-fn a_torn_marker_left_by_a_killed_holder_never_hides_a_later_lease() {
+fn an_unreadable_marker_is_interrupted_whoever_holds_control() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let earlier = controller.acquire_for_person(Beside::Commands).unwrap();
     fs::write(&controller.private, b"{\"site\":\"git").unwrap();
-    hidden(&controller.screen_visible().unwrap_err());
     drop(earlier);
 
+    interrupted(&controller.screen_visible().unwrap_err());
+    assert_eq!(
+        controller.interrupted_hold(),
+        Some(Interrupted { hold: None })
+    );
     let later = controller.acquire_for_person(Beside::Commands).unwrap();
-
-    assert!(!controller.private.exists());
-    assert!(controller.screen_visible().is_ok());
+    assert!(controller.private.exists(), "only the person ends it");
     drop(later);
+
+    // Nothing of it can be read, so it stays interrupted while adopted,
+    // and the adopter's exclusion keeps every other controller out.
+    let mut adopted = controller.adopt_interrupted().unwrap().unwrap();
+    assert_eq!(adopted.hold, None);
+    interrupted(&controller.screen_visible().unwrap_err());
+    assert_eq!(
+        Controller::at(505, directory.path())
+            .acquire_for_person(Beside::Commands)
+            .unwrap_err()
+            .code,
+        "busy"
+    );
+    adopted.end().unwrap();
+    drop(adopted);
+    assert!(controller.screen_visible().is_ok());
 }
 
 #[test]
@@ -144,20 +298,6 @@ fn a_marker_is_written_whole_and_never_through_a_link() {
     );
     assert_eq!(controller.private_hold(), Some(github()));
     lease.release();
-}
-
-#[test]
-fn an_unreadable_hold_hides_the_screen_only_while_the_person_has_control() {
-    let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
-    let person = controller.acquire_for_person(Beside::Commands).unwrap();
-    fs::write(&controller.private, b"{not a hold").unwrap();
-
-    hidden(&controller.screen_visible().unwrap_err());
-    assert_eq!(controller.private_hold(), None);
-
-    drop(person);
-    assert!(controller.screen_visible().is_ok());
 }
 
 #[test]

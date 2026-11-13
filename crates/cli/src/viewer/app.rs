@@ -68,6 +68,10 @@ pub async fn serve(
 
     let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
     *unpoisoned(&viewer.app) = Some(lines);
+    // A sign-in an earlier service died holding is taken over before
+    // anything is served, so no request finds it unheld; a service that
+    // cannot take it over does not serve.
+    viewer.adopt_interrupted()?;
 
     // The frame service lives as long as this viewer and follows its helper.
     // Without it the app reads pictures over this viewer's address as before.

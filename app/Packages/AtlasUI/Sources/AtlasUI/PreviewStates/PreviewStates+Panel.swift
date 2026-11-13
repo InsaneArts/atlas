@@ -28,6 +28,7 @@
         PreviewState(name: "Service note", value: panelServiceNote),
         PreviewState(name: "Idle note, quit an app", value: panelIdleNoteQuit),
         PreviewState(name: "Wrong account", value: panelWrongAccount),
+        PreviewState(name: "Sign-in interrupted", value: panelSignInInterrupted),
         PreviewState(name: "Accounts", value: panelAccounts),
         PreviewState(name: "Waiting, a message", value: panelAskTyped),
         PreviewState(name: "Waiting, a click", value: panelAskNamedClick),
@@ -109,6 +110,13 @@
     @MainActor static let panelWrongAccount: PanelState = {
       var state = panelIdle
       state.wrongAccount = "atlas"
+      return state
+    }()
+
+    /// A sign-in Atlas was holding when it stopped, waiting for the person.
+    @MainActor static let panelSignInInterrupted: PanelState = {
+      var state = panelIdle
+      state.interruptedSignIn = PanelInterruptedSignIn(site: "github.com", canFinish: true, id: "a1")
       return state
     }()
 

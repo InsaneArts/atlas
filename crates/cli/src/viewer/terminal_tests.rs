@@ -176,6 +176,7 @@ async fn a_terminal_that_followed_the_settings_to_another_helper_heeds_that_help
     let hold = atlas_control::PrivateHold {
         site: "github.com".to_owned(),
         kind: atlas_control::HoldKind::SignIn,
+        browser: None,
     };
     lease.hide_screen(&other_controller, &token, &hold).unwrap();
     assert!(first_controller.screen_visible().is_ok());

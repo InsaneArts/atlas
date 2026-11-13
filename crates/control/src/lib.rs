@@ -31,7 +31,7 @@ pub use executor::{ExecutorClaims, record_executor};
 pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
-pub use privacy::{HoldKind, PrivateHold, Visible};
+pub use privacy::{Adopted, HoldKind, Interrupted, PrivateHold, Visible};
 #[cfg(any(test, feature = "test-support"))]
 pub use wait::WaitEvent;
 #[cfg(any(test, feature = "test-support"))]
@@ -450,6 +450,7 @@ impl Controller {
         marker_wait: Duration,
     ) -> Result<Ownership> {
         let lock = self.take_lock()?;
+        self.require_not_interrupted()?;
         let _marker = self.lock_marker_within(marker_wait)?;
         if recovery {
             self.read_nothing_running()?;
@@ -470,8 +471,16 @@ impl Controller {
         self.acquire_for(Purpose::Change(Beside::Commands))
     }
 
-    /// [`Controller::acquire`] for `purpose`.
+    /// [`Controller::acquire`] for `purpose`, an agent's: refused while a
+    /// sign-in is interrupted.
     fn acquire_for(&self, purpose: Purpose) -> Result<Ownership> {
+        let ownership = self.acquire_for_anyone(purpose)?;
+        self.require_not_interrupted()?;
+        Ok(ownership)
+    }
+
+    /// [`Controller::acquire`] for `purpose`, the person's included.
+    fn acquire_for_anyone(&self, purpose: Purpose) -> Result<Ownership> {
         let lock = self.take_lock()?;
         // A command whose leftover work could not be recorded is settled
         // once it is, or once that work ended.
@@ -497,6 +506,7 @@ impl Controller {
     /// refusal here; it is the returned `bool`.
     pub fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
         let lock = self.take_lock()?;
+        self.require_not_interrupted()?;
         self.settle_unrecorded_runs();
         let unknown = match self.require_known_beside(Beside::Nothing) {
             Ok(()) => false,
@@ -692,7 +702,9 @@ impl Controller {
     /// [`Beside::Nothing`], one still running refuses it. The person's note
     /// holds a new lease generation, which a private hold names.
     pub(crate) fn acquire_for_person(&self, beside: Beside) -> Result<Ownership> {
-        let mut ownership = self.acquire_for(Purpose::Change(beside))?;
+        // The person may take control while a sign-in is interrupted: it
+        // stays hidden from agents until they finish or cancel it.
+        let mut ownership = self.acquire_for_anyone(Purpose::Change(beside))?;
         // No earlier lease holds control now: a hold it left is cleared
         // before the new lease could be taken for its holder.
         self.clear_stale_private()?;

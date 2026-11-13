@@ -250,7 +250,8 @@ async fn a_sign_in_takes_control_checks_jobs_hides_the_screen_then_opens_the_sit
         controller.private_hold(),
         Some(PrivateHold {
             site: "github.com".to_owned(),
-            kind: HoldKind::SignIn
+            kind: HoldKind::SignIn,
+            browser: Some("com.google.Chrome".to_owned()),
         })
     );
     assert_eq!(controller.screen_visible().unwrap_err().code, Code::Busy);
@@ -552,7 +553,10 @@ async fn the_status_says_which_site_the_person_signs_in_to() {
         .await
         .unwrap();
     let hold = viewer.client().controller.private_hold();
-    assert_eq!(json!(hold), json!({"site": "github.com", "kind": "signIn"}));
+    assert_eq!(
+        json!(hold),
+        json!({"site": "github.com", "kind": "signIn", "browser": "com.google.Chrome"})
+    );
     viewer
         .release(Some(reply["lease"].as_str().unwrap()))
         .await
@@ -695,6 +699,7 @@ fn signing_under(lease: &str) -> SignIn {
         hold: PrivateHold {
             site: "github.com".to_owned(),
             kind: HoldKind::SignIn,
+            browser: Some("com.google.Chrome".to_owned()),
         },
         browser: Browser::Chrome,
     }
@@ -799,6 +804,7 @@ async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_se
     let hold = PrivateHold {
         site: "github.com".to_owned(),
         kind: HoldKind::SignIn,
+        browser: None,
     };
     lease.hide_screen(&moved.controller, &token, &hold).unwrap();
     *unpoisoned(&viewer.client) = moved.clone();

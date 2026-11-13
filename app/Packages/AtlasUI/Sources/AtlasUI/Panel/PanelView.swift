@@ -37,6 +37,9 @@ public struct PanelView: View {
       if let name = state.wrongAccount {
         PanelWrongAccountNote(name: name, send: send)
       }
+      if let signIn = state.interruptedSignIn {
+        PanelInterruptedSignInNote(signIn: signIn, send: send)
+      }
       if let ask = state.ask {
         PanelAskCard(ask: ask, send: send)
           .id(ask.id)
