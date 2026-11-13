@@ -99,7 +99,8 @@ struct CreateScreenFocusTests {
     )
     window.contentView = host
     host.layoutSubtreeIfNeeded()
-    let secure = Self.fields(in: host).filter { $0 is NSSecureTextField }
+    let secure = Self.fields(in: host)
+      .filter { $0 is NSSecureTextField }
     let password = try #require(secure.first, "the password field")
     let verify = try #require(secure.last, "the verify field")
     window.makeFirstResponder(password)
