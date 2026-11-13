@@ -67,6 +67,38 @@ async fn a_restart_waits_until_the_daemon_closes_to_new_commands() {
 }
 
 #[tokio::test]
+async fn a_return_to_the_screen_during_the_lookup_is_not_taken_for_a_mode_off_it() {
+    // Off the screen until the mode is looked up, which happens as the
+    // person comes back: the display there has a mode. Off it again for
+    // good from the next wait, with none.
+    let on_screen = Cell::new(true);
+    let lookups = Cell::new(0);
+    let has_mode = || {
+        lookups.set(lookups.get() + 1);
+        if lookups.get() == 1 {
+            on_screen.set(true);
+        }
+        on_screen.get()
+    };
+    let pause = || {
+        on_screen.set(false);
+        std::future::ready(())
+    };
+    let restarted = Cell::new(0);
+    watch(
+        true,
+        pause,
+        || std::future::ready(()),
+        || on_screen.get(),
+        has_mode,
+        async || true,
+        || restarted.set(restarted.get() + 1),
+    )
+    .await;
+    assert_eq!(restarted.get(), 1, "a mode on the screen ended the watch");
+}
+
+#[tokio::test]
 async fn a_display_looked_at_back_on_the_screen_is_not_taken_for_the_one_off_it() {
     // Each wait moves to the next moment: on the screen, off it, back on it
     // during the settle, then off it for good. On it the display has a mode,

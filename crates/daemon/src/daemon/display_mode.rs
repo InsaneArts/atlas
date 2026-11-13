@@ -61,7 +61,12 @@ async fn watch<Pause, Settle>(
         if on_console() {
             continue;
         }
-        if has_mode() {
+        let mode = has_mode();
+        // The same if it came back during the lookup.
+        if on_console() {
+            continue;
+        }
+        if mode {
             return;
         }
         break;

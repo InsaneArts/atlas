@@ -256,16 +256,20 @@ pub(crate) struct Live {
     sequence: u64,
 }
 
-/// Why a reading failed, and the error code behind it when the helper's
-/// stream gave one.
+/// Why a reading failed, and, when the first picture of a stream opened for
+/// it failed and that stream was then stopped and confirmed, the error code
+/// behind it: only then may another backend take its place.
 struct Failure {
     reason: Reason,
-    code: Option<Code>,
+    first_picture: Option<Code>,
 }
 
 impl From<Reason> for Failure {
     fn from(reason: Reason) -> Self {
-        Self { reason, code: None }
+        Self {
+            reason,
+            first_picture: None,
+        }
     }
 }
 
@@ -284,15 +288,13 @@ impl Live {
     /// The next picture of the open stream, opening one with `backend`
     /// first when none is open.
     async fn read(&mut self, backend: CaptureBackend, budget: &Budget) -> Result<Picture, Failure> {
+        let opening = self.stream.is_none();
         let (stream, backend) = match &mut self.stream {
             Some(open) => open,
             None => {
                 let opened = LiveStream::connect(&self.client, self.longest, backend)
                     .await
-                    .map_err(|error| Failure {
-                        reason: Reason::of(error.code),
-                        code: Some(error.code),
-                    })?
+                    .map_err(|error| Reason::of(error.code))?
                     .ok_or(Reason::SourceStartFailed)?;
                 self.stream.insert((opened, backend))
             }
@@ -330,12 +332,13 @@ impl Live {
                     .last()
                     .map_or(Reason::of(error.code), |record| record.reason);
                 // Only a stream left at a frame boundary is read again.
-                if !stream.can_retry(&error) {
-                    self.stop().await?;
+                if stream.can_retry(&error) {
+                    return Err(reason.into());
                 }
+                self.stop().await?;
                 Err(Failure {
                     reason,
-                    code: Some(error.code),
+                    first_picture: opening.then_some(error.code),
                 })
             }
         }
@@ -343,28 +346,23 @@ impl Live {
 }
 
 /// Whether a stream opened with `backend` whose first picture failed with
-/// `code` gives way to a CoreGraphics stream for the same reading: the
-/// helper could not capture its display through ScreenCaptureKit, as when
-/// its daemon has no mode for that display. A changed session, missing
-/// consent or a busy helper refuse either way, and a stream that is not
-/// confirmed stopped is never replaced.
-fn falls_back(backend: CaptureBackend, code: Option<Code>) -> bool {
-    backend == CaptureBackend::ScreenCaptureKit && code == Some(Code::Capture)
+/// `first_picture`, and was then stopped and confirmed, gives way to a
+/// CoreGraphics stream for the same reading: the helper could not capture
+/// its display through ScreenCaptureKit, as when its daemon has no mode for
+/// that display. A changed session, missing consent or a busy helper refuse
+/// either way, as does a stream that failed to open or was not confirmed
+/// stopped.
+fn falls_back(backend: CaptureBackend, first_picture: Option<Code>) -> bool {
+    backend == CaptureBackend::ScreenCaptureKit && first_picture == Some(Code::Capture)
 }
 
 impl Acquire for Live {
     async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
-        let opening = self.stream.is_none();
         match self.read(self.backend, budget).await {
-            // The failed stream was stopped and confirmed: one left open is
-            // read again as it is.
-            Err(failure)
-                if opening && self.stream.is_none() && falls_back(self.backend, failure.code) =>
-            {
-                self.read(CaptureBackend::CoreGraphics, budget)
-                    .await
-                    .map_err(|failure| failure.reason)
-            }
+            Err(failure) if falls_back(self.backend, failure.first_picture) => self
+                .read(CaptureBackend::CoreGraphics, budget)
+                .await
+                .map_err(|failure| failure.reason),
             read => read.map_err(|failure| failure.reason),
         }
     }

@@ -1485,8 +1485,20 @@ async fn the_daemon_closes_to_new_commands_only_off_the_screen_with_none_running
         !daemon.close_commands().await,
         "closed with a command running"
     );
+
+    // Finished but not collected: the listener is asked to collect it.
     running.abort();
-    while daemon.runs.lock().await.join_next().await.is_some() {}
+    while !running.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !daemon.close_commands().await,
+        "closed before it was collected"
+    );
+    tokio::time::timeout(Duration::from_secs(5), daemon.collect_runs.notified())
+        .await
+        .expect("the listener was not asked to collect it");
+    while daemon.runs.lock().await.try_join_next().is_some() {}
     assert!(daemon.close_commands().await);
 }
 

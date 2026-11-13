@@ -193,6 +193,9 @@ pub struct Daemon {
     /// new foreground commands are then refused before they run, so the
     /// restart ends none.
     commands_closed: AtomicBool,
+    /// Asks the listener to collect finished commands now, which it
+    /// otherwise does only when something else wakes it.
+    collect_runs: Notify,
     /// The one live capture source; held through its native source's drain.
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
@@ -235,6 +238,7 @@ impl Daemon {
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
             commands_closed: AtomicBool::new(false),
+            collect_runs: Notify::new(),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
@@ -347,10 +351,16 @@ impl Daemon {
 
     /// Close to new foreground commands when none runs and the helper is off
     /// the screen, so a restart that follows ends none. Says whether it
-    /// closed; once closed it stays so until this process ends.
+    /// closed; once closed it stays so until this process ends. Commands
+    /// that finished but were not collected yet count until the listener,
+    /// asked here, collects them and sees what they came to.
     async fn close_commands(&self) -> bool {
         let runs = self.runs.lock().await;
-        if !runs.is_empty() || (self.screen.on_console)() {
+        if !runs.is_empty() {
+            self.collect_runs.notify_one();
+            return false;
+        }
+        if (self.screen.on_console)() {
             return false;
         }
         self.commands_closed.store(true, Ordering::Release);
@@ -538,6 +548,8 @@ impl Serving {
                 () = daemon.restarting.notified() => {
                     return Err(Error::new(Code::Restart, "Restarting at the controller's request"));
                 }
+                // Finished commands are collected at the top of the loop.
+                () = daemon.collect_runs.notified() => {}
                 Some(result) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     if let Err(error) = connection_outcome(result, &mut self.connections, false) {
                         if error.code == Code::Job {
