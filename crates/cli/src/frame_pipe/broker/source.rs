@@ -7,6 +7,7 @@
 use atlas_client::client::{Client, live::LiveStream};
 use atlas_control::Visible;
 use atlas_core::{
+    error::Code,
     frame_pipe::{
         budget::Budget,
         diagnostics::{Reason, Ring},
@@ -249,9 +250,23 @@ pub(crate) struct Live {
     client: Arc<Client>,
     longest: u32,
     backend: CaptureBackend,
-    stream: Option<LiveStream>,
+    /// The open stream and the backend it was opened with.
+    stream: Option<(LiveStream, CaptureBackend)>,
     ring: Ring,
     sequence: u64,
+}
+
+/// Why a reading failed, and the error code behind it when the helper's
+/// stream gave one.
+struct Failure {
+    reason: Reason,
+    code: Option<Code>,
+}
+
+impl From<Reason> for Failure {
+    fn from(reason: Reason) -> Self {
+        Self { reason, code: None }
+    }
 }
 
 impl Live {
@@ -265,20 +280,24 @@ impl Live {
             sequence: 0,
         }
     }
-}
 
-impl Acquire for Live {
-    async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
-        let stream = match &mut self.stream {
-            Some(stream) => stream,
+    /// The next picture of the open stream, opening one with `backend`
+    /// first when none is open.
+    async fn read(&mut self, backend: CaptureBackend, budget: &Budget) -> Result<Picture, Failure> {
+        let (stream, backend) = match &mut self.stream {
+            Some(open) => open,
             None => {
-                let opened = LiveStream::connect(&self.client, self.longest, self.backend)
+                let opened = LiveStream::connect(&self.client, self.longest, backend)
                     .await
-                    .map_err(|error| Reason::of(error.code))?
+                    .map_err(|error| Failure {
+                        reason: Reason::of(error.code),
+                        code: Some(error.code),
+                    })?
                     .ok_or(Reason::SourceStartFailed)?;
-                self.stream.insert(opened)
+                self.stream.insert((opened, backend))
             }
         };
+        let backend = *backend;
         match stream
             .next_reserved(&self.client, &mut self.ring, budget)
             .await
@@ -296,7 +315,7 @@ impl Acquire for Live {
                         measure(display.height)?,
                         measure(display.scale)?,
                     ],
-                    backend: match self.backend {
+                    backend: match backend {
                         CaptureBackend::CoreGraphics => Source::Cg,
                         CaptureBackend::ScreenCaptureKit => Source::Sck,
                     },
@@ -314,14 +333,45 @@ impl Acquire for Live {
                 if !stream.can_retry(&error) {
                     self.stop().await?;
                 }
-                Err(reason)
+                Err(Failure {
+                    reason,
+                    code: Some(error.code),
+                })
             }
+        }
+    }
+}
+
+/// Whether a stream opened with `backend` whose first picture failed with
+/// `code` gives way to a CoreGraphics stream for the same reading: the
+/// helper could not capture its display through ScreenCaptureKit, as when
+/// its daemon has no mode for that display. A changed session, missing
+/// consent or a busy helper refuse either way, and a stream that is not
+/// confirmed stopped is never replaced.
+fn falls_back(backend: CaptureBackend, code: Option<Code>) -> bool {
+    backend == CaptureBackend::ScreenCaptureKit && code == Some(Code::Capture)
+}
+
+impl Acquire for Live {
+    async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
+        let opening = self.stream.is_none();
+        match self.read(self.backend, budget).await {
+            // The failed stream was stopped and confirmed: one left open is
+            // read again as it is.
+            Err(failure)
+                if opening && self.stream.is_none() && falls_back(self.backend, failure.code) =>
+            {
+                self.read(CaptureBackend::CoreGraphics, budget)
+                    .await
+                    .map_err(|failure| failure.reason)
+            }
+            read => read.map_err(|failure| failure.reason),
         }
     }
 
     async fn stop(&mut self) -> Result<(), Reason> {
         match self.stream.take() {
-            Some(mut stream) => stream
+            Some((mut stream, _)) => stream
                 .stop(&self.client)
                 .await
                 .map_err(|_| Reason::DrainUnconfirmed),
