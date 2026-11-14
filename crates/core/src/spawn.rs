@@ -99,6 +99,20 @@ pub fn hold_spawns() -> MutexGuard<'static, ()> {
     alone()
 }
 
+/// [`spawn`], only when `still` says so once the lock is held, immediately
+/// before the program starts: none when it says not.
+///
+/// # Errors
+///
+/// Returns the error of starting the program.
+pub fn spawn_if(command: &mut Command, still: impl FnOnce() -> bool) -> io::Result<Option<Child>> {
+    let _alone = alone();
+    if !still() {
+        return Ok(None);
+    }
+    command.spawn().map(Some)
+}
+
 /// [`spawn_async`], only when `still` says so once the lock is held,
 /// immediately before the program starts: none when it says not.
 ///

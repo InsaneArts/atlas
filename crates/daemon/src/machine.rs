@@ -9,6 +9,7 @@ pub mod key;
 pub mod launch;
 pub mod pairing;
 pub mod stop;
+pub mod supervise;
 pub mod vault;
 
 use crate::daemon::serve::machine::Paired;
