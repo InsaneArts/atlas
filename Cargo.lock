@@ -238,6 +238,8 @@ name = "atlas-session"
 version = "0.1.3"
 dependencies = [
  "atlas-core",
+ "nix",
+ "serde",
  "serde_json",
  "snow",
  "tokio",

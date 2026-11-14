@@ -2,8 +2,14 @@
 //! that shares nothing with it: each end's key, the Noise handshakes that
 //! prove them, and the framing of what follows.
 //!
-//! Nothing here knows what a connection carries; lanes, heartbeats and
-//! pairing records build on it.
+//! Nothing here knows what a lane carries: the station's client and the
+//! guest's daemon put requests, pictures and stages on them. Generations
+//! and the right to act for one are here; what retiring one cancels is the
+//! owner of the work's.
 
+pub mod authority;
+pub mod clock;
+pub mod generation;
 pub mod keys;
+pub mod lane;
 pub mod secure;

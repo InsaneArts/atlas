@@ -13,12 +13,14 @@ test-support = ["atlas-core/test-support"]
 
 [dependencies]
 atlas-core.workspace = true
+nix = { workspace = true, features = ["time"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 snow = { workspace = true, features = ["std", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
 tokio = { workspace = true, features = ["io-util"] }
 
 [dev-dependencies]
 atlas-core = { workspace = true, features = ["test-support"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt", "rt-multi-thread", "test-util", "time"] }
 
 [lints]
