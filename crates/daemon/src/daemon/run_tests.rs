@@ -1069,7 +1069,7 @@ async fn a_command_cancelled_while_it_waits_to_spawn_never_starts() {
     let (holding, holds) = std::sync::mpsc::channel();
     // Every spawn waits behind this thread until it lets go.
     let holder = std::thread::spawn(move || {
-        let _held = atlas_core::spawn::hold_spawns();
+        let _held = atlas_core::spawn::hold();
         holding.send(()).unwrap();
         let _ = release.recv();
     });

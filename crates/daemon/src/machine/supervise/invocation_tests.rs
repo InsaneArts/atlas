@@ -3,6 +3,7 @@ use super::*;
 fn invocation() -> Invocation {
     Invocation {
         lease: Duration::from_millis(2000),
+        proofs: "/var/proofs".into(),
         argv0: "echo".into(),
         program: "/bin/echo".into(),
         arguments: vec!["--".into(), "a b".into(), "".into()],
@@ -18,13 +19,14 @@ fn an_invocation_reads_back_from_its_words() {
 
 #[test]
 fn words_that_are_not_an_invocation_are_refused() {
-    let refused: [&[&str]; 6] = [
+    let refused: [&[&str]; 7] = [
         &[],
-        &["2000", "echo"],
-        &["+2000", "echo", "/bin/echo"],
-        &["0", "echo", "/bin/echo"],
-        &["2000", "echo", "bin/echo"],
-        &["2000", "", "/bin/echo"],
+        &["2000", "/p", "echo"],
+        &["+2000", "/p", "echo", "/bin/echo"],
+        &["0", "/p", "echo", "/bin/echo"],
+        &["2000", "/p", "echo", "bin/echo"],
+        &["2000", "/p", "", "/bin/echo"],
+        &["2000", "p", "echo", "/bin/echo"],
     ];
     for words in refused {
         let words: Vec<OsString> = words.iter().map(OsString::from).collect();

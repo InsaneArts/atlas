@@ -9,16 +9,18 @@
 //! A client that goes away, or a daemon that stops, ends the command. Any
 //! failure once the command has started is uncertain: it may have done some
 //! of its work.
-use crate::machine::supervise::{
-    RENEW,
-    invocation::{self, Invocation, Supervisor},
+use crate::machine::{
+    processes::Remembered,
+    supervise::invocation::{self, Invocation, Supervisor},
 };
 use atlas_core::{
     error::Code,
     protocol::{MAX_REPLY_EVENTS, failure, interrupted},
     session::Console,
 };
+use atlas_session::generation::Generation;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use keeper::{Keepers, Verdict};
 use nix::{
     sys::signal::{Signal, killpg},
     unistd::Pid,
@@ -33,16 +35,18 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     process::{ExitStatus, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::unix::{OwnedReadHalf, OwnedWriteHalf, pipe},
+    io::AsyncReadExt,
+    net::unix::{OwnedReadHalf, pipe},
     process::Command,
     sync::mpsc::{
         Sender,
         error::{SendTimeoutError, TrySendError},
     },
+    sync::oneshot,
 };
 
 /// Output forwarded per run; the rest is drained and reported as truncated.
@@ -427,17 +431,24 @@ pub(super) type Unless<'a> = &'a (dyn Fn() -> Option<Value> + Send + Sync);
 /// How long a supervised command's lease runs unrenewed.
 const LEASE: Duration = Duration::from_secs(2);
 
-/// How often a supervised command's lease is renewed.
-const RENEWAL: Duration = Duration::from_millis(500);
-
 /// What a command on a machine desktop runs under: the supervisor that ends
-/// its work once the daemon is gone or stops renewing, and what ends the
-/// renewing.
+/// its work once the daemon is gone or stops renewing, where it is kept
+/// before it starts, and what ends the renewing.
 pub(super) struct Lease {
     pub(super) supervisor: Supervisor,
+    /// Where supervisors leave their proof.
+    pub(super) proofs: PathBuf,
+    /// The generation it is started for.
+    pub(super) generation: Generation,
     /// Completes once the work may no longer run: its generation is over,
     /// or agents were stopped since it was admitted.
     pub(super) over: Pin<Box<dyn Future<Output = ()> + Send>>,
+    /// The refusal of the word to start, checked right before it is given;
+    /// none while the command is still admitted.
+    pub(super) admitted: Box<dyn Fn() -> Option<Value> + Send + Sync>,
+    /// Where its supervisor is kept on the desktop's disk.
+    pub(super) kept: Arc<dyn Remembered>,
+    pub(super) keepers: Arc<Keepers>,
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.
@@ -461,7 +472,7 @@ pub(super) async fn run_unless(
 
 /// A command running in a process group of its own.
 struct Spawned {
-    child: tokio::process::Child,
+    child: Owned,
     /// Its standard output and error, merged.
     pipe: pipe::Receiver,
     group: Pid,
@@ -470,43 +481,69 @@ struct Spawned {
     told: Option<Told>,
 }
 
-/// The supervisor's end of the lifeline, as the daemon reads it: how the
-/// program ended, said once.
+/// Who holds the command's own child, unreaped while its group may still
+/// be signalled.
+enum Owned {
+    /// The command, which reaps it.
+    Here(tokio::process::Child),
+    /// Its supervisor's keeper, which reaps it once this is dropped: once
+    /// the command is done signalling its group.
+    Kept(#[expect(dead_code, reason = "held only to be dropped")] oneshot::Sender<()>),
+}
+
+/// The supervisor's end of the lifeline, as the daemon reads it: that the
+/// program started, then how it ended, each said once; and what its keeper
+/// said of the word to start.
 struct Told {
     lifeline: OwnedReadHalf,
-    frame: Vec<u8>,
+    said: Vec<u8>,
+    started: bool,
+    verdict: oneshot::Receiver<Verdict>,
+    /// Set once the command stops waiting for its program to start: its
+    /// keeper gives no word to start after.
+    starting: Arc<std::sync::Mutex<bool>>,
+}
+
+/// One frame a supervisor said.
+enum Heard {
+    Started,
+    Ended(ExitStatus),
+    /// It went without saying more, or said something else.
+    Gone,
 }
 
 impl Told {
-    /// How the program ended, once the supervisor says it; none when the
-    /// supervisor is gone without saying, or says something else. Anything
-    /// it said before it went is read first.
-    async fn heard(&mut self) -> Option<ExitStatus> {
+    /// The next frame the supervisor says. Anything it said before it went
+    /// is read first.
+    async fn hear(&mut self) -> Heard {
         let mut chunk = [0; invocation::FRAME];
-        while self.frame.len() < invocation::FRAME && !self.frame.contains(&b'\n') {
-            let room = invocation::FRAME - self.frame.len();
-            match self.lifeline.read(&mut chunk[..room]).await {
-                Ok(0) | Err(_) => return None,
-                Ok(count) => self.frame.extend_from_slice(&chunk[..count]),
+        loop {
+            if let Some(end) = self.said.iter().position(|byte| *byte == b'\n') {
+                let frame: Vec<u8> = self.said.drain(..=end).collect();
+                if frame == invocation::STARTED && !self.started {
+                    self.started = true;
+                    return Heard::Started;
+                }
+                return invocation::heard(&frame).map_or(Heard::Gone, Heard::Ended);
+            }
+            if self.said.len() >= invocation::FRAME {
+                return Heard::Gone;
+            }
+            match self.lifeline.read(&mut chunk).await {
+                Ok(0) | Err(_) => return Heard::Gone,
+                Ok(count) => self.said.extend_from_slice(&chunk[..count]),
             }
         }
-        invocation::heard(&self.frame)
     }
-}
 
-/// Renew the lease over `lifeline` until it is `over` or the supervisor is
-/// gone. Dropping the lifeline when it is over tells the supervisor to end
-/// the work at once.
-async fn renew(mut lifeline: OwnedWriteHalf, over: Pin<Box<dyn Future<Output = ()> + Send>>) {
-    let mut every = tokio::time::interval(RENEWAL);
-    tokio::pin!(over);
-    loop {
-        tokio::select! {
-            () = &mut over => return,
-            _ = every.tick() => {
-                if lifeline.write_all(&[RENEW]).await.is_err() {
-                    return;
-                }
+    /// How the program ended, once the supervisor says it; none when it is
+    /// gone without saying.
+    async fn ended(&mut self) -> Option<ExitStatus> {
+        loop {
+            match self.hear().await {
+                Heard::Started => {}
+                Heard::Ended(status) => return Some(status),
+                Heard::Gone => return None,
             }
         }
     }
@@ -514,7 +551,8 @@ async fn renew(mut lifeline: OwnedWriteHalf, over: Pin<Box<dyn Future<Output = (
 
 /// Spawn with merged output in a group of its own, retaining the child until
 /// pipe setup either succeeds or has killed and reaped it. Under a `lease`,
-/// the group is its supervisor's, and the program runs in it.
+/// the group is its supervisor's, and the program runs in it once its keeper
+/// says so.
 async fn spawn(
     argv: &[String],
     home: Option<&Path>,
@@ -548,6 +586,7 @@ async fn spawn(
             let (daemon, theirs) = atlas_core::spawn::socket_pair().map_err(unstarted)?;
             let invocation = Invocation {
                 lease: LEASE,
+                proofs: lease.proofs.clone(),
                 argv0: name.into(),
                 program: executable.clone(),
                 arguments: arguments.iter().map(Into::into).collect(),
@@ -590,19 +629,51 @@ async fn spawn(
 
     // Checks that this is a pipe and makes it non-blocking.
     let set_up = pipe::Receiver::from_owned_fd(OwnedFd::from(reader)).and_then(|pipe| {
-        let told = match (lifeline, lease) {
-            (Some(lifeline), Some(lease)) => Some(supervised(lifeline, lease)?),
-            _ => None,
-        };
-        Ok((pipe, told))
+        let halves = lifeline
+            .map(|lifeline| {
+                lifeline.set_nonblocking(true)?;
+                Ok::<_, std::io::Error>(tokio::net::UnixStream::from_std(lifeline)?.into_split())
+            })
+            .transpose()?;
+        Ok((pipe, halves))
     });
-    let (pipe, told) = match set_up {
+    let (pipe, halves) = match set_up {
         Ok(set_up) => set_up,
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
             return Err(interrupted(Code::SpawnFailed, error.to_string()));
         }
+    };
+    let (child, told) = match (halves, lease) {
+        (Some((reading, writing)), Some(lease)) => {
+            // A supervisor told nothing starts nothing: one this cannot name
+            // is let go, and ends itself.
+            let supervisor = atlas_core::process::start(group.as_raw())
+                .map(|start| atlas_core::process::Instance::new(group.as_raw(), start))
+                .map_err(|error| failure(Code::SpawnFailed, error.error))?;
+            let (verdict, hearing) = oneshot::channel();
+            let (released, releasing) = oneshot::channel();
+            let starting = Arc::new(std::sync::Mutex::new(false));
+            tokio::spawn(keeper::keep(
+                supervisor,
+                writing,
+                lease,
+                verdict,
+                starting.clone(),
+                child,
+                releasing,
+            ));
+            let told = Told {
+                lifeline: reading,
+                said: Vec::new(),
+                started: false,
+                verdict: hearing,
+                starting,
+            };
+            (Owned::Kept(released), Some(told))
+        }
+        _ => (Owned::Here(child), None),
     };
 
     Ok(Spawned {
@@ -611,19 +682,6 @@ async fn spawn(
         group,
         started,
         told,
-    })
-}
-
-/// The daemon's end of a supervisor's lifeline: renewed on a task of its
-/// own, which outlives this command's reply as the work it left may, and
-/// read here for how the program ended.
-fn supervised(lifeline: std::os::unix::net::UnixStream, lease: Lease) -> std::io::Result<Told> {
-    lifeline.set_nonblocking(true)?;
-    let (reading, renewing) = tokio::net::UnixStream::from_std(lifeline)?.into_split();
-    tokio::spawn(renew(renewing, lease.over));
-    Ok(Told {
-        lifeline: reading,
-        frame: Vec::new(),
     })
 }
 
@@ -646,10 +704,18 @@ struct Watch {
     linger: Option<tokio::time::Instant>,
     /// It runs under a supervisor, the leader of its group.
     supervised: bool,
+    /// What tells a supervised command's keeper the command no longer
+    /// waits for its program to start.
+    starting: Option<Arc<std::sync::Mutex<bool>>>,
 }
 
 impl Watch {
     fn terminate(&mut self, group: Pid) {
+        if let Some(starting) = &self.starting {
+            *starting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        }
         if self.supervised {
             // The supervisor alone passes it on, once to each process it
             // started: a second SIGTERM would cut a program's own grace
@@ -734,10 +800,11 @@ enum Exit {
 
 /// The command's end: its supervisor's word, when it has one, as the
 /// supervisor exiting is not the program's end; otherwise its child's exit.
-async fn exit(child: &tokio::process::Child, told: Option<&mut Told>) -> Exit {
-    match told {
-        Some(told) => Exit::Told(told.heard().await),
-        None => Exit::Child(child_exited(child).await),
+async fn exit(child: &Owned, told: Option<&mut Told>) -> Exit {
+    match (told, child) {
+        (Some(told), _) => Exit::Told(told.ended().await),
+        (None, Owned::Here(child)) => Exit::Child(child_exited(child).await),
+        (None, Owned::Kept(_)) => std::future::pending().await,
     }
 }
 
@@ -785,6 +852,7 @@ async fn run_at(
     let supervised = spawned.told.is_some();
     let mut watch = Watch {
         supervised,
+        starting: spawned.told.as_ref().map(|told| told.starting.clone()),
         ..Watch::default()
     };
     if events
@@ -817,7 +885,9 @@ async fn run_at(
                     // permitted: preserve prompt ordinary reaping even
                     // while a descendant still holds the output pipe.
                     Exit::Child(Ok(())) if !watch.stopping => {
-                        watch.status = Some(spawned.child.wait().await);
+                        if let Owned::Here(child) = &mut spawned.child {
+                            watch.status = Some(child.wait().await);
+                        }
                     }
                     Exit::Child(Ok(())) | Exit::Told(None) => {}
                     Exit::Child(Err(error)) => watch.status = Some(Err(error)),
@@ -848,8 +918,36 @@ async fn run_at(
     }
     // A supervisor is never waited for: what the program left lives under
     // the lease, and the runtime reaps it once it ends.
-    if watch.status.is_none() && !supervised {
-        watch.status = Some(spawned.child.wait().await);
+    if watch.status.is_none()
+        && let Owned::Here(child) = &mut spawned.child
+    {
+        watch.status = Some(child.wait().await);
+    }
+    // A supervised program that never said it started: nothing ran if its
+    // keeper never gave the word, which it says once it has decided.
+    if let Some(told) = spawned.told.as_mut()
+        && !told.started
+        && watch.status.is_none()
+    {
+        let decided = tokio::select! {
+            decided = &mut told.verdict => decided.ok(),
+            reason = &mut cancel, if !watch.cause.abandoned() => {
+                watch.cause = StopCause::Cancelled(reason);
+                None
+            }
+        };
+        if let Some(Verdict::Refused(refusal)) = decided {
+            // Ended before it started: what ended it says so, and nothing
+            // ran.
+            return match watch.cause {
+                StopCause::Cancelled(reason) => {
+                    let mut reply = reason.reply();
+                    reply["uncertain"] = json!(false);
+                    reply
+                }
+                StopCause::Running | StopCause::Timeout => refusal,
+            };
+        }
     }
     // A supervised command's work may have been ended by what also cancels
     // it (a Stop ends its lease) before the cancel was seen, or while it was
@@ -889,6 +987,8 @@ async fn run_at(
         ),
     }
 }
+
+pub(crate) mod keeper;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

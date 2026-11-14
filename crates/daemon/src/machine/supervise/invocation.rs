@@ -15,6 +15,8 @@ pub const FRAME: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invocation {
     pub lease: Duration,
+    /// Where the supervisor leaves its proof, by its full path.
+    pub proofs: PathBuf,
     /// The name the program is started under.
     pub argv0: OsString,
     /// The program, by its full path.
@@ -27,6 +29,7 @@ impl Invocation {
     pub fn words(&self) -> Vec<OsString> {
         let mut words = vec![
             OsString::from(self.lease.as_millis().to_string()),
+            self.proofs.clone().into_os_string(),
             self.argv0.clone(),
             self.program.clone().into_os_string(),
         ];
@@ -36,7 +39,7 @@ impl Invocation {
 
     /// The invocation `words` give; none when they are not one.
     pub fn parse(words: &[OsString]) -> Option<Self> {
-        let [lease, argv0, program, arguments @ ..] = words else {
+        let [lease, proofs, argv0, program, arguments @ ..] = words else {
             return None;
         };
         let lease = lease.to_str()?;
@@ -44,12 +47,13 @@ impl Invocation {
             return None;
         }
         let lease = Duration::from_millis(lease.parse().ok().filter(|ms| *ms > 0)?);
-        let program = PathBuf::from(program);
-        if !program.is_absolute() || argv0.is_empty() {
+        let (proofs, program) = (PathBuf::from(proofs), PathBuf::from(program));
+        if !program.is_absolute() || !proofs.is_absolute() || argv0.is_empty() {
             return None;
         }
         Some(Self {
             lease,
+            proofs,
             argv0: argv0.clone(),
             program,
             arguments: arguments.to_vec(),
@@ -118,6 +122,9 @@ impl Supervisor {
 pub fn told(status: ExitStatus) -> Vec<u8> {
     format!("status {}\n", status.into_raw()).into_bytes()
 }
+
+/// The frame that says the program started.
+pub const STARTED: &[u8] = b"started\n";
 
 /// The program's end a whole frame tells; none for anything else.
 pub fn heard(frame: &[u8]) -> Option<ExitStatus> {

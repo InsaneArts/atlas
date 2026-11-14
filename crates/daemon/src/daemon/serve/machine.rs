@@ -5,8 +5,8 @@
 use super::{Asker, Daemon, Gate, Reader, Writer, answer, write};
 use crate::machine::{
     changes::{Asked, Changes, State},
+    processes::Supervising,
     stop::{Kept as StopKept, Stop, Why},
-    supervise::invocation::Supervisor,
     vault::Vault,
 };
 use atlas_core::{
@@ -140,6 +140,9 @@ impl Halting {
                         let saved = tokio::task::spawn_blocking(move || saving.stop(why)).await;
                         unsaved |= !matches!(saved, Ok(Ok(())));
                         // Saved, or as saved as it can be: now its work ends.
+                        // Its work is being ended now: none of it counts as
+                        // settled until judged, so no Resume passes over it.
+                        worker.keepers.ending_all();
                         worker.halted.send_modify(|halt| {
                             halt.stops += 1;
                             halt.halted = true;
@@ -152,7 +155,9 @@ impl Halting {
                     }
                     Transition::Resume(authority, at) => {
                         let current = || authority.check().is_ok() && since.load(SeqCst) == at;
-                        if unsaved || !current() {
+                        // Never over work still being ended, or not known to
+                        // have ended.
+                        if unsaved || worker.keepers.unsettled() || !current() {
                             continue;
                         }
                         let (lifting, checking) = (stop.clone(), authority.clone());
@@ -166,8 +171,13 @@ impl Halting {
                             continue;
                         }
                         let turned = turn.lock().unwrap_or_else(PoisonError::into_inner);
-                        if current() {
-                            worker.halted.send_modify(|halt| halt.halted = false);
+                        // Reopened only while no work stands unsettled, and
+                        // none can come to meanwhile.
+                        if current()
+                            && worker.keepers.settled_then(|| {
+                                worker.halted.send_modify(|halt| halt.halted = false)
+                            })
+                        {
                             continue;
                         }
                         // Lifted on disk by a Resume its generation no longer
@@ -277,10 +287,10 @@ impl Machine {
         mut daemon: Daemon,
         paired: Paired,
         clock: Arc<dyn Clock>,
-        supervisor: Supervisor,
+        supervising: Supervising,
     ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
-        daemon.supervisor = Some(supervisor);
+        daemon.supervising = Some(supervising);
         // Stopped before it started, or unable to tell: still stopped.
         let clear = matches!(paired.stop.kept(), Ok(StopKept::Clear));
         daemon.halted.send_modify(|halt| halt.halted = !clear);

@@ -104,10 +104,9 @@ pub fn spawn_async(command: &mut tokio::process::Command) -> io::Result<tokio::p
     command.spawn()
 }
 
-/// Hold every Atlas spawn off until the guard is dropped, for a test that
-/// needs one to wait.
-#[cfg(any(test, feature = "test-support"))]
-pub fn hold_spawns() -> MutexGuard<'static, ()> {
+/// Hold every Atlas spawn and pipe in this process off until the guard is
+/// dropped: none is under way while it is held, and none starts.
+pub fn hold() -> MutexGuard<'static, ()> {
     alone()
 }
 

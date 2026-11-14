@@ -17,8 +17,10 @@ use std::{
 /// `atlas machine-supervise` running `words`, its output read here, with
 /// the daemon's end of its lifeline. Its output is its standard error.
 fn supervising(words: &[&str]) -> (Child, UnixStream, std::io::PipeReader) {
+    let proofs = tempfile::tempdir().unwrap().keep();
     let invocation = Invocation {
         lease: Duration::from_secs(2),
+        proofs,
         argv0: words[0].into(),
         program: words[0].into(),
         arguments: words[1..].iter().map(OsString::from).collect(),
@@ -58,6 +60,7 @@ fn the_supervisor_command_runs_a_program_and_says_how_it_ended() {
     let (mut child, mut lifeline, mut output) = supervising(&["/bin/echo", "said"]);
     lifeline.write_all(&[RENEW]).unwrap();
 
+    assert_eq!(frame(&mut lifeline), invocation::STARTED);
     let told = invocation::heard(&frame(&mut lifeline));
 
     assert_eq!(told.and_then(|status| status.code()), Some(0));
@@ -69,7 +72,8 @@ fn the_supervisor_command_runs_a_program_and_says_how_it_ended() {
 
 #[test]
 fn the_supervisor_command_ends_its_work_once_its_lifeline_closes() {
-    let (mut child, lifeline, _output) = supervising(&["/bin/sleep", "30"]);
+    let (mut child, mut lifeline, _output) = supervising(&["/bin/sleep", "30"]);
+    lifeline.write_all(&[RENEW]).unwrap();
     std::thread::sleep(Duration::from_millis(300));
 
     drop(lifeline);

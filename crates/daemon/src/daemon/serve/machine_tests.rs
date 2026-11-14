@@ -36,6 +36,23 @@ fn stopping(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Arc<Stop<Arc
     Arc::new(Stop::new(records.path().join("stop"), vault.clone()))
 }
 
+/// What a guest's commands run under, its supervisors kept in a folder of
+/// their own beside its change records, as pairing leaves them.
+fn supervising(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Supervising {
+    crate::machine::commitment::create(vault, crate::machine::processes::STORE).unwrap();
+    let folder = records.path().join("supervisors");
+    let proofs = folder.join("proofs");
+    std::fs::create_dir_all(&proofs).unwrap();
+    Supervising {
+        supervisor: crate::machine::supervise::invocation::Supervisor::of_these_tests(),
+        proofs,
+        kept: Arc::new(crate::machine::processes::Processes::new(
+            folder.join("processes.json"),
+            vault.clone(),
+        )),
+    }
+}
+
 /// Connections the station makes, as the guest's listener hands them over.
 struct Channel(Mutex<mpsc::UnboundedReceiver<(Purpose, Raw)>>);
 
@@ -100,7 +117,7 @@ impl Served {
             changes: changes.clone(),
             stop: stopping(&records, &vault),
         };
-        let machine = Machine::new(daemon, paired, clock.clone(), Supervisor::of_these_tests());
+        let machine = Machine::new(daemon, paired, clock.clone(), supervising(&records, &vault));
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let machine = machine.clone();
@@ -494,7 +511,7 @@ async fn be_the_guest(spec: &str) {
         daemon,
         paired,
         Arc::new(atlas_session::clock::Continuous),
-        Supervisor::of_these_tests(),
+        supervising(&_records, &_vault),
     );
     let _ = machine.serve(&Socket(listener)).await;
 }
@@ -1228,4 +1245,55 @@ async fn a_command_on_a_machine_lane_with_nothing_to_supervise_it_is_refused() {
 
     assert_eq!(refusal["code"], "platform", "{refusal}");
     assert_eq!(refusal["uncertain"], false, "{refusal}");
+}
+
+#[tokio::test]
+async fn a_supervisor_killed_from_outside_stops_every_change_after_it() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (_lines, supervisor) = sleeping(&desktop).await;
+    assert!(!refused_as_stopped(&desktop).await);
+
+    nix::sys::signal::kill(supervisor, nix::sys::signal::Signal::SIGKILL).unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    assert!(refused_as_stopped(&desktop).await);
+    let _ = nix::sys::signal::killpg(supervisor, nix::sys::signal::Signal::SIGKILL);
+}
+
+#[tokio::test]
+async fn a_resume_while_stopped_work_is_still_being_ended_lifts_nothing() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let left = leaving(&desktop).await;
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        refused_as_stopped(&desktop).await,
+        "resumed over work being ended"
+    );
+    assert!(gone_within(left, Duration::from_secs(2)).await);
+    // Once its work is judged, a later Resume lifts it.
+    let mut lifted = false;
+    for _ in 0..25 {
+        controlling
+            .outbox
+            .say(atlas_session::control::Said::Resume)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !refused_as_stopped(&desktop).await {
+            lifted = true;
+            break;
+        }
+    }
+    assert!(lifted, "a later Resume lifts it");
 }

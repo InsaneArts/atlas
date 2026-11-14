@@ -2,17 +2,92 @@
 //! end told apart from the supervisor's, and what they leave alive only
 //! while the lease is.
 use super::*;
+use crate::machine::processes::Supervised;
+use std::sync::Mutex;
 use tokio::sync::{mpsc, oneshot};
+
+/// Supervisors kept in memory, as they came and went: a store a test can
+/// hold up, or make fail.
+#[derive(Default)]
+struct Remembering {
+    kept: Mutex<Vec<Supervised>>,
+    /// The next add waits for this to be let go.
+    held: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    failing: bool,
+    /// Forgetting fails.
+    keeping: bool,
+}
+
+impl Remembering {
+    fn kept(&self) -> Vec<Supervised> {
+        self.kept.lock().unwrap().clone()
+    }
+}
+
+impl Remembered for Remembering {
+    fn add(&self, supervised: Supervised) -> atlas_core::error::Result<()> {
+        let held = self.held.lock().unwrap().take();
+        if let Some(held) = held {
+            let _ = held.recv();
+        }
+        if self.failing {
+            return Err(atlas_core::error::Error::new(Code::Io, "The store failed"));
+        }
+        self.kept.lock().unwrap().push(supervised);
+        Ok(())
+    }
+
+    fn retire(&self, retired: &[Supervised]) -> atlas_core::error::Result<()> {
+        if self.keeping {
+            return Err(atlas_core::error::Error::new(Code::Io, "The store failed"));
+        }
+        self.kept
+            .lock()
+            .unwrap()
+            .retain(|kept| !retired.contains(kept));
+        Ok(())
+    }
+}
+
+/// Where the supervisors these tests start leave their proofs.
+fn proofs() -> PathBuf {
+    static PROOFS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    PROOFS
+        .get_or_init(|| tempfile::tempdir().unwrap())
+        .path()
+        .to_owned()
+}
+
+/// A lease under this test binary as supervisor, kept in memory, that ends
+/// once `over` does.
+fn lease_until(over: impl Future<Output = ()> + Send + 'static) -> Lease {
+    kept_in(over, Arc::default(), Box::new(|| None))
+}
+
+/// A lease as [`lease_until`] gives, kept in `kept` and admitted while
+/// `admitted` says so.
+fn kept_in(
+    over: impl Future<Output = ()> + Send + 'static,
+    kept: Arc<Remembering>,
+    admitted: Box<dyn Fn() -> Option<Value> + Send + Sync>,
+) -> Lease {
+    Lease {
+        supervisor: Supervisor::of_these_tests(),
+        proofs: proofs(),
+        generation: Generation(1),
+        over: Box::pin(over),
+        admitted,
+        kept,
+        keepers: Arc::default(),
+    }
+}
 
 /// A lease under this test binary as supervisor, and what ends it.
 fn lease() -> (Lease, oneshot::Sender<()>) {
     let (end, over) = oneshot::channel::<()>();
-    let lease = Lease {
-        supervisor: Supervisor::of_these_tests(),
-        over: Box::pin(async move {
-            let _ = over.await;
-        }),
-    };
+    let lease = lease_until(async move {
+        let _ = over.await;
+    });
     (lease, end)
 }
 
@@ -296,15 +371,12 @@ async fn a_supervisor_killed_from_outside_leaves_the_command_s_end_unknown() {
 #[tokio::test]
 async fn a_stop_that_ends_the_lease_and_cancels_at_once_is_replied_to_as_the_stop() {
     let (stopping, stopped) = tokio::sync::watch::channel(false);
-    let lease = Lease {
-        supervisor: Supervisor::of_these_tests(),
-        over: Box::pin({
-            let mut stopped = stopped.clone();
-            async move {
-                let _ = stopped.wait_for(|stopped| *stopped).await;
-            }
-        }),
-    };
+    let lease = lease_until({
+        let mut stopped = stopped.clone();
+        async move {
+            let _ = stopped.wait_for(|stopped| *stopped).await;
+        }
+    });
     let cancel = {
         let mut stopped = stopped.clone();
         async move {
@@ -387,4 +459,252 @@ async fn a_timed_out_supervised_program_is_asked_to_end_once() {
     assert_eq!(output(&events), "terms 1\n");
     assert_eq!(reply["timedOut"], true, "{reply}");
     assert_eq!(reply["exitCode"], 0, "{reply}");
+}
+
+/// Whether `check` holds within `within`, looking every 20 ms.
+async fn within(within: Duration, check: impl Fn() -> bool) -> bool {
+    let started = Instant::now();
+    loop {
+        if check() {
+            return true;
+        }
+        if started.elapsed() >= within {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A command that leaves a mark when it runs, in a folder of its own.
+fn marking() -> (tempfile::TempDir, PathBuf, Vec<String>) {
+    let folder = tempfile::tempdir().unwrap();
+    let mark = folder.path().join("ran");
+    let argv = vec!["/usr/bin/touch".to_owned(), mark.display().to_string()];
+    (folder, mark, argv)
+}
+
+#[tokio::test]
+async fn a_supervised_program_starts_only_once_its_supervisor_is_kept() {
+    let (letting, held) = std::sync::mpsc::channel();
+    let kept = Arc::new(Remembering {
+        held: Mutex::new(Some(held)),
+        ..Remembering::default()
+    });
+    let (_folder, mark, argv) = marking();
+    let lease = kept_in(std::future::pending(), kept.clone(), Box::new(|| None));
+    let (sender, _receiver) = mpsc::channel(EVENTS);
+    let running = tokio::spawn(async move {
+        run_at(
+            &argv,
+            home(),
+            Duration::from_secs(10),
+            sender,
+            std::future::pending(),
+            &|| None,
+            Some(lease),
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!mark.exists(), "it ran before it was kept");
+    letting.send(()).unwrap();
+    let reply = running.await.unwrap();
+
+    assert_eq!(reply["exitCode"], 0, "{reply}");
+    assert!(mark.exists());
+}
+
+#[tokio::test]
+async fn a_supervised_command_whose_supervisor_cannot_be_kept_is_refused_and_never_runs() {
+    let kept = Arc::new(Remembering {
+        failing: true,
+        ..Remembering::default()
+    });
+    let (_folder, mark, argv) = marking();
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+
+    let (_events, reply) = supervised(
+        &argv,
+        Duration::from_secs(10),
+        std::future::pending(),
+        kept_in(std::future::pending(), kept, Box::new(|| None)),
+    )
+    .await;
+
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["uncertain"], false, "{reply}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!mark.exists());
+}
+
+#[tokio::test]
+async fn a_supervised_command_no_longer_admitted_once_kept_is_refused_and_never_runs() {
+    let (letting, held) = std::sync::mpsc::channel();
+    let kept = Arc::new(Remembering {
+        held: Mutex::new(Some(held)),
+        ..Remembering::default()
+    });
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let admitted = {
+        let stopped = stopped.clone();
+        Box::new(move || {
+            stopped
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then(|| failure(Code::Stopped, "Agents are stopped on this desktop"))
+        })
+    };
+    let (_folder, mark, argv) = marking();
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    // Agents are stopped while the store holds it up.
+    let stop = async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+        letting.send(()).unwrap();
+    };
+
+    let ((_events, reply), ()) = tokio::join!(
+        supervised(
+            &argv,
+            Duration::from_secs(10),
+            std::future::pending(),
+            kept_in(std::future::pending(), kept, admitted),
+        ),
+        stop
+    );
+
+    assert_eq!(reply["code"], "stopped", "{reply}");
+    assert_eq!(reply["uncertain"], false, "{reply}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!mark.exists());
+}
+
+#[tokio::test]
+async fn a_supervisor_whose_work_ended_by_itself_is_forgotten() {
+    let kept = Arc::new(Remembering::default());
+
+    let (_events, reply) = supervised(
+        &["/bin/echo", "done"],
+        Duration::from_secs(10),
+        std::future::pending(),
+        kept_in(std::future::pending(), kept.clone(), Box::new(|| None)),
+    )
+    .await;
+
+    assert_eq!(reply["exitCode"], 0, "{reply}");
+    assert!(within(Duration::from_secs(3), || kept.kept().is_empty()).await);
+}
+
+#[tokio::test]
+async fn a_supervisor_whose_work_ended_because_its_lease_was_over_is_kept_for_recovery() {
+    let kept = Arc::new(Remembering::default());
+    let (end, over) = oneshot::channel::<()>();
+    let lease = kept_in(
+        async move {
+            let _ = over.await;
+        },
+        kept.clone(),
+        Box::new(|| None),
+    );
+    let (events, _reply) = supervised(
+        &["/bin/sh", "-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"],
+        Duration::from_secs(10),
+        std::future::pending(),
+        lease,
+    )
+    .await;
+    let left = printed(&events);
+
+    end.send(()).unwrap();
+
+    assert!(gone_within(left, Duration::from_secs(2)).await);
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(kept.kept().len(), 1, "forgotten before a Stop was saved");
+}
+
+#[tokio::test]
+async fn a_supervisor_killed_from_outside_leaves_its_work_unknown() {
+    let kept = Arc::new(Remembering::default());
+    let lease = kept_in(std::future::pending(), kept.clone(), Box::new(|| None));
+    let keepers = lease.keepers.clone();
+    let (sender, mut receiver) = mpsc::channel(EVENTS);
+    let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+    let command = run_at(
+        &argv,
+        home(),
+        Duration::from_secs(30),
+        sender,
+        std::future::pending(),
+        &|| None,
+        Some(lease),
+    );
+    let killing = async {
+        let started = receiver.recv().await.unwrap();
+        let supervisor = Pid::from_raw(i32::try_from(started["pid"].as_i64().unwrap()).unwrap());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        nix::sys::signal::kill(supervisor, Signal::SIGKILL).unwrap();
+        supervisor
+    };
+
+    let (_reply, supervisor) = tokio::join!(command, killing);
+
+    assert!(within(Duration::from_secs(3), || keepers.uncertain()).await);
+    assert_eq!(kept.kept().len(), 1);
+    signal_group(supervisor, Signal::SIGKILL);
+}
+
+#[tokio::test]
+async fn a_command_cancelled_while_its_supervisor_is_being_kept_never_starts() {
+    let (letting, held) = std::sync::mpsc::channel();
+    let kept = Arc::new(Remembering {
+        held: Mutex::new(Some(held)),
+        ..Remembering::default()
+    });
+    let (_folder, mark, argv) = marking();
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let cancel = async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Cancel::Left
+    };
+    // Kept only after the cancel, inside the supervisor's grace.
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        letting.send(()).unwrap();
+    };
+
+    let ((_events, reply), ()) = tokio::join!(
+        supervised(
+            &argv,
+            Duration::from_secs(10),
+            cancel,
+            kept_in(std::future::pending(), kept, Box::new(|| None)),
+        ),
+        release
+    );
+
+    assert_eq!(reply["code"], "transport", "{reply}");
+    assert_eq!(reply["uncertain"], false, "{reply}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!mark.exists(), "it started after it was cancelled");
+}
+
+#[tokio::test]
+async fn a_supervisor_whose_record_cannot_be_forgotten_leaves_its_work_unknown() {
+    let kept = Arc::new(Remembering {
+        keeping: true,
+        ..Remembering::default()
+    });
+    let lease = kept_in(std::future::pending(), kept, Box::new(|| None));
+    let keepers = lease.keepers.clone();
+
+    let (_events, reply) = supervised(
+        &["/bin/echo", "done"],
+        Duration::from_secs(10),
+        std::future::pending(),
+        lease,
+    )
+    .await;
+
+    assert_eq!(reply["exitCode"], 0, "{reply}");
+    assert!(within(Duration::from_secs(3), || keepers.uncertain()).await);
 }

@@ -21,12 +21,29 @@ fn a_supervisor_runs_what_it_is_given_when_started_for_these_tests() {
     std::process::exit(i32::from(start(&words)));
 }
 
+/// Where the supervisors these tests start leave their proofs.
+fn proofs() -> PathBuf {
+    static PROOFS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    PROOFS
+        .get_or_init(|| tempfile::tempdir().unwrap())
+        .path()
+        .to_owned()
+}
+
 /// A supervisor of the program `words` name, in a group of its own, with
-/// an 800 ms lease, and the daemon's end of its lifeline.
+/// an 800 ms lease, told to start, and the daemon's end of its lifeline.
 fn supervisor(words: &[&str]) -> (Child, UnixStream) {
+    let (child, mut lifeline) = silent_supervisor(words);
+    lifeline.write_all(&[RENEW]).unwrap();
+    (child, lifeline)
+}
+
+/// A supervisor as [`supervisor`] starts one, not yet told to start.
+fn silent_supervisor(words: &[&str]) -> (Child, UnixStream) {
     use std::os::unix::process::CommandExt;
     let invocation = Invocation {
         lease: Duration::from_millis(800),
+        proofs: proofs(),
         argv0: words[0].into(),
         program: words[0].into(),
         arguments: words[1..].iter().map(OsString::from).collect(),
@@ -42,17 +59,22 @@ fn supervisor(words: &[&str]) -> (Child, UnixStream) {
     (atlas_core::spawn::spawn(&mut command).unwrap(), daemon)
 }
 
-/// How the program ended, as the supervisor says it on `lifeline`.
+/// How the program ended, as the supervisor says it on `lifeline`, after
+/// saying it started.
 fn told(lifeline: &mut UnixStream) -> Option<ExitStatus> {
-    let mut frame = Vec::new();
-    let mut byte = [0; 1];
-    while frame.len() < invocation::FRAME && lifeline.read(&mut byte).ok()? == 1 {
-        frame.push(byte[0]);
-        if byte[0] == b'\n' {
-            break;
+    loop {
+        let mut frame = Vec::new();
+        let mut byte = [0; 1];
+        while frame.len() < invocation::FRAME && lifeline.read(&mut byte).ok()? == 1 {
+            frame.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        if frame != invocation::STARTED {
+            return invocation::heard(&frame);
         }
     }
-    invocation::heard(&frame)
 }
 
 /// Whether the group `child` leads ends within `within`.
@@ -311,14 +333,20 @@ struct MadeUp {
     refusing: bool,
     /// The first listing of children waits for this to be let go.
     held: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Processes it describes, each the child of its `ppid`.
+    born: Vec<Info>,
+    /// Listed in the group the first time only, then gone from it.
+    leaving: Mutex<Option<Info>>,
 }
 
 impl Kernel for MadeUp {
     fn group(&self, _pgid: i32) -> atlas_core::error::Result<Vec<Info>> {
-        Ok(self.group.clone())
+        let mut group = self.group.clone();
+        group.extend(self.leaving.lock().unwrap().take());
+        Ok(group)
     }
 
-    fn children(&self, _pid: i32) -> atlas_core::error::Result<Vec<i32>> {
+    fn children(&self, pid: i32) -> atlas_core::error::Result<Vec<i32>> {
         let held = self.held.lock().unwrap().take();
         if let Some(held) = held {
             let _ = held.recv();
@@ -326,14 +354,23 @@ impl Kernel for MadeUp {
         if self.refusing {
             return Err(std::io::Error::other("refused").into());
         }
-        Ok(Vec::new())
+        Ok(self
+            .born
+            .iter()
+            .filter(|info| info.ppid == pid)
+            .map(|info| info.instance.pid)
+            .collect())
     }
 
-    fn info(&self, _pid: i32) -> atlas_core::error::Result<Option<Info>> {
+    fn info(&self, pid: i32) -> atlas_core::error::Result<Option<Info>> {
         if self.refusing {
             return Err(std::io::Error::other("refused").into());
         }
-        Ok(None)
+        Ok(self
+            .born
+            .iter()
+            .find(|info| info.instance.pid == pid)
+            .cloned())
     }
 
     fn ended(&self, _instance: &Instance) -> bool {
@@ -371,7 +408,7 @@ fn a_look_that_fails_after_the_group_never_makes_the_supervisor_a_target() {
 
     assert_eq!(work.look(), None);
 
-    assert_eq!(work.targets(), vec![Pid::from_raw(99_001)]);
+    assert_eq!(work.tracked(), vec![Instance::new(99_001, [1, 0])]);
 }
 
 #[test]
@@ -390,10 +427,10 @@ fn ending_never_waits_on_a_look_held_up_in_the_kernel() {
     std::thread::sleep(Duration::from_millis(100));
 
     let started = Instant::now();
-    let targets = work.targets();
+    let targets = work.tracked();
 
     assert!(started.elapsed() < Duration::from_millis(50));
-    assert_eq!(targets, vec![Pid::from_raw(99_002)]);
+    assert_eq!(targets, vec![Instance::new(99_002, [1, 0])]);
     letting.send(()).unwrap();
     assert_eq!(looking.join().unwrap(), Some(true));
 }
@@ -412,7 +449,7 @@ fn a_process_seen_once_is_ended_while_the_kernel_cannot_say_it_has() {
     work.kernel.refusing = true;
 
     assert_eq!(work.look(), None);
-    assert_eq!(work.targets(), vec![Pid::from_raw(99_003)]);
+    assert_eq!(work.tracked(), vec![Instance::new(99_003, [1, 0])]);
 }
 
 #[test]
@@ -443,6 +480,7 @@ fn the_supervisor_keeps_none_of_the_output_open_once_the_program_has_it() {
     use std::os::unix::process::CommandExt;
     let invocation = Invocation {
         lease: Duration::from_millis(800),
+        proofs: proofs(),
         argv0: "sh".into(),
         program: "/bin/sh".into(),
         arguments: ["-c", "echo said; /bin/sleep 30 >/dev/null 2>&1 &"]
@@ -520,4 +558,159 @@ fn sigterm_ends_work_that_left_the_group_even_when_it_ignores_it() {
         );
     }
     renewing.join().unwrap();
+}
+
+#[test]
+fn a_supervisor_never_told_to_start_starts_nothing_and_ends_by_itself() {
+    let folder = tempfile::tempdir().unwrap();
+    let mark = folder.path().join("ran");
+    let (mut child, _lifeline) = silent_supervisor(&["/usr/bin/touch", mark.to_str().unwrap()]);
+
+    let status = child.wait().unwrap();
+
+    assert_eq!(status.code(), Some(i32::from(ENDED)));
+    assert!(!mark.exists(), "the program ran");
+}
+
+#[test]
+fn a_supervisor_told_to_start_starts_its_program() {
+    let folder = tempfile::tempdir().unwrap();
+    let mark = folder.path().join("ran");
+    let (mut child, mut lifeline) = silent_supervisor(&["/usr/bin/touch", mark.to_str().unwrap()]);
+
+    lifeline.write_all(&[RENEW]).unwrap();
+
+    assert_eq!(
+        told(&mut lifeline).and_then(|status| status.code()),
+        Some(0)
+    );
+    assert!(mark.exists());
+    assert_eq!(child.wait().unwrap().code(), Some(i32::from(DONE)));
+}
+
+#[test]
+fn a_supervisor_whose_lease_ends_ends_its_work_and_says_so_by_its_own_code() {
+    let (mut child, _lifeline) = supervisor(&["/bin/sh", "-c", "/bin/sleep 30 & /bin/sleep 30"]);
+
+    let status = child.wait().unwrap();
+
+    assert_eq!(status.signal(), None);
+    assert_eq!(status.code(), Some(i32::from(ENDED)));
+}
+
+/// A PID no process can have: macOS hands out none above 99,999.
+const NO_PROCESS: i32 = 100_500;
+
+#[test]
+fn ending_with_only_the_supervisor_left_is_ended() {
+    let kernel = MadeUp {
+        group: vec![listed(own(), 77)],
+        ..MadeUp::default()
+    };
+    let work = Work::new(kernel, Pid::from_raw(77));
+
+    assert_eq!(work.ending(), ENDED);
+}
+
+#[test]
+fn ending_with_a_member_that_will_not_go_cannot_say_it_ended() {
+    let kernel = MadeUp {
+        group: vec![listed(own(), 77), listed(NO_PROCESS, 77)],
+        ..MadeUp::default()
+    };
+    let work = Work::new(kernel, Pid::from_raw(77));
+
+    assert_eq!(work.ending(), UNSURE);
+}
+
+#[test]
+fn ending_with_a_tracked_process_not_known_to_have_ended_cannot_say_it_ended() {
+    let kernel = MadeUp {
+        group: vec![listed(NO_PROCESS, 77)],
+        ..MadeUp::default()
+    };
+    let mut work = Work::new(kernel, Pid::from_raw(77));
+    assert_eq!(work.look(), Some(true));
+    // It left the group; the kernel cannot say it ended.
+    work.kernel.group = vec![listed(own(), 77)];
+
+    assert_eq!(work.ending(), UNSURE);
+}
+
+#[test]
+fn ending_never_signals_a_process_whose_identity_cannot_be_read() {
+    let mut command = Command::new("/bin/sleep");
+    command.arg("30");
+    let mut child = atlas_core::spawn::spawn(&mut command).unwrap();
+    let pid = child.id() as i32;
+    let kernel = MadeUp {
+        group: vec![listed(own(), 77), listed(pid, 77)],
+        refusing: true,
+        ..MadeUp::default()
+    };
+    let work = Work::new(kernel, Pid::from_raw(77));
+
+    assert_eq!(work.ending(), UNSURE);
+
+    assert_eq!(child.try_wait().unwrap(), None, "it was signalled");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn ending_finds_a_program_that_left_the_group_before_any_look() {
+    let kernel = MadeUp {
+        group: vec![listed(own(), 77)],
+        born: vec![Info {
+            ppid: own(),
+            ..listed(NO_PROCESS, 78)
+        }],
+        ..MadeUp::default()
+    };
+    let work = Work::new(kernel, Pid::from_raw(77));
+
+    assert_eq!(work.ending(), UNSURE, "the program was never found");
+}
+
+#[test]
+fn ending_keeps_a_member_that_left_the_group_between_rounds() {
+    let kernel = MadeUp {
+        group: vec![listed(own(), 77)],
+        leaving: Mutex::new(Some(listed(NO_PROCESS, 77))),
+        ..MadeUp::default()
+    };
+    let work = Work::new(kernel, Pid::from_raw(77));
+
+    assert_eq!(work.ending(), UNSURE, "a member was forgotten once it left");
+}
+
+#[test]
+fn a_pid_taken_by_another_process_never_brings_in_that_process_s_children() {
+    let kernel = MadeUp {
+        group: vec![listed(NO_PROCESS, 77)],
+        ..MadeUp::default()
+    };
+    let mut work = Work::new(kernel, Pid::from_raw(77));
+    assert_eq!(work.look(), Some(true));
+    // It left the group, and another process took its PID, with a child.
+    work.kernel.group = vec![listed(own(), 77)];
+    work.kernel.born = vec![
+        Info {
+            instance: Instance::new(NO_PROCESS, [2, 0]),
+            ..listed(NO_PROCESS, 90)
+        },
+        Info {
+            ppid: NO_PROCESS,
+            ..listed(NO_PROCESS + 1, 90)
+        },
+    ];
+
+    work.look();
+
+    assert!(
+        !work
+            .tracked()
+            .contains(&Instance::new(NO_PROCESS + 1, [1, 0])),
+        "an unrelated child was taken for work"
+    );
 }

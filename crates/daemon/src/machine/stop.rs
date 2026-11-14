@@ -6,6 +6,7 @@
 //! command reads as unknown, never as no Stop: unknown holds as Stop does.
 use super::{
     commitment::{Commitment, Judged, Revision},
+    record_file::{self, number},
     vault::Vault,
 };
 use atlas_core::{
@@ -15,8 +16,6 @@ use atlas_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    io::Read,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Mutex, PoisonError},
 };
@@ -80,7 +79,7 @@ impl<V: Vault> Stop<V> {
     /// The record on disk and its number, once its commitment vouches for
     /// it; none when nothing was ever saved.
     fn trusted(&self) -> Result<(u64, Kept)> {
-        let found = read_regular(&self.path)?;
+        let found = record_file::read_regular(&self.path, LIMIT).map_err(|_| unknown())?;
         let revision = found.as_ref().map(|bytes| Revision {
             number: number(bytes),
             digest: bytes_sha256(bytes),
@@ -206,42 +205,9 @@ impl<V: Vault> Stop<V> {
     }
 }
 
-/// The record's number, as it says, without trusting the rest.
-fn number(bytes: &[u8]) -> u64 {
-    serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .and_then(|record| record["number"].as_u64())
-        .unwrap_or(u64::MAX)
-}
-
-/// The file at `path`, when it is a file of its own (never a link or a
-/// pipe) of at most [`LIMIT`] bytes; none when there is none.
-fn read_regular(path: &Path) -> Result<Option<Vec<u8>>> {
-    let opened = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path);
-    let file = match opened {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(unknown()),
-    };
-    let metadata = file.metadata().map_err(|_| unknown())?;
-    if !metadata.is_file() || metadata.len() > LIMIT {
-        return Err(unknown());
-    }
-    let mut bytes = Vec::new();
-    file.take(LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| unknown())?;
-    Ok(Some(bytes))
-}
-
 /// Keep what changed beside `path`, its name included, for good.
 fn sync_folder(path: &Path) -> Result<()> {
-    let folder = path.parent().unwrap_or(Path::new("."));
-    std::fs::File::open(folder)
-        .and_then(|folder| folder.sync_all())
+    record_file::sync_folder(path)
         .map_err(|error| Error::new(Code::Io, "The Stop cannot be kept.").with_source(error))
 }
 

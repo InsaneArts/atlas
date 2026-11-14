@@ -239,9 +239,11 @@ pub struct Daemon {
     /// Where a machine's changes are kept on its disk, outliving this
     /// process; none for the helper login, whose station keeps its own.
     kept: Option<Arc<dyn Kept>>,
-    /// What a machine's commands run under; none for the helper login,
-    /// whose commands run as they are.
-    supervisor: Option<crate::machine::supervise::invocation::Supervisor>,
+    /// What a machine's commands run under, and where each is kept before it
+    /// starts; none for the helper login, whose commands run as they are.
+    supervising: Option<crate::machine::processes::Supervising>,
+    /// The supervisors its keepers own, and how each stands.
+    keepers: Arc<run::keeper::Keepers>,
     /// Whether agents are stopped on a machine desktop, and how many Stops
     /// there have been: no change is taken while stopped, and a command
     /// admitted before a Stop ends with it, a Resume after or not. Never
@@ -310,7 +312,8 @@ impl Daemon {
             recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
             outcomes: Arc::default(),
             kept: None,
-            supervisor: None,
+            supervising: None,
+            keepers: Arc::default(),
             halted: watch::Sender::new(Halt::default()),
         }
     }
@@ -864,6 +867,7 @@ pub(super) struct Asker {
 
 /// What a change on a machine's session runs only while: its generation,
 /// and its lane not cancelled.
+#[derive(Clone)]
 pub(super) struct Gate {
     pub(super) authority: atlas_session::authority::Authority,
     pub(super) lanes: Arc<atlas_session::lane::Lanes>,
@@ -876,6 +880,19 @@ pub(super) struct Gate {
 }
 
 impl Gate {
+    /// The refusal of what it admitted now, when its lane was cancelled, the
+    /// generation it came in is over, or agents were stopped since.
+    fn refused(&self) -> Option<Value> {
+        let halt = *self.halted.borrow();
+        if halt.halted || halt.stops != self.stops {
+            return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
+        }
+        if self.lanes.cancelled(self.lane) {
+            return Some(failure(Code::Cancelled, "The change was cancelled"));
+        }
+        self.authority.check().err().map(refused)
+    }
+
     /// Completes once the work it admitted may no longer run: its generation
     /// is over, or agents were stopped since, a Resume after or not.
     fn over(&self) -> impl Future<Output = ()> + Send + 'static {
@@ -895,15 +912,7 @@ impl Asker {
     /// The refusal of a change now, when its lane was cancelled or the
     /// generation it came in is over.
     fn refused_now(&self) -> Option<Value> {
-        let gate = self.gate.as_ref()?;
-        let halt = *gate.halted.borrow();
-        if halt.halted || halt.stops != gate.stops {
-            return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
-        }
-        if gate.lanes.cancelled(gate.lane) {
-            return Some(failure(Code::Cancelled, "The change was cancelled"));
-        }
-        gate.authority.check().err().map(refused)
+        self.gate.as_ref()?.refused()
     }
 
     /// The refusal of `request` on a machine's session: there, a change is
@@ -1294,12 +1303,26 @@ async fn serve_run(
 }
 
 /// The refusal of a command on a machine's session when nothing could
-/// supervise it: none runs there unsupervised.
+/// supervise it, as none runs there unsupervised, or while work left
+/// earlier is not known to have ended.
 fn unsupervised(daemon: &Daemon, asker: &Asker) -> Option<Value> {
-    (asker.gate.is_some() && daemon.supervisor.is_none()).then(|| {
-        failure(
+    asker.gate.as_ref()?;
+    if daemon.supervising.is_none() {
+        return Some(failure(
             Code::Platform,
             "This desktop cannot supervise commands, so none is run",
+        ));
+    }
+    uncertain(&daemon.keepers)
+}
+
+/// The refusal of a change while work started earlier on a machine is not
+/// known to have ended.
+fn uncertain(keepers: &run::keeper::Keepers) -> Option<Value> {
+    keepers.uncertain().then(|| {
+        failure(
+            Code::Stopped,
+            "Work started earlier on this desktop is not known to have ended, so agents are stopped",
         )
     })
 }
@@ -1361,10 +1384,18 @@ async fn run_registered(
     let lease = asker
         .gate
         .as_ref()
-        .zip(daemon.supervisor.as_ref())
-        .map(|(gate, supervisor)| run::Lease {
-            supervisor: supervisor.clone(),
-            over: Box::pin(gate.over()),
+        .zip(daemon.supervising.as_ref())
+        .map(|(gate, supervising)| {
+            let (still, keepers) = (gate.clone(), daemon.keepers.clone());
+            run::Lease {
+                supervisor: supervising.supervisor.clone(),
+                proofs: supervising.proofs.clone(),
+                generation: gate.authority.generation(),
+                over: Box::pin(gate.over()),
+                admitted: Box::new(move || still.refused().or_else(|| uncertain(&keepers))),
+                kept: supervising.kept.clone(),
+                keepers: daemon.keepers.clone(),
+            }
         });
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;
     let reply = keep(daemon, remembering, &reply).await;
