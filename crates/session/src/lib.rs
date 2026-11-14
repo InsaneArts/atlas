@@ -9,6 +9,8 @@
 
 pub mod authority;
 pub mod clock;
+pub mod control;
+pub mod credit;
 pub mod generation;
 pub mod keys;
 pub mod lane;
