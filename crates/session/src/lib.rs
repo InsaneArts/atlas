@@ -17,3 +17,5 @@ pub mod lane;
 pub mod pairing;
 pub mod pairing_file;
 pub mod secure;
+#[cfg(any(test, feature = "test-support"))]
+pub mod standin;

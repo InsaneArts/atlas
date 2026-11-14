@@ -125,6 +125,12 @@ impl Credit {
             .add_permits(usize::try_from(given).unwrap_or(0));
     }
 
+    /// How much credit is left to spend now.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn left(&self) -> usize {
+        self.available.available_permits()
+    }
+
     /// `lane` closed: what it owes will never be read, and comes back.
     pub fn closed(&self, lane: LaneId) {
         let given = self.owed().remove(&lane).unwrap_or(0);
