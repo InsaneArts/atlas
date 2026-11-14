@@ -5,7 +5,7 @@ use super::Daemon;
 use atlas_core::{
     error::{Code, Error, Result},
     protocol::{CaptureBackend, SessionPin, refused},
-    session::InputEpoch,
+    session::{Console, InputEpoch},
 };
 use atlas_native::native::capture::{
     self, RawShot,
@@ -162,11 +162,17 @@ pub(super) async fn write_header(out: &mut (impl AsyncWrite + Unpin), value: &Va
 /// Every check reads actual session facts. A changed epoch is never silently
 /// adopted by an existing connection, including a display geometry change.
 fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
-    if (daemon.screen.on_console)() {
-        return Err(Error::new(Code::OnConsole, "The helper is on the screen"));
+    if daemon.screen.away() {
+        return Err(match daemon.screen.console {
+            Console::Off => Error::new(Code::OnConsole, "The helper is on the screen"),
+            Console::Own => Error::new(
+                Code::SessionChanged,
+                "The desktop's own session is not on its screen",
+            ),
+        });
     }
     let proof = (daemon.screen.session)()?;
-    let current = InputEpoch::from_proof(&proof, std::process::id())?;
+    let current = InputEpoch::from_proof_kept(&proof, std::process::id(), daemon.screen.console)?;
     if current != *expected {
         return Err(Error::new(
             Code::SessionChanged,

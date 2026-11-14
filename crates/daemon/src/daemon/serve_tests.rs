@@ -1,8 +1,9 @@
 use super::*;
 use crate::test_support::child::Processes;
-use crate::test_support::{session, synthetic};
+use crate::test_support::{own_session, session, synthetic};
 use atlas_core::protocol::{Crop, JobRequest, Region};
 use atlas_core::screen::windows::{Bounds, Dock, Window};
+use atlas_core::session::Console;
 use std::os::fd::AsRawFd;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -772,9 +773,9 @@ fn a_window_read_is_refused_while_the_helper_is_on_screen() {
         dock: true,
         pin: None,
     };
-    assert!(request.policy().allowed(false).is_none());
+    assert!(request.policy().allowed(Console::Off, false).is_none());
     assert_eq!(
-        request.policy().allowed(true).unwrap()["code"],
+        request.policy().allowed(Console::Off, true).unwrap()["code"],
         "on-console"
     );
 }
@@ -789,7 +790,10 @@ fn a_window_read_is_refused_in_another_session() {
                 display_id,
             }),
         };
-        let refusal = request.policy().check(|| false, session).unwrap();
+        let refusal = request
+            .policy()
+            .check(Console::Off, || false, session)
+            .unwrap();
         assert_eq!(refusal["code"], "session-changed");
         assert_eq!(refusal["uncertain"], false);
     }
@@ -916,7 +920,7 @@ fn nothing_is_captured_if_the_helper_comes_on_screen_while_the_worker_waits() {
                     crop: None
                 })
                 .policy()
-                .allowed(true)
+                .allowed(Console::Off, true)
                 .unwrap()
             ]
         );
@@ -997,7 +1001,7 @@ async fn pixels_are_discarded_if_the_helper_comes_on_screen_during_capture() {
                 crop: None
             })
             .policy()
-            .allowed(true)
+            .allowed(Console::Off, true)
             .unwrap()
         ]
     );
@@ -1934,4 +1938,83 @@ async fn a_sound_request_answers_what_the_mute_last_reported() {
         assert_eq!(reply["helperSound"], "unavailable");
         assert!(reply["reason"].is_string(), "{reply}");
     }
+}
+
+/// A machine's daemon, its own session on its screen as `shown` says.
+fn machine(shown: fn() -> bool) -> Arc<Daemon> {
+    let mut daemon = Daemon::new("Aqua".into(), synthetic, shown, own_session);
+    daemon.screen.console = Console::Own;
+    daemon.screen.windows = fake_windows;
+    daemon.screen.bundle_id = fake_bundle_id;
+    daemon.screen.dock = |_| Dock::Icons(Vec::new());
+    Arc::new(daemon)
+}
+
+#[tokio::test]
+async fn a_machine_acts_on_its_own_screen_and_nothing_acts_once_its_session_leaves_it() {
+    for request in [
+        r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
+        r#"{"op":"windows"}"#,
+        r#"{"op":"screenshot"}"#,
+    ] {
+        let shown = exchange(machine(|| true), request).await;
+        assert_eq!(shown.last().unwrap()["ok"], true, "{request}: {shown:?}");
+
+        let left = exchange(machine(|| false), request).await;
+        assert_eq!(left.len(), 1, "{request}");
+        assert_eq!(left[0]["code"], "session-changed", "{request}");
+    }
+}
+
+/// A command a machine runs on its own screen keeps running there, and
+/// stops when that session leaves the screen.
+#[tokio::test]
+async fn a_command_on_a_machines_own_screen_stops_when_its_session_leaves_it() {
+    static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+    let daemon = machine(|| SHOWN.load(std::sync::atomic::Ordering::SeqCst));
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let served = tokio::spawn(handle(
+        server,
+        daemon,
+        true,
+        watch::channel(ConnectionPhase::Refusal).0,
+    ));
+    client
+        .write_all(b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n")
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(client).lines();
+    let started: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
+
+    // Several of the daemon's checks pass with the session on its screen.
+    tokio::time::sleep(CONSOLE_CHECK * 2).await;
+    assert!(
+        nix::sys::signal::killpg(group, None).is_ok(),
+        "still running"
+    );
+
+    SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
+    let line = tokio::time::timeout(Duration::from_secs(8), lines.next_line())
+        .await
+        .expect("the command was stopped")
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        (&reply["code"], &reply["uncertain"]),
+        (&json!("session-changed"), &json!(true))
+    );
+    served.await.unwrap().unwrap();
+    assert!(nix::sys::signal::killpg(group, None).is_err());
+}
+
+#[tokio::test]
+async fn a_machine_closes_to_new_commands_only_on_its_own_screen() {
+    assert!(
+        !machine(|| false).close_commands().await,
+        "closed off its screen"
+    );
+    assert!(machine(|| true).close_commands().await, "on its own screen");
 }

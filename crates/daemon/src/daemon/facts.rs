@@ -1,7 +1,7 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
 use super::recorder;
-use atlas_core::protocol::Census;
+use atlas_core::{protocol::Census, session::Console};
 use atlas_native::native::{accessibility_trusted as accessibility, capture, cf, resources};
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
@@ -53,6 +53,21 @@ pub(super) fn display_has_mode() -> bool {
 /// nothing acts unless the session is known to be hidden.
 pub(super) fn on_console() -> bool {
     console_state() != Some(false)
+}
+
+/// Whether the session is on the console, read as `console`'s kind must
+/// read it: unknown counts as away from where it keeps the screen.
+pub(super) fn observed(console: Console) -> fn() -> bool {
+    match console {
+        Console::Off => on_console,
+        Console::Own => shown,
+    }
+}
+
+/// Whether the session is known to be on the console. Unknown counts as
+/// off it: a machine's work never runs on a screen not known to be its own.
+fn shown() -> bool {
+    console_state() == Some(true)
 }
 
 /// The main display's bounds in points: x, y, width, height.

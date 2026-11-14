@@ -16,6 +16,7 @@ use atlas_core::{
     error::Result,
     process::Info,
     protocol::{How, JOB_GRACE, JobId, JobState, Left},
+    session::Console,
     time::now_ms,
 };
 use nix::sys::signal::Signal;
@@ -460,18 +461,36 @@ impl Jobs {
 /// says it is gone.
 fn ended_by_itself(how: How) -> bool {
     match how {
-        How::Exited | How::Stopped | How::Timeout | How::Person | How::OnConsole => true,
+        How::Exited
+        | How::Stopped
+        | How::Timeout
+        | How::Person
+        | How::OnConsole
+        | How::LeftScreen => true,
         How::Gone | How::Restarted | How::LeaderGone => false,
     }
 }
 
+/// Why every job must end now, if one must: the screen away from where
+/// `console` keeps it, or the person's Stop.
+fn forced(console: Console, on_console: bool, stopped: bool) -> Option<How> {
+    if console.away(on_console) {
+        return Some(match console {
+            Console::Off => How::OnConsole,
+            Console::Own => How::LeftScreen,
+        });
+    }
+    stopped.then_some(How::Person)
+}
+
 /// Watch `jobs` until stopping: about once a second, five times a second
 /// while one is stopping. A Stop is seen through the input service's
-/// saved `stop_marker`; the helper on screen through `on_console`.
+/// saved `stop_marker`; the screen away from where `console` keeps it
+/// through `on_console`.
 pub(in crate::daemon) async fn supervise(
     jobs: Arc<Jobs>,
     stop_marker: PathBuf,
-    on_console: fn() -> bool,
+    (console, on_console): (Console, fn() -> bool),
     mut stopping: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     loop {
@@ -488,14 +507,13 @@ pub(in crate::daemon) async fn supervise(
         let watched = jobs.clone();
         let marker = stop_marker.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            let stopped = marker.exists();
-            watched.watch_once(if on_console() {
-                Some(How::OnConsole)
-            } else {
-                stopped.then_some(How::Person)
-            })
+            watched.watch_once(forced(console, on_console(), marker.exists()))
         })
         .await;
         jobs.worker_outcome(outcome)?;
     }
 }
+
+#[cfg(test)]
+#[path = "supervise_tests.rs"]
+mod tests;

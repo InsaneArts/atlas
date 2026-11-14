@@ -3,7 +3,7 @@ use atlas_core::screen::windows::{Dock, Window};
 use atlas_core::{
     error::{Code, Error, Result},
     protocol::{Crop, Policy, Region, Request, failure, refused},
-    session::InputEpoch,
+    session::{Console, InputEpoch},
 };
 use atlas_native::native::capture;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -25,12 +25,21 @@ pub(super) struct Screen {
     pub(super) bundle_id: fn(i64) -> Option<String>,
     pub(super) dock: fn(&[Window]) -> Dock,
     pub(super) on_console: fn() -> bool,
+    /// Where this desktop's screen must be: off the console for the hidden
+    /// login, on it for a machine of its own.
+    pub(super) console: Console,
     pub(super) session: fn() -> Result<Value>,
 }
 
 impl Screen {
+    /// Whether the screen is away from where this desktop keeps it.
+    pub(super) fn away(self) -> bool {
+        self.console.away((self.on_console)())
+    }
+
     pub(super) fn epoch(self) -> Result<InputEpoch> {
-        (self.session)().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+        (self.session)()
+            .and_then(|proof| InputEpoch::from_proof_kept(&proof, std::process::id(), self.console))
     }
 
     /// A fresh console check precedes the exact session and display comparison.
@@ -39,7 +48,7 @@ impl Screen {
         epoch: &InputEpoch,
         policy: Policy,
     ) -> std::result::Result<(), Value> {
-        if let Some(refusal) = policy.allowed((self.on_console)()) {
+        if let Some(refusal) = policy.allowed(self.console, (self.on_console)()) {
             return Err(refusal);
         }
         if self.epoch().map_err(refused)? != *epoch {

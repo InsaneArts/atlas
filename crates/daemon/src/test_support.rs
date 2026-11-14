@@ -62,6 +62,14 @@ pub fn session() -> Result<Value> {
     }))
 }
 
+/// The made-up session of a machine of its own: on its own console, on
+/// display 7.
+pub fn own_session() -> Result<Value> {
+    let mut proof = session()?;
+    proof["onConsole"] = json!(true);
+    Ok(proof)
+}
+
 /// Answer every connection to `listener` as a real daemon does.
 pub fn serve(listener: UnixListener) {
     let daemon = Arc::new(Daemon::new("Aqua".into(), synthetic, || false, session));

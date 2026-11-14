@@ -41,12 +41,49 @@ pub struct InputEpoch {
 
 /// Where a proved session's screen must be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Console {
+pub enum Console {
     /// Off the console: the second login, kept behind the person's own.
     Off,
     /// On its own console: a machine of its own, whose screen is nobody
     /// else's.
     Own,
+}
+
+/// Where this process's own session keeps its screen, fixed once at start.
+static KEPT: std::sync::OnceLock<Console> = std::sync::OnceLock::new();
+
+impl Console {
+    /// Whether a session `on_console` is away from where this screen must
+    /// be: a hidden login shown, or a machine's own session not shown.
+    #[must_use]
+    pub const fn away(self, on_console: bool) -> bool {
+        match self {
+            Self::Off => on_console,
+            Self::Own => !on_console,
+        }
+    }
+
+    /// Where this process's session keeps its screen: off the console,
+    /// unless the process said otherwise at start. Once read, it is fixed.
+    pub fn kept() -> Self {
+        *KEPT.get_or_init(|| Self::Off)
+    }
+
+    /// Keep this process's session's screen here for its whole life, before
+    /// any proof is read.
+    ///
+    /// # Errors
+    ///
+    /// Refuses once a place was kept or assumed, even the same one: a
+    /// proof may already have been read against it.
+    pub fn keep(self) -> Result<()> {
+        KEPT.set(self).map_err(|_| {
+            Error::new(
+                Code::Identity,
+                "This process's screen was already kept elsewhere.",
+            )
+        })
+    }
 }
 
 /// The epoch a machine desktop's session is in, compared by exact
@@ -197,13 +234,24 @@ impl ProofObservation {
 }
 
 impl InputEpoch {
-    /// Decode a hidden graphical-session observation into an input epoch.
+    /// Decode a graphical-session observation into an input epoch, its
+    /// screen where this process keeps it.
     ///
     /// # Errors
     ///
     /// Rejects incomplete, visible, non-graphical or invalid identity and geometry facts, and a
     /// zero process ID. A decoded proof is a snapshot, never authority for a later session.
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
-        ProofObservation::decode(proof).input_epoch(process_id, Console::Off)
+        Self::from_proof_kept(proof, process_id, Console::kept())
+    }
+
+    /// [`Self::from_proof`] for a session whose screen must be where
+    /// `console` says, whatever this process keeps.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_proof`].
+    pub fn from_proof_kept(proof: &Value, process_id: u32, console: Console) -> Result<Self> {
+        ProofObservation::decode(proof).input_epoch(process_id, console)
     }
 }

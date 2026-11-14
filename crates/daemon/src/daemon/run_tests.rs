@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::child::{Child, Processes, RUN};
+use atlas_core::session::Console;
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -161,10 +162,11 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
         (None, true),
         (Some(Cancel::Left), false),
         (Some(Cancel::Stopping), false),
-        (Some(Cancel::OnConsole), false),
+        (Some(Cancel::Away(Console::Off)), false),
         (Some(Cancel::Left), true),
         (Some(Cancel::Stopping), true),
-        (Some(Cancel::OnConsole), true),
+        (Some(Cancel::Away(Console::Off)), true),
+        (Some(Cancel::Away(Console::Own)), false),
     ] {
         let mut child = Child::new(RUN);
         let argv = child.argv("stubborn");
@@ -237,11 +239,18 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
                 reply,
                 interrupted(Code::Restart, "The helper stopped while the command ran")
             ),
-            Some(Cancel::OnConsole) => assert_eq!(
+            Some(Cancel::Away(Console::Off)) => assert_eq!(
                 reply,
                 interrupted(
                     Code::OnConsole,
                     "The helper came on screen, so the command was stopped"
+                )
+            ),
+            Some(Cancel::Away(Console::Own)) => assert_eq!(
+                reply,
+                interrupted(
+                    Code::SessionChanged,
+                    "The desktop's own session left its screen, so the command was stopped"
                 )
             ),
         }
@@ -454,7 +463,12 @@ async fn a_child_exit_does_not_imply_its_pipe_closed() {
 
 #[tokio::test]
 async fn cancellation_after_exit_leaves_the_descendant_running() {
-    for reason in [Cancel::Left, Cancel::Stopping, Cancel::OnConsole] {
+    for reason in [
+        Cancel::Left,
+        Cancel::Stopping,
+        Cancel::Away(Console::Off),
+        Cancel::Away(Console::Own),
+    ] {
         let mut child = Child::new(RUN);
         let argv = child.argv("pipe");
         let (sender, mut receiver) = mpsc::channel(EVENTS);
@@ -482,9 +496,13 @@ async fn cancellation_after_exit_leaves_the_descendant_running() {
             Cancel::Stopping => {
                 interrupted(Code::Restart, "The helper stopped while the command ran")
             }
-            Cancel::OnConsole => interrupted(
+            Cancel::Away(Console::Off) => interrupted(
                 Code::OnConsole,
                 "The helper came on screen, so the command was stopped",
+            ),
+            Cancel::Away(Console::Own) => interrupted(
+                Code::SessionChanged,
+                "The desktop's own session left its screen, so the command was stopped",
             ),
         };
         assert_eq!(reply, expected);
@@ -963,7 +981,7 @@ async fn coming_on_screen_stops_the_command() {
         child.started(&mut receiver, observer).await;
         child.message("ready").await;
         child.permit("start");
-        Cancel::OnConsole
+        Cancel::Away(Console::Off)
     };
 
     let reply = tokio::time::timeout(

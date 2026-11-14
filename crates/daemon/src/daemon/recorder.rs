@@ -7,7 +7,7 @@
 //! fresh one for the next capture, and Screen Recording stays allowed.
 //! Once after an update, one already past [`AFTER_UPDATE`] is restarted the
 //! same way.
-use atlas_core::process::Instance;
+use atlas_core::{process::Instance, session::Console};
 use atlas_native::native::{
     activity,
     capture::{self, source::Source},
@@ -77,21 +77,31 @@ pub(super) struct System {
     /// Tells the live stream that its next picture comes from a new
     /// recorder, which takes longer to send its first.
     restarted: fn(),
-    /// Whether the helper is on the screen, or that cannot be read.
+    /// Whether the session is on the console, read as `console`'s kind
+    /// must read it.
     on_console: fn() -> bool,
+    /// Where this desktop's screen must be.
+    console: Console,
 }
 
 impl System {
-    /// macOS itself.
-    pub(super) fn real() -> Self {
+    /// macOS itself, for a desktop whose screen `console` says where to keep.
+    pub(super) fn real(console: Console) -> Self {
         Self {
             find: || resources::running(Path::new(RECORDER)),
             describe: resources::describe,
             kill: sigkill,
             exits,
             restarted: capture::recorder_restarted,
-            on_console: super::facts::on_console,
+            on_console: super::facts::observed(console),
+            console,
         }
+    }
+
+    /// Whether the screen is away from where this desktop keeps it, or
+    /// that cannot be read: the person may be using it.
+    fn away(&self) -> bool {
+        self.console.away((self.on_console)())
     }
 }
 
@@ -345,7 +355,7 @@ impl Recorder {
         // The person may be using the helper, physical input announces
         // nothing, and its recorder may be theirs too: the next reading
         // tries again.
-        if (self.system.on_console)() {
+        if self.system.away() {
             return (report, READING);
         }
         let restarted = match &self.input {
@@ -388,7 +398,7 @@ impl Recorder {
     /// was measured, and wait for it to exit. One that has not exited by
     /// then keeps the captures of `source` out until it has.
     fn restart(&self, source: &Source, measured: &Process, helper: u32) -> Restart {
-        if (self.system.on_console)() {
+        if self.system.away() {
             return Restart::Refused;
         }
         let pid = measured.instance.pid;

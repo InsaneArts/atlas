@@ -87,6 +87,7 @@ fn fake() -> System {
             OFF_SCREEN_FOR.set(left.saturating_sub(1));
             left == 0
         },
+        console: Console::Off,
     }
 }
 
@@ -873,4 +874,28 @@ fn a_recorder_not_measured_after_an_update_is_looked_at_again() {
     let report = recorder.report_at(&source(), start + READING).unwrap();
     assert_eq!(kills(), [700]);
     assert!(report.reset_after_update);
+}
+
+#[test]
+fn a_machines_recorder_is_restarted_on_its_own_screen_and_left_alone_off_it() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let machine = || System {
+        console: Console::Own,
+        ..fake()
+    };
+    // Off its screen: the person may be using it, or it cannot be told.
+    OFF_SCREEN_FOR.set(usize::MAX);
+    let left = Recorder::new(machine(), Some(HELPER))
+        .report_at(&source(), Instant::now())
+        .unwrap();
+    assert_eq!(kills(), [] as [i32; 0]);
+    assert_eq!(left.resets, 0);
+
+    OFF_SCREEN_FOR.set(0);
+    let restarted = Recorder::new(machine(), Some(HELPER))
+        .report_at(&source(), Instant::now())
+        .unwrap();
+    assert_eq!(kills(), [700]);
+    assert_eq!(restarted.resets, 1);
 }

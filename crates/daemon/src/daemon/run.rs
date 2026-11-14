@@ -12,6 +12,7 @@
 use atlas_core::{
     error::Code,
     protocol::{MAX_REPLY_EVENTS, failure, interrupted},
+    session::Console,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
@@ -350,8 +351,10 @@ pub(super) enum Cancel {
     Left,
     /// The daemon is stopping.
     Stopping,
-    /// The helper came on screen, where a person may be using it.
-    OnConsole,
+    /// The screen left where this desktop keeps it: the helper came on
+    /// screen, where a person may be using it, or a machine's own session
+    /// left its screen.
+    Away(Console),
 }
 
 impl Cancel {
@@ -359,9 +362,13 @@ impl Cancel {
         let (code, message) = match self {
             Self::Left => (Code::Transport, "The client went away"),
             Self::Stopping => (Code::Restart, "The helper stopped while the command ran"),
-            Self::OnConsole => (
+            Self::Away(Console::Off) => (
                 Code::OnConsole,
                 "The helper came on screen, so the command was stopped",
+            ),
+            Self::Away(Console::Own) => (
+                Code::SessionChanged,
+                "The desktop's own session left its screen, so the command was stopped",
             ),
         };
         interrupted(code, message)

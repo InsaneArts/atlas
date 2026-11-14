@@ -416,23 +416,23 @@ impl Request {
 
 #[cfg(target_os = "macos")]
 impl Policy {
-    /// Console refusal precedes a session-pin refusal at every admission point.
+    /// Console refusal precedes a session-pin refusal at every admission
+    /// point. `kept` is where this desktop's screen must be.
     pub fn check(
         self,
+        kept: crate::session::Console,
         on_console: fn() -> bool,
         session: fn() -> Result<Value, Error>,
     ) -> Option<Value> {
-        self.allowed(on_console())
-            .or_else(|| self.pinned_elsewhere(session))
+        self.allowed(kept, on_console())
+            .or_else(|| self.pinned_elsewhere(kept, session))
     }
 
-    /// Ending and inspecting jobs remain available while the helper is visible.
-    pub fn allowed(self, on_console: bool) -> Option<Value> {
+    /// Ending and inspecting jobs remain available while the screen is
+    /// away from where `kept` says it must be.
+    pub fn allowed(self, kept: crate::session::Console, on_console: bool) -> Option<Value> {
         match self.console {
-            Console::Hidden if on_console => Some(failure(
-                Code::OnConsole,
-                "The helper is on the screen; switch back to your own account first",
-            )),
+            Console::Hidden if kept.away(on_console) => Some(away(kept)),
             Console::Hidden | Console::Any | Console::Open => None,
         }
     }
@@ -447,10 +447,16 @@ impl Policy {
     }
 
     /// A pin is checked against a fresh session observation at each admission point.
-    fn pinned_elsewhere(self, session: fn() -> Result<Value, Error>) -> Option<Value> {
+    fn pinned_elsewhere(
+        self,
+        kept: crate::session::Console,
+        session: fn() -> Result<Value, Error>,
+    ) -> Option<Value> {
         let pin = self.pin?;
         let here = session()
-            .and_then(|proof| crate::session::InputEpoch::from_proof(&proof, std::process::id()))
+            .and_then(|proof| {
+                crate::session::InputEpoch::from_proof_kept(&proof, std::process::id(), kept)
+            })
             .map(|epoch| SessionPin {
                 security_session_id: epoch.security_session_id,
                 display_id: epoch.display_id,
@@ -461,6 +467,22 @@ impl Policy {
             Ok(_) => Some(refused(Error::session_changed())),
             Err(error) => Some(refused(error)),
         }
+    }
+}
+
+/// The refusal of a request that needs the screen where `kept` says it must
+/// be, while it is not.
+#[cfg(target_os = "macos")]
+fn away(kept: crate::session::Console) -> Value {
+    match kept {
+        crate::session::Console::Off => failure(
+            Code::OnConsole,
+            "The helper is on the screen; switch back to your own account first",
+        ),
+        crate::session::Console::Own => failure(
+            Code::SessionChanged,
+            "The desktop's own session is not on its screen",
+        ),
     }
 }
 

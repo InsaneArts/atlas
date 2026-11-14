@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::Console::{Off, Own};
 
 /// What `line` asks, whatever name it gives its change.
 fn parse(line: &[u8]) -> Result<Request, Value> {
@@ -317,8 +318,11 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
         assert!(parsed.is_ok(), "{request}");
         if let Ok(parsed) = parsed {
             let policy = parsed.policy();
-            assert!(policy.allowed(false).is_none(), "{request}");
-            assert_eq!(policy.allowed(true).is_some(), hidden, "{request}");
+            assert!(policy.allowed(Off, false).is_none(), "{request}");
+            assert_eq!(policy.allowed(Off, true).is_some(), hidden, "{request}");
+            // A machine's own session must be on its screen instead.
+            assert!(policy.allowed(Own, true).is_none(), "{request}");
+            assert_eq!(policy.allowed(Own, false).is_some(), hidden, "{request}");
             assert_eq!(policy.pin.is_some(), pinned, "{request}");
             let phase = if mutation {
                 ConnectionPhase::Mutation(label)
@@ -329,7 +333,8 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
         }
     }
     let host = Request::HostSession(Vec::new()).policy();
-    assert!(host.allowed(true).is_none());
+    assert!(host.allowed(Off, true).is_none());
+    assert!(host.allowed(Own, false).is_none());
     assert!(host.pin.is_none());
     assert!(matches!(host.phase, ConnectionPhase::Read("host-session")));
 }
@@ -762,4 +767,10 @@ fn a_sound_request_reads_or_sets_whether_the_helper_is_muted() {
         refused(r#"{"op":"sound","muted":"yes"}"#)["error"],
         "\"muted\" must be true or false"
     );
+}
+
+#[test]
+fn a_screen_away_is_refused_in_the_words_of_its_kind() {
+    assert_eq!(away(Off)["code"], "on-console");
+    assert_eq!(away(Own)["code"], "session-changed");
 }

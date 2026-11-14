@@ -10,11 +10,11 @@ pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
 #[cfg(any(test, feature = "test-support"))]
 pub use diagnosis::{START_INPUT, diagnosis};
-pub use epoch::{Display, Epoch, InputEpoch, MachineEpoch};
+pub use epoch::{Console, Display, Epoch, InputEpoch, MachineEpoch};
 
 use crate::account::FIRST_USER_UID;
 use crate::error::{Code, Error, Result};
-use epoch::{Console, ProofObservation};
+use epoch::ProofObservation;
 use serde::Deserialize;
 use serde_json::Value;
 

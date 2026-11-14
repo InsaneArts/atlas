@@ -148,6 +148,8 @@ pub enum How {
     Person,
     /// The helper came on screen.
     OnConsole,
+    /// A machine's own session left its screen.
+    LeftScreen,
     /// It was found ended with nothing to say why: the daemon was down, or
     /// its PID is another process's now.
     Gone,

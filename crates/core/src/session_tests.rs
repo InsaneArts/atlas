@@ -1,6 +1,6 @@
 use super::{
-    Absence, FOCUS_APP, LOGGED_OUT, Observation, diagnosis, has_capability, input_build_current,
-    require_hidden, silent, validate_target_uid,
+    Absence, Console, FOCUS_APP, InputEpoch, LOGGED_OUT, Observation, diagnosis, has_capability,
+    input_build_current, require_hidden, silent, validate_target_uid,
 };
 use crate::error::Code;
 use serde_json::json;
@@ -625,4 +625,72 @@ fn a_machine_paired_with_another_station_is_refused() {
             .require_machine(&expect(&paired))
             .is_err()
     );
+}
+
+/// A graphical session's proof, on the console or not.
+fn observed(on_console: bool) -> serde_json::Value {
+    json!({"ok": true, "uid": 502, "onConsole": on_console, "hasGraphicAccess": true,
+        "securitySessionID": 42, "displayID": 7, "width": 1440.0, "height": 900.0})
+}
+
+#[test]
+fn a_screen_is_away_only_from_where_its_kind_keeps_it() {
+    assert!(Console::Off.away(true));
+    assert!(!Console::Off.away(false));
+    assert!(Console::Own.away(false));
+    assert!(!Console::Own.away(true));
+}
+
+#[test]
+fn a_process_keeps_its_screen_off_the_console_unless_it_said_otherwise() {
+    assert_eq!(Console::kept(), Console::Off);
+}
+
+#[test]
+fn a_proof_is_decoded_for_the_screen_its_kind_keeps() {
+    let hidden = InputEpoch::from_proof_kept(&observed(false), 9, Console::Off);
+    let shown = InputEpoch::from_proof_kept(&observed(true), 9, Console::Own);
+
+    assert_eq!(hidden.unwrap(), shown.unwrap());
+    assert!(InputEpoch::from_proof_kept(&observed(true), 9, Console::Off).is_err());
+    assert!(InputEpoch::from_proof_kept(&observed(false), 9, Console::Own).is_err());
+    assert!(InputEpoch::from_proof(&observed(false), 9).is_ok());
+}
+
+#[test]
+fn a_kept_screen_once_read_can_never_be_changed() {
+    let read = Console::kept();
+
+    assert!(Console::Own.keep().is_err());
+    assert!(read.keep().is_err());
+    assert_eq!(Console::kept(), read);
+}
+
+/// Set in the child process the test below starts.
+const KEPT_OWN: &str = "ATLAS_TEST_KEPT_OWN";
+
+#[test]
+fn a_process_that_keeps_its_own_screen_first_decodes_every_proof_for_it() {
+    if std::env::var_os(KEPT_OWN).is_some() {
+        Console::Own.keep().unwrap();
+        assert!(InputEpoch::from_proof(&observed(true), 9).is_ok());
+        assert!(InputEpoch::from_proof(&observed(false), 9).is_err());
+        assert!(Console::Off.keep().is_err());
+        assert_eq!(Console::kept(), Console::Own);
+        return;
+    }
+    // Its own process: every other test here keeps the default.
+    let output = crate::spawn::output(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "session::tests::a_process_that_keeps_its_own_screen_first_decodes_every_proof_for_it",
+                "--test-threads=1",
+            ])
+            .env(KEPT_OWN, "1"),
+    )
+    .unwrap();
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("1 passed"), "{said}");
 }

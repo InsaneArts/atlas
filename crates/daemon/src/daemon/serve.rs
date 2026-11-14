@@ -18,7 +18,7 @@ use atlas_core::{
         self, Asked, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure,
         interrupted, refused,
     },
-    session::validate_target_uid,
+    session::{Console, validate_target_uid},
 };
 use atlas_native::native::{apps, capture, endpoint, windows};
 #[cfg(test)]
@@ -231,6 +231,7 @@ impl Daemon {
                     atlas_native::native::ax::dock(windows, atlas_native::native::ax::DOCK_TIMEOUT)
                 },
                 on_console,
+                console: Console::kept(),
                 session,
             },
             restarting: Notify::new(),
@@ -243,7 +244,7 @@ impl Daemon {
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
             agent: ConsoleAgent::detached(),
-            recorder: Arc::new(Recorder::new(recorder::System::real(), None)),
+            recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
             outcomes: Arc::default(),
         }
     }
@@ -267,7 +268,7 @@ impl Daemon {
         let mut daemon = Self::new(
             manager,
             capture::main_display,
-            facts::on_console,
+            facts::observed(Console::kept()),
             atlas_native::native::session_info,
         );
         // The helper's apps go silent before any agent acts, as the person
@@ -277,7 +278,7 @@ impl Daemon {
         // Only a daemon shown to run as the helper restarts its screen
         // recorder; one built any other way only reads it. A restart never
         // overlaps the input service's input, told beside its socket.
-        let mut recorder = Recorder::new(recorder::System::real(), Some(uid));
+        let mut recorder = Recorder::new(recorder::System::real(Console::kept()), Some(uid));
         if let Some(home) = std::env::var_os("HOME") {
             let input =
                 crate::helper_paths::HelperPaths::new(uid, PathBuf::from(home)).input_socket();
@@ -329,7 +330,7 @@ impl Daemon {
         Some(tokio::spawn(job::supervise(
             self.jobs.clone()?,
             marker,
-            self.screen.on_console,
+            (self.screen.console, self.screen.on_console),
             self.stopping.subscribe(),
         )))
     }
@@ -349,8 +350,8 @@ impl Daemon {
             .await;
     }
 
-    /// Close to new foreground commands when none runs and the helper is off
-    /// the screen, so a restart that follows ends none. Says whether it
+    /// Close to new foreground commands when none runs and the screen is
+    /// where this desktop keeps it, so a restart that follows ends none. Says whether it
     /// closed; once closed it stays so until this process ends. Commands
     /// that finished but were not collected yet count until the listener,
     /// asked here, collects them and sees what they came to.
@@ -360,20 +361,20 @@ impl Daemon {
             self.collect_runs.notify_one();
             return false;
         }
-        if (self.screen.on_console)() {
+        if self.screen.away() {
             return false;
         }
         self.commands_closed.store(true, Ordering::Release);
         true
     }
 
-    /// Completes once the helper is on the console, checked about once a
-    /// second.
-    async fn on_screen(&self) {
+    /// Completes once the screen is away from where this desktop keeps it,
+    /// checked about once a second.
+    async fn moved_away(&self) {
         loop {
             tokio::time::sleep(CONSOLE_CHECK).await;
 
-            if (self.screen.on_console)() {
+            if self.screen.away() {
                 return;
             }
         }
@@ -446,11 +447,12 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
-    // Started on the screen, it has no mode for the display it gets off it.
+    // Started on the screen, the hidden login has no mode for the display it
+    // gets off it. A machine's own session is on its screen by design.
     let restarter = daemon.clone();
     let closer = daemon.clone();
     let displaying = tokio::spawn(super::display_mode::restart_off_screen(
-        started_on_screen,
+        started_on_screen && daemon.screen.console == Console::Off,
         daemon.screen.on_console,
         facts::display_has_mode,
         async move || closer.close_commands().await,
@@ -948,7 +950,11 @@ async fn admit(
         Some(_) | None => None,
     };
 
-    match policy.check(daemon.screen.on_console, daemon.screen.session) {
+    match policy.check(
+        daemon.screen.console,
+        daemon.screen.on_console,
+        daemon.screen.session,
+    ) {
         Some(refusal) => {
             remember(remembering, &refusal);
             Err((refusal, framed))
@@ -986,7 +992,13 @@ async fn acknowledge(
 /// snapshot, even if the connection disappears before the worker finishes.
 async fn serve_windows(daemon: Arc<Daemon>, dock: bool, policy: Policy) -> Value {
     tokio::task::spawn_blocking(move || {
-        let guard = || policy.check(daemon.screen.on_console, daemon.screen.session);
+        let guard = || {
+            policy.check(
+                daemon.screen.console,
+                daemon.screen.on_console,
+                daemon.screen.session,
+            )
+        };
         if let Some(refusal) = guard() {
             return refusal;
         }
@@ -1079,7 +1091,11 @@ async fn run_registered(
     phase: &watch::Sender<ConnectionPhase>,
     handler: &mut oneshot::Sender<Result<()>>,
 ) -> Result<()> {
-    if let Some(refusal) = policy.check(daemon.screen.on_console, daemon.screen.session) {
+    if let Some(refusal) = policy.check(
+        daemon.screen.console,
+        daemon.screen.on_console,
+        daemon.screen.session,
+    ) {
         phase.send_replace(ConnectionPhase::Refusal);
         remember(remembering, &refusal);
         return write(&mut writer, &refusal).await;
@@ -1096,7 +1112,7 @@ async fn run_registered(
             _ = reader.read(&mut byte) => run::Cancel::Left,
             () = handler.closed() => run::Cancel::Left,
             () = daemon.stopped() => run::Cancel::Stopping,
-            () = daemon.on_screen() => run::Cancel::OnConsole,
+            () = daemon.moved_away() => run::Cancel::Away(daemon.screen.console),
         }
     };
     let reply = run::run(argv, timeout, events, cancel).await;

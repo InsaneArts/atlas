@@ -1658,7 +1658,7 @@ async fn a_failed_supervisor_never_reports_a_settled_job() {
     let mut supervisor = Box::pin(supervise(
         jobs.clone(),
         folder.path().join("stop"),
-        || false,
+        (atlas_core::session::Console::Off, || false),
         stopped,
     ));
     // Poll directly so the first timer is registered without running a blocking worker.
@@ -1807,7 +1807,7 @@ async fn stopping_supervision_joins_the_in_flight_worker() {
     let mut supervisor = Box::pin(supervise(
         jobs.clone(),
         folder.path().join("stop"),
-        || false,
+        (atlas_core::session::Console::Off, || false),
         stopped,
     ));
     // Register and advance only the first sampling timer. The real worker handshake
