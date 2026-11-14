@@ -94,11 +94,12 @@ pub trait GuestRecords: Send + Sync {
     /// Fails when it cannot be read.
     fn secret(&self) -> Result<Option<PairingSecret>>;
 
-    /// Forget the secret, for good.
+    /// Forget the secret, for good: durably before it returns, and again for
+    /// a secret already gone, whose removal may not have been kept.
     ///
     /// # Errors
     ///
-    /// Fails when it cannot be removed.
+    /// Fails when it cannot be removed, or its removal cannot be kept.
     fn forget_secret(&self) -> Result<()>;
 }
 
@@ -270,13 +271,9 @@ pub async fn guest_pairs<S: AsyncRead + AsyncWrite + Unpin>(
         if &committed != change {
             return Err(refused("the guest is paired for another enrolment"));
         }
-        // A commitment that outlived its secret's removal finishes it.
-        if off_runtime(records, |records| records.secret())
-            .await?
-            .is_some()
-        {
-            off_runtime(records, |records| records.forget_secret()).await?;
-        }
+        // A commitment that outlived its secret's removal finishes it, its
+        // being kept for good too, whether or not the secret is still there.
+        off_runtime(records, |records| records.forget_secret()).await?;
         let mut secure = connect_as_guest(stream, own, station, desktop, Purpose::Pairing).await?;
         ack(&mut secure, change, facts).await?;
         return Ok(station);

@@ -744,3 +744,28 @@ async fn a_guest_gone_after_committing_and_a_station_gone_before_its_ack_still_c
     let (completed, acked) = completion(&with, &station, &guest).await;
     assert!(completed.is_ok() && acked.is_ok());
 }
+
+#[tokio::test]
+async fn a_secret_gone_whose_removal_cannot_be_kept_holds_the_ack_until_it_can() {
+    let with = setup();
+    let (station, guest) = (
+        Arc::new(Kept::default()),
+        Arc::new(Guest::holding(&with.secret)),
+    );
+    station.keep(Enrolment::Pending {
+        change: with.change.clone(),
+        guest: with.guest.public(),
+    });
+    guest.commit(with.station.public(), &with.change).unwrap();
+    // Removed already, but that removal may not have been kept.
+    *guest.secret.lock().unwrap() = None;
+    guest.forgetting_fails.store(true, SeqCst);
+
+    let (held, refused) = completion(&with, &station, &guest).await;
+    assert!(held.is_err() && refused.is_err());
+    assert!(matches!(station.now(), Some(Enrolment::Pending { .. })));
+
+    guest.forgetting_fails.store(false, SeqCst);
+    let (paired, acked) = completion(&with, &station, &guest).await;
+    assert!(paired.is_ok() && acked.is_ok());
+}

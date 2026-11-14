@@ -186,6 +186,7 @@ version = "0.1.3"
 dependencies = [
  "atlas-core",
  "atlas-native",
+ "atlas-session",
  "base64",
  "libc",
  "nix",
