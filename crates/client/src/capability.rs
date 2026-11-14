@@ -20,6 +20,7 @@ pub const FIXTURE: &str = "/Users/Shared/AtlasTests/DesktopFixture";
 pub(crate) const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
                            Use Chrome/Firefox for web pages; do not retry a blank page.";
 
+#[derive(Clone)]
 pub struct Doctor {
     pub diagnosis: atlas_core::session::Diagnosis,
     pub(crate) native: NativeState,

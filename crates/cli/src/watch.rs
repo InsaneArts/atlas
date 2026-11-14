@@ -499,7 +499,7 @@ fn signature(status: &Value, mark: Mark) -> Value {
 }
 
 /// `session` without the ages that count up while nothing else changes.
-fn without_ticking_ages(session: &mut Value) {
+pub(crate) fn without_ticking_ages(session: &mut Value) {
     let Some(session) = session.as_object_mut() else {
         return;
     };

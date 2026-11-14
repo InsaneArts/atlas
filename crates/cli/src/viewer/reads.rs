@@ -6,7 +6,6 @@ use super::{
     Viewer,
     control::cleanup_session,
     http::{json_response, response},
-    unpoisoned,
 };
 use atlas_client::{
     activity_log::{self, Whose},
@@ -33,6 +32,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 /// The most activity rows and screenshots one read lists: what the app's
@@ -75,7 +75,68 @@ impl Named {
     }
 }
 
+/// How long one look at the helper answers every status read.
+const LOOK_SHARED_FOR: Duration = Duration::from_secs(1);
+
+/// One look at the helper, shared by the status reads that come while it
+/// is fresh: the report on the helper `client` serves.
+pub(super) struct Look {
+    client: Arc<Client>,
+    /// How many times looks were forgotten before this one began.
+    forgotten: u64,
+    at: tokio::time::Instant,
+    doctor: atlas_client::capability::Doctor,
+}
+
 impl Viewer {
+    /// The helper's report for a status read of `client`, waiting until
+    /// `until` at most, with when it was looked at and whether this read
+    /// looked: one look at a time, and one finished within
+    /// [`LOOK_SHARED_FOR`] answers every read of the same helper, however
+    /// many readers come at once. A look at a helper the settings replaced
+    /// meanwhile is not kept for the next. The Stop kept on the person's
+    /// side is noted afresh for each read.
+    async fn look(
+        &self,
+        client: &Arc<Client>,
+        until: tokio::time::Instant,
+    ) -> (atlas_client::capability::Doctor, tokio::time::Instant, bool) {
+        let mut shared = self.look.lock().await;
+        let forgotten = self
+            .looks_forgotten
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let reused = shared.as_ref().filter(|look| {
+            Arc::ptr_eq(&look.client, client)
+                && look.forgotten == forgotten
+                && look.at.elapsed() < LOOK_SHARED_FOR
+        });
+        let (mut doctor, at, looked) = match reused {
+            Some(look) => (look.doctor.clone(), look.at, false),
+            None => {
+                let doctor =
+                    atlas_client::overview::helper_report(client, until, self.idle_look()).await;
+                let at = tokio::time::Instant::now();
+                *shared = Arc::ptr_eq(client, &self.client()).then(|| Look {
+                    client: client.clone(),
+                    forgotten,
+                    at,
+                    doctor: doctor.clone(),
+                });
+                (doctor, at, true)
+            }
+        };
+        drop(shared);
+        atlas_client::overview::note_stop(client, &mut doctor);
+        (doctor, at, looked)
+    }
+
+    /// Forget the shared look, and any under way: the next status read
+    /// looks at the helper again. It never waits for a look.
+    pub(super) fn forget_look(&self) {
+        self.looks_forgotten
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// [`Viewer::status_for`] any caller but the person's own app.
     #[cfg(test)]
     pub(super) async fn status(self: &Arc<Self>) -> Value {
@@ -112,11 +173,12 @@ impl Viewer {
         self.follow_settings().await;
 
         let client = self.client();
-        let doctor = atlas_client::overview::report(&client, until, self.idle_look()).await;
+        let (doctor, looked_at, looked) = self.look(&client, until).await;
 
         // Ending control waits on the helper too: it finishes by itself
-        // when that takes longer than a moment.
-        if !doctor.diagnosis.ready {
+        // when that takes longer than a moment. Only a look this read made
+        // ends it: a shared one may be older than the control taken since.
+        if looked && !doctor.diagnosis.ready {
             self.release_shortly().await;
         }
 
@@ -196,6 +258,10 @@ impl Viewer {
             _ => Value::Null,
         };
         status.value["overview"]["signInInterrupted"] = interrupted;
+        self.tell_producer(&client, looked_at, &status.value, active);
+        if !self.feed.available() {
+            status.value["events"] = json!("unavailable");
+        }
 
         if !person && let Some(fields) = status.value.as_object_mut() {
             fields.remove("consoleName");
@@ -488,29 +554,29 @@ fn activity_session(query: Option<&str>) -> Result<Option<Whose>> {
 /// Account `name`'s full name, as `ask` finds it, kept in `known`. It is
 /// asked once per account (off the runtime, as it asks directory services),
 /// also when it has none, but again after an ask that had no answer.
-async fn account_title(
-    known: &std::sync::Mutex<Option<(String, Title)>>,
-    name: &str,
-    ask: fn(&str) -> Title,
-) -> Option<String> {
-    let kept = unpoisoned(known)
-        .clone()
-        .filter(|(account, _)| account == name);
-    if let Some((_, title)) = kept {
-        return title.titled();
+async fn account_title(known: &AccountTitle, name: &str, ask: fn(&str) -> Title) -> Option<String> {
+    // One question at a time: readers that come meanwhile take its answer.
+    let mut kept = known.lock().await;
+    let fresh = |(account, title, at): &(String, Title, tokio::time::Instant)| {
+        account == name && (*title != Title::Unknown || at.elapsed() < UNKNOWN_TITLE_KEPT)
+    };
+    if let Some((_, title, _)) = kept.as_ref().filter(|entry| fresh(entry)) {
+        return title.clone().titled();
     }
 
     let account = name.to_owned();
     let title = tokio::task::spawn_blocking(move || ask(&account))
         .await
         .unwrap_or(Title::Unknown);
-    if title == Title::Unknown {
-        return None;
-    }
-
-    *unpoisoned(known) = Some((name.to_owned(), title.clone()));
+    *kept = Some((name.to_owned(), title.clone(), tokio::time::Instant::now()));
     title.titled()
 }
+
+/// The full name of the account last asked about, and when it was asked.
+pub(super) type AccountTitle = tokio::sync::Mutex<Option<(String, Title, tokio::time::Instant)>>;
+
+/// How long an account whose name went unanswered is not asked about again.
+const UNKNOWN_TITLE_KEPT: Duration = Duration::from_secs(60);
 
 /// What was done in the helper lately, newest first, as the app and the
 /// view list it: every session's newest rows, or `whose` rows alone, from
@@ -695,7 +761,7 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
 /// Keep whether the person's apps think they are away, which can name the
 /// app they type a password in, for the person's own app (`person`) alone:
 /// any other caller's status goes without it.
-fn keep_idle_time_for(status: &mut Value, person: bool) {
+pub(super) fn keep_idle_time_for(status: &mut Value, person: bool) {
     if !person && let Some(fields) = status.as_object_mut() {
         fields.remove("idleTime");
     }

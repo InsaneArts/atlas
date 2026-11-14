@@ -1409,7 +1409,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/overview.rs",
-        &["report"],
+        &["helper_report"],
         "owner: the report of the desktop's readiness",
     ),
     (

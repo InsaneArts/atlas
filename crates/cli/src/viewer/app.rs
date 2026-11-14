@@ -123,6 +123,7 @@ pub async fn serve(
     let pictures = tokio::spawn(prune_pictures(viewer.clone()));
     let expiry = expire_control(viewer.clone());
     let upkeep = tokio::spawn(super::upkeep::keep_up(viewer.clone()));
+    let producing = tokio::spawn(super::produce::produce(viewer.clone()));
 
     // Changes in progress in the helper (taking control, input, recovery)
     // end first, however long the helper takes, and no more begin; then
@@ -142,6 +143,10 @@ pub async fn serve(
         let leave = shutdown_view.idle_leave.clone();
         let _ = tokio::task::spawn_blocking(move || leave.take_back()).await;
 
+        // The feed's writer ends before the feed closes, so nothing begins
+        // it again while the service ends.
+        producing.abort();
+        let _ = producing.await;
         shutdown_view.close().await;
         let _ = shutdown_view.release(None).await;
     })

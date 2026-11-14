@@ -6,10 +6,13 @@ mod accounts;
 mod app;
 mod attach;
 mod control;
+mod events;
+mod feed;
 mod frames;
 mod http;
 mod interrupted;
 mod local;
+mod produce;
 mod reads;
 mod settings;
 mod sign_in;
@@ -49,7 +52,7 @@ const SERVICE: &str = "atlas-viewer";
 pub(crate) const PROTOCOL: u64 = 1;
 
 /// What this viewer serves beyond its version, for readers to look for.
-const CAPABILITIES: &[&str] = &["incarnation", "interrupted-sign-in"];
+const CAPABILITIES: &[&str] = &["incarnation", "interrupted-sign-in", "events"];
 
 /// The header every reply names this viewer's incarnation in.
 const INCARNATION_HEADER: &str = "x-atlas-incarnation";
@@ -108,8 +111,15 @@ struct Viewer {
     prefix: String,
     authority: String,
     /// The helper account's short name and what directory services said of
-    /// its full name, once they answered.
-    account_name: std::sync::Mutex<Option<(String, atlas_core::account::Title)>>,
+    /// its full name.
+    account_name: reads::AccountTitle,
+    /// The newest look at the helper, shared by the status reads, and how
+    /// many times looks were forgotten since the service started.
+    look: tokio::sync::Mutex<Option<reads::Look>>,
+    looks_forgotten: std::sync::atomic::AtomicU64,
+    /// The event feed, and the newest status read for its producer.
+    feed: feed::Feed,
+    observed: tokio::sync::watch::Sender<Option<produce::Observed>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
     /// The helper daemon and display input was last started or re-pinned
@@ -180,6 +190,7 @@ impl Viewer {
     /// that takes, then let no more begin.
     async fn close(&self) {
         *self.closed.write().await = true;
+        self.feed.close();
     }
 }
 

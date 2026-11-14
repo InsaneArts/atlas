@@ -154,8 +154,8 @@ async fn automatic_input_startup_queued_after_shutdown_sends_no_request() {
         .await;
 }
 
-#[tokio::test]
-async fn an_account_title_is_asked_again_after_no_answer_and_kept_once_answered() {
+#[tokio::test(start_paused = true)]
+async fn an_account_title_is_asked_again_a_while_after_no_answer_and_kept_once_answered() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static ASKED: AtomicUsize = AtomicUsize::new(0);
     fn ask(_: &str) -> Title {
@@ -165,9 +165,11 @@ async fn an_account_title_is_asked_again_after_no_answer_and_kept_once_answered(
             _ => Title::Titled("Not asked".to_owned()),
         }
     }
-    let known = std::sync::Mutex::new(None);
+    let known = tokio::sync::Mutex::new(None);
 
     assert_eq!(account_title(&known, "atlas", ask).await, None);
+    assert_eq!(account_title(&known, "atlas", ask).await, None, "not yet");
+    tokio::time::advance(UNKNOWN_TITLE_KEPT).await;
     assert_eq!(
         account_title(&known, "atlas", ask).await.as_deref(),
         Some("Atlas")
@@ -187,7 +189,7 @@ async fn an_account_with_no_full_name_is_asked_once() {
         ASKED.fetch_add(1, Ordering::SeqCst);
         Title::Untitled
     }
-    let known = std::sync::Mutex::new(None);
+    let known = tokio::sync::Mutex::new(None);
 
     assert_eq!(account_title(&known, "atlas", ask).await, None);
     assert_eq!(account_title(&known, "atlas", ask).await, None);
@@ -219,6 +221,91 @@ async fn only_the_persons_status_carries_the_console_name() {
                 assert!(person["consoleName"]["state"].is_string());
                 let agent = viewer.status_for(false).await;
                 assert!(agent.get("consoleName").is_none());
+                viewer.close().await;
+            },
+            |_| None,
+        )
+        .await;
+}
+
+/// How many requests the helper is asked for while `reads` run on a viewer
+/// of its own.
+async fn requests_for<F: Future<Output = ()>>(reads: impl FnOnce(Arc<Viewer>) -> F) -> usize {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, helper, _) = verified(dir.path());
+    helper
+        .serve(
+            async {
+                reads(viewer.clone()).await;
+                viewer.close().await;
+            },
+            |_| None,
+        )
+        .await;
+    helper.requests()
+}
+
+#[tokio::test]
+async fn status_reads_that_come_together_share_one_look_at_the_helper() {
+    let alone = requests_for(|viewer| async move {
+        viewer.status_for(false).await;
+    })
+    .await;
+    let together = requests_for(|viewer| async move {
+        tokio::join!(
+            viewer.status_for(false),
+            viewer.status_for(true),
+            viewer.status_for(false)
+        );
+        viewer.status_for(false).await;
+    })
+    .await;
+
+    assert!(alone > 0);
+    assert_eq!(together, alone, "four reads, one look");
+}
+
+#[tokio::test]
+async fn a_look_at_one_helper_answers_no_read_of_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, helper, _) = verified(dir.path());
+    helper
+        .serve(
+            async {
+                let until = tokio::time::Instant::now() + READ_DEADLINE;
+                let served = viewer.client();
+                let _ = viewer.look(&served, until).await;
+                let once = helper.requests();
+                let _ = viewer.look(&served, until).await;
+                assert_eq!(helper.requests(), once, "the same helper's look is shared");
+
+                let next = Arc::new((*served).clone());
+                let _ = viewer.look(&next, until).await;
+                assert!(helper.requests() > once, "another helper is looked at");
+                viewer.close().await;
+            },
+            |_| None,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn a_look_from_before_a_stop_or_resume_answers_no_read_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, helper, _) = verified(dir.path());
+    helper
+        .serve(
+            async {
+                let until = tokio::time::Instant::now() + READ_DEADLINE;
+                let served = viewer.client();
+                let _ = viewer.look(&served, until).await;
+                let once = helper.requests();
+
+                viewer.forget_look();
+                let (_, _, looked) = viewer.look(&served, until).await;
+
+                assert!(looked, "looked at the helper again");
+                assert!(helper.requests() > once);
                 viewer.close().await;
             },
             |_| None,

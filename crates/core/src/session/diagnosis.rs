@@ -47,6 +47,7 @@ pub fn require_report(report: &Value) -> Result<()> {
     }
 }
 
+#[derive(Clone)]
 pub struct Diagnosis {
     pub value: Value,
     pub observation: Observation,

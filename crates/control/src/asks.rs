@@ -144,10 +144,15 @@ impl Asks {
     }
 
     /// The folder the asks are kept in.
-    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn folder(&self) -> &Path {
         &self.folder
+    }
+
+    /// The file the person's grants are kept in, beside the folder.
+    #[must_use]
+    pub fn allowed_path(&self) -> &Path {
+        &self.allowed
     }
 
     /// Ask `ask`, or, when this session already asks the same request,

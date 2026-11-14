@@ -54,6 +54,19 @@ pub async fn report(
     until: Instant,
     idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
+    let mut doctor = helper_report(client, until, idle).await;
+    note_stop(client, &mut doctor);
+    doctor
+}
+
+/// [`report`] as the helper answers, without the Stop kept on the person's
+/// side, which [`note_stop`] adds: a report shared between reads is noted
+/// afresh for each.
+pub async fn helper_report(
+    client: &Client,
+    until: Instant,
+    idle: crate::idle_time::Look,
+) -> crate::capability::Doctor {
     let reply = tokio::time::timeout_at(until, client.status())
         .await
         .unwrap_or_else(|_| json!(late()));
@@ -69,13 +82,16 @@ pub async fn report(
             .unwrap_or(Named::Unknown)
     );
 
-    // A Stop kept on the person's side counts as one the helper holds.
+    doctor
+}
+
+/// A Stop kept on the person's side counts as one the helper holds.
+pub fn note_stop(client: &Client, doctor: &mut crate::capability::Doctor) {
+    let status = &mut doctor.diagnosis.value;
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
         status["session"]["inputService"]["held"] = json!(true);
         doctor.diagnosis.observation.native.held = true;
     }
-
-    doctor
 }
 
 /// The controller's mutations of unknown outcome, and how many are pending

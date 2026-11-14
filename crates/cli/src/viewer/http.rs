@@ -104,7 +104,11 @@ pub(super) fn configured(
         prefix,
         authority,
         app: std::sync::Mutex::new(None),
-        account_name: std::sync::Mutex::new(None),
+        account_name: tokio::sync::Mutex::new(None),
+        look: tokio::sync::Mutex::new(None),
+        looks_forgotten: std::sync::atomic::AtomicU64::new(0),
+        feed: super::feed::Feed::default(),
+        observed: watch::Sender::new(None),
         accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
         sign_in: Mutex::new(None),
         interrupted: std::sync::Mutex::new(None),
@@ -255,6 +259,13 @@ pub(super) fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
 /// lease change and its matching cleanup. Each request therefore runs to
 /// completion in its own task.
 async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
+    // A reader waiting on the feed changes nothing: its wait is its
+    // connection's, and ends when the reader goes away.
+    if request.method() == Method::GET
+        && request.uri().path().strip_prefix(&viewer.prefix) == Some("events.json")
+    {
+        return respond(viewer, request).await;
+    }
     tokio::spawn(respond(viewer, request))
         .await
         .unwrap_or_else(|_| refused(500, "Viewer request failed"))
@@ -266,6 +277,8 @@ async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
 enum Route {
     /// The address itself, which says what serves it.
     Service,
+    /// What changed since a reader last looked, waiting a while for it.
+    Events,
     Read(Read),
     /// Opening the viewer window in the app.
     OpenViewer,
@@ -292,6 +305,7 @@ macro_rules! routes {
                 if *method == Method::GET {
                     return match path {
                         "" => Some(Self::Service),
+                        "events.json" => Some(Self::Events),
                         $($read_path => Some(Self::Read(Read::$read)),)+
                         _ => None,
                     };
@@ -384,6 +398,7 @@ impl Route {
                 | Change::SignInInterrupted,
             ) => true,
             Self::Service
+            | Self::Events
             | Self::Read(_)
             | Self::OpenViewer
             | Self::Change(
@@ -398,14 +413,16 @@ impl Route {
         }
     }
 
-    /// Whether it ends control or stops agents, which have slots of their
-    /// own.
+    /// Whether it keeps or ends control or stops agents, which have slots
+    /// of their own.
     fn urgent(self) -> bool {
         match self {
             // The person's answer ends an agent's wait, and finishing a
-            // sign-in ends control: neither waits behind other requests.
+            // sign-in ends control: neither waits behind other requests. A
+            // renewal kept waiting would end control the person holds.
             Self::Change(
                 Change::Hold
+                | Change::Renew
                 | Change::Release
                 | Change::Revoke
                 | Change::Answer
@@ -414,6 +431,7 @@ impl Route {
                 | Change::SignInInterrupted,
             ) => true,
             Self::Service
+            | Self::Events
             | Self::Read(_)
             | Self::OpenViewer
             | Self::Change(
@@ -421,7 +439,6 @@ impl Route {
                 | Change::Cleanup
                 | Change::Input
                 | Change::Acquire
-                | Change::Renew
                 | Change::AddAccount
                 | Change::RemoveAccount
                 | Change::SetLevel
@@ -476,6 +493,7 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
                 "protocol": super::PROTOCOL,
                 "capabilities": super::CAPABILITIES,
                 "incarnation": viewer.incarnation,
+                "events": if viewer.feed.available() { "available" } else { "unavailable" },
             }),
         );
     }
@@ -485,6 +503,14 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
         .is_some_and(|given| same_secret(given.as_bytes(), viewer.app_secret.as_bytes()));
     if route.is_some_and(Route::app_only) && !app {
         return json_response(403, json!(not_the_app()));
+    }
+
+    // The feed's waits have a pool of their own, outside every other
+    // route's slots.
+    if route == Some(Route::Events) {
+        let (feed, after) = feed_position(request.uri().query());
+        let (code, body) = viewer.feed.answer(feed, after).await;
+        return json_response(code, body);
     }
 
     // Ending control has slots of its own, so a busy viewer still lets go.
@@ -534,11 +560,25 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
             }
             Err(response) => response,
         },
-        Some(Route::Service) | None => refused(404, "Unknown operation"),
+        Some(Route::Service | Route::Events) | None => refused(404, "Unknown operation"),
     }
 }
 
 /// The desktop `query` names, as `desktop=` its ID.
+/// The feed position a reader names: `feed=F&after=N`.
+fn feed_position(query: Option<&str>) -> (Option<&str>, u64) {
+    let value = |key: &str| {
+        query?
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
+    };
+    let after = value("after").and_then(|after| after.parse().ok());
+    (
+        value("feed").filter(|_| after.is_some()),
+        after.unwrap_or(0),
+    )
+}
+
 fn named_in_query(query: Option<&str>) -> Option<&str> {
     query?
         .split('&')
@@ -618,7 +658,12 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
         Change::Cleanup => viewer.clean_up(body["session"].as_str()).await,
         // Control a viewer holds is left alone either way.
         Change::Hold => match body["on"].as_bool() {
-            Some(on) => viewer.client().hold(on).await,
+            Some(on) => {
+                let held = viewer.client().hold(on).await;
+                // The shared look says how the helper stood before.
+                viewer.forget_look();
+                held
+            }
             None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
         },
         Change::Input => viewer.input(lease, frame, &body["actions"]).await,

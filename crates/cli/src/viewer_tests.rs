@@ -3246,3 +3246,60 @@ async fn a_request_for_another_desktop_is_refused_and_one_naming_none_is_for_thi
         assert_eq!(status, 409, "{named}");
     }
 }
+
+#[tokio::test]
+async fn a_reader_that_goes_away_frees_its_wait_on_the_feed() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+    let (opening, events) = (viewer.clone(), dir.path().join("events"));
+    tokio::task::spawn_blocking(move || opening.feed.open(&events))
+        .await
+        .unwrap()
+        .unwrap();
+    let (feed, head) = viewer.feed.head().unwrap();
+    let mut reader = tokio::net::TcpStream::connect(viewer.authority.as_str())
+        .await
+        .unwrap();
+    let request = format!(
+        "GET {}events.json?feed={feed}&after={head} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\n\r\n",
+        viewer.prefix,
+        host = viewer.authority,
+    );
+    reader.write_all(request.as_bytes()).await.unwrap();
+    let free = |viewer: &Viewer| viewer.feed.free_waits();
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while free(&viewer) == super::feed::WAITS {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the reader waits");
+    drop(reader);
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while free(&viewer) < super::feed::WAITS {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its wait ended with it");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_renewal_is_never_turned_away_while_reads_and_the_feed_are_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let _reads = viewer
+        .requests
+        .try_acquire_many(u32::try_from(CONCURRENT_REQUESTS).unwrap())
+        .unwrap();
+    let _waits = viewer.feed.hold_every_wait();
+
+    let (status, body) = posted(&viewer, "control/renew", &json!({"lease": "none"})).await;
+
+    assert_ne!(body["code"], "busy", "{status} {body}");
+}

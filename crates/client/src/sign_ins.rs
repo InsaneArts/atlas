@@ -139,6 +139,12 @@ pub fn listed() -> Listed {
     atlas_core::config::home().map_or(Listed::Unknown, |home| listed_in(&home))
 }
 
+/// Where the accounts are recorded in `home`.
+#[must_use]
+pub fn record_in(home: &Path) -> std::path::PathBuf {
+    home.join(RECORD)
+}
+
 /// [`listed`] for the home folder `home`.
 #[must_use]
 pub fn listed_in(home: &Path) -> Listed {
