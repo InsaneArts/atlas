@@ -155,9 +155,21 @@ impl Halting {
                     }
                     Transition::Resume(authority, at) => {
                         let current = || authority.check().is_ok() && since.load(SeqCst) == at;
-                        // Never over work still being ended, or not known to
-                        // have ended.
-                        if unsaved || worker.keepers.unsettled() || !current() {
+                        if unsaved || !current() {
+                            continue;
+                        }
+                        // What earlier daemons left, looked at again under
+                        // this saved Stop, and never lifted over: work still
+                        // being ended, or not known to have ended.
+                        let (looking, saving) = (worker.clone(), stop.clone());
+                        let resolved = tokio::task::spawn_blocking(move || {
+                            // Forgotten only under a Stop read back saved.
+                            let saved = matches!(saving.kept(), Ok(StopKept::Stopped { .. }));
+                            looking.recover_now(saved)
+                        })
+                        .await
+                        .unwrap_or(false);
+                        if !resolved || worker.keepers.unsettled() || !current() {
                             continue;
                         }
                         let (lifting, checking) = (stop.clone(), authority.clone());
@@ -265,6 +277,33 @@ impl Drop for Tasks {
     }
 }
 
+/// How a machine's daemon starts, off the runtime: work an earlier daemon
+/// may have left running stops agents, saved first, and what it left is then
+/// recovered, never forgotten without that saved Stop. Agents stay stopped
+/// when the Stop says so or cannot be told.
+async fn start(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) {
+    let reading = (daemon.clone(), stop);
+    let (left, saved, clear) = tokio::task::spawn_blocking(move || {
+        let (daemon, stop) = reading;
+        let left = daemon.supervising.as_ref().is_some_and(
+            |supervising| !matches!(supervising.kept.kept(), Ok(work) if work.is_empty()),
+        );
+        let saved = left && stop.stop(Why::Restarted).is_ok();
+        (left, saved, matches!(stop.kept(), Ok(StopKept::Clear)))
+    })
+    .await
+    .unwrap_or((true, false, false));
+    daemon.halted.send_modify(|halt| halt.halted = !clear);
+    if !left {
+        daemon.keepers.orphans(false);
+        return;
+    }
+    // Recovered while serving, agents stopped meanwhile.
+    tokio::task::spawn_blocking(move || {
+        daemon.recover_published(crate::machine::processes::LEFT_ENDING, saved)
+    });
+}
+
 /// The generation live now, and the tasks that keep it.
 struct Live {
     authority: Authority,
@@ -279,6 +318,9 @@ pub struct Machine {
     clock: Arc<dyn Clock>,
     live: Mutex<Option<Live>>,
     halting: Arc<Halting>,
+    /// Finding how it started: what Stop says, and what an earlier daemon
+    /// left. Serving waits for it.
+    starting: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub said: Arc<Said>,
 }
 
@@ -291,17 +333,20 @@ impl Machine {
     ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
         daemon.supervising = Some(supervising);
-        // Stopped before it started, or unable to tell: still stopped.
-        let clear = matches!(paired.stop.kept(), Ok(StopKept::Clear));
-        daemon.halted.send_modify(|halt| halt.halted = !clear);
+        // Nothing is taken until it is known whether agents were stopped,
+        // and what an earlier daemon left.
+        daemon.halted.send_modify(|halt| halt.halted = true);
+        daemon.keepers.orphans(true);
         let daemon = Arc::new(daemon);
         let halting = Halting::new(daemon.clone(), paired.stop.clone());
+        let starting = tokio::spawn(start(daemon.clone(), paired.stop.clone()));
         Arc::new(Self {
             daemon,
             paired,
             clock,
             live: Mutex::new(None),
             halting,
+            starting: std::sync::Mutex::new(Some(starting)),
             said: Arc::default(),
         })
     }
@@ -312,6 +357,15 @@ impl Machine {
     ///
     /// Returns the listener's failure.
     pub async fn serve(self: Arc<Self>, listener: &dyn Listener) -> Result<()> {
+        // Connections wait until the daemon knows how it started.
+        let starting = self
+            .starting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(starting) = starting {
+            let _ = starting.await;
+        }
         let (lanes, controls) = (
             Arc::new(Semaphore::new(LANES)),
             Arc::new(Semaphore::new(CONTROLS)),

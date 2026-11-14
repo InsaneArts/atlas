@@ -2132,3 +2132,26 @@ async fn a_reply_whose_outcome_could_not_be_kept_goes_as_uncertain() {
     assert_eq!(reply["uncertain"], true);
     assert_eq!(reply["code"], "uncertain");
 }
+
+#[tokio::test]
+async fn only_a_machine_desktop_s_daemon_says_what_work_it_left() {
+    let reply = answered_elsewhere(r#"{"op":"leftovers"}"#).await;
+
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["code"], "platform", "{reply}");
+}
+
+#[tokio::test]
+async fn a_resume_never_waits_on_a_recovery_already_under_way() {
+    let daemon = daemon(false);
+    let _recovering = daemon.keepers.recovering.lock().await;
+
+    let resolved = tokio::task::spawn_blocking({
+        let daemon = daemon.clone();
+        move || daemon.recover_now(true)
+    })
+    .await
+    .unwrap();
+
+    assert!(!resolved);
+}

@@ -1,5 +1,9 @@
 use super::*;
-use crate::machine::{commitment::create, vault::Memory};
+use crate::machine::{
+    commitment::create,
+    supervise::{DONE, ENDED, proof},
+    vault::Memory,
+};
 use std::sync::Arc;
 
 /// A guest's supervisors as pairing leaves them, in a folder of their own.
@@ -121,4 +125,139 @@ fn a_change_written_but_not_yet_made_current_is_kept_as_written() {
     std::fs::write(&path, &bytes).unwrap();
 
     assert_eq!(processes.kept().unwrap(), [supervised(10), supervised(11)]);
+}
+
+/// A supervisor of this boot, as an earlier daemon kept it.
+fn left(pid: i32) -> Supervised {
+    Supervised {
+        boot: atlas_core::process::boot().unwrap(),
+        ..supervised(pid)
+    }
+}
+
+/// Recover with nothing owned and nothing waited for, under a saved Stop.
+fn recovered(
+    processes: &Processes<Arc<Memory>>,
+    proofs: &Path,
+    running: impl Fn(&Instance) -> bool,
+) -> bool {
+    recover(processes, proofs, |_| false, running, Duration::ZERO, true)
+}
+
+#[test]
+fn recovery_with_nothing_left_is_done() {
+    let (folder, _vault, processes) = paired();
+
+    assert!(recovered(&processes, folder.path(), |_| false));
+}
+
+#[test]
+fn recovery_of_a_record_that_cannot_be_trusted_is_never_done() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+    std::fs::write(folder.path().join("processes.json"), b"{").unwrap();
+
+    assert!(!recovered(&processes, folder.path(), |_| false));
+}
+
+#[test]
+fn a_supervisor_of_another_boot_is_forgotten() {
+    let (folder, _vault, processes) = paired();
+    processes.add(supervised(10)).unwrap();
+
+    assert!(recovered(&processes, folder.path(), |_| true));
+    assert_eq!(processes.kept().unwrap(), []);
+}
+
+#[test]
+fn a_supervisor_gone_with_its_proof_is_forgotten_with_its_proof() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+    proof::leave(folder.path(), &left(10).supervisor, ENDED).unwrap();
+
+    assert!(recovered(&processes, folder.path(), |_| false));
+    assert_eq!(processes.kept().unwrap(), []);
+    assert_eq!(proof::left(folder.path(), &left(10).supervisor), None);
+}
+
+#[test]
+fn a_supervisor_gone_without_proof_or_unsure_of_its_work_stays() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+    processes.add(left(11)).unwrap();
+    proof::leave(
+        folder.path(),
+        &left(11).supervisor,
+        crate::machine::supervise::UNSURE,
+    )
+    .unwrap();
+
+    assert!(!recovered(&processes, folder.path(), |_| false));
+    assert_eq!(processes.kept().unwrap(), [left(10), left(11)]);
+}
+
+#[test]
+fn a_supervisor_still_running_stays_whatever_proof_it_has() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+    proof::leave(folder.path(), &left(10).supervisor, DONE).unwrap();
+
+    assert!(!recovered(&processes, folder.path(), |_| true));
+    assert_eq!(processes.kept().unwrap(), [left(10)]);
+}
+
+#[test]
+fn a_supervisor_a_keeper_owns_is_left_to_its_keeper() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+
+    let done = recover(
+        &processes,
+        folder.path(),
+        |_| true,
+        |_| true,
+        Duration::ZERO,
+        true,
+    );
+
+    assert!(done);
+    assert_eq!(processes.kept().unwrap(), [left(10)]);
+}
+
+#[test]
+fn recovery_without_a_saved_stop_forgets_nothing() {
+    let (folder, _vault, processes) = paired();
+    processes.add(supervised(10)).unwrap();
+
+    let done = recover(
+        &processes,
+        folder.path(),
+        |_| false,
+        |_| false,
+        Duration::ZERO,
+        false,
+    );
+
+    assert!(!done);
+    assert_eq!(processes.kept().unwrap(), [supervised(10)]);
+}
+
+#[test]
+fn recovery_waits_for_a_supervisor_still_ending_its_work() {
+    let (folder, _vault, processes) = paired();
+    processes.add(left(10)).unwrap();
+    proof::leave(folder.path(), &left(10).supervisor, ENDED).unwrap();
+    let started = std::time::Instant::now();
+
+    let done = recover(
+        &processes,
+        folder.path(),
+        |_| false,
+        |_| started.elapsed() < Duration::from_millis(300),
+        Duration::from_secs(5),
+        true,
+    );
+
+    assert!(done);
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

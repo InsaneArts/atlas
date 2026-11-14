@@ -342,6 +342,9 @@ requests! { request =>
     "outcome" Outcome { change: Token } = Ok(Request::Outcome {
         change: change(request)?.ok_or_else(|| bad("outcome requires the \"change\" it asks about"))?,
     }),
+    /// Whether work a machine desktop's daemon started may still run:
+    /// `running`, `none` or `unknown`.
+    "leftovers" Leftovers = Ok(Request::Leftovers),
 }
 
 /// One request line: what it asks, and the name it gives the change it
@@ -405,6 +408,7 @@ impl Request {
             Self::Sound { muted: None } => (Any, None, Read("sound")),
             Self::Sound { muted: Some(_) } => (Any, None, Mutation("sound")),
             Self::Outcome { .. } => (Any, None, Read("outcome")),
+            Self::Leftovers => (Any, None, Read("leftovers")),
         };
         Policy {
             console,

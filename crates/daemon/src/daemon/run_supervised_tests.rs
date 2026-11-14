@@ -25,6 +25,10 @@ impl Remembering {
 }
 
 impl Remembered for Remembering {
+    fn kept(&self) -> atlas_core::error::Result<Vec<Supervised>> {
+        Ok(self.kept())
+    }
+
     fn add(&self, supervised: Supervised) -> atlas_core::error::Result<()> {
         let held = self.held.lock().unwrap().take();
         if let Some(held) = held {
@@ -596,7 +600,7 @@ async fn a_supervisor_whose_work_ended_by_itself_is_forgotten() {
 }
 
 #[tokio::test]
-async fn a_supervisor_whose_work_ended_because_its_lease_was_over_is_kept_for_recovery() {
+async fn a_supervisor_whose_work_ended_because_its_lease_was_over_is_forgotten_once_proved() {
     let kept = Arc::new(Remembering::default());
     let (end, over) = oneshot::channel::<()>();
     let lease = kept_in(
@@ -618,8 +622,7 @@ async fn a_supervisor_whose_work_ended_because_its_lease_was_over_is_kept_for_re
     end.send(()).unwrap();
 
     assert!(gone_within(left, Duration::from_secs(2)).await);
-    tokio::time::sleep(Duration::from_millis(700)).await;
-    assert_eq!(kept.kept().len(), 1, "forgotten before a Stop was saved");
+    assert!(within(Duration::from_secs(3), || kept.kept().is_empty()).await);
 }
 
 #[tokio::test]

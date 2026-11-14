@@ -20,9 +20,13 @@ use tokio::{
 /// A guest's change records.
 type Kept = Changes<Arc<dyn Vault>>;
 
+/// A guest's records' folder, the vault vouching for them, and its change
+/// records.
+type Records = (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>);
+
 /// A guest's change records as pairing leaves them, in a folder of their
 /// own, and the vault vouching for them.
-fn records() -> (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>) {
+fn records() -> Records {
     let folder = tempfile::tempdir().unwrap();
     let vault: Arc<dyn Vault> = Arc::new(crate::machine::vault::Memory::default());
     crate::machine::commitment::create(&vault, crate::machine::changes::STORE).unwrap();
@@ -101,7 +105,7 @@ impl Served {
     }
 
     /// A guest serving with `records`, as a daemon that started finds them.
-    async fn on(records: (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>)) -> Self {
+    async fn on(records: Records) -> Self {
         let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
         daemon.screen.console = Console::Own;
@@ -1296,4 +1300,232 @@ async fn a_resume_while_stopped_work_is_still_being_ended_lifts_nothing() {
         }
     }
     assert!(lifted, "a later Resume lifts it");
+}
+
+/// A guest's records with one supervisor an earlier daemon left, its PID
+/// one no process can have, and its proof of `code` if it left one.
+fn left_behind(code: Option<u8>) -> (Records, crate::machine::processes::Supervised) {
+    let records = records();
+    let supervising = supervising(&records.0, &records.1);
+    let supervised = crate::machine::processes::Supervised {
+        boot: atlas_core::process::boot().unwrap(),
+        generation: atlas_session::generation::Generation(1),
+        supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+    };
+    supervising.kept.add(supervised.clone()).unwrap();
+    if let Some(code) = code {
+        crate::machine::supervise::proof::leave(&supervising.proofs, &supervised.supervisor, code)
+            .unwrap();
+    }
+    (records, supervised)
+}
+
+/// Resume on `controlling` until changes are taken again, within 5 s.
+async fn resumed(controlling: &Controlling, desktop: &Desktop) -> bool {
+    for _ in 0..25 {
+        controlling
+            .outbox
+            .say(atlas_session::control::Said::Resume)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !refused_as_stopped(desktop).await {
+            return true;
+        }
+    }
+    false
+}
+
+#[tokio::test]
+async fn a_guest_that_starts_on_work_left_behind_stops_agents_until_resumed() {
+    let (records, left) = left_behind(Some(crate::machine::supervise::ENDED));
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+
+    assert_eq!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped {
+            why: crate::machine::stop::Why::Restarted
+        }
+    );
+    assert!(refused_as_stopped(&desktop).await);
+    assert!(
+        resumed(&controlling, &desktop).await,
+        "a Resume lifts it once recovered"
+    );
+    let kept = served
+        .machine
+        .daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .kept()
+        .unwrap();
+    assert!(
+        !kept.contains(&left),
+        "what was left is forgotten: {kept:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_guest_whose_left_work_is_not_known_to_have_ended_lifts_no_stop() {
+    let (records, left) = left_behind(None);
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+
+    assert!(
+        !resumed(&controlling, &desktop).await,
+        "lifted over work not known to have ended"
+    );
+    let kept = served
+        .machine
+        .daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .kept()
+        .unwrap();
+    assert_eq!(kept, [left]);
+}
+
+#[tokio::test]
+async fn a_guest_that_could_not_save_its_stop_at_start_forgets_nothing_it_was_left() {
+    let (records, left) = left_behind(Some(crate::machine::supervise::ENDED));
+    // The Stop's file cannot be written: a folder stands in its place.
+    std::fs::create_dir(records.0.path().join("stop")).unwrap();
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+
+    assert!(
+        !resumed(&controlling, &desktop).await,
+        "lifted with no Stop saved"
+    );
+    let kept = served
+        .machine
+        .daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .kept()
+        .unwrap();
+    assert_eq!(kept, [left], "forgotten with no Stop saved");
+}
+
+/// What the guest says of the work it left.
+async fn leftovers(desktop: &Desktop) -> Value {
+    let replies = ask(desktop, LaneKind::Read, &json!({"op": "leftovers"})).await;
+    replies.last().unwrap()["leftovers"].clone()
+}
+
+#[tokio::test]
+async fn a_guest_that_ran_nothing_has_no_leftover_work() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    assert_eq!(leftovers(&desktop).await, "none");
+}
+
+#[tokio::test]
+async fn a_guest_has_leftover_work_while_a_command_or_what_it_left_runs() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (_lines, _group) = sleeping(&desktop).await;
+
+    assert_eq!(leftovers(&desktop).await, "running");
+}
+
+#[tokio::test]
+async fn work_left_running_is_leftover_until_it_ends_by_itself() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let left = leaving(&desktop).await;
+    assert_eq!(leftovers(&desktop).await, "running");
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(left),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+
+    let mut answered = Value::Null;
+    for _ in 0..25 {
+        answered = leftovers(&desktop).await;
+        if answered == "none" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(answered, "none");
+}
+
+#[tokio::test]
+async fn work_left_by_an_earlier_daemon_with_no_proof_is_unknown() {
+    let (records, _left) = left_behind(None);
+
+    let served = Served::on(records).await;
+    let (_controlling, desktop) = served.control().await;
+
+    assert_eq!(leftovers(&desktop).await, "unknown");
+}
+
+#[tokio::test]
+async fn work_kept_from_another_boot_is_forgotten_before_none_is_said() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let kept = served
+        .machine
+        .daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .clone();
+    let earlier = crate::machine::processes::Supervised {
+        boot: "an earlier boot".into(),
+        generation: atlas_session::generation::Generation(1),
+        supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+    };
+    kept.add(earlier).unwrap();
+
+    assert_eq!(leftovers(&desktop).await, "none");
+    assert_eq!(kept.kept().unwrap(), []);
+}
+
+#[tokio::test]
+async fn running_work_never_hides_a_record_that_cannot_be_trusted() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (_lines, _group) = sleeping(&desktop).await;
+    // Once its supervisor is kept: the word to start comes after.
+    let kept = served
+        .machine
+        .daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .clone();
+    for _ in 0..50 {
+        if kept.kept().is_ok_and(|work| !work.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    std::fs::write(
+        served
+            .records
+            .path()
+            .join("supervisors")
+            .join("processes.json"),
+        b"{",
+    )
+    .unwrap();
+
+    assert_eq!(leftovers(&desktop).await, "unknown");
 }

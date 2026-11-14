@@ -29,24 +29,38 @@ pub(crate) enum Keeping {
     Active,
     /// Its work is being ended, or has ended and is not yet judged.
     Ending,
-    /// Its supervisor ended without proving its work did.
-    Uncertain,
 }
 
-/// The supervisors this daemon's keepers own, and how each stands.
+/// The supervisors this daemon's keepers own, and how each stands; and
+/// whether earlier daemons left any that recovery could not show done with.
 #[derive(Default)]
-pub(crate) struct Keepers(Mutex<HashMap<Instance, Keeping>>);
+pub(crate) struct Keepers {
+    owned: Mutex<HashMap<Instance, Keeping>>,
+    orphans: std::sync::atomic::AtomicBool,
+    /// Held through each recovery and each handing of a keeper's record to
+    /// it, so what one finds is never written over by another's older word.
+    pub(crate) recovering: tokio::sync::Mutex<()>,
+}
 
 impl Keepers {
     fn set(&self, supervisor: Instance, keeping: Keeping) {
-        self.0
+        self.owned
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(supervisor, keeping);
     }
 
+    /// Leave `supervisor`'s work to recovery: counted as orphaned before it
+    /// stops being owned, under the lock a Resume decides under, so no Resume
+    /// sees it as neither.
+    fn hand_over(&self, supervisor: &Instance) {
+        let mut owned = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
+        self.orphans(true);
+        owned.remove(supervisor);
+    }
+
     fn leave(&self, supervisor: &Instance) {
-        self.0
+        self.owned
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(supervisor);
@@ -56,7 +70,7 @@ impl Keepers {
     /// ended, so none counts as settled until it is judged.
     pub(crate) fn ending_all(&self) {
         for keeping in self
-            .0
+            .owned
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values_mut()
@@ -70,14 +84,15 @@ impl Keepers {
     /// Whether any work is not known to have ended: changes are refused
     /// while it is.
     pub(crate) fn uncertain(&self) -> bool {
-        self.any(|keeping| keeping == Keeping::Uncertain)
+        self.orphaned()
     }
 
     /// Run `then` only while every keeper's work may run, with none able to
     /// change how it stands meanwhile: whether it ran.
     pub(crate) fn settled_then(&self, then: impl FnOnce()) -> bool {
-        let keepers = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let settled = keepers.values().all(|keeping| *keeping == Keeping::Active);
+        let keepers = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
+        let settled =
+            !self.orphaned() && keepers.values().all(|keeping| *keeping == Keeping::Active);
         if settled {
             then();
         }
@@ -87,11 +102,36 @@ impl Keepers {
     /// Whether any work is being ended, or is not known to have ended: a
     /// Resume waits for neither.
     pub(crate) fn unsettled(&self) -> bool {
-        self.any(|keeping| keeping != Keeping::Active)
+        self.orphaned() || self.any(|keeping| keeping != Keeping::Active)
+    }
+
+    /// Whether any keeper still keeps work: its work may run, or is being
+    /// ended.
+    pub(crate) fn keeping(&self) -> bool {
+        self.any(|_| true)
+    }
+
+    /// Whether a keeper owns `supervisor`: recovery leaves it to them.
+    pub(crate) fn owns(&self, supervisor: &Instance) -> bool {
+        self.owned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(supervisor)
+    }
+
+    /// Say whether earlier daemons left work recovery could not show done
+    /// with.
+    pub(crate) fn orphans(&self, left: bool) {
+        self.orphans
+            .store(left, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn orphaned(&self) -> bool {
+        self.orphans.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn any(&self, matching: impl Fn(Keeping) -> bool) -> bool {
-        self.0
+        self.owned
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
@@ -151,7 +191,6 @@ pub(super) async fn keep(
         Ok(()) => admitted(),
         Err(refusal) => Some(refusal),
     };
-    let mut ended_by_lease = false;
     match refusal {
         Some(refusal) => {
             // Dropping the lifeline ends the supervisor, which started nothing.
@@ -164,7 +203,7 @@ pub(super) async fn keep(
         }
         None => {
             let _ = verdict.send(Verdict::Went);
-            ended_by_lease = renew(&mut lifeline, &mut over).await;
+            renew(&mut lifeline, &mut over).await;
             drop(lifeline);
         }
     }
@@ -177,38 +216,38 @@ pub(super) async fn keep(
         .and_then(|code| u8::try_from(code).ok())
         .filter(|code| [DONE, ENDED].contains(code))
         .is_some_and(|code| proof::left(&proofs, &supervisor) == Some(code));
-    if !proven {
-        keepers.set(supervisor, Keeping::Uncertain);
-        return;
+    // Judged under the lock every recovery takes, so none reads its record
+    // while it is going and takes what is left of it for an orphan.
+    let _one = keepers.recovering.lock().await;
+    // Proved ended, whatever ended it: its record says only whether work
+    // may run, and whether a lapse's Stop is saved is the Stop's to keep.
+    let retired = match supervised {
+        Ok(supervised) => proven && retire(kept, supervised, proofs).await,
+        Err(_) => proven,
+    };
+    if retired {
+        keepers.leave(&supervisor);
+    } else {
+        keepers.hand_over(&supervisor);
     }
-    // Ended because its lease was over: the Stop being saved for it decides,
-    // and recovery retires it under that Stop, by its proof.
-    if !ended_by_lease
-        && let Ok(supervised) = supervised
-        && !retire(kept, supervised, proofs).await
-    {
-        keepers.set(supervisor, Keeping::Uncertain);
-        return;
-    }
-    keepers.leave(&supervisor);
 }
 
 /// Renew over `lifeline` until the lease is `over` or the supervisor is
-/// gone: whether it was over.
+/// gone.
 async fn renew(
     lifeline: &mut OwnedWriteHalf,
     over: &mut std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
-) -> bool {
+) {
     let mut every = tokio::time::interval(RENEWAL);
     // The first tick is the word to start, already given.
     every.tick().await;
     loop {
         tokio::select! {
             biased;
-            () = over.as_mut() => return true,
+            () = over.as_mut() => return,
             _ = every.tick() => {
                 if lifeline.write_all(&[RENEW]).await.is_err() {
-                    return false;
+                    return;
                 }
             }
         }
@@ -263,3 +302,7 @@ async fn retire(kept: Arc<dyn Remembered>, supervised: Supervised, proofs: PathB
     .await
     .is_ok_and(|retired| retired.is_ok())
 }
+
+#[cfg(test)]
+#[path = "keeper_tests.rs"]
+mod tests;

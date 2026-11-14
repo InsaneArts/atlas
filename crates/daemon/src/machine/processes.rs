@@ -6,6 +6,7 @@
 use super::{
     commitment::{Commitment, Judged, Revision},
     record_file::{self, number},
+    supervise::{DONE, ENDED, proof},
     vault::Vault,
 };
 use atlas_core::{
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{Mutex, PoisonError},
+    time::Duration,
 };
 
 /// The store's name among the guest's recovery stores.
@@ -61,6 +63,13 @@ pub struct Supervising {
 
 /// Where a machine's supervisors are kept on its disk.
 pub trait Remembered: Send + Sync {
+    /// Every supervisor kept now.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the record cannot be trusted.
+    fn kept(&self) -> Result<Vec<Supervised>>;
+
     /// Keep `supervised` before its program may start.
     ///
     /// # Errors
@@ -203,6 +212,10 @@ impl<V: Vault> Processes<V> {
 }
 
 impl<V: Vault> Remembered for Processes<V> {
+    fn kept(&self) -> Result<Vec<Supervised>> {
+        Processes::kept(self)
+    }
+
     fn add(&self, supervised: Supervised) -> Result<()> {
         Processes::add(self, supervised)
     }
@@ -210,6 +223,72 @@ impl<V: Vault> Remembered for Processes<V> {
     fn retire(&self, retired: &[Supervised]) -> Result<()> {
         Processes::retire(self, retired)
     }
+}
+
+/// How long recovery at a start waits for a supervisor an earlier daemon
+/// left to end the work it knew, its lifeline closed with that daemon.
+pub const LEFT_ENDING: Duration = Duration::from_secs(5);
+
+/// Recover what earlier daemons left in `kept`: retire every supervisor
+/// shown to be done with, by one rule, and say whether anything is left
+/// that is not. It only reads processes and never signals one: a PID read
+/// then signalled could be another process by then.
+///
+/// - one a keeper of this daemon `owned` is its keeper's, and skipped;
+/// - one from another boot ended with that boot;
+/// - one gone that left its proof of `DONE` or `ENDED` in `proofs` ended
+///   everything it knew;
+/// - one still `running`, waited for up to `wait`, or gone with no such
+///   proof, is not known to be done with, and stays.
+///
+/// Only with `retiring` (under a saved Stop) is anything forgotten.
+/// Whether everything is done with: false when the record cannot be trusted,
+/// something stays, or forgetting failed.
+pub fn recover(
+    kept: &dyn Remembered,
+    proofs: &Path,
+    owned: impl Fn(&Instance) -> bool,
+    running: impl Fn(&Instance) -> bool,
+    wait: Duration,
+    retiring: bool,
+) -> bool {
+    let Ok(work) = kept.kept() else {
+        return false;
+    };
+    let Ok(boot) = atlas_core::process::boot() else {
+        return false;
+    };
+    let left: Vec<Supervised> = work
+        .into_iter()
+        .filter(|supervised| !owned(&supervised.supervisor))
+        .collect();
+    let until = std::time::Instant::now() + wait;
+    while left
+        .iter()
+        .any(|supervised| supervised.boot == boot && running(&supervised.supervisor))
+        && std::time::Instant::now() < until
+    {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (done, staying): (Vec<Supervised>, Vec<Supervised>) =
+        left.into_iter().partition(|supervised| {
+            supervised.boot != boot
+                || (!running(&supervised.supervisor)
+                    && proof::left(proofs, &supervised.supervisor)
+                        .is_some_and(|code| code == DONE || code == ENDED))
+        });
+    if !retiring {
+        return done.is_empty() && staying.is_empty();
+    }
+    if !done.is_empty() {
+        if kept.retire(&done).is_err() {
+            return false;
+        }
+        for supervised in &done {
+            let _ = proof::forget(proofs, &supervised.supervisor);
+        }
+    }
+    staying.is_empty()
 }
 
 /// Keep what changed beside `path`, its name included, for good.

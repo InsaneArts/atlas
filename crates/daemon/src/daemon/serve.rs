@@ -1086,6 +1086,20 @@ pub(super) async fn answer(
             .await
             .unwrap_or_else(|_| interrupted(Code::Daemon, "The helper's sound could not be set"))
         }
+        Request::Leftovers => match &daemon.supervising {
+            // The helper login keeps its own ledger, on the station.
+            None => failure(
+                Code::Platform,
+                "Only a machine desktop's daemon says what work it left",
+            ),
+            Some(_) => {
+                let asking = daemon.clone();
+                let leftovers = tokio::task::spawn_blocking(move || asking.leftovers())
+                    .await
+                    .unwrap_or("unknown");
+                json!({"ok": true, "op": "leftovers", "leftovers": leftovers})
+            }
+        },
         Request::Outcome { change } => match &daemon.kept {
             // The disk outlives this process: it says, whatever was asked before.
             Some(kept) => {
@@ -1314,6 +1328,88 @@ fn unsupervised(daemon: &Daemon, asker: &Asker) -> Option<Value> {
         ));
     }
     uncertain(&daemon.keepers)
+}
+
+impl Daemon {
+    /// Recover what earlier daemons of this machine left: whether all of
+    /// it is done with. See [`crate::machine::processes::recover`].
+    /// Whether work this machine's daemons started may still run, as the
+    /// station asks before it takes the desktop: `running`, `none` or
+    /// `unknown`, which holds as running does. Another boot's records are
+    /// forgotten before `none` is said. Blocking.
+    fn leftovers(&self) -> &'static str {
+        let Some(supervising) = &self.supervising else {
+            return "unknown";
+        };
+        let (Ok(work), Ok(boot)) = (supervising.kept.kept(), atlas_core::process::boot()) else {
+            return "unknown";
+        };
+        if self.keepers.uncertain() {
+            return "unknown";
+        }
+        if self.keepers.keeping() {
+            return "running";
+        }
+        let mut unproven = false;
+        let mut other_boots = Vec::new();
+        for supervised in work {
+            if supervised.boot != boot {
+                other_boots.push(supervised);
+            } else if !supervised.supervisor.ended() {
+                return "running";
+            } else {
+                let code = crate::machine::supervise::proof::left(
+                    &supervising.proofs,
+                    &supervised.supervisor,
+                );
+                unproven |= !matches!(
+                    code,
+                    Some(crate::machine::supervise::DONE | crate::machine::supervise::ENDED)
+                );
+            }
+        }
+        if unproven {
+            return "unknown";
+        }
+        if !other_boots.is_empty() && supervising.kept.retire(&other_boots).is_err() {
+            return "unknown";
+        }
+        "none"
+    }
+
+    /// [`Daemon::recover_published`] with no wait, at once or not at all: not
+    /// done with when another recovery is under way. Blocking.
+    pub(super) fn recover_now(&self, retiring: bool) -> bool {
+        let Ok(_one) = self.keepers.recovering.try_lock() else {
+            return false;
+        };
+        let resolved = self.recover(Duration::ZERO, retiring);
+        self.keepers.orphans(!resolved);
+        resolved
+    }
+
+    /// [`Daemon::recover`], and what it found told, under the one lock every
+    /// recovery and every keeper handing over its record takes. Blocking.
+    pub(super) fn recover_published(&self, wait: Duration, retiring: bool) -> bool {
+        let _one = self.keepers.recovering.blocking_lock();
+        let resolved = self.recover(wait, retiring);
+        self.keepers.orphans(!resolved);
+        resolved
+    }
+
+    fn recover(&self, wait: Duration, retiring: bool) -> bool {
+        let Some(supervising) = &self.supervising else {
+            return true;
+        };
+        crate::machine::processes::recover(
+            &*supervising.kept,
+            &supervising.proofs,
+            |supervisor| self.keepers.owns(supervisor),
+            |supervisor| !supervisor.ended(),
+            wait,
+            retiring,
+        )
+    }
 }
 
 /// The refusal of a change while work started earlier on a machine is not

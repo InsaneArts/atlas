@@ -50,6 +50,8 @@ pub enum Why {
     ControlLost,
     /// The desktop's pairing was revoked.
     Revoked,
+    /// A daemon started after one that may have left work running.
+    Restarted,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
