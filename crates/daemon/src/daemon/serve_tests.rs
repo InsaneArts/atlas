@@ -2105,3 +2105,30 @@ async fn a_stream_refusal_reaches_a_client_over_a_connection_that_holds_what_it_
     assert_eq!(header["code"], "on-console", "{header}");
     served.await.unwrap().unwrap();
 }
+
+/// Changes kept on a disk that takes nothing.
+struct Refusing;
+
+impl Kept for Refusing {
+    fn done(&self, _: &atlas_core::files::Token, _: &Value) -> Result<()> {
+        Err(Error::new(Code::Io, "The disk is full"))
+    }
+
+    fn outcome(&self, _: &atlas_core::files::Token) -> Result<Outcome> {
+        Ok(Outcome::Unknown)
+    }
+}
+
+#[tokio::test]
+async fn a_reply_whose_outcome_could_not_be_kept_goes_as_uncertain() {
+    let mut daemon = Daemon::new("Aqua".into(), synthetic, || false, session);
+    daemon.kept = Some(Arc::new(Refusing));
+    let daemon = Arc::new(daemon);
+    let remembering = daemon.outcomes.begin(atlas_core::files::Token::new());
+
+    let reply = keep(&daemon, remembering, &json!({"ok": true, "op": "run"})).await;
+
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["uncertain"], true);
+    assert_eq!(reply["code"], "uncertain");
+}

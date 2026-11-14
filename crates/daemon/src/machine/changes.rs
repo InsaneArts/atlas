@@ -555,6 +555,22 @@ fn unknown() -> Error {
     )
 }
 
+impl<V: Vault> crate::daemon::serve::Kept for Changes<V> {
+    fn done(&self, change: &Token, reply: &Value) -> Result<()> {
+        Changes::done(self, change, reply)
+    }
+
+    /// An intended change is unknown, never running: after a restart
+    /// nothing says whether it ran.
+    fn outcome(&self, change: &Token) -> Result<atlas_core::outcomes::Outcome> {
+        use atlas_core::outcomes::Outcome;
+        Ok(match self.of(change)? {
+            Some(State::Done { reply }) => Outcome::Done { reply },
+            Some(State::Intended) | None => Outcome::Unknown,
+        })
+    }
+}
+
 #[cfg(test)]
 #[path = "changes_tests.rs"]
 mod tests;

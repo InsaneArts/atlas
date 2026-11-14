@@ -13,7 +13,8 @@ use crate::daemon::{
 };
 use atlas_core::{
     error::{Code, Error, Result},
-    outcomes::{Outcomes, Remembering},
+    files::Token,
+    outcomes::{Outcome, Outcomes, Remembering},
     protocol::{
         self, Asked, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure,
         interrupted, refused,
@@ -235,6 +236,27 @@ pub struct Daemon {
     /// What the changes that named themselves came to, for whoever lost
     /// the reply to one.
     outcomes: Arc<Outcomes>,
+    /// Where a machine's changes are kept on its disk, outliving this
+    /// process; none for the helper login, whose station keeps its own.
+    kept: Option<Arc<dyn Kept>>,
+}
+
+/// Changes kept on the desktop's disk: what each came to, before it is
+/// answered, and what one came to when it is asked again.
+pub(crate) trait Kept: Send + Sync {
+    /// Keep `reply` as what `change` came to.
+    ///
+    /// # Errors
+    ///
+    /// Fails when it cannot be kept.
+    fn done(&self, change: &Token, reply: &Value) -> Result<()>;
+
+    /// What `change` came to, if it is kept: none while unresolved.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the records cannot be trusted.
+    fn outcome(&self, change: &Token) -> Result<Outcome>;
 }
 
 impl Daemon {
@@ -270,6 +292,7 @@ impl Daemon {
             agent: ConsoleAgent::detached(),
             recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
             outcomes: Arc::default(),
+            kept: None,
         }
     }
 
@@ -865,7 +888,7 @@ pub(super) async fn answer(
             .flatten()
     });
     if let Some(refusal) = refusal {
-        remember(remembering, &refusal);
+        let refusal = keep(&daemon, remembering, &refusal).await;
         return write(&mut writer, &refusal).await;
     }
 
@@ -1000,11 +1023,45 @@ pub(super) async fn answer(
             .await
             .unwrap_or_else(|_| interrupted(Code::Daemon, "The helper's sound could not be set"))
         }
-        Request::Outcome { change } => daemon.outcomes.of(&change).answer(),
+        Request::Outcome { change } => match &daemon.kept {
+            // The disk outlives this process: it says, whatever was asked before.
+            Some(kept) => {
+                let kept = kept.clone();
+                tokio::task::spawn_blocking(move || kept.outcome(&change))
+                    .await
+                    .map_err(|_| Error::new(Code::State, "The change records could not be read."))
+                    .and_then(|outcome| outcome)
+                    .map_or_else(refused, |outcome| outcome.answer())
+            }
+            None => daemon.outcomes.of(&change).answer(),
+        },
     };
 
     remember(remembering, &reply);
     write(&mut writer, &reply).await
+}
+
+/// [`remember`], and on a machine's disk too before it is answered, off
+/// the runtime's threads: the reply to send. One whose outcome could not
+/// be kept is never sent as it is: the change stays intended there, so it
+/// goes as uncertain, and what it came to stays unknown.
+async fn keep(daemon: &Daemon, remembering: Option<Remembering>, reply: &Value) -> Value {
+    let mut reply = reply.clone();
+    if let (Some(kept), Some(change)) = (
+        daemon.kept.clone(),
+        remembering.as_ref().and_then(Remembering::change).cloned(),
+    ) {
+        let keeping = reply.clone();
+        let done = tokio::task::spawn_blocking(move || kept.done(&change, &keeping)).await;
+        if !matches!(done, Ok(Ok(()))) {
+            reply = interrupted(
+                Code::Uncertain,
+                "The change ended, but what it came to could not be kept",
+            );
+        }
+    }
+    remember(remembering, &reply);
+    reply
 }
 
 /// Remember `reply` as what a change that named itself came to: one lost
@@ -1058,10 +1115,7 @@ async fn admit(
         daemon.screen.on_console,
         daemon.screen.session,
     ) {
-        Some(refusal) => {
-            remember(remembering, &refusal);
-            Err((refusal, framed))
-        }
+        Some(refusal) => Err((keep(daemon, remembering, &refusal).await, framed)),
         None => Ok((request, policy, remembering)),
     }
 }
@@ -1152,7 +1206,7 @@ async fn serve_run(
             Code::Busy,
             "The helper daemon is restarting; try again in a moment",
         );
-        remember(remembering, &reply);
+        let reply = keep(&daemon, remembering, &reply).await;
         return write(&mut writer, &reply).await;
     }
     runs.spawn(async move {
@@ -1212,7 +1266,7 @@ async fn run_registered(
         .or_else(|| asker.refused_now());
     if let Some(refusal) = refusal {
         phase.send_replace(ConnectionPhase::Refusal);
-        remember(remembering, &refusal);
+        let refusal = keep(daemon, remembering, &refusal).await;
         return write(&mut writer, &refusal).await;
     }
     // Events reach the client through their own writer, so a slow
@@ -1233,7 +1287,7 @@ async fn run_registered(
     // Cancelled or retired during any wait before it starts, it never does.
     let unless = || asker.refused_now();
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless).await;
-    remember(remembering, &reply);
+    let reply = keep(daemon, remembering, &reply).await;
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,
         () = handler.closed() => {

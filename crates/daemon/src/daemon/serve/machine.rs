@@ -3,6 +3,10 @@
 //! lane per request, admitted in the live generation and bound to what it
 //! carries before anything is done.
 use super::{Asker, Daemon, Gate, Reader, Writer, answer, write};
+use crate::machine::{
+    changes::{Asked, Changes, State},
+    vault::Vault,
+};
 use atlas_core::{
     desktop::DesktopId,
     error::{Code, Error, Result},
@@ -65,6 +69,8 @@ pub struct Paired {
     pub desktop: DesktopId,
     pub station: PeerKey,
     pub generations: Arc<dyn Generations + Send + Sync>,
+    /// What each change it was asked for came to, on its disk.
+    pub changes: Arc<Changes<Arc<dyn Vault>>>,
 }
 
 impl std::fmt::Debug for Paired {
@@ -128,9 +134,10 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(daemon: Arc<Daemon>, paired: Paired, clock: Arc<dyn Clock>) -> Arc<Self> {
+    pub fn new(mut daemon: Daemon, paired: Paired, clock: Arc<dyn Clock>) -> Arc<Self> {
+        daemon.kept = Some(paired.changes.clone());
         Arc::new(Self {
-            daemon,
+            daemon: Arc::new(daemon),
             paired,
             clock,
             live: Mutex::new(None),
@@ -297,6 +304,13 @@ impl Machine {
         if let Err(refusal) = bound(&header, &line) {
             return write(&mut writer, &refusal).await;
         }
+        // A change is kept as intended before it runs; one asked before is
+        // answered from what it came to, never run again.
+        if let LaneKind::Change { change } = &header.kind
+            && let Some(answered) = self.intended(change, &line).await
+        {
+            return write(&mut writer, &answered).await;
+        }
         line.push(b'\n');
         let reader: Reader = Box::new(std::io::Cursor::new(line).chain(reader));
         let asker = Asker {
@@ -314,6 +328,38 @@ impl Machine {
         tokio::select! {
             served = answer(reader, writer, self.daemon.clone(), asker, phase) => served,
             () = lanes.ended(header.lane) => Ok(()),
+        }
+    }
+}
+
+impl Machine {
+    /// Keep `change`, asked for with the request `line`, as intended: none
+    /// when it is new and may run now, else the reply to give instead.
+    async fn intended(&self, change: &atlas_core::files::Token, line: &[u8]) -> Option<Value> {
+        // One that is not a request at all is refused as anywhere, with no
+        // intent left behind that nothing could finish.
+        protocol::parse(line).ok()?;
+        let request: Value = serde_json::from_slice(line).ok()?;
+        let operation = request["op"].as_str().unwrap_or_default().to_owned();
+        let (changes, change) = (self.paired.changes.clone(), change.clone());
+        let asked = tokio::task::spawn_blocking(move || changes.ask(&change, &operation, &request))
+            .await
+            .map_err(|_| Error::new(Code::State, "The change records could not be read."))
+            .and_then(|asked| asked);
+        match asked {
+            Ok(Asked::Begun) => None,
+            Ok(Asked::Again(State::Done { reply })) => Some(reply),
+            Ok(Asked::Again(State::Intended)) => Some(atlas_core::protocol::interrupted(
+                Code::Uncertain,
+                "This change was asked for before, and what it came to is unknown",
+            )),
+            // Refused for certain only when nothing could have run: the same
+            // ID with another request, or a new one past the bound. Records
+            // that cannot be read leave what the change came to unknown.
+            Err(error) if matches!(error.code, Code::BadRequest | Code::Busy) => {
+                Some(atlas_core::protocol::refused(error))
+            }
+            Err(error) => Some(serde_json::json!(error.uncertain())),
         }
     }
 }

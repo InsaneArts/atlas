@@ -120,6 +120,11 @@ pub struct Remembering {
 }
 
 impl Remembering {
+    /// The change being remembered, until its reply is.
+    pub fn change(&self) -> Option<&Token> {
+        self.change.as_ref()
+    }
+
     /// Remember `reply` as what the change came to: should the reply be
     /// lost on its way, it can still be asked for.
     pub fn done(mut self, reply: &Value) {

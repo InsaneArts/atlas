@@ -20,13 +20,14 @@ use std::{path::PathBuf, sync::Arc};
 
 /// The guest's identity to the station it paired with: opened only by the
 /// guest's genuine daemon, as launchd started it, and only once paired.
-/// `secret` is where the pairing secret is kept while there is one.
+/// `secret` is where the pairing secret is kept while there is one, and
+/// `records` the folder its changes are kept in.
 ///
 /// # Errors
 ///
 /// Refuses any other process, and a guest that is not paired; fails when
 /// a record cannot be read.
-pub async fn open(desktop: DesktopId, secret: PathBuf) -> Result<Paired> {
+pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Result<Paired> {
     launch::prove().await?;
     let vault = vault::Keychain::atlas();
     tokio::task::spawn_blocking(move || {
@@ -36,11 +37,13 @@ pub async fn open(desktop: DesktopId, secret: PathBuf) -> Result<Paired> {
             .ok_or_else(|| {
                 Error::new(Code::Identity, "This desktop is not paired with a station.")
             })?;
+        let vault: Arc<dyn vault::Vault> = Arc::new(vault);
         Ok(Paired {
             keys,
             desktop,
             station,
-            generations: Arc::new(generations::Kept::new(vault)),
+            generations: Arc::new(generations::Kept::new(vault.clone())),
+            changes: Arc::new(changes::Changes::new(records, vault)),
         })
     })
     .await

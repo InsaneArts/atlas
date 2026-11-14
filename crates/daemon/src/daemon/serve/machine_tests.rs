@@ -17,6 +17,19 @@ use tokio::{
     sync::mpsc,
 };
 
+/// A guest's change records.
+type Kept = Changes<Arc<dyn Vault>>;
+
+/// A guest's change records as pairing leaves them, in a folder of their
+/// own, and the vault vouching for them.
+fn records() -> (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>) {
+    let folder = tempfile::tempdir().unwrap();
+    let vault: Arc<dyn Vault> = Arc::new(crate::machine::vault::Memory::default());
+    crate::machine::commitment::create(&vault, crate::machine::changes::STORE).unwrap();
+    let changes = Arc::new(Changes::new(folder.path(), vault.clone()));
+    (folder, vault, changes)
+}
+
 /// Connections the station makes, as the guest's listener hands them over.
 struct Channel(Mutex<mpsc::UnboundedReceiver<(Purpose, Raw)>>);
 
@@ -53,11 +66,20 @@ struct Served {
     guest_key: PeerKey,
     desktop: DesktopId,
     connections: mpsc::UnboundedSender<(Purpose, Raw)>,
+    changes: Arc<Kept>,
+    vault: Arc<dyn Vault>,
+    records: tempfile::TempDir,
     _serving: tokio::task::JoinHandle<Result<()>>,
 }
 
 impl Served {
     async fn start() -> Self {
+        Self::on(records()).await
+    }
+
+    /// A guest serving with `records`, as a daemon that started finds them.
+    async fn on(records: (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>)) -> Self {
+        let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
         daemon.screen.console = Console::Own;
         let (station, guest) = (Keypair::generate().unwrap(), Keypair::generate().unwrap());
@@ -69,8 +91,9 @@ impl Served {
             desktop: desktop.clone(),
             station: station.public(),
             generations: Arc::new(Counted::default()),
+            changes: changes.clone(),
         };
-        let machine = Machine::new(Arc::new(daemon), paired, clock.clone());
+        let machine = Machine::new(daemon, paired, clock.clone());
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let machine = machine.clone();
@@ -84,6 +107,9 @@ impl Served {
             guest_key,
             desktop,
             connections,
+            changes,
+            vault,
+            records,
             _serving: serving,
         }
     }
@@ -432,6 +458,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Serve as the guest, in this process, until the parent ends it.
 async fn be_the_guest(spec: &str) {
+    let (_records, _vault, changes) = records();
     let [socket, station] = spec.split(' ').collect::<Vec<_>>()[..] else {
         panic!("not a guest's spec: {spec}");
     };
@@ -446,13 +473,10 @@ async fn be_the_guest(spec: &str) {
         desktop: atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id(),
         station: PeerKey::from_hex(station).unwrap(),
         generations: Arc::new(Counted::default()),
+        changes,
     };
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
-    let machine = Machine::new(
-        Arc::new(daemon),
-        paired,
-        Arc::new(atlas_session::clock::Continuous),
-    );
+    let machine = Machine::new(daemon, paired, Arc::new(atlas_session::clock::Continuous));
     let _ = machine.serve(&Socket(listener)).await;
 }
 
@@ -518,4 +542,213 @@ async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidde
     answered["user"]["uid"] = json!(502);
     let hidden = atlas_core::session::require_hidden(&answered, 502).unwrap_err();
     assert_eq!(hidden.code, Code::OnConsole, "{}", hidden.error);
+}
+
+/// A command that adds a line to `file` each time it runs.
+fn appending(file: &std::path::Path, change: &Token) -> Value {
+    json!({"op": "run", "argv": ["/bin/sh", "-c", format!("echo ran >> '{}'", file.display())],
+        "change": change})
+}
+
+#[tokio::test]
+async fn a_change_asked_for_twice_runs_once_and_is_answered_from_what_it_came_to() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("runs");
+    let change = Token::new();
+    let lane = || LaneKind::Change {
+        change: change.clone(),
+    };
+
+    let first = ask(&desktop, lane(), &appending(&file, &change)).await;
+    let again = ask(&desktop, lane(), &appending(&file, &change)).await;
+
+    assert_eq!(first.last().unwrap()["ok"], true, "{first:?}");
+    assert_eq!(again, [first.last().unwrap().clone()]);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "ran\n");
+    assert!(matches!(
+        served.changes.of(&change).unwrap(),
+        Some(crate::machine::changes::State::Done { .. })
+    ));
+}
+
+#[tokio::test]
+async fn what_a_change_came_to_is_answered_by_a_daemon_that_started_since() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let change = Token::new();
+    // Its reply lost on the way: the station never read it.
+    let ran = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &appending(&folder.path().join("runs"), &change),
+    )
+    .await;
+    let Served { records, vault, .. } = served;
+
+    // A daemon that started since, with nothing in its memory.
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::on((records, vault, changes)).await;
+    let (_controlling, desktop) = restarted.control().await;
+    let asked = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+    )
+    .await;
+
+    assert_eq!(
+        atlas_core::outcomes::Outcome::remembered(&asked[0]),
+        Some(ran.last().unwrap().clone()),
+        "{asked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_change_asked_again_when_its_records_cannot_be_trusted_is_uncertain() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let change = Token::new();
+    let request = appending(&folder.path().join("runs"), &change);
+    let lane = || LaneKind::Change {
+        change: change.clone(),
+    };
+    ask(&desktop, lane(), &request).await;
+    // The records gone, as a guest command could make them.
+    std::fs::remove_file(served.records.path().join("manifest.json")).unwrap();
+    let Served { records, vault, .. } = served;
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::on((records, vault, changes)).await;
+    let (_controlling, desktop) = restarted.control().await;
+
+    let replies = ask(&desktop, lane(), &request).await;
+
+    assert_eq!(replies[0]["uncertain"], true, "{replies:?}");
+}
+
+#[tokio::test]
+async fn a_change_whose_outcome_is_unknown_is_never_run_again() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("runs");
+    let change = Token::new();
+    let request = appending(&file, &change);
+    // Asked before by a daemon that died before it said what it came to.
+    served.changes.ask(&change, "run", &request).unwrap();
+
+    let replies = ask(&desktop, LaneKind::Change { change }, &request).await;
+
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0]["code"], "uncertain", "{replies:?}");
+    assert_eq!(replies[0]["uncertain"], true);
+    assert!(!file.exists(), "it did not run");
+}
+
+#[tokio::test]
+async fn a_change_refused_at_admission_is_kept_as_refused_and_can_be_asked_for() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    // Pinned to a session that is not this one.
+    let request = json!({"op": "run", "argv": ["/usr/bin/true"], "change": change,
+        "session": {"securitySessionId": 1, "displayId": 1}});
+
+    let refused = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+    let asked = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+    )
+    .await;
+
+    assert_eq!(refused[0]["ok"], false, "{refused:?}");
+    assert_eq!(asked[0]["outcome"], "done", "{asked:?}");
+    assert_eq!(asked[0]["reply"], refused[0]);
+}
+
+#[tokio::test]
+async fn a_change_that_is_not_a_request_leaves_no_intent_behind() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "run", "argv": "not a list", "change": change}),
+    )
+    .await;
+
+    assert_eq!(replies[0]["code"], "bad-request", "{replies:?}");
+    assert_eq!(served.changes.of(&change).unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_change_whose_reply_was_lost_is_still_answered_after_the_memory_moved_on() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let change = Token::new();
+    // Its reply is lost: the station hangs up once the request is sent.
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let request = appending(&folder.path().join("runs"), &change);
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    stream.flush().await.unwrap();
+    drop(stream);
+    let kept = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(crate::machine::changes::State::Done { reply }) =
+                served.changes.of(&change).unwrap()
+            {
+                return reply;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("what it came to was kept");
+    // More changes since than the daemon's memory holds.
+    for _ in 0..260 {
+        let other = Token::new();
+        let refused = json!({"op": "run", "argv": ["/usr/bin/true"], "change": other,
+            "session": {"securitySessionId": 1, "displayId": 1}});
+        ask(&desktop, LaneKind::Change { change: other }, &refused).await;
+    }
+
+    let asked = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+    )
+    .await;
+
+    assert_eq!(
+        atlas_core::outcomes::Outcome::remembered(&asked[0]),
+        Some(kept),
+        "{asked:?}"
+    );
 }
