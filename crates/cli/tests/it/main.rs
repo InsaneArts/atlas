@@ -5,4 +5,5 @@ mod boundaries;
 mod cli_contract;
 mod desktop_boundaries;
 mod jobs;
+mod machine_supervisor;
 mod references;

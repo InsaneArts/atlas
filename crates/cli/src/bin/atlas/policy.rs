@@ -206,6 +206,7 @@ impl Policy {
             Command::Monitor { .. } => Self::local(View::Monitor),
             Command::HelperServe(_)
             | Command::JobLaunch { .. }
+            | Command::MachineSupervise { .. }
             | Command::InputService(_)
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo

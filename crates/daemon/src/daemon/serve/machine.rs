@@ -6,6 +6,7 @@ use super::{Asker, Daemon, Gate, Reader, Writer, answer, write};
 use crate::machine::{
     changes::{Asked, Changes, State},
     stop::{Kept as StopKept, Stop, Why},
+    supervise::invocation::Supervisor,
     vault::Vault,
 };
 use atlas_core::{
@@ -272,8 +273,14 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(mut daemon: Daemon, paired: Paired, clock: Arc<dyn Clock>) -> Arc<Self> {
+    pub fn new(
+        mut daemon: Daemon,
+        paired: Paired,
+        clock: Arc<dyn Clock>,
+        supervisor: Supervisor,
+    ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
+        daemon.supervisor = Some(supervisor);
         // Stopped before it started, or unable to tell: still stopped.
         let clear = matches!(paired.stop.kept(), Ok(StopKept::Clear));
         daemon.halted.send_modify(|halt| halt.halted = !clear);

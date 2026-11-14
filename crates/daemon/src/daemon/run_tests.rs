@@ -941,6 +941,7 @@ async fn a_relative_program_starts_at_home() {
                 sender,
                 std::future::pending::<Cancel>(),
                 &|| None,
+                None,
             );
 
             let (reply, (events, processes)) =
@@ -1045,6 +1046,7 @@ async fn a_command_refused_at_its_last_moment_never_starts() {
         sender,
         std::future::pending::<Cancel>(),
         &unless,
+        None,
     )
     .await;
 
@@ -1087,6 +1089,7 @@ async fn a_command_cancelled_while_it_waits_to_spawn_never_starts() {
                 sender,
                 std::future::pending::<Cancel>(),
                 &unless,
+                None,
             )
             .await
         }

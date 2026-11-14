@@ -100,7 +100,7 @@ impl Served {
             changes: changes.clone(),
             stop: stopping(&records, &vault),
         };
-        let machine = Machine::new(daemon, paired, clock.clone());
+        let machine = Machine::new(daemon, paired, clock.clone(), Supervisor::of_these_tests());
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let machine = machine.clone();
@@ -420,7 +420,7 @@ async fn lanes_over_the_bound_are_closed_before_any_handshake() {
 
 /// Set in the guest process the test below starts: its socket and its
 /// station's key. The guest makes its own key and says only its public
-/// half, beside the socket.
+/// half, beside the socket, once it listens there.
 const GUEST: &str = "ATLAS_TEST_MACHINE_GUEST";
 
 /// Connections on a Unix socket, each naming what it is for in its first
@@ -473,8 +473,7 @@ async fn be_the_guest(spec: &str) {
     };
     Console::Own.keep().unwrap();
     let keys = Keypair::generate().unwrap();
-    let public = std::path::Path::new(socket).with_extension("pub");
-    std::fs::write(public, hex(keys.public().as_bytes())).unwrap();
+    let said = hex(keys.public().as_bytes());
     let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
     daemon.screen.console = Console::Own;
     let paired = Paired {
@@ -486,31 +485,44 @@ async fn be_the_guest(spec: &str) {
         changes,
     };
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
-    let machine = Machine::new(daemon, paired, Arc::new(atlas_session::clock::Continuous));
+    // Said once it listens, whole: the parent connects only after.
+    let public = std::path::Path::new(socket).with_extension("pub");
+    let writing = public.with_extension("pub.new");
+    std::fs::write(&writing, said).unwrap();
+    std::fs::rename(writing, public).unwrap();
+    let machine = Machine::new(
+        daemon,
+        paired,
+        Arc::new(atlas_session::clock::Continuous),
+        Supervisor::of_these_tests(),
+    );
     let _ = machine.serve(&Socket(listener)).await;
 }
 
-#[tokio::test]
-async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login() {
-    if let Ok(spec) = std::env::var(GUEST) {
-        return be_the_guest(&spec).await;
-    }
+/// A guest in a process of its own, the test binary again, and the
+/// station's control of it and way to its lanes.
+struct Guest {
+    child: tokio::process::Child,
+    desktop: Desktop,
+    _controlling: Controlling,
+    _folder: tempfile::TempDir,
+}
+
+/// Start the guest as the test named `test`, which must serve as the guest
+/// when [`GUEST`] is set, and take control of it.
+async fn guest(test: &str) -> Guest {
     let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let socket = folder.path().join("guest.sock");
     let station = Arc::new(Keypair::generate().unwrap());
     let spec = format!("{} {}", socket.display(), hex(station.public().as_bytes()));
     let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
     command
-        .args([
-            "--exact",
-            "daemon::serve::machine::tests::a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login",
-            "--test-threads=1",
-        ])
+        .args(["--exact", test, "--test-threads=1"])
         .env(GUEST, spec)
         .kill_on_drop(true);
-    let mut child = atlas_core::spawn::spawn_async(&mut command).unwrap();
+    let child = atlas_core::spawn::spawn_async(&mut command).unwrap();
     tokio::time::timeout(Duration::from_secs(20), async {
-        while !socket.exists() {
+        while !socket.with_extension("pub").exists() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -518,9 +530,7 @@ async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidde
     .expect("the guest listens");
     let guest =
         PeerKey::from_hex(&std::fs::read_to_string(socket.with_extension("pub")).unwrap()).unwrap();
-    let child_pid = child.id().unwrap();
     let desktop = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id();
-
     let controlling = station_control(reach(&socket, 0).await, &station, guest, &desktop)
         .await
         .unwrap();
@@ -535,9 +545,28 @@ async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidde
         controlling.outbox.clone(),
         Box::new(SocketLanes(socket.clone())),
     );
-    let replies = ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await;
+    Guest {
+        child,
+        desktop: lanes,
+        _controlling: controlling,
+        _folder: folder,
+    }
+}
+
+#[tokio::test]
+async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login() {
+    if let Ok(spec) = std::env::var(GUEST) {
+        return be_the_guest(&spec).await;
+    }
+    let mut guest = guest(
+        "daemon::serve::machine::tests::a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login",
+    )
+    .await;
+    let child_pid = guest.child.id().unwrap();
+
+    let replies = ask(&guest.desktop, LaneKind::Read, &json!({"op": "hello"})).await;
     let hello = replies.last().unwrap().clone();
-    child.kill().await.unwrap();
+    guest.child.kill().await.unwrap();
 
     assert_eq!(hello["ok"], true, "{hello}");
     assert_eq!(
@@ -1084,4 +1113,119 @@ async fn a_generation_that_lapsed_ends_its_running_command_once_its_stop_is_save
         served.machine.paired.stop.kept().unwrap(),
         crate::machine::stop::Kept::Stopped { .. }
     ));
+}
+
+/// Run a command on `desktop` that leaves a process behind, and that
+/// process's PID once the command has replied.
+async fn leaving(desktop: &Desktop) -> i32 {
+    use base64::Engine;
+    let change = Token::new();
+    let request = json!({"op": "run",
+        "argv": ["/bin/sh", "-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"],
+        "change": change});
+    let replies = ask(desktop, LaneKind::Change { change }, &request).await;
+    assert_eq!(replies.last().unwrap()["exitCode"], 0, "{replies:?}");
+    let said: Vec<u8> = replies
+        .iter()
+        .filter(|reply| reply["event"] == "output")
+        .flat_map(|reply| {
+            base64::engine::general_purpose::STANDARD
+                .decode(reply["data"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect();
+    String::from_utf8(said).unwrap().trim().parse().unwrap()
+}
+
+/// Whether process `pid` is gone, or only waits to be reaped, within `within`.
+async fn gone_within(pid: i32, within: Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        if atlas_core::process::info(pid)
+            .unwrap()
+            .is_none_or(|info| info.zombie)
+        {
+            return true;
+        }
+        if started.elapsed() >= within {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn what_a_command_left_ends_once_agents_are_stopped_though_a_resume_follows() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let left = leaving(&desktop).await;
+    assert!(!gone_within(left, Duration::ZERO).await);
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+
+    assert!(gone_within(left, Duration::from_secs(2)).await);
+}
+
+#[tokio::test]
+async fn what_a_command_left_ends_once_its_generation_is_replaced() {
+    let served = Served::start().await;
+    let (_old, desktop) = served.control().await;
+    let left = leaving(&desktop).await;
+
+    let _new = served.control().await;
+
+    assert!(gone_within(left, Duration::from_secs(2)).await);
+}
+
+#[tokio::test]
+async fn a_guest_killed_with_no_restart_leaves_none_of_its_work_running() {
+    if let Ok(spec) = std::env::var(GUEST) {
+        return be_the_guest(&spec).await;
+    }
+    let mut guest = guest(
+        "daemon::serve::machine::tests::a_guest_killed_with_no_restart_leaves_none_of_its_work_running",
+    )
+    .await;
+    let left = leaving(&guest.desktop).await;
+    assert!(!gone_within(left, Duration::ZERO).await);
+
+    guest.child.kill().await.unwrap();
+
+    assert!(gone_within(left, Duration::from_secs(2)).await);
+}
+
+#[tokio::test]
+async fn a_command_on_a_machine_lane_with_nothing_to_supervise_it_is_refused() {
+    let served = Served::start().await;
+    let (_controlling, _desktop) = served.control().await;
+    let (authority, lanes) = {
+        let live = served.machine.live.lock().await;
+        let live = live.as_ref().unwrap();
+        (live.authority.clone(), live.lanes.clone())
+    };
+    let asker = Asker {
+        controller: true,
+        host: None,
+        gate: Some(Gate {
+            authority,
+            lanes,
+            lane: LaneId(9),
+            halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
+            stops: 0,
+        }),
+    };
+    let unsupervised = Daemon::new("Aqua".into(), synthetic, || true, own_session);
+    assert!(super::super::unsupervised(&served.machine.daemon, &asker).is_none());
+
+    let refusal = super::super::unsupervised(&unsupervised, &asker).unwrap();
+
+    assert_eq!(refusal["code"], "platform", "{refusal}");
+    assert_eq!(refusal["uncertain"], false, "{refusal}");
 }

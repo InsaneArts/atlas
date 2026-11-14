@@ -239,6 +239,9 @@ pub struct Daemon {
     /// Where a machine's changes are kept on its disk, outliving this
     /// process; none for the helper login, whose station keeps its own.
     kept: Option<Arc<dyn Kept>>,
+    /// What a machine's commands run under; none for the helper login,
+    /// whose commands run as they are.
+    supervisor: Option<crate::machine::supervise::invocation::Supervisor>,
     /// Whether agents are stopped on a machine desktop, and how many Stops
     /// there have been: no change is taken while stopped, and a command
     /// admitted before a Stop ends with it, a Resume after or not. Never
@@ -307,6 +310,7 @@ impl Daemon {
             recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
             outcomes: Arc::default(),
             kept: None,
+            supervisor: None,
             halted: watch::Sender::new(Halt::default()),
         }
     }
@@ -871,6 +875,22 @@ pub(super) struct Gate {
     pub(super) stops: u64,
 }
 
+impl Gate {
+    /// Completes once the work it admitted may no longer run: its generation
+    /// is over, or agents were stopped since, a Resume after or not.
+    fn over(&self) -> impl Future<Output = ()> + Send + 'static {
+        let authority = self.authority.clone();
+        let mut halted = self.halted.clone();
+        let stops = self.stops;
+        async move {
+            tokio::select! {
+                () = authority.ended() => {}
+                _ = halted.wait_for(|halt| halt.stops > stops) => {}
+            }
+        }
+    }
+}
+
 impl Asker {
     /// The refusal of a change now, when its lane was cancelled or the
     /// generation it came in is over.
@@ -1273,6 +1293,17 @@ async fn serve_run(
     })?
 }
 
+/// The refusal of a command on a machine's session when nothing could
+/// supervise it: none runs there unsupervised.
+fn unsupervised(daemon: &Daemon, asker: &Asker) -> Option<Value> {
+    (asker.gate.is_some() && daemon.supervisor.is_none()).then(|| {
+        failure(
+            Code::Platform,
+            "This desktop cannot supervise commands, so none is run",
+        )
+    })
+}
+
 /// Admission a queued command must pass again, its execution, and the replies
 /// that report it to `handler`, which losing cancels the command. What it
 /// came to is remembered, for a command that named itself, before its final
@@ -1297,7 +1328,8 @@ async fn run_registered(
             daemon.screen.on_console,
             daemon.screen.session,
         )
-        .or_else(|| asker.refused_now());
+        .or_else(|| asker.refused_now())
+        .or_else(|| unsupervised(daemon, asker));
     if let Some(refusal) = refusal {
         phase.send_replace(ConnectionPhase::Refusal);
         let refusal = keep(daemon, remembering, &refusal).await;
@@ -1326,7 +1358,15 @@ async fn run_registered(
     };
     // Cancelled or retired during any wait before it starts, it never does.
     let unless = || asker.refused_now();
-    let reply = run::run_unless(argv, *timeout, events, cancel, &unless).await;
+    let lease = asker
+        .gate
+        .as_ref()
+        .zip(daemon.supervisor.as_ref())
+        .map(|(gate, supervisor)| run::Lease {
+            supervisor: supervisor.clone(),
+            over: Box::pin(gate.over()),
+        });
+    let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;
     let reply = keep(daemon, remembering, &reply).await;
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,

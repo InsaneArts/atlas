@@ -22,6 +22,7 @@
 use std::{
     future::Future,
     io::{self, PipeReader, PipeWriter},
+    os::unix::net::UnixStream,
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{Mutex, MutexGuard, PoisonError},
 };
@@ -79,6 +80,17 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
 pub fn pipe() -> io::Result<(PipeReader, PipeWriter)> {
     let _alone = alone();
     std::io::pipe()
+}
+
+/// A connected pair of Unix sockets, as [`UnixStream::pair`] makes one,
+/// made close-on-exec while no Atlas spawn is under way.
+///
+/// # Errors
+///
+/// Returns the error of making the pair.
+pub fn socket_pair() -> io::Result<(UnixStream, UnixStream)> {
+    let _alone = alone();
+    UnixStream::pair()
 }
 
 /// Start `command`, as [`tokio::process::Command::spawn`] does, while no

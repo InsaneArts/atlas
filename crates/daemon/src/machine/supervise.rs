@@ -4,8 +4,9 @@
 //! watchdog cannot stop work once the daemon is gone, and a new daemon may
 //! never come; the supervisor never waits for one.
 //!
-//! Its standard input is the lifeline, its own alone: the daemon writes
-//! [`RENEW`] while the generation the work belongs to is live. The pipe
+//! Its standard input is the lifeline, a Unix socket its own alone: the
+//! daemon writes [`RENEW`] while the generation the work belongs to is
+//! live, and the supervisor says back how the program ended. The socket
 //! closing, a lease gone unrenewed, or anything else on it, ends every
 //! process the supervisor started: its group, and every descendant it has
 //! seen leave the group. It goes on supervising until all of them are gone,
@@ -14,10 +15,7 @@
 //! macOS gives a process no containment that survives both leaving its
 //! group and losing its parent: a descendant that does both between two
 //! looks is not seen.
-use atlas_core::{
-    error::Result,
-    process::{Info, Instance},
-};
+use atlas_core::process::{Info, Instance};
 use atlas_session::clock::{Clock, Continuous};
 use nix::{
     sys::signal::{Signal, kill, killpg},
@@ -25,11 +23,20 @@ use nix::{
 };
 use std::{
     collections::HashSet,
-    io::{ErrorKind, Read},
-    process::{Command, ExitStatus, Stdio},
+    ffi::OsString,
+    io::{ErrorKind, Read, Write},
+    os::{
+        fd::AsFd,
+        unix::{net::UnixStream, process::CommandExt},
+    },
+    process::{Command, Stdio},
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
+
+pub mod invocation;
+
+use invocation::Invocation;
 
 /// What the daemon writes to renew the lease.
 pub const RENEW: u8 = b'.';
@@ -37,47 +44,111 @@ pub const RENEW: u8 = b'.';
 /// How often the supervisor looks, at most.
 const LOOK: Duration = Duration::from_millis(100);
 
-/// Run `program` with `arguments` in this process's own group, under
+/// How long the work has to end once the supervisor is asked to end it,
+/// before it is made to: within the daemon's own grace.
+const TERMINATING: Duration = Duration::from_millis(1500);
+
+/// The supervisor's command: run what `words` give under the lifeline on
+/// standard input, the program's output on standard error. The exit code is 0 once everything it started has
+/// ended, and 127 when the words were not an invocation or nothing could
+/// be started; the program's own end goes back on the lifeline.
+pub fn start(words: &[OsString]) -> u8 {
+    let Some(invocation) = Invocation::parse(words) else {
+        return 127;
+    };
+    let Ok(lifeline) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return 127;
+    };
+    supervise(&invocation, UnixStream::from(lifeline));
+    0
+}
+
+/// Run `invocation`'s program in this process's own group, under
 /// `lifeline`, ending everything it started when no renewal comes within
-/// `lease` on the continuous clock. Returns once the program and all it
-/// left running have ended.
-///
-/// # Errors
-///
-/// Never returns an error: anything that goes wrong ends the work.
-pub fn supervise(
-    program: &str,
-    arguments: &[String],
-    lifeline: impl Read + Send + 'static,
-    lease: Duration,
-) -> Result<ExitStatus> {
+/// the lease on the continuous clock. Once the program ends, its end goes
+/// back on the lifeline; this returns once all it left running has ended
+/// too. Anything that goes wrong ends the work.
+pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
     let work = Arc::new(Work::new(Live, getpgrp()));
+    // Asked to end, before anything could be started that it must end.
+    if !on_terminate(Arc::clone(&work)) {
+        work.end();
+    }
     // The lease runs from before anything starts, and a clock that cannot
     // be read starts nothing.
-    let lease = Arc::new(Lease::start(Continuous, lease).unwrap_or_else(|| work.end()));
+    let lease = Arc::new(Lease::start(Continuous, invocation.lease).unwrap_or_else(|| work.end()));
+    let mut telling = lifeline.try_clone().unwrap_or_else(|_| work.end());
     if !listen(lifeline, Arc::clone(&lease)) || !watch(Arc::clone(&lease), Arc::clone(&work)) {
         work.end();
     }
-    let mut command = Command::new(program);
-    command.args(arguments).stdin(Stdio::null());
+    // The program's output, both streams, is this process's standard
+    // error: its standard output is not the program's to write on.
+    let output = std::io::stderr()
+        .as_fd()
+        .try_clone_to_owned()
+        .unwrap_or_else(|_| work.end());
+    let mut command = Command::new(&invocation.program);
+    command
+        .arg0(&invocation.argv0)
+        .args(&invocation.arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output));
     // Checked again once nothing else may start: a lease that ran out while
     // waiting starts nothing.
     let Ok(Some(mut child)) = atlas_core::spawn::spawn_if(&mut command, || lease.live()) else {
         work.end();
     };
-    let mut status = None;
+    // The program has the output now: this process keeps none of it open.
+    drop(command);
+    let _ = let_go_of_output();
+    let mut told = false;
     loop {
-        if status.is_none() {
-            status = child.try_wait().unwrap_or_else(|_| work.end());
+        if !told && let Some(status) = child.try_wait().unwrap_or_else(|_| work.end()) {
+            // Said once; a daemon that no longer listens changes nothing,
+            // as only the lifeline says whether the work lives on.
+            let _ = telling.write_all(&invocation::told(status));
+            told = true;
         }
         let left = work.look().unwrap_or_else(|| work.end());
-        if let Some(status) = status
-            && !left
-        {
-            return Ok(status);
+        if told && !left {
+            return;
         }
         std::thread::sleep(LOOK);
     }
+}
+
+/// Point this process's standard error, the program's output, at nothing.
+fn let_go_of_output() -> std::io::Result<()> {
+    let nothing = std::fs::OpenOptions::new().write(true).open("/dev/null")?;
+    nix::unistd::dup2_stderr(&nothing).map_err(std::io::Error::from)
+}
+
+/// Take SIGTERM on a thread of its own: pass it on, once, to everything
+/// the supervisor started, and end them all once they have had a grace. A
+/// handler, not a mask, so the program starts with the default action.
+/// False when it cannot be set up.
+fn on_terminate<K: Kernel + 'static>(work: Arc<Work<K>>) -> bool {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+    else {
+        return false;
+    };
+    let terms = {
+        let _inside = runtime.enter();
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    };
+    let Ok(mut terms) = terms else {
+        return false;
+    };
+    std::thread::Builder::new()
+        .spawn(move || {
+            runtime.block_on(terms.recv());
+            work.terminate();
+            std::thread::sleep(TERMINATING);
+            work.end();
+        })
+        .is_ok()
 }
 
 /// The lease, as the lifeline has kept it: when it runs out, on its clock,
@@ -305,6 +376,23 @@ impl<K: Kernel> Work<K> {
             .filter(|instance| instance.pid != self.own && !self.kernel.ended(instance))
             .map(|instance| Pid::from_raw(instance.pid))
             .collect()
+    }
+
+    /// Ask everything it started to end, once each: its group, then every
+    /// process it has seen that left the group.
+    fn terminate(&self) {
+        let _ = killpg(self.group, Signal::SIGTERM);
+        for pid in self.targets() {
+            let outside = self
+                .kernel
+                .info(pid.as_raw())
+                .ok()
+                .flatten()
+                .is_some_and(|info| info.pgid != self.group.as_raw());
+            if outside {
+                let _ = kill(pid, Signal::SIGTERM);
+            }
+        }
     }
 
     /// End every process this supervisor started, then itself: nothing it

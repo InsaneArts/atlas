@@ -1,53 +1,58 @@
 use super::*;
 use atlas_session::clock::Manual;
 use std::{
-    io::Write,
-    process::{Child, Stdio},
+    os::{fd::OwnedFd, unix::process::ExitStatusExt},
+    process::{Child, ExitStatus},
     sync::mpsc,
     time::Instant,
 };
 
-/// Set in the child the tests below start: what it supervises.
-const SUPERVISING: &str = "ATLAS_TEST_SUPERVISING";
-
-/// What separates a supervised program's words in [`SUPERVISING`].
-const SEPARATE: char = '\u{1f}';
-
 /// The supervisor these tests run in a child of their own: the test binary
-/// again, in a group of its own, supervising what `SUPERVISING` names.
+/// again, running only this test, with the invocation's words after `--`.
 #[test]
 fn a_supervisor_runs_what_it_is_given_when_started_for_these_tests() {
-    let Ok(program) = std::env::var(SUPERVISING) else {
+    let words: Vec<OsString> = std::env::args_os()
+        .skip_while(|word| word != "--")
+        .skip(1)
+        .collect();
+    if words.is_empty() {
         return;
-    };
-    let mut words = program.split(SEPARATE).map(str::to_owned);
-    let program = words.next().unwrap();
-    let arguments: Vec<String> = words.collect();
-    let status = supervise(
-        &program,
-        &arguments,
-        std::io::stdin(),
-        Duration::from_millis(800),
-    );
-    std::process::exit(status.ok().and_then(|status| status.code()).unwrap_or(70));
+    }
+    std::process::exit(i32::from(start(&words)));
 }
 
-/// A supervisor of the program `words` name, its lifeline held here.
-fn supervisor(words: &[&str]) -> Child {
-    let program = words.join(&SEPARATE.to_string());
+/// A supervisor of the program `words` name, in a group of its own, with
+/// an 800 ms lease, and the daemon's end of its lifeline.
+fn supervisor(words: &[&str]) -> (Child, UnixStream) {
     use std::os::unix::process::CommandExt;
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let invocation = Invocation {
+        lease: Duration::from_millis(800),
+        argv0: words[0].into(),
+        program: words[0].into(),
+        arguments: words[1..].iter().map(OsString::from).collect(),
+    };
+    let supervisor = invocation::Supervisor::of_these_tests();
+    let (daemon, theirs) = atlas_core::spawn::socket_pair().unwrap();
+    let mut command = Command::new(supervisor.program());
     command
-        .args([
-            "--exact",
-            "machine::supervise::tests::a_supervisor_runs_what_it_is_given_when_started_for_these_tests",
-            "--test-threads=1",
-        ])
-        .env(SUPERVISING, program)
-        .stdin(Stdio::piped())
+        .args(supervisor.arguments(&invocation))
+        .stdin(Stdio::from(OwnedFd::from(theirs)))
         .stdout(Stdio::null())
         .process_group(0);
-    atlas_core::spawn::spawn(&mut command).unwrap()
+    (atlas_core::spawn::spawn(&mut command).unwrap(), daemon)
+}
+
+/// How the program ended, as the supervisor says it on `lifeline`.
+fn told(lifeline: &mut UnixStream) -> Option<ExitStatus> {
+    let mut frame = Vec::new();
+    let mut byte = [0; 1];
+    while frame.len() < invocation::FRAME && lifeline.read(&mut byte).ok()? == 1 {
+        frame.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    invocation::heard(&frame)
 }
 
 /// Whether the group `child` leads ends within `within`.
@@ -66,27 +71,26 @@ fn ends_within(child: &mut Child, within: Duration) -> bool {
 
 #[test]
 fn a_lifeline_that_closes_ends_the_group_at_once() {
-    let mut child = supervisor(&["/bin/sleep", "30"]);
+    let (mut child, lifeline) = supervisor(&["/bin/sleep", "30"]);
     std::thread::sleep(Duration::from_millis(300));
 
-    drop(child.stdin.take());
+    drop(lifeline);
 
     assert!(ends_within(&mut child, Duration::from_millis(500)));
 }
 
 #[test]
 fn a_lease_gone_unrenewed_ends_the_group() {
-    let mut child = supervisor(&["/bin/sleep", "30"]);
+    let (mut child, lifeline) = supervisor(&["/bin/sleep", "30"]);
 
     // The lifeline stays open; nothing renews the lease.
     assert!(ends_within(&mut child, Duration::from_secs(5)));
-    drop(child.stdin.take());
+    drop(lifeline);
 }
 
 #[test]
 fn renewals_keep_the_work_running_until_they_stop() {
-    let mut child = supervisor(&["/bin/sleep", "30"]);
-    let mut lifeline = child.stdin.take().unwrap();
+    let (mut child, mut lifeline) = supervisor(&["/bin/sleep", "30"]);
     let group = Pid::from_raw(child.id() as i32);
 
     for _ in 0..10 {
@@ -100,22 +104,21 @@ fn renewals_keep_the_work_running_until_they_stop() {
 }
 
 #[test]
-fn the_work_ending_by_itself_ends_its_supervisor_with_its_status() {
-    let mut child = supervisor(&["/usr/bin/false"]);
-    let mut lifeline = child.stdin.take().unwrap();
+fn the_work_ending_by_itself_is_told_with_its_status_and_ends_its_supervisor() {
+    let (mut child, mut lifeline) = supervisor(&["/usr/bin/false"]);
     let _ = lifeline.write_all(&[RENEW]);
 
-    let status = child.wait().unwrap();
+    let told = told(&mut lifeline);
 
-    assert_eq!(status.code(), Some(1));
+    assert_eq!(told.and_then(|status| status.code()), Some(1));
+    assert_eq!(child.wait().unwrap().code(), Some(0));
 }
 
 #[test]
 fn work_left_behind_by_a_program_that_ended_is_supervised_until_it_ends_too() {
     // Its background process outlives the shell, in the shell's group.
-    let mut child = supervisor(&["/bin/sh", "-c", "/bin/sleep 30 &"]);
+    let (mut child, mut lifeline) = supervisor(&["/bin/sh", "-c", "/bin/sleep 30 &"]);
     std::thread::sleep(Duration::from_millis(500));
-    let mut lifeline = child.stdin.take().unwrap();
     lifeline.write_all(&[RENEW]).unwrap();
     assert!(
         killpg(Pid::from_raw(child.id() as i32), None).is_ok(),
@@ -129,7 +132,7 @@ fn work_left_behind_by_a_program_that_ended_is_supervised_until_it_ends_too() {
 #[test]
 fn work_that_leaves_the_group_is_ended_with_it() {
     // A new session of its own, out of the supervisor's group.
-    let mut child = supervisor(&[
+    let (mut child, lifeline) = supervisor(&[
         "/usr/bin/perl",
         "-e",
         "use POSIX; POSIX::setsid(); sleep 30",
@@ -141,7 +144,7 @@ fn work_that_leaves_the_group_is_ended_with_it() {
         "the program that left the group was found"
     );
 
-    drop(child.stdin.take());
+    drop(lifeline);
 
     assert!(ends_within(&mut child, Duration::from_secs(2)));
     for pid in escaped {
@@ -156,7 +159,7 @@ fn work_that_leaves_the_group_is_ended_with_it() {
 #[test]
 fn work_whose_parent_stays_in_the_group_is_ended_once_it_leaves_it() {
     // The shell stays in the group; its child leaves it.
-    let mut child = supervisor(&[
+    let (mut child, lifeline) = supervisor(&[
         "/bin/sh",
         "-c",
         "/usr/bin/perl -e 'use POSIX; POSIX::setsid(); sleep 30' & wait",
@@ -176,7 +179,7 @@ fn work_whose_parent_stays_in_the_group_is_ended_once_it_leaves_it() {
         "the grandchild that left the group was found"
     );
 
-    drop(child.stdin.take());
+    drop(lifeline);
 
     assert!(ends_within(&mut child, Duration::from_secs(2)));
     for pid in escaped {
@@ -410,4 +413,111 @@ fn a_process_seen_once_is_ended_while_the_kernel_cannot_say_it_has() {
 
     assert_eq!(work.look(), None);
     assert_eq!(work.targets(), vec![Pid::from_raw(99_003)]);
+}
+
+#[test]
+fn a_program_ended_by_a_signal_is_told_as_ended_by_it() {
+    let (mut child, mut lifeline) = supervisor(&["/usr/bin/perl", "-e", "kill 'KILL', $$"]);
+
+    let told = told(&mut lifeline);
+
+    assert_eq!(told.and_then(|status| status.signal()), Some(9));
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+#[test]
+fn a_program_is_told_as_ended_while_what_it_left_still_runs() {
+    let (mut child, mut lifeline) = supervisor(&["/bin/sh", "-c", "/bin/sleep 30 & exit 3"]);
+    lifeline.write_all(&[RENEW]).unwrap();
+
+    let told = told(&mut lifeline);
+
+    assert_eq!(told.and_then(|status| status.code()), Some(3));
+    assert!(killpg(Pid::from_raw(child.id() as i32), None).is_ok());
+    drop(lifeline);
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
+}
+
+#[test]
+fn the_supervisor_keeps_none_of_the_output_open_once_the_program_has_it() {
+    use std::os::unix::process::CommandExt;
+    let invocation = Invocation {
+        lease: Duration::from_millis(800),
+        argv0: "sh".into(),
+        program: "/bin/sh".into(),
+        arguments: ["-c", "echo said; /bin/sleep 30 >/dev/null 2>&1 &"]
+            .map(OsString::from)
+            .to_vec(),
+    };
+    let supervisor = invocation::Supervisor::of_these_tests();
+    let (mut lifeline, theirs) = atlas_core::spawn::socket_pair().unwrap();
+    let (mut output, writing) = atlas_core::spawn::pipe().unwrap();
+    let mut command = Command::new(supervisor.program());
+    command
+        .args(supervisor.arguments(&invocation))
+        .stdin(Stdio::from(OwnedFd::from(theirs)))
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(OwnedFd::from(writing)))
+        .process_group(0);
+    let mut child = atlas_core::spawn::spawn(&mut command).unwrap();
+    drop(command);
+    lifeline.write_all(&[RENEW]).unwrap();
+
+    // Read to the end: what the shell left closed its output, and the
+    // supervisor, still supervising it, holds none.
+    let mut said = String::new();
+    output.read_to_string(&mut said).unwrap();
+
+    assert!(said.ends_with("said\n"), "{said:?}");
+    assert!(killpg(Pid::from_raw(child.id() as i32), None).is_ok());
+    drop(lifeline);
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
+}
+
+#[test]
+fn sigterm_reaches_the_program_with_its_default_action() {
+    let (mut child, mut lifeline) = supervisor(&["/bin/sleep", "30"]);
+    lifeline.write_all(&[RENEW]).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).unwrap();
+
+    let told = told(&mut lifeline);
+    assert_eq!(told.and_then(|status| status.signal()), Some(15));
+    drop(lifeline);
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
+}
+
+#[test]
+fn sigterm_ends_work_that_left_the_group_even_when_it_ignores_it() {
+    let (mut child, mut lifeline) = supervisor(&[
+        "/usr/bin/perl",
+        "-e",
+        "use POSIX; POSIX::setsid(); $SIG{TERM} = 'IGNORE'; sleep 30",
+    ]);
+    std::thread::sleep(Duration::from_millis(500));
+    lifeline.write_all(&[RENEW]).unwrap();
+    let escaped = descendants(child.id() as i32);
+    assert!(!escaped.is_empty());
+    let renewing = std::thread::spawn(move || {
+        for _ in 0..20 {
+            if lifeline.write_all(&[RENEW]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+
+    // Only the supervisor is asked; the lease stays renewed.
+    kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).unwrap();
+
+    assert!(ends_within(&mut child, Duration::from_secs(3)));
+    for pid in escaped {
+        assert!(
+            atlas_core::process::info(pid)
+                .unwrap()
+                .is_none_or(|info| info.zombie)
+        );
+    }
+    renewing.join().unwrap();
 }

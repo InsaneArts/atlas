@@ -272,7 +272,7 @@ async fn carry_out(
         Command::ElementsInfo { pid } => elements_info(pid),
         // Main runs the helper daemon on its own thread and becomes a job
         // before it creates the async runtime.
-        Command::HelperServe(_) | Command::JobLaunch { .. } => {
+        Command::HelperServe(_) | Command::JobLaunch { .. } | Command::MachineSupervise { .. } => {
             unreachable!("main runs these before anything else")
         }
         Command::InputService(args) => input_service(args).await,

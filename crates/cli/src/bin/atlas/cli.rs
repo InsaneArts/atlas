@@ -407,6 +407,13 @@ pub(super) enum Command {
         #[arg(long, value_name = "SIZE", default_value = "64M", value_parser = file_size)]
         max_size: u64,
     },
+    /// What a machine desktop's commands and jobs run under, started by its
+    /// daemon.
+    #[command(hide = true)]
+    MachineSupervise {
+        #[arg(last = true, required = true)]
+        words: Vec<std::ffi::OsString>,
+    },
     /// The first process of a background job, started by the helper daemon.
     #[command(hide = true)]
     JobLaunch {

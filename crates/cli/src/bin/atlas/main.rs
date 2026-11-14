@@ -104,6 +104,12 @@ fn main() -> ExitCode {
         std::time::Duration::ZERO
     };
 
+    // A supervisor starts its work before anything else of Atlas starts
+    // in it.
+    if let Command::MachineSupervise { words } = &command {
+        return ExitCode::from(atlas_daemon::machine::supervise::start(words));
+    }
+
     // A background job's first process becomes the job itself, before
     // anything else of Atlas starts in it.
     if let Command::JobLaunch {
