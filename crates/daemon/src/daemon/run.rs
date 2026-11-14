@@ -392,18 +392,36 @@ impl StopCause {
     }
 }
 
-/// Run `argv`, sending its events to `events`, and return the final reply.
-/// When `cancel` completes (the client left, the daemon is stopping or the
-/// helper came on screen) or the client stops taking events, the group is
-/// ended before returning.
+/// [`run_unless`] with nothing to stop it.
+#[cfg(test)]
 pub(super) async fn run(
     argv: &[String],
     timeout: Duration,
     events: Sender<Value>,
     cancel: impl Future<Output = Cancel>,
 ) -> Value {
+    run_unless(argv, timeout, events, cancel, &|| None).await
+}
+
+/// What stops a command from starting, checked immediately before it does:
+/// the refusal to give instead, if any.
+pub(super) type Unless<'a> = &'a (dyn Fn() -> Option<Value> + Send + Sync);
+
+/// Run `argv`, sending its events to `events`, and return the final reply.
+/// When `cancel` completes (the client left, the daemon is stopping or the
+/// screen left where the desktop keeps it) or the client stops taking
+/// events, the group is ended before returning. It is refused instead when
+/// `unless` says so immediately before the command would start, after every
+/// wait that comes before it.
+pub(super) async fn run_unless(
+    argv: &[String],
+    timeout: Duration,
+    events: Sender<Value>,
+    cancel: impl Future<Output = Cancel>,
+    unless: Unless<'_>,
+) -> Value {
     // The command runs in the helper's home, as a shell there would.
-    run_at(argv, home(), timeout, events, cancel).await
+    run_at(argv, home(), timeout, events, cancel, unless).await
 }
 
 /// A command running in a process group of its own.
@@ -417,7 +435,7 @@ struct Spawned {
 
 /// Spawn with merged output in a group of its own, retaining the child until
 /// pipe setup either succeeds or has killed and reaped it.
-async fn spawn(argv: &[String], home: Option<&Path>) -> Result<Spawned, Value> {
+async fn spawn(argv: &[String], home: Option<&Path>, unless: Unless<'_>) -> Result<Spawned, Value> {
     // The protocol never passes an empty argv; refuse one rather than panic.
     let Some((name, arguments)) = argv.split_first() else {
         return Err(failure(Code::SpawnFailed, "No command to run"));
@@ -439,10 +457,18 @@ async fn spawn(argv: &[String], home: Option<&Path>) -> Result<Spawned, Value> {
         .process_group(0)
         .kill_on_drop(false);
     in_helper(&mut command, &path, home);
-    let spawned = atlas_core::spawn::spawn_async(&mut command);
+    let mut refusal = None;
+    let spawned = atlas_core::spawn::spawn_async_if(&mut command, || {
+        refusal = unless();
+        refusal.is_none()
+    });
     // The command keeps this process's copies of the pipe's write end.
     drop(command);
-    let mut child = spawned.map_err(unstarted)?;
+    let Some(mut child) = spawned.map_err(unstarted)? else {
+        return Err(
+            refusal.unwrap_or_else(|| failure(Code::Cancelled, "The command was not started"))
+        );
+    };
 
     let started = Instant::now();
 
@@ -561,15 +587,16 @@ async fn child_exited(child: &tokio::process::Child) -> std::io::Result<()> {
     }
 }
 
-/// [`run`] with `home` as the helper's home.
+/// [`run_unless`] with `home` as the helper's home.
 async fn run_at(
     argv: &[String],
     home: Option<PathBuf>,
     timeout: Duration,
     events: Sender<Value>,
     cancel: impl Future<Output = Cancel>,
+    unless: Unless<'_>,
 ) -> Value {
-    let mut spawned = match spawn(argv, home.as_deref()).await {
+    let mut spawned = match spawn(argv, home.as_deref(), unless).await {
         Ok(spawned) => spawned,
         Err(refusal) => return refusal,
     };

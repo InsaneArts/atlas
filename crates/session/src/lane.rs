@@ -63,6 +63,8 @@ pub enum Opener {
 pub struct Lanes {
     authority: Authority,
     state: Mutex<State>,
+    /// Wakes the work of every lane when one is cancelled.
+    cancelling: tokio::sync::Notify,
 }
 
 #[derive(Debug, Default)]
@@ -82,6 +84,7 @@ impl Lanes {
         Self {
             authority,
             state: Mutex::new(State::default()),
+            cancelling: tokio::sync::Notify::new(),
         }
     }
 
@@ -96,9 +99,30 @@ impl Lanes {
 
     /// The station cancelled `lane`, open or not.
     pub fn cancel(&self, lane: LaneId) {
-        let mut state = self.state();
-        state.asked.remove(&lane);
-        state.cancelled.insert(lane);
+        {
+            let mut state = self.state();
+            state.asked.remove(&lane);
+            state.cancelled.insert(lane);
+        }
+        self.cancelling.notify_waiters();
+    }
+
+    /// Completes once `lane` is cancelled or its generation retired: what
+    /// a lane's work selects on, whether or not its connection stays open.
+    pub async fn ended(&self, lane: LaneId) {
+        loop {
+            let cancelled = self.cancelling.notified();
+            tokio::pin!(cancelled);
+            // Waiting before looking, so a cancel between the two is heard.
+            cancelled.as_mut().enable();
+            if self.cancelled(lane) {
+                return;
+            }
+            tokio::select! {
+                () = cancelled => {}
+                () = self.authority.ended() => return,
+            }
+        }
     }
 
     /// Whether `lane` was cancelled: its work stops at its next check.

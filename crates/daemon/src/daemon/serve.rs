@@ -41,6 +41,7 @@ use tokio::{
     task::{Id, JoinError, JoinHandle, JoinSet},
 };
 
+pub mod machine;
 mod stream;
 
 /// Connections served at once.
@@ -791,6 +792,7 @@ pub(crate) async fn handle(
     let asker = Asker {
         controller,
         host: Some((caller, peer.uid())),
+        gate: None,
     };
     answer(Box::new(reader), Box::new(writer), daemon, asker, phase).await
 }
@@ -803,6 +805,37 @@ pub(super) struct Asker {
     /// what a host session is verified against. None where the connection
     /// cannot show it.
     pub(super) host: Option<(Option<atlas_core::process::Instance>, u32)>,
+    /// The lane of a machine's session the request came on, checked
+    /// immediately before each change runs; none for the helper login.
+    pub(super) gate: Option<Gate>,
+}
+
+/// What a change on a machine's session runs only while: its generation,
+/// and its lane not cancelled.
+pub(super) struct Gate {
+    pub(super) authority: atlas_session::authority::Authority,
+    pub(super) lanes: Arc<atlas_session::lane::Lanes>,
+    pub(super) lane: atlas_session::lane::LaneId,
+}
+
+impl Asker {
+    /// The refusal of a change now, when its lane was cancelled or the
+    /// generation it came in is over.
+    fn refused_now(&self) -> Option<Value> {
+        let gate = self.gate.as_ref()?;
+        if gate.lanes.cancelled(gate.lane) {
+            return Some(failure(Code::Cancelled, "The change was cancelled"));
+        }
+        gate.authority.check().err().map(refused)
+    }
+
+    /// The refusal of `request` on a machine's session: there, a change is
+    /// only a command, until the others keep their ownership to the end.
+    fn unavailable(&self, request: &Request, phase: ConnectionPhase) -> Option<Value> {
+        let changes = matches!(phase, ConnectionPhase::Mutation(_));
+        (self.gate.is_some() && changes && !matches!(request, Request::Run { .. }))
+            .then(|| failure(Code::Platform, "This desktop cannot make that change yet"))
+    }
 }
 
 /// Serve the one request on `reader`, answering on `writer`.
@@ -824,6 +857,17 @@ pub(super) async fn answer(
         Err((refusal, true)) => return stream::write_header(&mut writer, &refusal).await,
         Err((refusal, false)) => return write(&mut writer, &refusal).await,
     };
+
+    // A change runs only while the generation it came in does.
+    let refusal = asker.unavailable(&request, policy.phase).or_else(|| {
+        matches!(policy.phase, ConnectionPhase::Mutation(_))
+            .then(|| asker.refused_now())
+            .flatten()
+    });
+    if let Some(refusal) = refusal {
+        remember(remembering, &refusal);
+        return write(&mut writer, &refusal).await;
+    }
 
     let reply = match request {
         Request::Stream {
@@ -897,7 +941,13 @@ pub(super) async fn answer(
         }
         Request::Run { argv, timeout, .. } => {
             let connection = (reader, writer, remembering);
-            return serve_run(daemon, argv, timeout, policy, connection, phase).await;
+            let ran = Ran {
+                argv,
+                timeout,
+                policy,
+                asker,
+            };
+            return serve_run(daemon, ran, connection, phase).await;
         }
         Request::Restart => {
             return acknowledge(&mut writer, "restart", remembering, || {
@@ -1074,11 +1124,17 @@ async fn serve_windows(daemon: Arc<Daemon>, dock: bool, policy: Policy) -> Value
 
 /// Register a streamed command before permitting execution, retaining its writer
 /// and child cleanup independently of the socket handler's lifetime.
-async fn serve_run(
-    daemon: Arc<Daemon>,
+/// A command asked for, and who asked.
+struct Ran {
     argv: Vec<String>,
     timeout: Duration,
     policy: Policy,
+    asker: Asker,
+}
+
+async fn serve_run(
+    daemon: Arc<Daemon>,
+    ran: Ran,
     connection: (Reader, Writer, Option<Remembering>),
     phase: watch::Sender<ConnectionPhase>,
 ) -> Result<()> {
@@ -1106,9 +1162,7 @@ async fn serve_run(
         let (mut reader, writer, remembering) = connection;
         let result = run_registered(
             &runner,
-            &argv,
-            timeout,
-            policy,
+            &ran,
             (&mut reader, writer, remembering),
             &phase,
             &mut handler,
@@ -1137,18 +1191,26 @@ async fn serve_run(
 /// reply is written.
 async fn run_registered(
     daemon: &Daemon,
-    argv: &[String],
-    timeout: Duration,
-    policy: Policy,
+    ran: &Ran,
     (reader, mut writer, remembering): (&mut Reader, Writer, Option<Remembering>),
     phase: &watch::Sender<ConnectionPhase>,
     handler: &mut oneshot::Sender<Result<()>>,
 ) -> Result<()> {
-    if let Some(refusal) = policy.check(
-        daemon.screen.console,
-        daemon.screen.on_console,
-        daemon.screen.session,
-    ) {
+    let Ran {
+        argv,
+        timeout,
+        policy,
+        asker,
+    } = ran;
+    // Queued behind others, it is checked again, its generation too.
+    let refusal = policy
+        .check(
+            daemon.screen.console,
+            daemon.screen.on_console,
+            daemon.screen.session,
+        )
+        .or_else(|| asker.refused_now());
+    if let Some(refusal) = refusal {
         phase.send_replace(ConnectionPhase::Refusal);
         remember(remembering, &refusal);
         return write(&mut writer, &refusal).await;
@@ -1168,7 +1230,9 @@ async fn run_registered(
             () = daemon.moved_away() => run::Cancel::Away(daemon.screen.console),
         }
     };
-    let reply = run::run(argv, timeout, events, cancel).await;
+    // Cancelled or retired during any wait before it starts, it never does.
+    let unless = || asker.refused_now();
+    let reply = run::run_unless(argv, *timeout, events, cancel, &unless).await;
     remember(remembering, &reply);
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,

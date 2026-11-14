@@ -52,6 +52,8 @@ struct Shared {
     clock: Arc<dyn Clock>,
     state: Mutex<State>,
     hook: Hook,
+    /// Set once the generation retired, for the work that waits on it.
+    ended: tokio::sync::watch::Sender<bool>,
 }
 
 struct State {
@@ -89,6 +91,7 @@ impl Authority {
                     retired: None,
                 }),
                 hook,
+                ended: tokio::sync::watch::Sender::new(false),
             }),
         };
         if now.is_none() {
@@ -131,6 +134,7 @@ impl Authority {
     /// Run the hook for `cause` when this call retired the generation.
     fn told(&self, cause: Retired, retired_now: bool) -> Retired {
         if retired_now {
+            self.shared.ended.send_replace(true);
             (self.shared.hook)(self.shared.generation, cause);
         }
         cause
@@ -202,6 +206,14 @@ impl Authority {
     /// Why the generation retired, once it has.
     pub fn retired(&self) -> Option<Retired> {
         self.state().retired
+    }
+
+    /// Completes once the generation retired, for whatever cause. A lapse
+    /// retires it only when a check finds it, which the guest's watchdog
+    /// makes often.
+    pub async fn ended(&self) {
+        let mut ended = self.shared.ended.subscribe();
+        let _ = ended.wait_for(|ended| *ended).await;
     }
 }
 

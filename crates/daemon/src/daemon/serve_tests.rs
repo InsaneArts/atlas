@@ -2028,6 +2028,7 @@ async fn answered_elsewhere(request: &str) -> Value {
     let asker = Asker {
         controller: true,
         host: None,
+        gate: None,
     };
     let served = tokio::spawn(answer(
         Box::new(reader),
@@ -2076,6 +2077,7 @@ async fn a_stream_refusal_reaches_a_client_over_a_connection_that_holds_what_it_
     let asker = Asker {
         controller: true,
         host: None,
+        gate: None,
     };
     let served = tokio::spawn(answer(
         Box::new(reader),

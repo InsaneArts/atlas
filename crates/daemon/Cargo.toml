@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "
 [dev-dependencies]
 atlas-core = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
+atlas-session = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["socket"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

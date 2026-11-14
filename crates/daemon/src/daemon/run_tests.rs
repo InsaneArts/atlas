@@ -927,6 +927,7 @@ async fn a_relative_program_starts_at_home() {
                 Duration::from_secs(5),
                 sender,
                 std::future::pending::<Cancel>(),
+                &|| None,
             );
 
             let (reply, (events, processes)) =
@@ -1008,4 +1009,85 @@ fn signals_have_conventional_names() {
     assert_eq!(signal_name(Signal::SIGSYS as i32), "SIGSYS");
     assert_eq!(signal_name(Signal::SIGINFO as i32), "SIGINFO");
     assert_eq!(signal_name(64), "SIG64");
+}
+
+#[tokio::test]
+async fn a_command_refused_at_its_last_moment_never_starts() {
+    let folder = tempfile::tempdir().unwrap();
+    let touched = folder.path().join("ran");
+    let argv = vec![
+        "/usr/bin/touch".to_owned(),
+        touched.to_str().unwrap().to_owned(),
+    ];
+    let (sender, mut receiver) = mpsc::channel(EVENTS);
+    let checked = std::sync::atomic::AtomicUsize::new(0);
+    let unless = || {
+        checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(failure(Code::Cancelled, "The change was cancelled"))
+    };
+
+    let reply = run_unless(
+        &argv,
+        Duration::from_secs(5),
+        sender,
+        std::future::pending::<Cancel>(),
+        &unless,
+    )
+    .await;
+
+    assert_eq!(reply["code"], "cancelled");
+    assert_eq!(checked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(receiver.recv().await.is_none(), "nothing started");
+    assert!(!touched.exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_cancelled_while_it_waits_to_spawn_never_starts() {
+    let folder = tempfile::tempdir().unwrap();
+    let touched = folder.path().join("ran");
+    let argv = vec![
+        "/usr/bin/touch".to_owned(),
+        touched.to_str().unwrap().to_owned(),
+    ];
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (held, release) = std::sync::mpsc::channel::<()>();
+    let (holding, holds) = std::sync::mpsc::channel();
+    // Every spawn waits behind this thread until it lets go.
+    let holder = std::thread::spawn(move || {
+        let _held = atlas_core::spawn::hold_spawns();
+        holding.send(()).unwrap();
+        let _ = release.recv();
+    });
+    holds.recv().unwrap();
+    let running = tokio::spawn({
+        let cancelled = cancelled.clone();
+        async move {
+            let (sender, _receiver) = mpsc::channel(EVENTS);
+            let unless = move || {
+                cancelled
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    .then(|| failure(Code::Cancelled, "The change was cancelled"))
+            };
+            run_unless(
+                &argv,
+                Duration::from_secs(5),
+                sender,
+                std::future::pending::<Cancel>(),
+                &unless,
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    held.send(()).unwrap();
+    holder.join().unwrap();
+
+    let reply = tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply["code"], "cancelled", "{reply}");
+    assert!(!touched.exists());
 }

@@ -217,3 +217,47 @@ async fn a_header_of_the_longest_length_is_read_and_a_longer_one_refused() {
         assert_eq!(header_read.is_ok(), read, "{length} bytes");
     }
 }
+
+/// Whether `ended` completes within a moment.
+async fn ends(ended: impl std::future::Future<Output = ()>) -> bool {
+    tokio::time::timeout(std::time::Duration::from_millis(200), ended)
+        .await
+        .is_ok()
+}
+
+#[tokio::test]
+async fn a_lanes_work_ends_when_it_is_cancelled_before_or_while_it_waits() {
+    let (lanes, _) = lanes();
+    let lanes = Arc::new(lanes);
+    lanes.cancel(LaneId(1));
+    assert!(ends(lanes.ended(LaneId(1))).await);
+
+    let waiting = tokio::spawn({
+        let lanes = lanes.clone();
+        async move { lanes.ended(LaneId(2)).await }
+    });
+    tokio::task::yield_now().await;
+    lanes.cancel(LaneId(2));
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn another_lanes_cancel_leaves_a_lanes_work_running() {
+    let (lanes, _) = lanes();
+
+    lanes.cancel(LaneId(1));
+
+    assert!(!ends(lanes.ended(LaneId(2))).await);
+}
+
+#[tokio::test]
+async fn every_lanes_work_ends_when_its_generation_retires() {
+    let (lanes, authority) = lanes();
+
+    authority.retire(Retired::ControlLost);
+
+    assert!(ends(lanes.ended(LaneId(5))).await);
+}

@@ -335,3 +335,27 @@ fn a_heartbeat_is_taken_under_the_lock_a_check_decides_under() {
     hearing.join().unwrap();
     authority.check().unwrap();
 }
+
+#[tokio::test]
+async fn work_waiting_on_a_generation_hears_it_retire_for_any_cause() {
+    let (replaced, _, _) = held();
+    let waiting = tokio::spawn({
+        let replaced = replaced.clone();
+        async move { replaced.ended().await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    replaced.retire(Retired::Replaced);
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A lapse found by a check, as the watchdog finds it.
+    let (lapsed, clock, _) = held();
+    clock.advance(LEASE * 2);
+    assert!(lapsed.check().is_err());
+    tokio::time::timeout(std::time::Duration::from_secs(5), lapsed.ended())
+        .await
+        .unwrap();
+}

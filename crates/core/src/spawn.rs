@@ -92,6 +92,30 @@ pub fn spawn_async(command: &mut tokio::process::Command) -> io::Result<tokio::p
     command.spawn()
 }
 
+/// Hold every Atlas spawn off until the guard is dropped, for a test that
+/// needs one to wait.
+#[cfg(any(test, feature = "test-support"))]
+pub fn hold_spawns() -> MutexGuard<'static, ()> {
+    alone()
+}
+
+/// [`spawn_async`], only when `still` says so once the lock is held,
+/// immediately before the program starts: none when it says not.
+///
+/// # Errors
+///
+/// Returns the error of starting the program.
+pub fn spawn_async_if(
+    command: &mut tokio::process::Command,
+    still: impl FnOnce() -> bool,
+) -> io::Result<Option<tokio::process::Child>> {
+    let _alone = alone();
+    if !still() {
+        return Ok(None);
+    }
+    command.spawn().map(Some)
+}
+
 /// [`tokio::process::Command::output`]: the program starts here, while no
 /// other Atlas spawn is under way, and the future only waits for it.
 pub fn output_async(
