@@ -10,13 +10,16 @@ pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
 #[cfg(any(test, feature = "test-support"))]
 pub use diagnosis::{START_INPUT, diagnosis};
-pub use epoch::{Display, Epoch, InputEpoch};
+pub use epoch::{Display, Epoch, InputEpoch, MachineEpoch};
 
 use crate::account::FIRST_USER_UID;
 use crate::error::{Code, Error, Result};
-use epoch::ProofObservation;
+use epoch::{Console, ProofObservation};
 use serde::Deserialize;
 use serde_json::Value;
+
+/// The longest boot identity taken from a status.
+const BOOT_LENGTH: usize = 128;
 
 /// A pin may be incomplete; readiness never fills in its missing fields.
 #[derive(Clone, Debug)]
@@ -60,6 +63,9 @@ pub struct NativeObservation {
     /// Whether Accessibility is allowed; None when not asked or not answered.
     pub accessibility: Option<bool>,
     epoch: Option<InputEpoch>,
+    /// The epoch the input service proves when its session is on its own
+    /// screen, as a machine desktop's is.
+    own_screen_epoch: Option<InputEpoch>,
     pinned: PinObservation,
     pub control_active: Option<bool>,
     pub held: bool,
@@ -86,7 +92,10 @@ impl NativeObservation {
             ready: value["ready"].as_bool(),
             accessibility: value["accessibility"].as_bool(),
             epoch: ProofObservation::decode(&value["session"])
-                .input_epoch(pid.unwrap_or(0))
+                .input_epoch(pid.unwrap_or(0), Console::Off)
+                .ok(),
+            own_screen_epoch: ProofObservation::decode(&value["session"])
+                .input_epoch(pid.unwrap_or(0), Console::Own)
                 .ok(),
             pinned: PinObservation::decode(&value["enforcedEpoch"]),
             control_active: value["controlActive"].as_bool(),
@@ -145,6 +154,10 @@ pub struct Observation {
     daemon_capabilities: Vec<String>,
     pub native: NativeObservation,
     pub installed_build: Option<String>,
+    /// What a machine desktop's daemon says of itself: whether it runs in
+    /// machine mode, and the boot it runs in.
+    machine_mode: bool,
+    boot: Option<String>,
 }
 
 impl Observation {
@@ -171,6 +184,11 @@ impl Observation {
             daemon_capabilities: capability_names(&value["daemon"]),
             native: NativeObservation::decode(&value["inputService"]),
             installed_build: value["installedBuild"].as_str().map(str::to_owned),
+            machine_mode: value["machine"]["mode"] == "machine",
+            boot: value["machine"]["boot"]
+                .as_str()
+                .filter(|boot| !boot.is_empty() && boot.len() <= BOOT_LENGTH)
+                .map(str::to_owned),
         }
     }
 
@@ -259,7 +277,10 @@ impl Observation {
             return Err(invalid());
         }
 
-        let proof = self.proof.input_epoch(pid).map_err(|_| invalid())?;
+        let proof = self
+            .proof
+            .input_epoch(pid, Console::Off)
+            .map_err(|_| invalid())?;
         if self.proof.parent_pid != Some(pid.into())
             || proof.uid != uid
             || proof.width != display.width
@@ -283,6 +304,89 @@ impl Observation {
             epoch,
             capture: self.capture == Some(true),
             input: self.native.healthy() && self.native.ready == Some(true) && native_matches,
+        })
+    }
+
+    /// The session a machine desktop's status proves, held to what its
+    /// pairing fixed and to what the station knows of it (`expect`). It
+    /// keeps every check [`Observation::require_hidden`] makes but two: the
+    /// account need not differ from the station's, since it is another
+    /// machine's, and its screen is its own, so it must be on its console,
+    /// with the person's hands off it instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal when the answer is not the paired machine as
+    /// `expect` says it must be.
+    pub fn require_machine(&self, expect: &MachineExpect<'_>) -> Result<MachineSession> {
+        self.require_answer()?;
+        let uid = expect.paired.uid;
+        let refused = |why: &str| Error::new(Code::Identity, format!("{why}. Run atlas doctor."));
+        if uid < FIRST_USER_UID {
+            return Err(refused("The desktop's account is not a user account"));
+        }
+        if self.uid != Some(uid.into()) {
+            return Err(refused(
+                "A different account answered than the desktop was paired with",
+            ));
+        }
+        if expect.peer != expect.paired.guest || expect.peer == expect.station {
+            return Err(refused(
+                "The desktop did not prove the key it was paired with",
+            ));
+        }
+        if expect.station.fingerprint() != expect.paired.station {
+            return Err(refused("The desktop was paired with another station"));
+        }
+        if !self.machine_mode {
+            return Err(refused(
+                "The desktop's Atlas is not running as a machine desktop",
+            ));
+        }
+        if !expect.eligible {
+            return Err(refused("The desktop is not one this kind may use"));
+        }
+        if expect.hands_off != Some(true) {
+            return Err(Error::new(
+                Code::OnConsole,
+                "The desktop's window may be taking your input. Close it, or turn its \
+                 input off, and try again.",
+            ));
+        }
+
+        let invalid = || refused("The desktop's session could not be verified");
+        let pid = self.capture_pid.ok_or_else(invalid)?;
+        let display = self.display.clone().ok_or_else(invalid)?;
+        let boot = self.boot.clone().ok_or_else(invalid)?;
+        if self.on_console != Some(true) || !self.aqua || !display.valid() {
+            return Err(invalid());
+        }
+        let proof = self
+            .proof
+            .input_epoch(pid, Console::Own)
+            .map_err(|_| invalid())?;
+        if self.proof.parent_pid != Some(pid.into())
+            || proof.uid != uid
+            || proof.width != display.width
+            || proof.height != display.height
+        {
+            return Err(invalid());
+        }
+
+        let epoch = MachineEpoch {
+            uid,
+            boot,
+            capture_pid: pid,
+            display,
+            security_session_id: proof.security_session_id,
+            display_id: proof.display_id,
+            input_pid: self.native.pid.unwrap_or(0),
+        };
+        let native_matches = self.native.own_screen_epoch.as_ref() == Some(&epoch.input_epoch());
+        Ok(MachineSession {
+            capture: self.capture == Some(true),
+            input: self.native.healthy() && self.native.ready == Some(true) && native_matches,
+            epoch,
         })
     }
 
@@ -320,6 +424,30 @@ fn connection_refusal(code: Option<&str>) -> Option<(Code, &'static str)> {
         ),
         _ => return None,
     })
+}
+
+/// What a machine desktop's proof is held to beyond its status.
+#[derive(Clone, Debug)]
+pub struct MachineExpect<'a> {
+    /// What its pairing fixed.
+    pub paired: &'a paired::Paired,
+    /// The key the connection this status came over proved.
+    pub peer: key::PeerKey,
+    /// The station's own key, which a desktop never is.
+    pub station: key::PeerKey,
+    /// Whether the kind finds this machine one it may use.
+    pub eligible: bool,
+    /// Whether the person's hands are off it: its window takes no input and
+    /// no maintenance runs. Unknown counts as on.
+    pub hands_off: Option<bool>,
+}
+
+/// The session a machine desktop's status proved.
+#[derive(Clone, Debug)]
+pub struct MachineSession {
+    pub epoch: MachineEpoch,
+    pub capture: bool,
+    pub input: bool,
 }
 
 #[derive(Clone, Debug)]

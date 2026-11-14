@@ -39,6 +39,46 @@ pub struct InputEpoch {
     pub process_id: u32,
 }
 
+/// Where a proved session's screen must be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Console {
+    /// Off the console: the second login, kept behind the person's own.
+    Off,
+    /// On its own console: a machine of its own, whose screen is nobody
+    /// else's.
+    Own,
+}
+
+/// The epoch a machine desktop's session is in, compared by exact
+/// equality: a new boot, security session, display or process is another
+/// epoch, and nothing remembered of the last holds in it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineEpoch {
+    pub uid: u32,
+    /// The guest's boot, as it reports it.
+    pub boot: String,
+    pub capture_pid: u32,
+    #[serde(flatten)]
+    pub display: Display,
+    pub security_session_id: u64,
+    pub display_id: u64,
+    pub input_pid: u32,
+}
+
+impl MachineEpoch {
+    pub(super) fn input_epoch(&self) -> InputEpoch {
+        InputEpoch {
+            uid: self.uid,
+            security_session_id: self.security_session_id,
+            display_id: self.display_id,
+            width: self.display.width,
+            height: self.display.height,
+            process_id: self.input_pid,
+        }
+    }
+}
+
 impl Epoch {
     pub fn input_epoch(&self) -> InputEpoch {
         InputEpoch {
@@ -112,11 +152,18 @@ impl ProofObservation {
         Some((security, display))
     }
 
-    pub(super) fn input_epoch(&self, process_id: u32) -> Result<InputEpoch> {
+    /// The input epoch the proof shows for `process_id`, its session's
+    /// screen where `console` says it must be.
+    pub(super) fn input_epoch(&self, process_id: u32, console: Console) -> Result<InputEpoch> {
         let invalid = || {
             Error::new(
                 Code::Identity,
-                "A hidden graphical session with valid geometry is required",
+                match console {
+                    Console::Off => "A hidden graphical session with valid geometry is required",
+                    Console::Own => {
+                        "A graphical session on its own screen with valid geometry is required"
+                    }
+                },
             )
         };
         let (security_session_id, display_id) = self.session_ids().ok_or_else(invalid)?;
@@ -139,7 +186,7 @@ impl ProofObservation {
             process_id,
         };
         if self.ok != Some(true)
-            || self.on_console != Some(false)
+            || self.on_console != Some(console == Console::Own)
             || self.graphic_access != Some(true)
             || process_id == 0
         {
@@ -157,6 +204,6 @@ impl InputEpoch {
     /// Rejects incomplete, visible, non-graphical or invalid identity and geometry facts, and a
     /// zero process ID. A decoded proof is a snapshot, never authority for a later session.
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
-        ProofObservation::decode(proof).input_epoch(process_id)
+        ProofObservation::decode(proof).input_epoch(process_id, Console::Off)
     }
 }
