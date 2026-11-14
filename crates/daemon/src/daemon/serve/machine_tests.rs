@@ -382,3 +382,140 @@ async fn lanes_over_the_bound_are_closed_before_any_handshake() {
         .expect("closed at once");
     assert_eq!(read.unwrap(), 0);
 }
+
+/// Set in the guest process the test below starts: its socket and its
+/// station's key. The guest makes its own key and says only its public
+/// half, beside the socket.
+const GUEST: &str = "ATLAS_TEST_MACHINE_GUEST";
+
+/// Connections on a Unix socket, each naming what it is for in its first
+/// byte, as a stand-in for the transport a machine's kind gives.
+struct Socket(tokio::net::UnixListener);
+
+impl Listener for Socket {
+    fn accept(&self) -> Accepting<'_> {
+        Box::pin(async {
+            let (mut stream, _) = self.0.accept().await?;
+            let purpose = match stream.read_u8().await? {
+                0 => Purpose::Control,
+                1 => Purpose::Lane,
+                _ => Purpose::Pairing,
+            };
+            Ok((purpose, Box::new(stream) as Raw))
+        })
+    }
+}
+
+/// Reach the guest's socket at `path` for `purpose`.
+async fn reach(path: &std::path::Path, purpose: u8) -> tokio::net::UnixStream {
+    let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
+    stream.write_all(&[purpose]).await.unwrap();
+    stream
+}
+
+/// The station dialling lanes to the guest's socket.
+struct SocketLanes(std::path::PathBuf);
+
+impl Dial for SocketLanes {
+    fn dial(&self) -> Dialing<'_> {
+        Box::pin(async move {
+            let mut stream = tokio::net::UnixStream::connect(&self.0).await?;
+            stream.write_all(&[1]).await?;
+            Ok(Box::new(stream) as Raw)
+        })
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Serve as the guest, in this process, until the parent ends it.
+async fn be_the_guest(spec: &str) {
+    let [socket, station] = spec.split(' ').collect::<Vec<_>>()[..] else {
+        panic!("not a guest's spec: {spec}");
+    };
+    Console::Own.keep().unwrap();
+    let keys = Keypair::generate().unwrap();
+    let public = std::path::Path::new(socket).with_extension("pub");
+    std::fs::write(public, hex(keys.public().as_bytes())).unwrap();
+    let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
+    daemon.screen.console = Console::Own;
+    let paired = Paired {
+        keys,
+        desktop: atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id(),
+        station: PeerKey::from_hex(station).unwrap(),
+        generations: Arc::new(Counted::default()),
+    };
+    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    let machine = Machine::new(
+        Arc::new(daemon),
+        paired,
+        Arc::new(atlas_session::clock::Continuous),
+    );
+    let _ = machine.serve(&Socket(listener)).await;
+}
+
+#[tokio::test]
+async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login() {
+    if let Ok(spec) = std::env::var(GUEST) {
+        return be_the_guest(&spec).await;
+    }
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let socket = folder.path().join("guest.sock");
+    let station = Arc::new(Keypair::generate().unwrap());
+    let spec = format!("{} {}", socket.display(), hex(station.public().as_bytes()));
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::serve::machine::tests::a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidden_login",
+            "--test-threads=1",
+        ])
+        .env(GUEST, spec)
+        .kill_on_drop(true);
+    let mut child = atlas_core::spawn::spawn_async(&mut command).unwrap();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !socket.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the guest listens");
+    let guest =
+        PeerKey::from_hex(&std::fs::read_to_string(socket.with_extension("pub")).unwrap()).unwrap();
+    let child_pid = child.id().unwrap();
+    let desktop = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id();
+
+    let controlling = station_control(reach(&socket, 0).await, &station, guest, &desktop)
+        .await
+        .unwrap();
+    let peers = Peers {
+        desktop,
+        own: station,
+        key: guest,
+    };
+    let lanes = Desktop::new(
+        peers,
+        controlling.generation,
+        controlling.outbox.clone(),
+        Box::new(SocketLanes(socket.clone())),
+    );
+    let replies = ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await;
+    let hello = replies.last().unwrap().clone();
+    child.kill().await.unwrap();
+
+    assert_eq!(hello["ok"], true, "{hello}");
+    assert_eq!(
+        hello["daemon"]["pid"].as_u64(),
+        Some(u64::from(child_pid)),
+        "{hello}"
+    );
+    // As a guest account of its own would answer: this test runs as the
+    // person, whom no proof takes for a helper. Its screen is as the child
+    // saw it.
+    let mut answered = hello.clone();
+    answered["user"]["uid"] = json!(502);
+    let hidden = atlas_core::session::require_hidden(&answered, 502).unwrap_err();
+    assert_eq!(hidden.code, Code::OnConsole, "{}", hidden.error);
+}
