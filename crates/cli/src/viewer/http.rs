@@ -114,6 +114,7 @@ pub(super) fn configured(
         recovery_pause: super::interrupted::Pause::default(),
         app_process: std::sync::Mutex::new(None),
         attaching: Arc::default(),
+        last_status: tokio::sync::watch::Sender::new(None),
         app_secret: atlas_core::name::random_hex(64),
         incarnation: atlas_core::name::random_hex(32),
         input_started: std::sync::Mutex::new(None),

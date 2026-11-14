@@ -108,6 +108,7 @@ impl Viewer {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
         let until = tokio::time::Instant::now() + READ_DEADLINE;
+        self.status_read();
         self.follow_settings().await;
 
         let client = self.client();

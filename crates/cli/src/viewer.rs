@@ -15,6 +15,7 @@ mod settings;
 mod sign_in;
 mod station;
 mod terminal;
+mod upkeep;
 
 pub use app::{keep_app, monitor, render_menubar, serve};
 pub(crate) use app::{launched_url, open_viewer};
@@ -135,6 +136,8 @@ struct Viewer {
     recovery_pause: interrupted::Pause,
     /// The app that attaches to this service, when it is the shipped one.
     attaching: Arc<attach::Attaching>,
+    /// When the newest status read began, told to whoever waits for one.
+    last_status: tokio::sync::watch::Sender<Option<tokio::time::Instant>>,
     /// The app this viewer serves, as macOS names its process once started:
     /// the frame service shows it the screen while agents may not see it.
     app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,

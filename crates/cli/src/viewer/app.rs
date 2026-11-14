@@ -122,6 +122,7 @@ pub async fn serve(
 
     let pictures = tokio::spawn(prune_pictures(viewer.clone()));
     let expiry = expire_control(viewer.clone());
+    let upkeep = tokio::spawn(super::upkeep::keep_up(viewer.clone()));
 
     // Changes in progress in the helper (taking control, input, recovery)
     // end first, however long the helper takes, and no more begin; then
@@ -148,6 +149,7 @@ pub async fn serve(
 
     expiry.abort();
     pictures.abort();
+    upkeep.abort();
     if let Some(attaching) = attaching {
         attaching.abort();
     }
