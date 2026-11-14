@@ -81,6 +81,7 @@ async fn a_message_too_long_or_not_understood_is_refused() {
 struct Told {
     stops: AtomicUsize,
     releases: AtomicUsize,
+    resumes: AtomicUsize,
     dials: Mutex<Vec<LaneId>>,
     settled: Mutex<Vec<atlas_core::files::Token>>,
 }
@@ -92,6 +93,10 @@ impl Guest for Told {
 
     fn release(&self) {
         self.releases.fetch_add(1, SeqCst);
+    }
+
+    fn resume(&self) {
+        self.resumes.fetch_add(1, SeqCst);
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {

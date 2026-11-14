@@ -5,6 +5,7 @@
 use super::{Asker, Daemon, Gate, Reader, Writer, answer, write};
 use crate::machine::{
     changes::{Asked, Changes, State},
+    stop::{Kept as StopKept, Stop, Why},
     vault::Vault,
 };
 use atlas_core::{
@@ -31,7 +32,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex as Held, PoisonError,
-        atomic::{AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
     },
     time::Duration,
 };
@@ -71,6 +72,8 @@ pub struct Paired {
     pub generations: Arc<dyn Generations + Send + Sync>,
     /// What each change it was asked for came to, on its disk.
     pub changes: Arc<Changes<Arc<dyn Vault>>>,
+    /// Whether agents are stopped here, on its disk.
+    pub stop: Arc<Stop<Arc<dyn Vault>>>,
 }
 
 impl std::fmt::Debug for Paired {
@@ -92,20 +95,138 @@ pub struct Said {
     pub retired: Held<Vec<(Generation, Retired)>>,
 }
 
+/// The guest's full Stop and Resume: what a Stop from the station, and a
+/// generation lost, carry out. Every one goes to one worker, in the order
+/// it came, so a Resume never undoes a Stop that came after it.
+struct Halting {
+    daemon: Arc<Daemon>,
+    transitions: tokio::sync::mpsc::UnboundedSender<Transition>,
+    /// Every Stop that came, saved or not yet: a Resume reopens nothing
+    /// when one came after it.
+    received: Arc<AtomicU64>,
+    /// Held while a Stop is taken in or a Resume reopens: the two never
+    /// cross. Never held across storage.
+    turning: Arc<Held<()>>,
+}
+
+/// What the worker carries out.
+enum Transition {
+    Stop(Why),
+    /// A Resume, from the generation it came in, after so many Stops came:
+    /// lifted only while that generation is live and no Stop came since.
+    Resume(Authority, u64),
+}
+
+impl Halting {
+    /// Halting for `daemon`, its Stop kept in `stop`.
+    fn new(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) -> Arc<Self> {
+        let (transitions, mut coming) = tokio::sync::mpsc::unbounded_channel();
+        let worker = daemon.clone();
+        let received = Arc::new(AtomicU64::new(0));
+        let since = received.clone();
+        let turning = Arc::new(Held::new(()));
+        let turn = turning.clone();
+        // The worker queues a Stop of its own without keeping its queue open.
+        let again = transitions.downgrade();
+        tokio::spawn(async move {
+            // A Stop that could not be saved: what agents are is unknown,
+            // and no Resume lifts it.
+            let mut unsaved = false;
+            while let Some(transition) = coming.recv().await {
+                match transition {
+                    Transition::Stop(why) => {
+                        let saving = stop.clone();
+                        let saved = tokio::task::spawn_blocking(move || saving.stop(why)).await;
+                        unsaved |= !matches!(saved, Ok(Ok(())));
+                        // Saved, or as saved as it can be: now its work ends.
+                        worker.halted.send_modify(|halt| {
+                            halt.stops += 1;
+                            halt.halted = true;
+                        });
+                        if let Some(jobs) = &worker.jobs {
+                            let reason = atlas_core::protocol::StopReason::Person;
+                            let request = atlas_core::protocol::JobRequest::StopAll { reason };
+                            let _ = jobs.serve(request).await;
+                        }
+                    }
+                    Transition::Resume(authority, at) => {
+                        let current = || authority.check().is_ok() && since.load(SeqCst) == at;
+                        if unsaved || !current() {
+                            continue;
+                        }
+                        let (lifting, checking) = (stop.clone(), authority.clone());
+                        let lifted = tokio::task::spawn_blocking(move || {
+                            // Checked again at the last moment before the disk.
+                            checking.check()?;
+                            lifting.resume()
+                        })
+                        .await;
+                        if !matches!(lifted, Ok(Ok(()))) {
+                            continue;
+                        }
+                        let turned = turn.lock().unwrap_or_else(PoisonError::into_inner);
+                        if current() {
+                            worker.halted.send_modify(|halt| halt.halted = false);
+                            continue;
+                        }
+                        // Lifted on disk by a Resume its generation no longer
+                        // gives: a full Stop of its own puts it back.
+                        since.fetch_add(1, SeqCst);
+                        worker.halted.send_modify(|halt| halt.halted = true);
+                        drop(turned);
+                        if let Some(again) = again.upgrade() {
+                            let _ = again.send(Transition::Stop(Why::ControlLost));
+                        }
+                    }
+                }
+            }
+        });
+        Arc::new(Self {
+            daemon,
+            transitions,
+            received,
+            turning,
+        })
+    }
+
+    /// Stop agents for `why`: no change is taken from now on, and the
+    /// worker saves the Stop, then ends the work it holds.
+    fn halt(&self, why: Why) {
+        let _taking = self.turning.lock().unwrap_or_else(PoisonError::into_inner);
+        self.received.fetch_add(1, SeqCst);
+        self.daemon.halted.send_modify(|halt| halt.halted = true);
+        let _ = self.transitions.send(Transition::Stop(why));
+    }
+
+    /// The person's Resume, in `authority`'s generation.
+    fn resume(&self, authority: Authority) {
+        let at = self.received.load(SeqCst);
+        let _ = self.transitions.send(Transition::Resume(authority, at));
+    }
+}
+
 /// What a control connection's reader hands on: never the machine itself,
 /// so a reader still going never keeps it alive.
 struct Hand {
     said: Arc<Said>,
     changes: Arc<Changes<Arc<dyn Vault>>>,
+    halting: Arc<Halting>,
+    /// The generation its connection is in.
+    authority: Authority,
 }
 
 impl Guest for Hand {
     fn stop(&self) {
         self.said.stops.fetch_add(1, SeqCst);
+        self.halting.halt(Why::Person);
     }
 
     fn release(&self) {
         self.said.releases.fetch_add(1, SeqCst);
+    }
+
+    fn resume(&self) {
+        self.halting.resume(self.authority.clone());
     }
 
     /// The station dials every lane itself: the guest is never asked to.
@@ -146,17 +267,24 @@ pub struct Machine {
     paired: Paired,
     clock: Arc<dyn Clock>,
     live: Mutex<Option<Live>>,
+    halting: Arc<Halting>,
     pub said: Arc<Said>,
 }
 
 impl Machine {
     pub fn new(mut daemon: Daemon, paired: Paired, clock: Arc<dyn Clock>) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
+        // Stopped before it started, or unable to tell: still stopped.
+        let clear = matches!(paired.stop.kept(), Ok(StopKept::Clear));
+        daemon.halted.send_modify(|halt| halt.halted = !clear);
+        let daemon = Arc::new(daemon);
+        let halting = Halting::new(daemon.clone(), paired.stop.clone());
         Arc::new(Self {
-            daemon: Arc::new(daemon),
+            daemon,
             paired,
             clock,
             live: Mutex::new(None),
+            halting,
             said: Arc::default(),
         })
     }
@@ -222,12 +350,21 @@ impl Machine {
         let secure = tokio::time::timeout(OPENING, handshake)
             .await
             .map_err(|_| Error::new(Code::Transport, "Control did not open in time."))??;
-        let said = self.said.clone();
+        let (said, halting) = (self.said.clone(), self.halting.clone());
+        // A generation lost, not replaced, is a full Stop: agents stay
+        // stopped until the person resumes them.
         let hook: Hook = Box::new(move |generation, cause| {
             said.retired
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((generation, cause));
+            let why = match cause {
+                Retired::Lapsed => Why::Lapsed,
+                Retired::ControlLost => Why::ControlLost,
+                Retired::Revoked => Why::Revoked,
+                Retired::Replaced => return,
+            };
+            halting.halt(why);
         });
         // One replacement at a time, its number given under the same lock,
         // so an older generation never replaces a newer one.
@@ -257,6 +394,8 @@ impl Machine {
         let guest = Hand {
             said: self.said.clone(),
             changes: paired.changes.clone(),
+            halting: self.halting.clone(),
+            authority: authority.clone(),
         };
         let reader = (authority.clone(), lanes.clone());
         tasks.0.push(
@@ -323,6 +462,9 @@ impl Machine {
         };
         // A lane of another generation, or one cancelled, is refused here;
         // a refused lane is closed, which is all the station hears.
+        // The Stops so far, taken before the lane is admitted: one after this
+        // refuses its change and ends its command, a Resume between or not.
+        let stops = self.daemon.halted.borrow().stops;
         lanes.admit(&header, Opener::Station)?;
         let (mut reader, writer) = tokio::io::split(secure);
         let mut writer: Writer = Box::new(writer);
@@ -349,6 +491,8 @@ impl Machine {
                 authority,
                 lanes: lanes.clone(),
                 lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
             }),
         };
         let phase = watch::channel(ConnectionPhase::Refusal).0;
@@ -356,7 +500,7 @@ impl Machine {
         // hung up does.
         tokio::select! {
             served = answer(reader, writer, self.daemon.clone(), asker, phase) => served,
-            () = lanes.ended(header.lane) => Ok(()),
+            () = ended(&lanes, header.lane) => Ok(()),
         }
     }
 }
@@ -391,6 +535,18 @@ impl Machine {
             Err(error) => Some(serde_json::json!(error.uncertain())),
         }
     }
+}
+
+/// Completes once a lane's work must end at once: the lane cancelled, or
+/// its generation replaced by a newer one. A generation lost instead is a
+/// full Stop, which ends the work itself once the Stop is saved.
+async fn ended(lanes: &Lanes, lane: LaneId) {
+    lanes.ended(lane).await;
+    if lanes.cancelled(lane) || lanes.retired() == Some(Retired::Replaced) {
+        return;
+    }
+    // Its own cancel still ends it while the Stop is saved.
+    lanes.until_cancelled(lane).await;
 }
 
 /// Retire `authority`'s generation the moment its lease lapses, checked on

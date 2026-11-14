@@ -59,6 +59,7 @@ pub struct StandIn {
     /// What the station said, as the desktop's work heard it.
     pub stops: AtomicUsize,
     pub releases: AtomicUsize,
+    pub resumes: AtomicUsize,
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
     pub settled: Mutex<Vec<atlas_core::files::Token>>,
@@ -101,6 +102,7 @@ impl StandIn {
             generations: Counted::default(),
             stops: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
+            resumes: AtomicUsize::new(0),
             dials: Mutex::new(Vec::new()),
             settled: Mutex::new(Vec::new()),
             retired: Arc::new(Mutex::new(Vec::new())),
@@ -179,6 +181,10 @@ impl Guest for StandIn {
 
     fn release(&self) {
         self.releases.fetch_add(1, SeqCst);
+    }
+
+    fn resume(&self) {
+        self.resumes.fetch_add(1, SeqCst);
     }
 
     fn settled(&self, changes: Vec<atlas_core::files::Token>) {

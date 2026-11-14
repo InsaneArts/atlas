@@ -355,6 +355,8 @@ pub(super) enum Cancel {
     /// screen, where a person may be using it, or a machine's own session
     /// left its screen.
     Away(Console),
+    /// Agents were stopped on a machine desktop.
+    Halted,
 }
 
 impl Cancel {
@@ -369,6 +371,10 @@ impl Cancel {
             Self::Away(Console::Own) => (
                 Code::SessionChanged,
                 "The desktop's own session left its screen, so the command was stopped",
+            ),
+            Self::Halted => (
+                Code::Stopped,
+                "Agents were stopped on this desktop, so the command was ended",
             ),
         };
         interrupted(code, message)

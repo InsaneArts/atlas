@@ -8,6 +8,7 @@ pub mod generations;
 pub mod key;
 pub mod launch;
 pub mod pairing;
+pub mod stop;
 pub mod vault;
 
 use crate::daemon::serve::machine::Paired;
@@ -21,7 +22,7 @@ use std::{path::PathBuf, sync::Arc};
 /// The guest's identity to the station it paired with: opened only by the
 /// guest's genuine daemon, as launchd started it, and only once paired.
 /// `secret` is where the pairing secret is kept while there is one, and
-/// `records` the folder its changes are kept in.
+/// `records` the private folder its changes and its Stop are kept in.
 ///
 /// # Errors
 ///
@@ -38,12 +39,15 @@ pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Resu
                 Error::new(Code::Identity, "This desktop is not paired with a station.")
             })?;
         let vault: Arc<dyn vault::Vault> = Arc::new(vault);
+        let changes = records.join("changes");
+        atlas_core::files::private_folder(&changes, Code::State)?;
         Ok(Paired {
             keys,
             desktop,
             station,
             generations: Arc::new(generations::Kept::new(vault.clone())),
-            changes: Arc::new(changes::Changes::new(records, vault)),
+            changes: Arc::new(changes::Changes::new(changes, vault.clone())),
+            stop: Arc::new(stop::Stop::new(records.join("stop.json"), vault)),
         })
     })
     .await

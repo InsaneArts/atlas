@@ -61,6 +61,8 @@ pub enum Said {
     Stop,
     /// The station lets control go.
     Release,
+    /// The person's Resume, from the station: agents may act again.
+    Resume,
     /// The station cancels a lane, open or not.
     Cancel { lane: LaneId },
     /// The station asks the guest to open a lane.
@@ -281,6 +283,8 @@ pub trait Guest: Send + Sync {
     fn stop(&self);
     /// The station let control go.
     fn release(&self);
+    /// The person's Resume came.
+    fn resume(&self);
     /// The station asks for lane `lane`: open one and send its header.
     fn dial(&self, lane: LaneId, kind: LaneKind);
     /// The station settled `changes`: what they came to may be forgotten.
@@ -311,6 +315,13 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
             Ok(Said::Beat) => authority.heard(),
             Ok(Said::Stop) => guest.stop(),
             Ok(Said::Release) => guest.release(),
+            // A Resume counts only from the generation live now: one buffered
+            // on a connection that retired lifts nothing.
+            Ok(Said::Resume) => {
+                if authority.check().is_ok() {
+                    guest.resume();
+                }
+            }
             Ok(Said::Cancel { lane }) => lanes.cancel(lane),
             Ok(Said::Dial { lane, kind }) => {
                 lanes.asked(lane);

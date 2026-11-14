@@ -239,6 +239,20 @@ pub struct Daemon {
     /// Where a machine's changes are kept on its disk, outliving this
     /// process; none for the helper login, whose station keeps its own.
     kept: Option<Arc<dyn Kept>>,
+    /// Whether agents are stopped on a machine desktop, and how many Stops
+    /// there have been: no change is taken while stopped, and a command
+    /// admitted before a Stop ends with it, a Resume after or not. Never
+    /// raised for the helper login, whose station stops agents itself.
+    halted: watch::Sender<Halt>,
+}
+
+/// Whether agents are stopped on a machine desktop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Halt {
+    /// Every Stop so far, saved and carried out: only ever goes up.
+    pub(super) stops: u64,
+    /// Whether no change is taken now.
+    pub(super) halted: bool,
 }
 
 /// Changes kept on the desktop's disk: what each came to, before it is
@@ -293,6 +307,7 @@ impl Daemon {
             recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
             outcomes: Arc::default(),
             kept: None,
+            halted: watch::Sender::new(Halt::default()),
         }
     }
 
@@ -386,6 +401,16 @@ impl Daemon {
         if let Some(jobs) = &self.jobs {
             jobs.fail_supervision();
         }
+    }
+
+    /// Completes once agents were stopped since `stops` Stops, whatever
+    /// came after.
+    async fn stopped_since(&self, stops: u64) {
+        let _ = self
+            .halted
+            .subscribe()
+            .wait_for(|halt| halt.stops > stops)
+            .await;
     }
 
     /// Completes once the daemon has begun to stop.
@@ -839,6 +864,11 @@ pub(super) struct Gate {
     pub(super) authority: atlas_session::authority::Authority,
     pub(super) lanes: Arc<atlas_session::lane::Lanes>,
     pub(super) lane: atlas_session::lane::LaneId,
+    /// Whether agents are stopped on the desktop.
+    pub(super) halted: watch::Receiver<Halt>,
+    /// The Stops there had been when the lane was admitted: one since
+    /// refuses its change, even resumed.
+    pub(super) stops: u64,
 }
 
 impl Asker {
@@ -846,6 +876,10 @@ impl Asker {
     /// generation it came in is over.
     fn refused_now(&self) -> Option<Value> {
         let gate = self.gate.as_ref()?;
+        let halt = *gate.halted.borrow();
+        if halt.halted || halt.stops != gate.stops {
+            return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
+        }
         if gate.lanes.cancelled(gate.lane) {
             return Some(failure(Code::Cancelled, "The change was cancelled"));
         }
@@ -1273,6 +1307,11 @@ async fn run_registered(
     // client never stalls supervision of the command.
     let (events, queue) = mpsc::channel(run::EVENTS);
     let mut delivery = tokio::spawn(deliver(queue, writer, || Ok(())));
+    // A Stop since it was admitted ends it, a Resume after or not.
+    let stops = asker
+        .gate
+        .as_ref()
+        .map_or_else(|| daemon.halted.borrow().stops, |gate| gate.stops);
     // The client never sends after its request. Losing either
     // the client or its handler cancels the owned command.
     let cancel = async {
@@ -1282,6 +1321,7 @@ async fn run_registered(
             () = handler.closed() => run::Cancel::Left,
             () = daemon.stopped() => run::Cancel::Stopping,
             () = daemon.moved_away() => run::Cancel::Away(daemon.screen.console),
+            () = daemon.stopped_since(stops) => run::Cancel::Halted,
         }
     };
     // Cancelled or retired during any wait before it starts, it never does.

@@ -161,6 +161,24 @@ impl Lanes {
         })
     }
 
+    /// Completes once `lane` is cancelled, however its generation ends.
+    pub async fn until_cancelled(&self, lane: LaneId) {
+        loop {
+            let cancelled = self.cancelling.notified();
+            tokio::pin!(cancelled);
+            cancelled.as_mut().enable();
+            if self.cancelled(lane) {
+                return;
+            }
+            cancelled.await;
+        }
+    }
+
+    /// Why the lanes' generation retired, once it has.
+    pub fn retired(&self) -> Option<crate::authority::Retired> {
+        self.authority.retired()
+    }
+
     /// Every lane admitted so far: what a retirement's hook cancels.
     pub fn admitted(&self) -> Vec<LaneId> {
         self.state().admitted.iter().copied().collect()

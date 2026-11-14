@@ -30,6 +30,12 @@ fn records() -> (tempfile::TempDir, Arc<dyn Vault>, Arc<Kept>) {
     (folder, vault, changes)
 }
 
+/// A guest's Stop as pairing leaves it, beside its change records.
+fn stopping(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Arc<Stop<Arc<dyn Vault>>> {
+    crate::machine::commitment::create(vault, crate::machine::stop::STORE).unwrap();
+    Arc::new(Stop::new(records.path().join("stop"), vault.clone()))
+}
+
 /// Connections the station makes, as the guest's listener hands them over.
 struct Channel(Mutex<mpsc::UnboundedReceiver<(Purpose, Raw)>>);
 
@@ -92,6 +98,7 @@ impl Served {
             station: station.public(),
             generations: Arc::new(Counted::default()),
             changes: changes.clone(),
+            stop: stopping(&records, &vault),
         };
         let machine = Machine::new(daemon, paired, clock.clone());
         let (connections, accepted) = mpsc::unbounded_channel();
@@ -321,6 +328,8 @@ async fn a_change_whose_lane_was_cancelled_after_admission_never_runs() {
             authority,
             lanes: lanes.clone(),
             lane: LaneId(9),
+            halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
+            stops: 0,
         }),
     };
     assert!(asker.refused_now().is_none());
@@ -473,6 +482,7 @@ async fn be_the_guest(spec: &str) {
         desktop: atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id(),
         station: PeerKey::from_hex(station).unwrap(),
         generations: Arc::new(Counted::default()),
+        stop: stopping(&_records, &_vault),
         changes,
     };
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
@@ -811,4 +821,267 @@ async fn a_guest_whose_owner_went_ends_its_control_though_heartbeats_keep_coming
         .expect("its control ended")
         .ok();
     drop(link);
+}
+
+/// Wait until `served` keeps agents stopped as `kept`.
+async fn kept_as(served: &Served, kept: crate::machine::stop::Kept) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.machine.paired.stop.kept().ok() != Some(kept.clone()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the Stop as it should be");
+}
+
+#[tokio::test]
+async fn a_stop_ends_a_running_command_and_refuses_every_change_until_resumed() {
+    use crate::machine::stop::{Kept, Why};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let request = json!({"op": "run", "argv": ["/bin/sleep", "30"], "timeoutMs": 60000,
+        "change": change});
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    stream.flush().await.unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    let started: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+
+    let ended: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(ended["code"], "stopped", "{ended}");
+    assert!(nix::sys::signal::killpg(group, None).is_err());
+    kept_as(&served, Kept::Stopped { why: Why::Person }).await;
+    let other = Token::new();
+    let refused = ask(
+        &desktop,
+        LaneKind::Change {
+            change: other.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/true"], "change": other}),
+    )
+    .await;
+    assert_eq!(refused[0]["code"], "stopped", "{refused:?}");
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+    kept_as(&served, Kept::Clear).await;
+    let again = Token::new();
+    let ran = ask(
+        &desktop,
+        LaneKind::Change {
+            change: again.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/true"], "change": again}),
+    )
+    .await;
+    assert_eq!(ran.last().unwrap()["ok"], true, "{ran:?}");
+}
+
+#[tokio::test]
+async fn a_generation_that_lapsed_leaves_agents_stopped_on_the_guests_disk() {
+    use crate::machine::stop::{Kept, Why};
+    let served = Served::start().await;
+    let (_controlling, _desktop) = served.control().await;
+    served.link.set(Conditions {
+        partitioned: true,
+        ..Conditions::default()
+    });
+
+    served.clock.advance(atlas_session::authority::LEASE * 2);
+
+    kept_as(&served, Kept::Stopped { why: Why::Lapsed }).await;
+}
+
+#[tokio::test]
+async fn a_guest_restarted_with_a_saved_stop_takes_no_change_until_resumed() {
+    use crate::machine::stop::Why;
+    let served = Served::start().await;
+    served.machine.paired.stop.stop(Why::Person).unwrap();
+    let Served { records, vault, .. } = served;
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::on((records, vault, changes)).await;
+    let (_controlling, desktop) = restarted.control().await;
+    let change = Token::new();
+
+    let refused = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/true"], "change": change}),
+    )
+    .await;
+
+    assert_eq!(refused[0]["code"], "stopped", "{refused:?}");
+}
+
+#[tokio::test]
+async fn a_newer_generation_taking_the_place_of_one_is_no_stop() {
+    let served = Served::start().await;
+    let (_first, _old) = served.control().await;
+
+    let (_second, _new) = served.control().await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Clear
+    );
+}
+
+/// Start `/bin/sleep 30` on a change lane of `desktop`: the lines its
+/// reply comes in, and its process group.
+async fn sleeping(
+    desktop: &Desktop,
+) -> (
+    tokio::io::Lines<BufReader<atlas_session::secure::Secure<Raw>>>,
+    nix::unistd::Pid,
+) {
+    let change = Token::new();
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let request = json!({"op": "run", "argv": ["/bin/sleep", "30"], "timeoutMs": 60000,
+        "change": change});
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    stream.flush().await.unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    let started: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
+    (lines, group)
+}
+
+/// Whether a new change on `desktop` is refused as stopped.
+async fn refused_as_stopped(desktop: &Desktop) -> bool {
+    let change = Token::new();
+    let replies = ask(
+        desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/true"], "change": change}),
+    )
+    .await;
+    replies[0]["code"] == "stopped"
+}
+
+#[tokio::test]
+async fn a_command_admitted_before_a_stop_ends_though_a_resume_follows_at_once() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (mut lines, group) = sleeping(&desktop).await;
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+
+    let ended: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(ended["code"], "stopped", "{ended}");
+    assert!(nix::sys::signal::killpg(group, None).is_err());
+}
+
+#[tokio::test]
+async fn a_resume_from_a_generation_that_retired_lifts_nothing() {
+    let served = Served::start().await;
+    let (old, _old_desktop) = served.control().await;
+    old.outbox.say(atlas_session::control::Said::Stop).unwrap();
+    kept_as(
+        &served,
+        crate::machine::stop::Kept::Stopped {
+            why: crate::machine::stop::Why::Person,
+        },
+    )
+    .await;
+    let (_new, desktop) = served.control().await;
+
+    old.outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(matches!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped { .. }
+    ));
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_stop_that_could_not_be_saved_holds_and_no_resume_lifts_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let folder = served.records.path().to_owned();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Resume)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let halted = served.machine.daemon.halted.borrow().halted;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(halted, "still stopped");
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_generation_that_lapsed_ends_its_running_command_once_its_stop_is_saved() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (_lines, group) = sleeping(&desktop).await;
+    served.link.set(Conditions {
+        partitioned: true,
+        ..Conditions::default()
+    });
+
+    served.clock.advance(atlas_session::authority::LEASE * 2);
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while nix::sys::signal::killpg(group, None).is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the command was ended");
+    assert!(matches!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped { .. }
+    ));
 }

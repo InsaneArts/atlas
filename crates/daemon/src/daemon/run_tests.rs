@@ -167,6 +167,7 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
         (Some(Cancel::Stopping), true),
         (Some(Cancel::Away(Console::Off)), true),
         (Some(Cancel::Away(Console::Own)), false),
+        (Some(Cancel::Halted), false),
     ] {
         let mut child = Child::new(RUN);
         let argv = child.argv("stubborn");
@@ -251,6 +252,13 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
                 interrupted(
                     Code::SessionChanged,
                     "The desktop's own session left its screen, so the command was stopped"
+                )
+            ),
+            Some(Cancel::Halted) => assert_eq!(
+                reply,
+                interrupted(
+                    Code::Stopped,
+                    "Agents were stopped on this desktop, so the command was ended"
                 )
             ),
         }
@@ -468,6 +476,7 @@ async fn cancellation_after_exit_leaves_the_descendant_running() {
         Cancel::Stopping,
         Cancel::Away(Console::Off),
         Cancel::Away(Console::Own),
+        Cancel::Halted,
     ] {
         let mut child = Child::new(RUN);
         let argv = child.argv("pipe");
@@ -503,6 +512,10 @@ async fn cancellation_after_exit_leaves_the_descendant_running() {
             Cancel::Away(Console::Own) => interrupted(
                 Code::SessionChanged,
                 "The desktop's own session left its screen, so the command was stopped",
+            ),
+            Cancel::Halted => interrupted(
+                Code::Stopped,
+                "Agents were stopped on this desktop, so the command was ended",
             ),
         };
         assert_eq!(reply, expected);

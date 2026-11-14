@@ -179,6 +179,22 @@ impl<V: Vault> Commitment<V> {
         }
     }
 
+    /// Commit to `next` in place of whatever is pending, with no moment
+    /// between in which the current revision stands alone: what recovery
+    /// judges is the current one, this next one, or unknown.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a revision that does not follow the current one.
+    pub fn begin_over(&self, next: Revision) -> Result<()> {
+        let _one = CHANGING.lock().unwrap_or_else(PoisonError::into_inner);
+        let kept = self.required()?;
+        if kept.current.number.checked_add(1) != Some(next.number) {
+            return Err(out_of_turn());
+        }
+        self.keep(kept.current, Some(next))
+    }
+
     /// Make the pending next revision current, once all of it is written.
     ///
     /// # Errors
@@ -203,6 +219,16 @@ impl<V: Vault> Commitment<V> {
             return Ok(());
         }
         self.keep(kept.current, None)
+    }
+
+    /// The current revision's number, and whether a next one is pending.
+    ///
+    /// # Errors
+    ///
+    /// Fails when there is no commitment, or it cannot be read.
+    pub fn state(&self) -> Result<(u64, bool)> {
+        let kept = self.required()?;
+        Ok((kept.current.number, kept.next.is_some()))
     }
 
     /// How `found`, the manifest on disk if there is one, stands.
