@@ -65,7 +65,8 @@ async fn what_is_said_goes_out_as_lines_with_a_heartbeat_between() {
 #[tokio::test]
 async fn a_message_too_long_or_not_understood_is_refused() {
     for line in [vec![b'x'; LINE + 2], b"{\"run\":\"rm\"}\n".to_vec()] {
-        let (mut near, far) = duplex(1 << 16);
+        // Room for the whole line, written before anything reads it.
+        let (mut near, far) = duplex(2 * LINE);
         near.write_all(&line).await.unwrap();
         drop(near);
 
@@ -81,6 +82,7 @@ struct Told {
     stops: AtomicUsize,
     releases: AtomicUsize,
     dials: Mutex<Vec<LaneId>>,
+    settled: Mutex<Vec<atlas_core::files::Token>>,
 }
 
 impl Guest for Told {
@@ -94,6 +96,10 @@ impl Guest for Told {
 
     fn dial(&self, lane: LaneId, _: LaneKind) {
         self.dials.lock().unwrap().push(lane);
+    }
+
+    fn settled(&self, changes: Vec<atlas_core::files::Token>) {
+        self.settled.lock().unwrap().extend(changes);
     }
 }
 
@@ -204,11 +210,11 @@ async fn half_a_message_when_the_silence_ends_is_not_lost() {
 #[tokio::test(start_paused = true)]
 async fn the_guests_hello_goes_before_its_first_heartbeat() {
     let (near, far) = duplex(1 << 16);
-    let outbox = Arc::new(Outbox::hello(Generation(8)));
+    let outbox = Arc::new(Outbox::hello(Generation(8), Vec::new()));
     let sending = tokio::spawn(send(near, outbox.clone()));
 
     let mut far = BufReader::new(far);
-    assert_eq!(hello(&mut far).await.unwrap(), Generation(8));
+    assert_eq!(hello(&mut far).await.unwrap().generation, Generation(8));
     assert_eq!(read(&mut far).await.unwrap(), Said::Beat);
 
     outbox.close();
@@ -429,7 +435,7 @@ async fn credit_however_much_never_queues_ahead_of_a_stop_and_gathers_by_lane() 
 #[tokio::test(start_paused = true)]
 async fn the_guests_hello_goes_first_however_late_sending_starts() {
     let (near, far) = duplex(1 << 16);
-    let outbox = Arc::new(Outbox::hello(Generation(9)));
+    let outbox = Arc::new(Outbox::hello(Generation(9), Vec::new()));
     let sending = send(near, outbox.clone());
     tokio::pin!(sending);
 
@@ -438,7 +444,108 @@ async fn the_guests_hello_goes_first_however_late_sending_starts() {
     let _ = tokio::time::timeout(Duration::from_millis(1), &mut sending).await;
 
     assert_eq!(
-        hello(&mut BufReader::new(far)).await.unwrap(),
+        hello(&mut BufReader::new(far)).await.unwrap().generation,
         Generation(9)
+    );
+}
+
+#[tokio::test]
+async fn a_hello_names_the_changes_the_guest_keeps_unsettled() {
+    let (near, far) = duplex(1 << 16);
+    let change = atlas_core::files::Token::new();
+    let outbox = Arc::new(Outbox::hello(Generation(3), vec![change.clone()]));
+    let sending = tokio::spawn(send(near, outbox.clone()));
+
+    let heard = hello(&mut BufReader::new(far)).await.unwrap();
+
+    assert_eq!(heard.generation, Generation(3));
+    assert_eq!(heard.unsettled, [change]);
+    outbox.close();
+    let _ = sending.await;
+}
+
+#[test]
+fn the_station_settles_every_change_it_holds_no_claim_on() {
+    let (claimed, settled) = (
+        atlas_core::files::Token::new(),
+        atlas_core::files::Token::new(),
+    );
+
+    let settling = settling(&[claimed.clone(), settled.clone()], |change| {
+        *change == claimed
+    });
+
+    assert_eq!(settling, [settled]);
+}
+
+#[tokio::test]
+async fn a_settlement_reaches_the_guest_without_waiting() {
+    let (authority, lanes, _clock) = generation();
+    let told = Told::default();
+    let change = atlas_core::files::Token::new();
+    let (mut station, guest) = duplex(1 << 16);
+    let credit = Credit::default();
+    let reading = guest_reads(guest, &authority, &lanes, &credit, &told);
+    let saying = async {
+        let mut line = serde_json::to_vec(&Said::Settled {
+            changes: vec![change.clone()],
+        })
+        .unwrap();
+        line.push(b'\n');
+        station.write_all(&line).await.unwrap();
+        drop(station);
+    };
+
+    tokio::join!(reading, saying);
+
+    assert_eq!(*told.settled.lock().unwrap(), [change]);
+}
+
+#[tokio::test]
+async fn a_hello_and_a_settlement_naming_every_change_a_guest_keeps_are_read_whole() {
+    let named: Vec<atlas_core::files::Token> = (0..NAMED)
+        .map(|_| atlas_core::files::Token::new())
+        .collect();
+    let (near, far) = duplex(1 << 20);
+    let outbox = Arc::new(Outbox::hello(Generation(2), named.clone()));
+    outbox
+        .say(Said::Settled {
+            changes: named.clone(),
+        })
+        .unwrap();
+    let sending = tokio::spawn(send(near, outbox.clone()));
+    let mut far = BufReader::new(far);
+
+    assert_eq!(hello(&mut far).await.unwrap().unsettled, named);
+    assert_eq!(
+        read(&mut far).await.unwrap(),
+        Said::Settled { changes: named }
+    );
+    outbox.close();
+    let _ = sending.await;
+}
+
+#[test]
+fn a_hello_reads_with_or_without_the_changes_it_names() {
+    let change = atlas_core::files::Token::new();
+    let without: Said = serde_json::from_str(r#"{"hello":{"generation":4}}"#).unwrap();
+    let with: Said = serde_json::from_value(
+        serde_json::json!({"hello": {"generation": 4, "unsettled": [change]}}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        without,
+        Said::Hello {
+            generation: Generation(4),
+            unsettled: Vec::new()
+        }
+    );
+    assert_eq!(
+        with,
+        Said::Hello {
+            generation: Generation(4),
+            unsettled: vec![change]
+        }
     );
 }

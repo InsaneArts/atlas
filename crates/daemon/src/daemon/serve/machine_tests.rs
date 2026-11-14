@@ -752,3 +752,63 @@ async fn a_change_whose_reply_was_lost_is_still_answered_after_the_memory_moved_
         "{asked:?}"
     );
 }
+
+#[tokio::test]
+async fn a_done_change_is_named_at_every_hello_until_the_station_settles_it() {
+    let served = Served::start().await;
+    let (_first, desktop) = served.control().await;
+    let folder = tempfile::tempdir().unwrap();
+    let change = Token::new();
+    ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &appending(&folder.path().join("runs"), &change),
+    )
+    .await;
+
+    // A settlement lost with its connection: the next hello names it again.
+    let (second, _desktop) = served.control().await;
+    assert_eq!(second.unsettled, std::slice::from_ref(&change));
+    let settling = atlas_session::control::settling(&second.unsettled, |_| false);
+    second
+        .outbox
+        .say(atlas_session::control::Said::Settled { changes: settling })
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.changes.of(&change).unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("forgotten once settled");
+    let (third, _desktop) = served.control().await;
+    assert!(third.unsettled.is_empty());
+}
+
+#[tokio::test]
+async fn a_guest_whose_owner_went_ends_its_control_though_heartbeats_keep_coming() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (link, machine) = (served.link.clone(), Arc::downgrade(&served.machine));
+
+    // Everything of the guest goes, the way this test reaches it too. The
+    // link and the station's control stay, its heartbeats still coming.
+    drop(desktop);
+    drop(served);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while machine.upgrade().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the guest went");
+    tokio::time::timeout(Duration::from_secs(5), controlling.reading)
+        .await
+        .expect("its control ended")
+        .ok();
+    drop(link);
+}

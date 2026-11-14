@@ -92,17 +92,33 @@ pub struct Said {
     pub retired: Held<Vec<(Generation, Retired)>>,
 }
 
-impl Guest for Said {
+/// What a control connection's reader hands on: never the machine itself,
+/// so a reader still going never keeps it alive.
+struct Hand {
+    said: Arc<Said>,
+    changes: Arc<Changes<Arc<dyn Vault>>>,
+}
+
+impl Guest for Hand {
     fn stop(&self) {
-        self.stops.fetch_add(1, SeqCst);
+        self.said.stops.fetch_add(1, SeqCst);
     }
 
     fn release(&self) {
-        self.releases.fetch_add(1, SeqCst);
+        self.said.releases.fetch_add(1, SeqCst);
     }
 
     /// The station dials every lane itself: the guest is never asked to.
     fn dial(&self, _: LaneId, _: LaneKind) {}
+
+    /// Forgotten off the runtime, without waiting: one not forgotten now
+    /// is named again at the next hello.
+    fn settled(&self, changes: Vec<atlas_core::files::Token>) {
+        let records = self.changes.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = records.settled(&changes);
+        });
+    }
 }
 
 /// Tasks ended when their owner goes.
@@ -220,20 +236,33 @@ impl Machine {
         let generation = tokio::task::spawn_blocking(move || generations.next())
             .await
             .map_err(|_| Error::new(Code::State, "The generation could not be given."))??;
+        // Changes done and unsettled are named again at every hello, so a
+        // settlement lost on the way is caught up. Read before the lease
+        // starts: slow storage never spends it.
+        let records = paired.changes.clone();
+        let unsettled = tokio::task::spawn_blocking(move || records.unsettled())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
         let authority = Authority::new(generation, self.clock.clone(), hook);
         let lanes = Arc::new(Lanes::new(authority.clone()));
-        let outbox = Arc::new(Outbox::hello(generation));
+        let outbox = Arc::new(Outbox::hello(generation, unsettled));
         let credit = Arc::new(Credit::default());
         let (reading, writing) = tokio::io::split(secure);
         let mut tasks = Tasks::default();
         tasks
             .0
             .push(tokio::spawn(control::send(writing, outbox)).abort_handle());
-        let (reader, guest) = ((authority.clone(), lanes.clone()), self.said.clone());
+        let guest = Hand {
+            said: self.said.clone(),
+            changes: paired.changes.clone(),
+        };
+        let reader = (authority.clone(), lanes.clone());
         tasks.0.push(
             tokio::spawn(async move {
                 let (authority, lanes) = reader;
-                control::guest_reads(reading, &authority, &lanes, &credit, &*guest).await;
+                control::guest_reads(reading, &authority, &lanes, &credit, &guest).await;
             })
             .abort_handle(),
         );

@@ -60,6 +60,8 @@ pub struct StandIn {
     pub stops: AtomicUsize,
     pub releases: AtomicUsize,
     pub dials: Mutex<Vec<LaneId>>,
+    /// The changes the station settled.
+    pub settled: Mutex<Vec<atlas_core::files::Token>>,
     /// Every generation that retired, and why.
     pub retired: Arc<Mutex<Vec<(Generation, Retired)>>>,
     /// The generation live now: a newer one retires it.
@@ -100,6 +102,7 @@ impl StandIn {
             stops: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
             dials: Mutex::new(Vec::new()),
+            settled: Mutex::new(Vec::new()),
             retired: Arc::new(Mutex::new(Vec::new())),
             current: Mutex::new(None),
             dial_gate: Arc::new(tokio::sync::Semaphore::new(
@@ -146,7 +149,7 @@ impl StandIn {
         let live = Live {
             lanes: Arc::new(Lanes::new(authority.clone())),
             authority,
-            outbox: Arc::new(Outbox::hello(generation)),
+            outbox: Arc::new(Outbox::hello(generation, Vec::new())),
             credit: Arc::new(Credit::default()),
             tasks: Tasks::default(),
         };
@@ -176,6 +179,13 @@ impl Guest for StandIn {
 
     fn release(&self) {
         self.releases.fetch_add(1, SeqCst);
+    }
+
+    fn settled(&self, changes: Vec<atlas_core::files::Token>) {
+        self.settled
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(changes);
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {
@@ -214,6 +224,8 @@ impl Station for Heard {
 #[derive(Debug)]
 pub struct Controlling {
     pub generation: Generation,
+    /// What the guest's hello said it keeps done and unsettled.
+    pub unsettled: Vec<atlas_core::files::Token>,
     pub outbox: Arc<Outbox>,
     pub credit: Arc<Credit>,
     pub heard: Arc<Heard>,
@@ -240,7 +252,10 @@ where
     let secure = connect_as_station(stream, own, desktop_key, desktop, Purpose::Control).await?;
     let (reading, writing) = tokio::io::split(secure);
     let mut reading = BufReader::new(reading);
-    let generation = control::hello(&mut reading).await?;
+    let control::Hello {
+        generation,
+        unsettled,
+    } = control::hello(&mut reading).await?;
     let outbox = Arc::new(Outbox::default());
     let tasks = Tasks::default();
     tasks.hold(tokio::spawn(control::send(writing, outbox.clone())).abort_handle());
@@ -252,6 +267,7 @@ where
     tasks.hold(reading.abort_handle());
     Ok(Controlling {
         generation,
+        unsettled,
         outbox,
         credit,
         heard,

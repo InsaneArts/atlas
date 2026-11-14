@@ -14,7 +14,10 @@ use crate::{
     generation::Generation,
     lane::{LaneId, LaneKind, Lanes},
 };
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::{
+    error::{Code, Error, Result},
+    files::Token,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -33,15 +36,25 @@ pub const HEARTBEAT: Duration = Duration::from_secs(1);
 pub const SILENCE: Duration = Duration::from_secs(3);
 /// The most dial requests waiting to go; more are refused.
 pub const DIALS: usize = 16;
-/// The longest control message read.
-const LINE: usize = 16 * 1024;
+/// The most changes a hello or a settlement names: as many as a guest
+/// keeps unsettled.
+pub const NAMED: usize = 1024;
+
+/// The longest control message read: a hello or a settlement naming
+/// [`NAMED`] changes, with room to spare.
+const LINE: usize = 128 * 1024;
 
 /// One control message.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum Said {
-    /// The guest's first message: the generation it gave this connection.
-    Hello { generation: Generation },
+    /// The guest's first message: the generation it gave this connection,
+    /// and the changes it keeps done that the station has not settled.
+    Hello {
+        generation: Generation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unsettled: Vec<Token>,
+    },
     /// Either end is there.
     Beat,
     /// The person's Stop, from the station.
@@ -54,6 +67,9 @@ pub enum Said {
     Dial { lane: LaneId, kind: LaneKind },
     /// The reading end of a bulk lane read this many more bytes of it.
     Credit { lane: LaneId, bytes: u64 },
+    /// The station holds no claim on these changes any more: the guest
+    /// may forget what they came to.
+    Settled { changes: Vec<Token> },
 }
 
 impl Said {
@@ -169,10 +185,14 @@ impl Outbox {
         self.ready.notify_one();
     }
 
-    /// The guest's outbox, its hello first: nothing goes before it.
-    pub fn hello(generation: Generation) -> Self {
+    /// The guest's outbox, its hello first: nothing goes before it. It
+    /// names the changes the guest keeps done and unsettled.
+    pub fn hello(generation: Generation, unsettled: Vec<Token>) -> Self {
         let outbox = Self::default();
-        outbox.queues().urgent.push_back(Said::Hello { generation });
+        outbox.queues().urgent.push_back(Said::Hello {
+            generation,
+            unsettled,
+        });
         outbox
     }
 }
@@ -263,6 +283,8 @@ pub trait Guest: Send + Sync {
     fn release(&self);
     /// The station asks for lane `lane`: open one and send its header.
     fn dial(&self, lane: LaneId, kind: LaneKind);
+    /// The station settled `changes`: what they came to may be forgotten.
+    fn settled(&self, changes: Vec<Token>);
 }
 
 /// Follow what the station says on `reader` for the generation `authority`
@@ -295,6 +317,7 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
                 guest.dial(lane, kind);
             }
             Ok(Said::Credit { lane, bytes }) => credit.returned(lane, bytes),
+            Ok(Said::Settled { changes }) => guest.settled(changes),
             // A guest never hears a hello.
             Ok(Said::Hello { .. }) | Err(_) => return,
         }
@@ -310,15 +333,40 @@ pub trait Station: Send + Sync {
     fn heard_again(&self);
 }
 
+/// What the guest's hello says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hello {
+    pub generation: Generation,
+    /// The changes it keeps done that the station has not settled.
+    pub unsettled: Vec<Token>,
+}
+
+/// Of the changes a hello names, those the station settles: each it holds
+/// no claim on. A station keeps a claim before it sends a change, so one
+/// it holds none on was settled already, or never its own.
+pub fn settling(unsettled: &[Token], claimed: impl Fn(&Token) -> bool) -> Vec<Token> {
+    unsettled
+        .iter()
+        .filter(|change| !claimed(change))
+        .cloned()
+        .collect()
+}
+
 /// Wait for the guest's hello, the first thing the station takes from a
 /// control connection.
 ///
 /// # Errors
 ///
 /// Fails when the connection fails, or its first message is not a hello.
-pub async fn hello<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Generation> {
+pub async fn hello<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Hello> {
     match read(reader).await? {
-        Said::Hello { generation } => Ok(generation),
+        Said::Hello {
+            generation,
+            unsettled,
+        } => Ok(Hello {
+            generation,
+            unsettled,
+        }),
         _ => Err(Error::new(
             Code::Protocol,
             "The desktop's control connection did not begin with its hello.",
