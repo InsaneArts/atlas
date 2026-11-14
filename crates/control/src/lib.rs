@@ -628,9 +628,8 @@ impl Controller {
             .collect()
     }
 
-    /// Where the holder note is kept, for tests that stand in for another
-    /// command's.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Where the holder note is kept: the event feed watches its folder,
+    /// and tests stand in for another command's there.
     pub fn holder_path(&self) -> &Path {
         &self.holder
     }
