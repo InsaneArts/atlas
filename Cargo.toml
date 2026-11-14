@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/core",
+    "crates/session",
     "crates/native",
     "crates/daemon",
     "crates/control",
@@ -26,6 +27,7 @@ atlas-control = { path = "crates/control" }
 atlas-core = { path = "crates/core" }
 atlas-daemon = { path = "crates/daemon" }
 atlas-native = { path = "crates/native" }
+atlas-session = { path = "crates/session" }
 
 axum = { version = "0.8", default-features = false }
 base64 = "0.22"
@@ -68,6 +70,7 @@ rand = { version = "0.9", default-features = false }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
+snow = { version = "0.10", default-features = false }
 syn = { version = "2", default-features = false, features = ["clone-impls", "full", "parsing", "printing", "visit", "visit-mut"] }
 tempfile = "3"
 tokio = "1"

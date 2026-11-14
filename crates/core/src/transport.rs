@@ -241,6 +241,21 @@ fn refused(path: &Path, error: io::Error) -> Error {
     .with_source(error)
 }
 
+impl<S> Pending<S> {
+    /// A request to be sent on `stream`, answered within `timeout` from
+    /// now, with the same reply limits as any other. Nothing here checks who
+    /// is at the other end: the caller must have authenticated the stream
+    /// as the peer it means to reach, as a session's handshake does.
+    pub fn over_authenticated(stream: S, timeout: Duration) -> Self {
+        let started = Instant::now();
+        Self {
+            stream,
+            deadline: started + timeout,
+            started,
+        }
+    }
+}
+
 impl<S: AsyncRead + AsyncWrite + Unpin> Pending<S> {
     /// # Errors
     ///
@@ -263,7 +278,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Pending<S> {
         // the peer cannot have acted on the request. A refusal it already
         // sent (busy, say) says why.
         let failed = match written {
-            Ok(Ok(())) => return Ok(self),
+            Ok(Ok(())) => return self.flushed(deadline).await,
             Ok(Err(error)) => Error::new(Code::Transport, error.to_string()).with_source(error),
             Err(elapsed) => Error::new(
                 Code::Transport,
@@ -273,6 +288,24 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Pending<S> {
         };
 
         Err(self.waiting_refusal().await.unwrap_or(failed))
+    }
+
+    /// Send what a stream that buffers, as a session's does, still holds.
+    /// Once the whole request was written, any of it may have reached the
+    /// peer, newline included, so a flush that fails leaves it uncertain.
+    async fn flushed(mut self, deadline: Instant) -> Result<Self> {
+        match timeout_at(deadline, self.stream.flush()).await {
+            Ok(Ok(())) => Ok(self),
+            Ok(Err(error)) => Err(Error::new(Code::Transport, error.to_string())
+                .with_source(error)
+                .uncertain()),
+            Err(elapsed) => Err(Error::new(
+                Code::Transport,
+                "The helper did not take the request in time",
+            )
+            .with_source(elapsed)
+            .uncertain()),
+        }
     }
 }
 

@@ -7,6 +7,7 @@ layers above it in this list:
 | Folder    | Package         | What it holds                                                       |
 | --------- | --------------- | ------------------------------------------------------------------- |
 | `core`    | `atlas-core`    | names, errors, time, wire types, observations, install location     |
+| `session` | `atlas-session` | authenticated, encrypted connections between a station and desktops |
 | `native`  | `atlas-native`  | macOS calls and input execution                                     |
 | `daemon`  | `atlas-daemon`  | the helper daemon, and the helper's layout and launchd actions      |
 | `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases        |

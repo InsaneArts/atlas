@@ -853,12 +853,7 @@ fn in_memory() -> (
     tokio::io::DuplexStream,
 ) {
     let (near, far) = tokio::io::duplex(4096);
-    let started = Instant::now();
-    let pending = super::Pending {
-        stream: near,
-        deadline: started + Duration::from_secs(10),
-        started,
-    };
+    let pending = super::Pending::over_authenticated(near, Duration::from_secs(10));
 
     (pending, far)
 }
@@ -989,4 +984,52 @@ async fn a_lane_trusts_only_the_expected_account_and_process() {
 
     drop(stream);
     assert!(child.wait().success());
+}
+
+/// A stream that takes every byte but cannot flush them.
+struct FlushFails(tokio::io::DuplexStream);
+
+impl tokio::io::AsyncRead for FlushFails {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(context, buffer)
+    }
+}
+
+impl tokio::io::AsyncWrite for FlushFails {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+        data: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(context, data)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Err(io::Error::other("the flush failed")))
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(context)
+    }
+}
+
+#[tokio::test]
+async fn a_request_whose_flush_fails_after_it_was_written_may_have_run() {
+    let (near, _far) = tokio::io::duplex(4096);
+    let pending = super::Pending::over_authenticated(FlushFails(near), Duration::from_secs(10));
+
+    let failed = pending.dispatch(&json!({"op": "run"})).await.err().unwrap();
+
+    assert_eq!(failed.code, Code::Transport);
+    assert!(failed.uncertain);
 }

@@ -3,6 +3,7 @@
 //! hidden graphical login it must be, and the doctor report built from it.
 pub mod diagnosis;
 mod epoch;
+pub mod key;
 
 pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
