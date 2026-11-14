@@ -105,6 +105,7 @@ struct Viewer {
     capture: std::sync::Mutex<Option<frames::Capture>>,
     requests: Semaphore,
     urgent: Semaphore,
+    renewals: Semaphore,
     /// The viewer's private address. Whoever holds it may control the
     /// helper, so it is never printed.
     url: String,

@@ -351,6 +351,9 @@ struct PanelControllerTests {
     #expect(service.statusCalls == 1)
 
     service.changes.tell([.asks])
+    // A change is read no sooner than a moment after the last reading.
+    try await clock.untilSleeping(for: ServiceChanges.soonest, "the woken reading never waited its moment")
+    clock.advance(by: ServiceChanges.soonest)
     try await settle("the feed never woke the status reading") { service.statusCalls == 2 }
     controller.watch(open: false)
   }

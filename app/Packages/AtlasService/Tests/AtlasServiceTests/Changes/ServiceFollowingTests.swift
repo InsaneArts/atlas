@@ -53,7 +53,7 @@ struct ServiceFollowingTests {
     #expect(asked == [nil, third, fourth, fourth])
     #expect(changes.count(of: [.status]) == 1, "the reset")
     #expect(changes.count(of: [.asks]) == 2, "the reset and the event")
-    #expect(!changes.followed, "a reader that stopped following keeps its own pace")
+    #expect(changes.followed, "a cancelled follower leaves what it found to the one that replaces it")
   }
 
   @Test("an unavailable feed is not followed, and readers keep their own pace")

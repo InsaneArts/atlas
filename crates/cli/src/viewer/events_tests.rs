@@ -204,3 +204,17 @@ fn a_feed_whose_folder_went_away_begins_again_in_a_new_one() {
     let mut log = EventLog::begin(&events).unwrap();
     assert_eq!(log.append("d", Kind::Activity).unwrap().seq, 1);
 }
+
+#[test]
+fn a_line_longer_than_any_record_is_damage_however_long() {
+    let folder = private();
+    let mut log = opened(folder.path());
+    log.append("d", Kind::Activity).unwrap();
+    let feed = log.position().0.to_owned();
+    drop(log);
+    let (_, path) = segments(folder.path()).unwrap().pop().unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, format!("{}\n{text}", "x".repeat(LINE * 4))).unwrap();
+
+    assert_ne!(opened(folder.path()).position().0, feed);
+}

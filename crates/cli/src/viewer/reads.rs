@@ -90,18 +90,28 @@ pub(super) struct Look {
 
 impl Viewer {
     /// The helper's report for a status read of `client`, waiting until
-    /// `until` at most, with when it was looked at and whether this read
-    /// looked: one look at a time, and one finished within
-    /// [`LOOK_SHARED_FOR`] answers every read of the same helper, however
-    /// many readers come at once. A look at a helper the settings replaced
-    /// meanwhile is not kept for the next. The Stop kept on the person's
-    /// side is noted afresh for each read.
+    /// `until` at most, with when it was looked at (`None` when it says
+    /// nothing of the helper) and whether this read looked: one look at a
+    /// time, and one finished within [`LOOK_SHARED_FOR`] answers every read
+    /// of the same helper, however many readers come at once. A look at a
+    /// helper the settings replaced meanwhile is not kept for the next. A
+    /// read that waited for another look and then ran out of time looking
+    /// itself learned nothing of the helper: its look is neither kept nor
+    /// counted. The Stop kept on the person's side is noted afresh for each
+    /// read.
     async fn look(
         &self,
         client: &Arc<Client>,
         until: tokio::time::Instant,
-    ) -> (atlas_client::capability::Doctor, tokio::time::Instant, bool) {
-        let mut shared = self.look.lock().await;
+    ) -> (
+        atlas_client::capability::Doctor,
+        Option<tokio::time::Instant>,
+        bool,
+    ) {
+        let (mut shared, waited) = match self.look.try_lock() {
+            Ok(shared) => (shared, false),
+            Err(_) => (self.look.lock().await, true),
+        };
         let forgotten = self
             .looks_forgotten
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -111,18 +121,22 @@ impl Viewer {
                 && look.at.elapsed() < LOOK_SHARED_FOR
         });
         let (mut doctor, at, looked) = match reused {
-            Some(look) => (look.doctor.clone(), look.at, false),
+            Some(look) => (look.doctor.clone(), Some(look.at), false),
             None => {
                 let doctor =
                     atlas_client::overview::helper_report(client, until, self.idle_look()).await;
                 let at = tokio::time::Instant::now();
-                *shared = Arc::ptr_eq(client, &self.client()).then(|| Look {
-                    client: client.clone(),
-                    forgotten,
-                    at,
-                    doctor: doctor.clone(),
-                });
-                (doctor, at, true)
+                if waited && at >= until {
+                    (doctor, None, false)
+                } else {
+                    *shared = Arc::ptr_eq(client, &self.client()).then(|| Look {
+                        client: client.clone(),
+                        forgotten,
+                        at,
+                        doctor: doctor.clone(),
+                    });
+                    (doctor, Some(at), true)
+                }
             }
         };
         drop(shared);
@@ -258,7 +272,9 @@ impl Viewer {
             _ => Value::Null,
         };
         status.value["overview"]["signInInterrupted"] = interrupted;
-        self.tell_producer(&client, looked_at, &status.value, active);
+        if let Some(looked_at) = looked_at {
+            self.tell_producer(&client, looked_at, &status.value, active);
+        }
         if !self.feed.available() {
             status.value["events"] = json!("unavailable");
         }

@@ -196,6 +196,14 @@ impl Producer {
             .into_iter()
             .filter(|(kind, mark)| self.marks.get(kind) != Some(mark))
             .collect();
+        // A change to control or sign-ins may change what the helper says:
+        // the readers it wakes look at the helper again.
+        if moved_marks
+            .iter()
+            .any(|(kind, _)| matches!(kind, Kind::Control | Kind::Status))
+        {
+            viewer.forget_look();
+        }
         let written = write(viewer, &desktop, moved_marks.iter().map(|(kind, _)| *kind)).await;
         for ((kind, mark), kept) in moved_marks.into_iter().zip(written) {
             if kept {

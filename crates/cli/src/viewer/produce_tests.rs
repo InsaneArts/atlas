@@ -148,3 +148,25 @@ async fn a_read_of_a_replaced_helper_or_an_older_look_is_not_handed_on() {
     viewer.tell_producer(&replaced, now + TICK, &json!({"overview": {}}), true);
     assert_eq!(newest(&viewer), Some(now), "a helper no longer served");
 }
+
+#[tokio::test]
+async fn a_change_to_control_makes_the_next_read_look_at_the_helper_again() {
+    let (viewer, _dir) = viewer();
+    let mut producer = Producer::default();
+    producer.tick(&viewer).await;
+    let forgotten = || {
+        viewer
+            .looks_forgotten
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let before = forgotten();
+
+    let client = viewer.client();
+    let folder = client.controller.holder_path().parent().unwrap().to_owned();
+    std::fs::create_dir_all(&folder).unwrap();
+    let name = client.desktop().id().as_str().to_owned();
+    std::fs::write(folder.join(format!("{name}.changed")), "{}").unwrap();
+    producer.tick(&viewer).await;
+
+    assert!(forgotten() > before);
+}

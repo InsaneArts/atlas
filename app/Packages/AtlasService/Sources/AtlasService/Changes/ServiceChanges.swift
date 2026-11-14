@@ -3,13 +3,16 @@ import os
 
 /// What the service's feed says changed, for the readers that wait on it. Each kind counts its changes; a reader
 /// notes the count before it reads and, after, waits for it to move or for its pause to end. A change that came while
-/// it read is read again at once, so none is lost. While the feed is followed a reader's pause stretches to
-/// ``fallback``: the feed wakes it when there is something to read.
+/// it read is read again once ``soonest`` has passed since it read, so none is lost and a busy feed folds into one
+/// read. While the feed is followed a reader's pause stretches to ``fallback``: the feed wakes it when there is
+/// something to read.
 public final class ServiceChanges: Sendable {
   /// The longest a reader waits while the feed is followed.
   public static let fallback: Duration = .seconds(30)
+  /// The least a reader waits between two reads a change woke: the changes that come meanwhile are read together.
+  public static let soonest: Duration = .seconds(1)
 
-  /// The changes counted per kind, whether the feed is followed, and the readers waiting.
+  /// The changes counted per kind, whether the feed is followed, and the readers' waits.
   private let state = OSAllocatedUnfairLock(initialState: State())
 
   /// Changes not followed yet: every reader waits its own pause.
@@ -32,7 +35,8 @@ public final class ServiceChanges: Sendable {
   }
 
   /// Waits for a change of `kinds` since the count `seen`, or for `pause` (``fallback`` while the feed is followed),
-  /// whichever comes first: at once when one came already. A cancelled wait ends at once.
+  /// whichever comes first; a change, even one that came already, ends it no sooner than ``soonest`` (or `pause`,
+  /// when shorter) after it began. A cancelled wait ends at once.
   ///
   /// - Parameters:
   ///   - pause: The reader's own pause, while the feed is not followed.
@@ -46,9 +50,31 @@ public final class ServiceChanges: Sendable {
     clock: any Clock<Duration>
   ) async {
     let wait = followed ? max(pause, Self.fallback) : pause
+    await waiting(wait, floor: min(pause, Self.soonest), on: kinds, since: seen, clock: clock)
+  }
+
+  /// ``pause(_:on:since:clock:)`` on a clock of a known kind, so its deadlines are counted from one moment.
+  ///
+  /// - Parameters:
+  ///   - wait: The longest it waits.
+  ///   - floor: The least it waits once a change came.
+  ///   - kinds: The kinds the reader shows.
+  ///   - seen: The count it noted before it last read.
+  ///   - clock: The clock the pause runs on.
+  private func waiting<C: Clock<Duration>>(
+    _ wait: Duration,
+    floor: Duration,
+    on kinds: Set<ChangeKind>,
+    since seen: UInt64,
+    clock: C
+  ) async {
+    let start = clock.now
     await withTaskGroup(of: Void.self) { group in
-      group.addTask { try? await clock.sleep(for: wait) }
-      group.addTask { await self.change(of: kinds, since: seen) }
+      group.addTask { try? await clock.sleep(until: start.advanced(by: wait), tolerance: nil) }
+      group.addTask {
+        await self.change(of: kinds, since: seen)
+        try? await clock.sleep(until: start.advanced(by: floor), tolerance: nil)
+      }
       await group.next()
       group.cancelAll()
     }
@@ -82,13 +108,16 @@ public final class ServiceChanges: Sendable {
   ///   - seen: The count noted.
   private func change(of kinds: Set<ChangeKind>, since seen: UInt64) async {
     let id = UUID()
+    state.withLock { $0.begin(id) }
+    defer { state.withLock { $0.end(id) } }
     await withTaskCancellationHandler {
       await withCheckedContinuation { (waiting: CheckedContinuation<Void, Never>) in
         let now = state.withLock { $0.wait(id, for: kinds, since: seen, waiting) }
         if now { waiting.resume() }
       }
     } onCancel: {
-      state.withLock { $0.cancel(id) }?.resume()
+      let waiting = state.withLock { $0.cancel(id) }
+      waiting?.resume()
     }
   }
 }

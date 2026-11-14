@@ -46,9 +46,13 @@ extension ViewerPanesModel {
           self?.work.sessions = nil
           return
         }
-        // Read again once the feed says the sessions or what they did changed; a cancelled pause ends at once, and
-        // the loop's condition ends the loop.
-        await changes.pause(Self.sessionsEvery, on: kinds, since: seen, clock: clock)
+        // Read again once the feed says the sessions or what they did changed, or at the list's own pace after a
+        // reading that failed; a cancelled pause ends at once, and the loop's condition ends the loop.
+        if self?.panes.sessions.failure != nil {
+          try? await clock.sleep(for: Self.sessionsEvery)
+        } else {
+          await changes.pause(Self.sessionsEvery, on: kinds, since: seen, clock: clock)
+        }
       }
     }
   }

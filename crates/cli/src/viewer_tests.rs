@@ -5,8 +5,8 @@ use super::{
     control::release_native,
     frames::Capture,
     http::{
-        CONCURRENT_REQUESTS, CONNECTIONS, FIRST_REQUEST, accept, bind, header, json_response,
-        respond,
+        CONCURRENT_REQUESTS, CONNECTIONS, FIRST_REQUEST, RENEWALS, accept, bind, header,
+        json_response, respond,
     },
     local::{answering, exchange, post_local_as_app, reply_status},
     reads::{ACTIVITY_ROWS, activity_row},
@@ -3300,6 +3300,20 @@ async fn a_renewal_is_never_turned_away_while_reads_and_the_feed_are_full() {
     let _waits = viewer.feed.hold_every_wait();
 
     let (status, body) = posted(&viewer, "control/renew", &json!({"lease": "none"})).await;
+
+    assert_ne!(body["code"], "busy", "{status} {body}");
+}
+
+#[tokio::test]
+async fn letting_go_is_never_turned_away_while_renewals_are_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let _renewals = viewer
+        .renewals
+        .try_acquire_many(u32::try_from(RENEWALS).unwrap())
+        .unwrap();
+
+    let (status, body) = posted(&viewer, "control/release", &json!({"lease": "none"})).await;
 
     assert_ne!(body["code"], "busy", "{status} {body}");
 }

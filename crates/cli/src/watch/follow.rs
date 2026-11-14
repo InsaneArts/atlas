@@ -64,7 +64,11 @@ impl Following {
                 .map(|(feed, head)| (feed.to_owned(), head));
             return (position, Duration::ZERO);
         }
-        let events = answer["events"].as_array().cloned().unwrap_or_default();
+        // An answer that is neither is not the feed's.
+        let Some(events) = answer["events"].as_array() else {
+            self.lost();
+            return (at, PROBE);
+        };
         let read_on = events.iter().any(|event| {
             // A kind this build does not know may say anything.
             event["kind"]

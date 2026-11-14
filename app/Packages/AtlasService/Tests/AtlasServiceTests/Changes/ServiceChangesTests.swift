@@ -75,4 +75,48 @@ struct ServiceChangesTests {
     }
     #expect(took < .seconds(5))
   }
+
+  @Test("a woken wait that is then cancelled leaves nothing behind")
+  func aWokenWaitLeavesNothing() async {
+    var state = ServiceChanges.State()
+    let id = UUID()
+    state.begin(id)
+    await withCheckedContinuation { (resume: CheckedContinuation<Void, Never>) in
+      let now = state.wait(id, for: [.status], since: 0, resume)
+      #expect(!now)
+      for woken in state.tell([.status]) { woken.resume() }
+    }
+    let woken = state.cancel(id)
+    #expect(woken == nil)
+    state.end(id)
+    #expect(state.waits.isEmpty)
+  }
+
+  @Test("a wait cancelled before it waits ends at once and leaves nothing behind")
+  func aWaitCancelledEarlyLeavesNothing() async {
+    var state = ServiceChanges.State()
+    let id = UUID()
+    state.begin(id)
+    let woken = state.cancel(id)
+    #expect(woken == nil)
+    await withCheckedContinuation { (resume: CheckedContinuation<Void, Never>) in
+      let now = state.wait(id, for: [.status], since: 0, resume)
+      #expect(now)
+      resume.resume()
+    }
+    state.end(id)
+    #expect(state.waits.isEmpty)
+  }
+
+  @Test("changes that come close together are read together, no sooner than a moment after the last read")
+  func changesCloseTogetherAreReadTogether() async {
+    let changes = ServiceChanges()
+    let seen = changes.count(of: [.activity])
+    changes.tell([.activity])
+    let took = await timed {
+      await changes.pause(.seconds(20), on: [.activity], since: seen, clock: ContinuousClock())
+    }
+    #expect(took >= ServiceChanges.soonest)
+    #expect(took < .seconds(5))
+  }
 }

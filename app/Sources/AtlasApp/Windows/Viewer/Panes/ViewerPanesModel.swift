@@ -101,9 +101,13 @@ final class ViewerPanesModel {
         let seen = changes.count(of: [.activity])
         await self?.readActivity(number)
         guard self?.work.generation == number, !Task.isCancelled else { return }
-        // Read again once the feed says Activity changed; a cancelled pause ends at once, and the loop's condition
-        // ends the loop.
-        await changes.pause(Self.activityEvery, on: [.activity], since: seen, clock: clock)
+        // Read again once the feed says Activity changed, or at the pane's own pace after a reading that failed; a
+        // cancelled pause ends at once, and the loop's condition ends the loop.
+        if self?.panes.activity.failure != nil {
+          try? await clock.sleep(for: Self.activityEvery)
+        } else {
+          await changes.pause(Self.activityEvery, on: [.activity], since: seen, clock: clock)
+        }
       }
     }
   }

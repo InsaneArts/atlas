@@ -77,3 +77,15 @@ fn a_service_past_its_waits_is_left_a_moment_while_the_log_is_looked_at() {
     assert_eq!((next, pause), (at, POLL));
     assert!(!following.live());
 }
+
+#[test]
+fn an_answer_that_is_not_the_feeds_is_left_a_while_and_the_log_looked_at() {
+    let following = Following::default();
+    let at = Some(("f".to_owned(), 3));
+
+    let (next, pause) = following.take(at.clone(), &json!({"ok": true}));
+
+    assert_eq!((next, pause), (at, PROBE));
+    assert!(!following.live());
+    assert_eq!(following.told(), 0);
+}

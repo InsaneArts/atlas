@@ -312,7 +312,10 @@ fn read_segment(path: &Path, last: bool) -> Option<Vec<Event>> {
     let mut line = Vec::new();
     loop {
         line.clear();
-        let read = reader.read_until(b'\n', &mut line).ok()?;
+        // Never more than one record's worth: a longer line is damage.
+        let read = std::io::Read::take(&mut reader, LINE as u64 + 1)
+            .read_until(b'\n', &mut line)
+            .ok()?;
         if read == 0 {
             return Some(records);
         }

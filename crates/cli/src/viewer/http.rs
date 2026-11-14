@@ -31,6 +31,9 @@ use tokio::{
 pub(super) const CONCURRENT_REQUESTS: usize = 32;
 /// Requests kept for ending control, so a busy viewer still lets go.
 const URGENT_REQUESTS: usize = 8;
+/// Requests kept for renewing control, so renewals neither wait behind
+/// other requests nor take the slots that end control.
+pub(super) const RENEWALS: usize = 4;
 /// How many connections are open at once; more wait to be accepted.
 pub(super) const CONNECTIONS: usize = 64;
 /// How long a connection may take to send a request's headers. An idle
@@ -100,6 +103,7 @@ pub(super) fn configured(
         capture: std::sync::Mutex::new(None),
         requests: Semaphore::new(CONCURRENT_REQUESTS),
         urgent: Semaphore::new(URGENT_REQUESTS),
+        renewals: Semaphore::new(RENEWALS),
         url: format!("http://{authority}{prefix}"),
         prefix,
         authority,
@@ -418,11 +422,9 @@ impl Route {
     fn urgent(self) -> bool {
         match self {
             // The person's answer ends an agent's wait, and finishing a
-            // sign-in ends control: neither waits behind other requests. A
-            // renewal kept waiting would end control the person holds.
+            // sign-in ends control: neither waits behind other requests.
             Self::Change(
                 Change::Hold
-                | Change::Renew
                 | Change::Release
                 | Change::Revoke
                 | Change::Answer
@@ -439,6 +441,7 @@ impl Route {
                 | Change::Cleanup
                 | Change::Input
                 | Change::Acquire
+                | Change::Renew
                 | Change::AddAccount
                 | Change::RemoveAccount
                 | Change::SetLevel
@@ -513,11 +516,13 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
         return json_response(code, body);
     }
 
-    // Ending control has slots of its own, so a busy viewer still lets go.
-    let slots = if route.is_some_and(Route::urgent) {
-        &viewer.urgent
-    } else {
-        &viewer.requests
+    // Ending control has slots of its own, so a busy viewer still lets go;
+    // so has renewing it, which kept waiting would end control the person
+    // holds.
+    let slots = match route {
+        Some(Route::Change(Change::Renew)) => &viewer.renewals,
+        Some(route) if route.urgent() => &viewer.urgent,
+        _ => &viewer.requests,
     };
     let Ok(_slot) = slots.try_acquire() else {
         return json_response(
@@ -564,7 +569,6 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 }
 
-/// The desktop `query` names, as `desktop=` its ID.
 /// The feed position a reader names: `feed=F&after=N`.
 fn feed_position(query: Option<&str>) -> (Option<&str>, u64) {
     let value = |key: &str| {
@@ -579,6 +583,7 @@ fn feed_position(query: Option<&str>) -> (Option<&str>, u64) {
     )
 }
 
+/// The desktop `query` names, as `desktop=` its ID.
 fn named_in_query(query: Option<&str>) -> Option<&str> {
     query?
         .split('&')
