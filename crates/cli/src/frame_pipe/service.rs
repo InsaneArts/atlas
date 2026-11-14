@@ -65,7 +65,7 @@ pub(crate) async fn start(
     input: Arc<Notify>,
 ) -> Result<Service> {
     let controller = nix::unistd::getuid().as_raw();
-    let helper = client.transport.peer_uid;
+    let helper = client.link.socket()?.peer_uid;
     let (listeners, endpoint) = endpoint::bind(controller, &client.desktop()).await?;
     let (service, bootstrap) = (Hex32::random(), Hex64::random());
     let descriptor = json!({

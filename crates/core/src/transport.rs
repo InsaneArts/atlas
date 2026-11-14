@@ -37,7 +37,7 @@ const DENIED_PAUSES: [Duration; 3] = [
 /// Longest reply, every line together.
 const MAX_REPLY: usize = 64 * 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Transport {
     pub path: PathBuf,
     pub timeout: Duration,
@@ -252,6 +252,16 @@ impl<S> Pending<S> {
             stream,
             deadline: started + timeout,
             started,
+        }
+    }
+
+    /// The same request on `stream` made into another type, keeping its
+    /// deadline.
+    pub fn map<T>(self, into: impl FnOnce(S) -> T) -> Pending<T> {
+        Pending {
+            stream: into(self.stream),
+            deadline: self.deadline,
+            started: self.started,
         }
     }
 }

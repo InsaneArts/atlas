@@ -106,11 +106,11 @@ async fn a_sessions_first_read_defers_another_sessions_service_change() {
     let host = HostSession::new(Host::Named, "worker").unwrap();
     client.controller = client.controller.labelled(Some(&host));
     client.host_session = Some(host.clone());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["apps"]).unwrap().command.unwrap();
     let policy = Policy::of(&command);
     assert!(policy.labelled(Actor::Agent));
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let helper = async {
         handshake(&listener).await;
         answer(&listener, "apps", json!({"ok": true, "apps": []})).await;
@@ -452,7 +452,7 @@ fn typed_text_names_the_field_it_was_sent_to_once_the_helper_checked_it() {
 async fn a_stop_cancels_an_environment_run_after_dispatch() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = atlas_client::test_support::client_in(dir.path());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["environment", "run", "--", "tool"])
         .unwrap()
         .command
@@ -465,7 +465,7 @@ async fn a_stop_cancels_an_environment_run_after_dispatch() {
     else {
         panic!("environment run did not parse");
     };
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let ownership = client.controller.acquire(false).unwrap();
     let helper = async {
         handshake(&listener).await;
@@ -504,11 +504,11 @@ async fn a_stop_cancels_an_environment_run_after_dispatch() {
 async fn atlas_run_lets_others_act_while_it_runs() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = atlas_client::test_support::client_in(dir.path());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
     client.doing = Policy::of(&command).doing;
     let other = atlas_control::Controller::at(60001, &dir.path().join("state"));
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let helper = async {
         handshake(&listener).await;
 
@@ -839,7 +839,7 @@ fn setup_commands_refuse_to_run_as_root() {
 async fn every_look_at_the_screen_is_refused_while_the_person_signs_in() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = atlas_client::test_support::client_in(dir.path());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     // No helper answers: a look that got as far as asking it would fail
     // another way.
     let mut lease = atlas_control::Lease::default();

@@ -32,7 +32,7 @@ pub(super) fn native_client() -> (tempfile::TempDir, Client, UnixListener, Sessi
     let mut client = client_in(dir.path());
     client.controller = Controller::at(atlas_core::test_support::UID, &dir.path().join("state"));
     client.config.helper_uid = nix::unistd::getuid().as_raw();
-    client.transport = client.input_transport();
+    client.link = Link::Unix(client.input_transport());
     let listener = UnixListener::bind(&client.config.input_socket).unwrap();
     let session = Session {
         epoch: Epoch {
@@ -839,8 +839,8 @@ async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothin
 /// An agent's `run` against a helper stand-in kept in `dir`, its
 /// listener, and the stop its controller heeds.
 pub(super) fn running(dir: &Path, mut client: Client) -> (Client, UnixListener, Interrupt) {
-    client.transport.path = dir.join("helper.sock");
-    let helper = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().path = dir.join("helper.sock");
+    let helper = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let interrupt = stoppable(&mut client);
     (client.doing(Doing::new("run")), helper, interrupt)
 }
@@ -1047,7 +1047,7 @@ async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value)
     let (dir, mut client, input, _session) = native_client();
     client.actor = Actor::Viewer;
     // As in use, commands go to the daemon's socket.
-    client.transport.path = client.config.socket_path.clone();
+    client.link.socket_mut().path = client.config.socket_path.clone();
     let daemon = UnixListener::bind(&client.config.socket_path).unwrap();
     let mut caller = Box::pin(client.hold(true));
     let mut hello = dispatched(&mut caller, &input, "hello").await;
@@ -1307,12 +1307,12 @@ async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
 async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() {
     let (dir, mut client, input, _session) = native_client();
     drop(input);
-    client.transport.path = dir.path().join("helper.sock");
-    let helper = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().path = dir.path().join("helper.sock");
+    let helper = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
     // The person's Stop finds no daemon keeping jobs to end.
-    person.transport.path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let run = || run_of(&["true"], 1000);
     let ownership = acting.controller.acquire(false).unwrap();
@@ -1551,12 +1551,12 @@ async fn lost_before_its_row(lost: bool) {
 #[tokio::test]
 async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fails() {
     let (dir, mut client, input, _session) = native_client();
-    client.transport.path = dir.path().join("helper.sock");
-    let helper = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().path = dir.path().join("helper.sock");
+    let helper = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let mut person = client.clone();
     person.actor = Actor::Viewer;
     // The person's Stop finds no daemon keeping jobs to end.
-    person.transport.path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.config.socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let ownership = acting.controller.acquire(false).unwrap();
     let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));
@@ -1994,9 +1994,9 @@ fn independent_proofs_require_the_exact_current_challenge_before_session_validat
 async fn independent_proofs_use_fresh_challenges_and_older_helpers_keep_the_original_probe() {
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
-    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let source = json!({"ok":true,"uid":502,"parentPID":123,"read":true});
     let proof = source.clone();
     let server = tokio::spawn(async move {
@@ -2041,10 +2041,10 @@ async fn identity_reads_input_and_challenged_proof_together_but_waits_for_both()
     for mismatch in [false, true] {
         let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let mut client = crate::test_support::client(directory.path());
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
-        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-        let daemon = UnixListener::bind(&client.transport.path).unwrap();
+        std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+        let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
         let input = UnixListener::bind(&client.config.input_socket).unwrap();
         let mut status = verified_status(&[]);
         status["daemon"]["capabilities"] = json!([atlas_core::protocol::SESSION_PROOF]);
@@ -2091,10 +2091,10 @@ async fn an_unverified_daemon_never_starts_either_independent_read() {
     for (uid, on_console) in [(7002, false), (7001, true)] {
         let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let mut client = crate::test_support::client(directory.path());
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
-        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-        let daemon = UnixListener::bind(&client.transport.path).unwrap();
+        std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+        let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
         let input = UnixListener::bind(&client.config.input_socket).unwrap();
         let mut status = verified_status(&[]);
         status["user"]["uid"] = json!(uid);

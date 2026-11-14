@@ -321,8 +321,8 @@ const ROLLED_BACK: [&str; 5] = ["inspect", "retire", "install", "retire", "resto
 fn answered_client(directory: &Path) -> (Client, atlas_control::Controller) {
     let mut client = crate::test_support::client(directory);
     client.allow_disrupt = true;
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
-    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
     let controller = client.controller.clone();
     (client, controller)
 }
@@ -480,7 +480,7 @@ fn only_a_new_daemon_answering_clears_a_replacement() {
     drop(controller.quarantine().unwrap());
     let other = controller.pending().unwrap();
     let (helper, agent, layout) = test_agent(directory.path());
-    let (asks, answer) = stand_in(&client.transport.path);
+    let (asks, answer) = stand_in(&client.link.socket().unwrap().path);
     let requester = Requester::start(move || async move {
         replace_job(&client, &helper, agent, &layout, |_| {
             Ok(json!({"ok": true}))
@@ -570,7 +570,7 @@ fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_keeps_control
             "none"
         };
         let run = held_at(held, true, &actions, entered, released);
-        let (asks, answer) = stand_in(&client.transport.path);
+        let (asks, answer) = stand_in(&client.link.socket().unwrap().path);
         let requester = Requester::start(move || async move {
             replace_job(&client, &helper, agent, &layout, run).await
         });

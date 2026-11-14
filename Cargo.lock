@@ -130,6 +130,7 @@ dependencies = [
  "atlas-core",
  "atlas-daemon",
  "atlas-native",
+ "atlas-session",
  "base64",
  "fs2",
  "libc",

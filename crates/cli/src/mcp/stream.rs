@@ -92,7 +92,7 @@ impl Server {
     /// this helper.
     async fn frame_service(&self) -> Option<Value> {
         let output = self.client.output_dir().ok()?.to_path_buf();
-        let (port, helper) = (self.port, self.client.transport.peer_uid);
+        let (port, helper) = (self.port, self.client.link.socket().ok()?.peer_uid);
         tokio::task::spawn_blocking(move || {
             crate::viewer::frame_service(&crate::viewer::local(&output, port)?, helper)
         })

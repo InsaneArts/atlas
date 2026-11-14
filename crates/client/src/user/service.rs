@@ -25,7 +25,10 @@ pub(crate) fn process_exists(pid: u32) -> bool {
 /// [`daemon_listens`](crate::jobs::daemon_listens) for the second login
 /// `login`: whether its socket is on this disk.
 pub(crate) fn daemon_listens_in(client: &Client, _login: &atlas_core::user::User) -> bool {
-    client.transport.path.exists()
+    client
+        .link
+        .socket()
+        .is_ok_and(|transport| transport.path.exists())
 }
 
 /// Whether the second login `login` has never been set up. Its daemon
@@ -33,7 +36,10 @@ pub(crate) fn daemon_listens_in(client: &Client, _login: &atlas_core::user::User
 /// shutdowns. Only an absent directory establishes a first setup; a
 /// missing socket can leave background jobs running.
 pub(crate) fn first_setup_in(client: &Client, _login: &atlas_core::user::User) -> bool {
-    client.transport.path.parent().is_some_and(|directory| {
+    let Ok(transport) = client.link.socket() else {
+        return false;
+    };
+    transport.path.parent().is_some_and(|directory| {
         std::fs::symlink_metadata(directory)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     })
@@ -90,7 +96,7 @@ async fn launch_input_in(client: &Client, login: &atlas_core::user::User) -> Res
         ],
         "timeoutMs": 3000,
     });
-    launched_pid(&client.transport.call(&request).await?)
+    launched_pid(&client.link.call(&request).await?)
 }
 
 /// [`Client::spawn_input`] in the second login `login`: launched, then

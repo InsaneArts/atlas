@@ -14,6 +14,7 @@ pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
     client::Client,
+    link::Link,
     task::{Task, record::OutputEntry, store::Store},
 };
 use atlas_core::{
@@ -24,7 +25,7 @@ use atlas_core::{
         FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, ReadRefusal, SessionPin,
     },
     time::now_ms,
-    transport::{OutputError, Transport, append_event, refusal},
+    transport::{OutputError, append_event, refusal},
 };
 use receipt::{Receipt, VERSION, owner_folder};
 use scavenge::remove_abandoned;
@@ -158,7 +159,7 @@ type Fault = dyn Fn(Step) -> std::io::Result<()> + Send + Sync;
 /// One call's collection on this Mac: the files it reads from the helper,
 /// pinned to the session verified, and where it keeps their copies.
 struct Collection {
-    transport: Transport,
+    link: Link,
     output: PathBuf,
     task: Option<Task>,
     pin: SessionPin,
@@ -181,7 +182,7 @@ impl Collection {
     /// The collection of `files` that `client` asks for.
     fn of(client: &Client, pin: SessionPin, files: &[String], max_size: u64) -> Result<Self> {
         Ok(Self {
-            transport: client.transport.clone(),
+            link: client.link.clone(),
             output: client.output_dir()?.to_owned(),
             task: client.task.clone(),
             pin,
@@ -286,7 +287,7 @@ impl Collection {
                 partial: folder.join(format!(".{n}.partial")),
                 copies,
                 taken: &names,
-                transport: &self.transport,
+                link: &self.link,
                 runtime,
                 left,
                 pin: self.pin,
@@ -438,8 +439,8 @@ struct One<'a> {
     copies: &'a Path,
     /// The names already collected in this call.
     taken: &'a [&'a str],
-    transport: &'a Transport,
-    /// The runtime that drives the transport.
+    link: &'a Link,
+    /// The runtime that drives the link.
     runtime: &'a Handle,
     /// Whether the caller went away.
     left: &'a AtomicBool,
@@ -680,8 +681,8 @@ impl One<'_> {
         let mut received = 0_u64;
         let mut written = Ok(());
         let reply = self.runtime.block_on(async {
-            let pending = self.transport.connect().await?.dispatch(request).await?;
-            pending
+            let (sent, unanswered) = self.link.send(request).await?;
+            let reply = sent
                 .finish_each(&mut |event| {
                     if event["event"] != "data" {
                         return Ok(());
@@ -699,7 +700,9 @@ impl One<'_> {
                     }
                     Ok(())
                 })
-                .await
+                .await?;
+            unanswered.answered();
+            Ok::<_, Error>(reply)
         });
         if written.is_err() {
             return Err(self.fail(ReadRefusal::Space));

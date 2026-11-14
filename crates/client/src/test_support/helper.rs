@@ -92,12 +92,12 @@ impl Helper {
     pub fn client(directory: &Path, uid: u32) -> (Client, Self) {
         let mut client = super::client(directory);
         client.config.helper_uid = uid;
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
-        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
 
         let helper = Self {
-            listener: UnixListener::bind(&client.transport.path).unwrap(),
+            listener: UnixListener::bind(&client.link.socket().unwrap().path).unwrap(),
             input: None,
             capabilities: Vec::new(),
             input_state: None,

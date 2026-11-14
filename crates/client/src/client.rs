@@ -32,7 +32,7 @@ pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::{Seen, WINDOW_LOOKUP};
 
-use crate::{doing::Doing, host_session::HostSession, task::Task};
+use crate::{doing::Doing, host_session::HostSession, link::Link, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::Config,
@@ -114,7 +114,8 @@ impl Actor {
 #[derive(Clone)]
 pub struct Client {
     pub config: Config,
-    pub transport: Transport,
+    /// How requests reach the desktop.
+    pub link: Link,
     /// A local stand-in's socket peer, separate from its reported helper UID.
     #[cfg(any(test, feature = "test-support"))]
     pub input_peer_uid: Option<u32>,
@@ -170,19 +171,19 @@ impl Client {
         let desktop = config.desktop();
         // The command service: where it listens, and the account the
         // kernel must name at its end.
-        let transport = match desktop.kind() {
+        let link = match desktop.kind() {
             Kind::User(login) => {
                 atlas_core::session::validate_uid(login.uid)?;
-                Transport {
+                Link::Unix(Transport {
                     path: config.socket_path.clone(),
                     timeout: Duration::from_secs(30),
                     peer_uid: login.uid,
-                }
+                })
             }
         };
         Ok(Self {
             controller: Controller::new(&desktop)?,
-            transport,
+            link,
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -303,7 +304,7 @@ impl Client {
     }
 
     async fn verified_status(&self) -> Result<Value> {
-        let mut hello = self.transport.call(&json!({"op": "hello"})).await?;
+        let mut hello = self.link.call(&json!({"op": "hello"})).await?;
 
         // Do not launch the probe into an unverified UID or the visible desktop.
         let answered_as_configured = match self.desktop().kind() {
@@ -336,7 +337,7 @@ impl Client {
         if atlas_core::session::has_capability(daemon, SESSION_PROOF) {
             let challenge = atlas_core::files::token();
             let reply = self
-                .transport
+                .link
                 .call(&json!({"op": "session-proof", "challenge": challenge}))
                 .await?;
             return Self::challenged_proof(&reply, &challenge);

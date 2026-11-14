@@ -296,8 +296,8 @@ async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
     })
     .unwrap();
     client.controller = atlas_control::Controller::at(uid, &dir.path().join("state"));
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let status = json!({
         "ok": false,
         "code": "blocked",

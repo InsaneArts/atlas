@@ -44,7 +44,7 @@ objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerat
 objc2-image-io = { workspace = true, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
 objc2-io-kit = { workspace = true, features = ["libc"] }
 objc2-screen-capture-kit = { workspace = true, features = ["std", "SCStream", "SCShareableContent", "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media"] }
-objc2-security = { workspace = true, features = ["std", "AuthSession", "Authorization", "CSCommon", "SecCode", "SecRequirement", "SecStaticCode"] }
+objc2-security = { workspace = true, features = ["std", "AuthSession", "Authorization", "CSCommon", "SecACL", "SecAccess", "SecBase", "SecCode", "SecItem", "SecKeychain", "SecKeychainItem", "SecTrustedApplication", "cssmconfig", "SecRequirement", "SecStaticCode"] }
 objc2-system-configuration = { workspace = true, features = ["SCDynamicStore", "SCDynamicStoreCopySpecific", "libc"] }
 
 [lints]

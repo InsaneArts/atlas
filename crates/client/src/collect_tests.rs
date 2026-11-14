@@ -38,7 +38,7 @@ impl Place {
         let home = base.join("helper");
         fs::create_dir(&home).unwrap();
         let mut client = crate::test_support::client_in(&base).doing(Doing::new("collect"));
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
         let host = HostSession::new(Host::Codex, "collect-test").unwrap();
         client.task = Some(Task::of(host.key(), None).unwrap());
         client.host_session = Some(host);
@@ -649,18 +649,7 @@ fn a_blocked_collection_write_or_sync_leaves_other_client_work_responsive() {
             beginning.await.unwrap();
             let read = json!({"op": "read", "path": "a.bin", "offset": 0, "length": 0,
                 "maxSize": 64 << 20, "session": PIN});
-            let other = place
-                .client
-                .transport
-                .connect()
-                .await
-                .unwrap()
-                .dispatch(&read)
-                .await
-                .unwrap()
-                .finish()
-                .await
-                .unwrap();
+            let other = place.client.link.call(&read).await.unwrap();
             let early = walk(&place.client.output_dir().unwrap().join(COLLECTED));
             let _ = answered.send((other, early));
             let collected = running.await.unwrap().unwrap();

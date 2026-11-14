@@ -39,7 +39,7 @@ pub async fn set(client: &Client, muted: bool) -> Result<Value> {
 }
 
 async fn ask(client: &Client, request: &Value) -> Result<Value> {
-    let reply = client.transport.call(request).await?;
+    let reply = client.link.call(request).await?;
     if reply["ok"] != true {
         return Err(atlas_core::transport::refusal(&reply));
     }

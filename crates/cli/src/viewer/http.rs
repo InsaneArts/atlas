@@ -784,10 +784,13 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
         // The frame service of the helper served now: one still serving the
         // helper the settings named before is not offered while it is
         // replaced.
-        Read::Pipe => match unpoisoned(&viewer.pipe)
-            .clone()
-            .filter(|descriptor| descriptor["helperUID"] == viewer.client().transport.peer_uid)
-        {
+        Read::Pipe => match unpoisoned(&viewer.pipe).clone().filter(|descriptor| {
+            viewer
+                .client()
+                .link
+                .socket()
+                .is_ok_and(|transport| descriptor["helperUID"] == transport.peer_uid)
+        }) {
             Some(descriptor) => json_response(200, descriptor),
             None => json_response(
                 404,

@@ -203,7 +203,7 @@ impl Client {
         } else {
             self.identity().await?;
         }
-        let read = async { AppList::decode(self.transport.call(&request).await?) };
+        let read = async { AppList::decode(self.link.call(&request).await?) };
         read.await.map_err(Error::certain)
     }
 }

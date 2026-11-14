@@ -21,7 +21,7 @@ type Heard = Arc<Mutex<Vec<Value>>>;
 /// this test's own account, with control kept in `dir/state`.
 fn client_in(dir: &Path) -> Client {
     let mut client = crate::test_support::client_in(dir);
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     client
 }
 
@@ -936,10 +936,10 @@ async fn unreadable_job_records_remain_visible_during_logout_cleanup() {
 async fn removing_the_socket_after_a_stop_was_sent_does_not_acknowledge_its_outcome() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
-    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-    std::fs::write(&client.transport.path, "endpoint").unwrap();
+    std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+    std::fs::write(&client.link.socket().unwrap().path, "endpoint").unwrap();
     let (sent, request) = tokio::sync::oneshot::channel::<()>();
-    let socket = client.transport.path.clone();
+    let socket = client.link.socket().unwrap().path.clone();
     // The request has gone out; then the daemon's socket is removed and the
     // read of its reply fails.
     let asked = async move {
@@ -949,7 +949,7 @@ async fn removing_the_socket_after_a_stop_was_sent_does_not_acknowledge_its_outc
     };
     sent.send(()).unwrap();
     let everyone = stopped_every(&client, asked).await;
-    assert!(!client.transport.path.exists());
+    assert!(!client.link.socket().unwrap().path.exists());
     assert_eq!(
         everyone.error.as_deref(),
         Some("Connection reset by peer"),

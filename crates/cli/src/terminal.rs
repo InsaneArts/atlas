@@ -145,7 +145,7 @@ pub async fn monitor(
 #[derive(Clone)]
 struct Discovery {
     record: Option<std::path::PathBuf>,
-    helper: u32,
+    helper: Option<u32>,
 }
 
 impl Discovery {
@@ -155,7 +155,11 @@ impl Discovery {
                 .output_dir()
                 .ok()
                 .map(|output| output.join(viewer::MENUBAR_RECORD)),
-            helper: client.transport.peer_uid,
+            helper: client
+                .link
+                .socket()
+                .ok()
+                .map(|transport| transport.peer_uid),
         }
     }
 }
@@ -168,7 +172,7 @@ async fn shared(client: &Client) -> Option<(String, Value)> {
 
 async fn discover(found: Discovery) -> Option<(String, Value)> {
     let record = found.record?;
-    let helper = found.helper;
+    let helper = found.helper?;
     tokio::task::spawn_blocking(move || {
         let found = viewer::read_record(&record)?;
         let port = viewer::recorded_port(&found)?;

@@ -45,9 +45,9 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
     assert_eq!(sandbox.apply(&first)["ok"], true);
     let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
     let mut client = crate::test_support::client(&sandbox.root);
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
-    fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+    fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let stage = stage_in(&sandbox.root, &plan.id);
     let helper = helper_name(nix::unistd::getuid().as_raw()).unwrap();
     let daemon = async {
@@ -274,8 +274,8 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
 async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
     let sandbox = Sandbox::new();
     let client = crate::test_support::client(&sandbox.root);
-    fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-    let daemon = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
+    fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+    let daemon = tokio::net::UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let _held = client.controller.acquire(false).unwrap();
 
     let stage = stage_in(&sandbox.root, &atlas_core::files::token());
@@ -705,7 +705,7 @@ async fn an_unfinished_rollback_retains_its_request_across_restart() {
         assert_eq!(&fs::read(path).unwrap(), bytes);
         assert_eq!(fs::read(&kept).unwrap(), b"helper edit");
         drop(helper);
-        fs::remove_file(&client.transport.path).unwrap();
+        fs::remove_file(&client.link.socket().unwrap().path).unwrap();
     }
 }
 

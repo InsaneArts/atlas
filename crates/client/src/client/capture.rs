@@ -253,7 +253,7 @@ impl Client {
         }
 
         self.look(&verified, async {
-            let reply = self.transport.call(&request).await?;
+            let reply = self.link.call(&request).await?;
             if reply["ok"] != true {
                 if reply["code"].is_string() {
                     return Err(atlas_core::transport::refusal(&reply));

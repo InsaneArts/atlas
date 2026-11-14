@@ -25,7 +25,6 @@ use atlas_core::{
         StopCameTo, StopReason, Stopped, job_name,
     },
     time::now_ms,
-    transport::Transport,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
@@ -723,7 +722,7 @@ impl Everyone {
 /// control the caller holds.
 pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     let request = json!({"op": "job", "action": "stop-all", "reason": reason});
-    stopped_every(client, client.transport.call(&request)).await
+    stopped_every(client, client.link.call(&request)).await
 }
 
 /// Whether the desktop's daemon may be listening, so a failed connection
@@ -818,11 +817,7 @@ where
 /// Single-job reads keep transport failures certain and refusals whole
 /// before decoding their operation-specific replies.
 async fn read_one(client: &Client, request: &Value) -> Result<Value> {
-    let reply = client
-        .transport
-        .call(request)
-        .await
-        .map_err(Error::certain)?;
+    let reply = client.link.call(request).await.map_err(Error::certain)?;
     if reply["ok"] == true {
         Ok(reply)
     } else {
@@ -864,10 +859,7 @@ pub(crate) async fn of_session(
 
 /// Every job as the helper shows it now, or why it cannot say.
 pub(crate) async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
-    let daemon = Transport {
-        timeout: Duration::from_secs(10),
-        ..client.transport.clone()
-    };
+    let daemon = client.link.clone().with_timeout(Duration::from_secs(10));
     let reply = daemon
         .call(&json!({"op": "job", "action": "show"}))
         .await

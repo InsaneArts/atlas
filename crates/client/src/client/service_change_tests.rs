@@ -1273,7 +1273,7 @@ async fn only_an_absent_daemon_directory_exempts_a_first_setup_from_checking_job
     let mut client = crate::test_support::client(directory.path());
     // First setup has already bootstrapped the shared executable.
     fs::write(&client.config.identity_probe, "installed executable").unwrap();
-    let daemon = client.transport.path.parent().unwrap();
+    let daemon = client.link.socket().unwrap().path.parent().unwrap();
     assert!(!daemon.exists());
     drop(client.service_change(false).await.unwrap());
 
@@ -1305,12 +1305,12 @@ async fn only_an_absent_daemon_directory_exempts_a_first_setup_from_checking_job
 async fn losing_the_socket_during_a_job_read_never_establishes_idle() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    std::fs::create_dir(client.transport.path.parent().unwrap()).unwrap();
+    std::fs::create_dir(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
     // Only the endpoint's disappearance matters; no server needs to run.
-    std::fs::write(&client.transport.path, "endpoint").unwrap();
+    std::fs::write(&client.link.socket().unwrap().path, "endpoint").unwrap();
     let error = client
         .require_jobs_idle(async {
-            std::fs::remove_file(&client.transport.path).unwrap();
+            std::fs::remove_file(&client.link.socket().unwrap().path).unwrap();
             Err(Error::new(Code::Io, "The daemon shut down during the read"))
         })
         .await

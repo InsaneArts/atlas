@@ -735,8 +735,8 @@ async fn frames_asked_together_share_one_capture_that_ends_in_time() {
     });
 
     let mut client = client(dir.path());
-    client.transport.path = socket;
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    client.link.socket_mut().path = socket;
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
     let (_, viewer) = bind(client, 0, None).await.unwrap();
 
     let wall_started = std::time::Instant::now();
@@ -2656,8 +2656,8 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             let mut client = atlas_client::test_support::client(directory.path());
             client.host_session = own.clone();
             client.controller = client.controller.labelled(own.as_ref());
-            client.transport.peer_uid = nix::unistd::getuid().as_raw();
-            client.input_peer_uid = Some(client.transport.peer_uid);
+            client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+            client.input_peer_uid = Some(client.link.socket().unwrap().peer_uid);
             std::fs::write(&client.config.identity_probe, b"installed build").unwrap();
             let build = client.installed_build().unwrap();
             let other = recovery_session("worker");
@@ -2690,8 +2690,8 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             let pending = client.controller.pending().unwrap();
             assert_eq!(pending.len(), 1);
 
-            std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
-            let daemon = UnixListener::bind(&client.transport.path).unwrap();
+            std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
+            let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
             let mut input = UnixListener::bind(&client.config.input_socket).unwrap();
             let previous_pid = i32::MAX as u32;
             assert!(!atlas_client::test_support::process_exists(previous_pid));

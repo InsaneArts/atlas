@@ -9,7 +9,6 @@ use atlas_core::{
     error::{Code, Error, Result},
     protocol::JobReply,
     session::{HOLD, has_capability},
-    transport::Transport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -56,10 +55,7 @@ impl Client {
     /// jobs, has none to end.
     async fn end_jobs_for_stop(&self) -> (Option<Value>, Option<String>) {
         // The daemon, answering within two seconds.
-        let daemon = Transport {
-            timeout: Duration::from_secs(2),
-            ..self.transport.clone()
-        };
+        let daemon = self.link.clone().with_timeout(Duration::from_secs(2));
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
         let unconfirmed = || {
             (

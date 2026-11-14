@@ -207,9 +207,12 @@ fn keep_pipe(
                 _ = tick.tick() => {}
             }
             let client = viewer.client();
-            let same = |serving: &Arc<Client>| {
-                serving.transport.peer_uid == client.transport.peer_uid
-                    && serving.transport.path == client.transport.path
+            let same = |serving: &Arc<Client>| match (serving.link.socket(), client.link.socket()) {
+                (Ok(serving), Ok(client)) => {
+                    serving.peer_uid == client.peer_uid && serving.path == client.path
+                }
+                (Err(_), Err(_)) => serving.desktop().id() == client.desktop().id(),
+                _ => false,
             };
             if running.as_ref().is_some_and(|(serving, _)| same(serving)) {
                 continue;

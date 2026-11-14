@@ -721,7 +721,7 @@ async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code(
         .tempdir_in("/tmp")
         .unwrap();
     let mut client = Client::new(config(dir.path())).unwrap();
-    client.transport.peer_uid = current_uid();
+    client.link.socket_mut().peer_uid = current_uid();
     let listener = UnixListener::bind(&client.config.socket_path).unwrap();
     let mut hello = status();
     hello["user"]["uid"] = json!(client.config.helper_uid);
@@ -770,7 +770,7 @@ async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_befo
         .tempdir_in("/tmp")
         .unwrap();
     let mut client = Client::new(config(dir.path())).unwrap();
-    client.transport.peer_uid = current_uid();
+    client.link.socket_mut().peer_uid = current_uid();
     let listener = UnixListener::bind(&client.config.socket_path).unwrap();
     let mut hello = status();
     hello["user"]["uid"] = json!(client.config.helper_uid);

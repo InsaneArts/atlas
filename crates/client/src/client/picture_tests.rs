@@ -546,12 +546,7 @@ async fn a_frame_sends_its_cancel_and_reads_the_daemons_answer() {
     cancel.send(()).unwrap();
     let picture = helper
         .serve(
-            frame(
-                client.transport.clone(),
-                epoch(),
-                std::process::id(),
-                cancelled,
-            ),
+            frame(client.link.clone(), epoch(), std::process::id(), cancelled),
             |request| panic!("nothing else is asked: {request}"),
         )
         .await;

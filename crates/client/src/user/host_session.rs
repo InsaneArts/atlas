@@ -23,5 +23,5 @@ pub(crate) async fn verified_by_user(
         }
     }
     let request = json!({"op": "host-session", "claims": claims});
-    HostSession::verify_with(local, &claims, client.transport.call(&request)).await
+    HostSession::verify_with(local, &claims, client.link.call(&request)).await
 }

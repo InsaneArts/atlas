@@ -476,10 +476,10 @@ async fn a_stop_still_settling_at_its_deadline_is_unconfirmed() {
 async fn only_the_daemon_that_ran_the_stream_can_confirm_its_drain() {
     let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = crate::test_support::client(directory.path());
-    client.transport.peer_uid = nix::unistd::getuid().as_raw();
-    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
     // This process answers, but the stream was another daemon's.
-    let listener = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
+    let listener = tokio::net::UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let (socket, producer) = UnixStream::pair().unwrap();
     drop(producer);
     let mut stream = confirming(socket, &epoch());

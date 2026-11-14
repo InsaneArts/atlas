@@ -9,13 +9,14 @@ repository.workspace = true
 
 [features]
 # Helpers and hooks for the tests of crates above; never in a shipped build.
-test-support = ["atlas-control/test-support", "atlas-core/test-support", "nix/event", "nix/socket"]
+test-support = ["atlas-control/test-support", "atlas-core/test-support", "atlas-session/test-support", "nix/event", "nix/socket"]
 
 [dependencies]
 atlas-control.workspace = true
 atlas-core.workspace = true
 atlas-daemon.workspace = true
 atlas-native.workspace = true
+atlas-session.workspace = true
 base64.workspace = true
 fs2.workspace = true
 libc.workspace = true
@@ -34,6 +35,7 @@ atlas-control = { workspace = true, features = ["test-support"] }
 atlas-core = { workspace = true, features = ["test-support"] }
 atlas-daemon = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
+atlas-session = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["event", "socket"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread", "test-util"] }
 

@@ -47,8 +47,8 @@ async fn a_window_read_keeps_its_deadline_and_never_leaves_an_uncertain_mutation
         .serve(client.verify(), |_| panic!("only identity is read"))
         .await
         .unwrap();
-    client.transport.path = directory.path().join("waiting.sock");
-    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    client.link.socket_mut().path = directory.path().join("waiting.sock");
+    let listener = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
     let waiting = async {
         let (mut peer, _) = listener.accept().await.unwrap();
         let mut request = Vec::new();

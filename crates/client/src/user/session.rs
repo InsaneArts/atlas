@@ -21,7 +21,7 @@ pub(crate) async fn session_proof_by_command(
         "argv": [command, "session-info"],
         "timeoutMs": 3000,
     });
-    let reply = client.transport.call(&request).await?;
+    let reply = client.link.call(&request).await?;
     if reply["ok"] != true || reply["exitCode"] != 0 || reply["timedOut"] != false {
         return Err(Error::new(
             Code::Identity,
@@ -54,7 +54,7 @@ pub(crate) async fn user_gone(
             .flatten()
             == Some(true)
     };
-    let answers = || async { client.transport.call(&json!({"op": "hello"})).await.is_ok() };
+    let answers = || async { client.link.call(&json!({"op": "hello"})).await.is_ok() };
 
     crate::client::session::gone_within(
         looked,

@@ -295,7 +295,7 @@ fn unobserved_job() -> Value {
 
 async fn read(client: &Client, argv: &[&str]) -> Option<String> {
     let reply = client
-        .transport
+        .link
         .call(&json!({"op": "run", "argv": argv, "timeoutMs": 3000}))
         .await
         .ok()?;

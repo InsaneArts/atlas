@@ -3,6 +3,7 @@
 //! whose conditions a test sets. It is the start of the conformance kit
 //! every kind of desktop passes.
 pub mod link;
+pub mod serve;
 
 use link::Tasks;
 

@@ -409,26 +409,28 @@ impl Client {
     }
 
     /// Where `mutation` goes: the input service for input, and the helper
-    /// daemon for everything else.
-    pub(super) fn transport_for(&self, mutation: &Mutation<'_>) -> Transport {
-        match mutation {
+    /// daemon for everything else. Changes reach the helper login's socket
+    /// only: a machine desktop takes them once it keeps their records.
+    pub(super) fn transport_for(&self, mutation: &Mutation<'_>) -> Result<Transport> {
+        let daemon = self.link.socket()?;
+        Ok(match mutation {
             Mutation::Input { .. } => self.input_transport(),
             // A long command's reply comes after it ends, and after the
             // helper has stopped whatever it left running.
             Mutation::Run { timeout, .. } => {
-                let mut transport = self.transport.clone();
+                let mut transport = daemon.clone();
                 transport.timeout = transport.timeout.max(*timeout + RUN_MARGIN);
                 transport
             }
             Mutation::JobStart { .. }
             | Mutation::JobStop { .. }
             | Mutation::Restart
-            | Mutation::Logout { .. } => self.transport.clone(),
-        }
+            | Mutation::Logout { .. } => daemon.clone(),
+        })
     }
 
     async fn connect(&self, mutation: &Mutation<'_>) -> Result<transport::Pending> {
-        let transport = self.transport_for(mutation);
+        let transport = self.transport_for(mutation)?;
         transport
             .connect()
             .await
@@ -551,7 +553,7 @@ impl Client {
             | Mutation::Restart
             | Mutation::Logout { .. } => {}
         }
-        let mut transport = self.transport_for(mutation);
+        let mut transport = self.transport_for(mutation).ok()?;
         transport.timeout = OUTCOME_WAIT;
         let answer = transport
             .call(&json!({"op": "outcome", "change": change}))

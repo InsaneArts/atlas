@@ -2,5 +2,6 @@
 //! the journal of held input, plus one administrator approval.
 
 pub mod approval;
+pub mod keychain;
 pub mod native;
 pub mod peer;

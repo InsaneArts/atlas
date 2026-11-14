@@ -7,7 +7,10 @@
 //! one already begun has ended. A daemon that answers neither in time is
 //! left, and the input goes then too.
 use super::{Actor, Client, live::read_header};
-use crate::before::{self, Raw};
+use crate::{
+    before::{self, Raw},
+    link::Link,
+};
 use atlas_control::Visible;
 use atlas_core::{
     actions::Action,
@@ -15,7 +18,6 @@ use atlas_core::{
     protocol::SessionPin,
     screen::elements::Element,
     session::InputEpoch,
-    transport::Transport,
 };
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -103,7 +105,7 @@ impl Client {
         }
         let (cancel, cancelled) = oneshot::channel();
         let task = tokio::spawn(frame(
-            self.transport.clone(),
+            self.link.clone(),
             epoch.clone(),
             capture_pid,
             cancelled,
@@ -135,7 +137,7 @@ impl Client {
             let epoch = &verified.session().epoch;
             let (_cancel, cancelled) = oneshot::channel();
             frame(
-                self.transport.clone(),
+                self.link.clone(),
                 epoch.input_epoch(),
                 epoch.capture_pid,
                 cancelled,
@@ -215,7 +217,7 @@ impl Client {
             // Never cancelled: nothing waits for this picture but its time.
             let (_keep_open, cancelled) = oneshot::channel();
             frame(
-                self.transport.clone(),
+                self.link.clone(),
                 epoch.input_epoch(),
                 epoch.capture_pid,
                 cancelled,
@@ -273,17 +275,18 @@ impl Client {
     }
 }
 
-/// One raw frame from the verified helper daemon `daemon` on `transport`,
+/// One raw frame from the verified helper daemon `daemon` on `link`,
 /// proved to come from the session and display `epoch` names. Once
 /// `cancelled` is sent, the daemon is asked to cancel it, and this ends
 /// with the frame, should it come first, or the daemon's answer.
 async fn frame(
-    transport: Transport,
+    link: Link,
     epoch: InputEpoch,
     daemon: u32,
     cancelled: oneshot::Receiver<()>,
 ) -> Result<Raw> {
-    let lane = transport
+    let lane = link
+        .socket()?
         .lane(daemon, tokio::time::Instant::now() + WAIT)
         .await?;
     let Some(mut socket) = lane else {

@@ -193,9 +193,12 @@ impl LiveStream {
         let high_res = offers(RGB_STREAM_HIGH_RES);
         let limit = if high_res { limit } else { limit.min(1600) };
         let epoch = verified.session.epoch.clone();
-        let lane = tokio::time::timeout(DEADLINE, client.transport.lane(epoch.capture_pid, setup))
-            .await
-            .map_err(|_| invalid("Preview connection timed out"))??;
+        let lane = tokio::time::timeout(
+            DEADLINE,
+            client.link.socket()?.lane(epoch.capture_pid, setup),
+        )
+        .await
+        .map_err(|_| invalid("Preview connection timed out"))??;
         let Some(socket) = lane else {
             return Err(Error::new(
                 Code::Identity,
@@ -665,7 +668,7 @@ async fn drain_query(
     query: &str,
     until: tokio::time::Instant,
 ) -> Result<Value> {
-    let Some(mut socket) = client.transport.lane(daemon, until).await? else {
+    let Some(mut socket) = client.link.socket()?.lane(daemon, until).await? else {
         return Err(Error::new(
             Code::Identity,
             "The drain answer did not come from the helper daemon that ran the stream",

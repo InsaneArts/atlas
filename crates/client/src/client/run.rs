@@ -261,7 +261,7 @@ impl Client {
     /// The reply comes after the command ends, as for any other run.
     async fn run_unrecorded(&self, mutation: &Mutation<'_>) -> Result<Value> {
         let reply = self
-            .transport_for(mutation)
+            .transport_for(mutation)?
             .call(&mutation.request())
             .await?;
         mutation.validate(&reply)?;

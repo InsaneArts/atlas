@@ -52,9 +52,8 @@ impl Client {
                 None => self.verify().await?.pin()?,
             };
             let request = json!({"op": "windows", "dock": dock, "session": pin});
-            let mut transport = self.transport.clone();
-            transport.timeout = limit;
-            window_list(transport.call(&request).await?)
+            let link = self.link.clone().with_timeout(limit);
+            window_list(link.call(&request).await?)
         };
         read.await.map_err(Error::certain)
     }
