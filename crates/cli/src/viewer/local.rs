@@ -116,6 +116,19 @@ pub(crate) fn local_checked(output: &Path, port: u16) -> Result<Option<String>> 
     }
 }
 
+/// The private address of the menu bar's viewer, when it runs, serves
+/// this version and keeps a feed of what changes. It blocks for up to a
+/// second: call it off the async runtime.
+pub(crate) fn serving_events(output: &Path, port: u16) -> Option<String> {
+    let (running, identity) = identified(&output.join(MENUBAR_RECORD), port)?;
+    let events = identity["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities.iter().any(|capability| capability == "events"));
+    (compatible(&identity) && events)
+        .then(|| address(&running).map(str::to_owned))
+        .flatten()
+}
+
 /// What the local viewer at `url` serves at `route`, read within `deadline`
 /// and at most `limit` bytes.
 pub(crate) fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Vec<u8>> {

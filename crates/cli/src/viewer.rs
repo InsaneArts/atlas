@@ -25,7 +25,7 @@ pub(crate) use app::{launched_url, open_viewer};
 pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, local_checked,
-    post_local, process, read_record, recorded, recorded_port, running,
+    post_local, process, read_record, recorded, recorded_port, running, serving_events,
 };
 pub(crate) use reads::{Named, activity_of};
 pub(crate) use terminal::{TerminalFrames, TerminalService};

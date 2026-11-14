@@ -8,7 +8,11 @@
 //! The menu bar's viewer answers when it runs: it knows who holds control
 //! and shares one capture among everyone watching, and reading it is what
 //! Atlas.app's own reading does (it may start input once the helper logs
-//! in). Otherwise the helper is read directly.
+//! in). Otherwise the helper is read directly. While the menu bar keeps a
+//! feed of what changes, the status is read when the feed says so, rather
+//! than whenever the activity log moves.
+mod follow;
+
 use atlas_client::{
     client::Client,
     overview::{READ_DEADLINE, Reading, State},
@@ -34,6 +38,11 @@ const TICK: Duration = Duration::from_millis(300);
 const SOONEST: Duration = Duration::from_secs(1);
 /// How often the status is read when the log has not changed.
 const READ_EVERY: Duration = Duration::from_secs(5);
+/// How often the status is read regardless while the feed is followed.
+const FEED_READ_EVERY: Duration = Duration::from_secs(30);
+/// How long a status read the feed asked for waits after each one that got
+/// no answer: a moment, then longer.
+const RETRIES: [Duration; 3] = [SOONEST, Duration::from_secs(2), Duration::from_secs(5)];
 /// After this long with nothing to say, a blank line shows it still runs.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 /// How often the screen is kept while an agent works or the person has
@@ -90,6 +99,10 @@ pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: boo
     // is passed on, for the pane that shows "this session".
     let own = HostSession::from_env().map(|session| session.key().clone());
     let mut watch = Watch::new(frames).for_session(own);
+    // One status alone needs no feed.
+    if !once {
+        watch = watch.following(follow::follow(output.clone(), port));
+    }
 
     let stop = stopped();
     tokio::pin!(stop);
@@ -162,6 +175,11 @@ struct Watch {
     /// The host session the watch runs for: other sessions' host ids are
     /// never passed on.
     own: Option<Key>,
+    /// The menu bar's feed, when followed; what it had said when the status
+    /// was last read; and the reads it asked for since that got no answer.
+    following: Option<std::sync::Arc<follow::Following>>,
+    read_told: u64,
+    unanswered: usize,
 }
 
 impl Watch {
@@ -176,7 +194,16 @@ impl Watch {
             kept: None,
             last_id: 0,
             own: None,
+            following: None,
+            read_told: 0,
+            unanswered: 0,
         }
+    }
+
+    /// This watch, reading the status when `following` says to.
+    fn following(mut self, following: std::sync::Arc<follow::Following>) -> Self {
+        self.following = Some(following);
+        self
     }
 
     /// This watch, passing on only `own` session's host id.
@@ -193,10 +220,22 @@ impl Watch {
         if self.read_due(mark, now) {
             self.log = mark;
             self.read_at = Some(now);
+            // What the feed says while this read runs asks for another.
+            let told = self
+                .following
+                .as_ref()
+                .map_or(0, |following| following.told());
 
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
-            if let Some((mut status, source)) = read_typed(client, output, port).await {
+            let read = read_typed(client, output, port).await;
+            if read.is_some() {
+                self.read_told = told;
+                self.unanswered = 0;
+            } else {
+                self.unanswered += 1;
+            }
+            if let Some((mut status, source)) = read {
                 self.add_own_session(client, &mut status).await;
                 if status.state == State::NotReady {
                     self.forget_frame();
@@ -240,14 +279,22 @@ impl Watch {
         }
     }
 
-    /// Whether to read the status now: soon after the log changed, and
-    /// every so often regardless.
+    /// Whether to read the status now: soon after the feed said something,
+    /// or while it is not followed, soon after the log changed; and every so
+    /// often regardless. A read that got no answer is tried again, a little
+    /// later each time.
     fn read_due(&self, mark: Mark, now: Instant) -> bool {
         let Some(read_at) = self.read_at else {
             return true;
         };
         let since = now.saturating_duration_since(read_at);
-        (mark != self.log && since >= SOONEST) || since >= READ_EVERY
+        match self.following.as_ref().filter(|following| following.live()) {
+            Some(following) => {
+                let retry = RETRIES[self.unanswered.min(RETRIES.len() - 1)];
+                (following.told() != self.read_told && since >= retry) || since >= FEED_READ_EVERY
+            }
+            None => (mark != self.log && since >= SOONEST) || since >= READ_EVERY,
+        }
     }
 
     /// The line for `status`, when it says something the last one did not.

@@ -529,3 +529,87 @@ async fn an_own_session_uses_the_decoded_key_instead_of_the_projection() {
         })
     );
 }
+
+#[test]
+fn while_the_feed_is_followed_the_status_is_read_when_it_says_so() {
+    let start = Instant::now();
+    let following = std::sync::Arc::new(follow::Following::default());
+    following.take(None, &json!({"reset": {"feed": "f", "head": 0}}));
+    let mut watch = Watch::new(None).following(following.clone());
+    watch.read_at = Some(start);
+    watch.read_told = following.told();
+    watch.log = mark(1);
+    let at = |seconds: f64| start + Duration::from_secs_f64(seconds);
+
+    assert!(
+        !watch.read_due(mark(2), at(5.0)),
+        "the log alone says nothing"
+    );
+    assert!(watch.read_due(mark(1), at(30.0)), "now and then regardless");
+
+    following.take(
+        Some(("f".to_owned(), 0)),
+        &json!({"events": [{"feed": "f", "seq": 1, "kind": "status"}]}),
+    );
+    assert!(
+        !watch.read_due(mark(1), at(0.5)),
+        "a moment after the last read"
+    );
+    assert!(watch.read_due(mark(1), at(1.0)));
+
+    watch.unanswered = 1;
+    assert!(
+        !watch.read_due(mark(1), at(1.0)),
+        "longer after one went unanswered"
+    );
+    assert!(watch.read_due(mark(1), at(2.0)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_menu_bar_that_keeps_a_feed_is_followed() {
+    use axum::{Json, Router, http::Uri, routing::get};
+
+    let dir = tempfile::tempdir().unwrap();
+    let client = atlas_client::test_support::client_in(dir.path());
+    let output = client.output_dir().unwrap().to_owned();
+    fs::create_dir_all(&output).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/viewer/");
+    fs::write(
+        output.join(crate::viewer::MENUBAR_RECORD),
+        json!({"url": url, "pid": std::process::id()}).to_string(),
+    )
+    .unwrap();
+    let app = Router::new()
+        .route(
+            "/viewer/",
+            get(|| async {
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id(),
+                    "protocol": 1, "capabilities": ["events"]}))
+            }),
+        )
+        .route(
+            "/viewer/events.json",
+            get(|uri: Uri| async move {
+                if uri.query().is_some_and(|query| query.contains("feed=")) {
+                    // Nothing new: the reader waits.
+                    std::future::pending::<()>().await;
+                }
+                Json(json!({"ok": true, "reset": {"feed": "f", "head": 3}}))
+            }),
+        );
+    let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let following = follow::follow(output, port);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !following.live() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the feed is followed");
+
+    assert_eq!(following.told(), 1, "a reset reads everything again, once");
+    serving.abort();
+}
