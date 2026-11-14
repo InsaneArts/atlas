@@ -34,3 +34,41 @@ impl fmt::Debug for PeerKey {
         write!(formatter, "PeerKey({})", &self.fingerprint()[..16])
     }
 }
+
+impl serde::Serialize for PeerKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let hex: String = self.0.iter().map(|byte| format!("{byte:02x}")).collect();
+        serializer.serialize_str(&hex)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PeerKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Self::from_hex(&hex)
+            .ok_or_else(|| serde::de::Error::custom("not a key: 64 lowercase hexadecimal digits"))
+    }
+}
+
+impl PeerKey {
+    /// The key written as 64 lowercase hexadecimal digits.
+    #[must_use]
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return None;
+        }
+        let mut bytes = [0; 32];
+        for (at, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[at * 2..at * 2 + 2], 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
+}
+
+#[cfg(test)]
+#[path = "key_tests.rs"]
+mod tests;

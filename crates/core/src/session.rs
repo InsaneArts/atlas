@@ -4,6 +4,7 @@
 pub mod diagnosis;
 mod epoch;
 pub mod key;
+pub mod paired;
 
 pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
