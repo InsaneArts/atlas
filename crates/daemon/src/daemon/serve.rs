@@ -35,10 +35,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{
-        UnixListener, UnixStream,
-        unix::{OwnedReadHalf, OwnedWriteHalf},
-    },
+    net::{UnixListener, UnixStream},
     signal::unix::{Signal, SignalKind, signal},
     sync::{Mutex, Notify, Semaphore, mpsc, oneshot, watch},
     task::{Id, JoinError, JoinHandle, JoinSet},
@@ -65,6 +62,32 @@ const CONSOLE_CHECK: Duration = Duration::from_secs(1);
 /// The file beside the socket that records the screen recorder's one
 /// restart after an update.
 const RESTARTED_AFTER_UPDATE: &str = "recorder-restarted-after-update";
+
+/// A connection's reading half, whatever carries it: the helper login's
+/// socket, or a lane of a machine's session.
+pub(super) type Reader = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+
+/// A connection's writing half, whatever carries it.
+pub(super) type Writer = Box<dyn Outgoing>;
+
+/// What a connection writes to.
+pub(super) trait Outgoing: AsyncWrite + Unpin + Send {
+    /// Make room for `bytes` to go at once, where the connection can.
+    fn make_room(&self, _bytes: usize) {}
+}
+
+impl Outgoing for tokio::net::unix::OwnedWriteHalf {
+    /// The socket's own small buffer would hand a large write over in
+    /// thousands of turns. Without the room it goes all the same, only
+    /// slower.
+    fn make_room(&self, bytes: usize) {
+        let _ =
+            nix::sys::socket::setsockopt(self.as_ref(), nix::sys::socket::sockopt::SndBuf, &bytes);
+    }
+}
+
+/// A lane of a session: its bulk credit, not a buffer, paces what it sends.
+impl<S: tokio::io::AsyncWrite + Unpin + Send> Outgoing for tokio::io::WriteHalf<S> {}
 
 type Connections = HashMap<Id, watch::Receiver<ConnectionPhase>>;
 
@@ -764,9 +787,33 @@ pub(crate) async fn handle(
         .and_then(|pid| atlas_core::process::info(pid).ok().flatten())
         .filter(|info| info.uid == peer.uid() && !info.zombie)
         .map(|info| info.instance);
-    let (mut reader, mut writer) = stream.into_split();
+    let (reader, writer) = stream.into_split();
+    let asker = Asker {
+        controller,
+        host: Some((caller, peer.uid())),
+    };
+    answer(Box::new(reader), Box::new(writer), daemon, asker, phase).await
+}
 
-    let admitted = admit(&mut reader, &daemon, controller).await;
+/// Who asked, as their connection showed it.
+pub(super) struct Asker {
+    /// Whether it is the controller, not the helper's own processes.
+    pub(super) controller: bool,
+    /// The process that connected, as it was when it did, and its account:
+    /// what a host session is verified against. None where the connection
+    /// cannot show it.
+    pub(super) host: Option<(Option<atlas_core::process::Instance>, u32)>,
+}
+
+/// Serve the one request on `reader`, answering on `writer`.
+pub(super) async fn answer(
+    mut reader: Reader,
+    mut writer: Writer,
+    daemon: Arc<Daemon>,
+    asker: Asker,
+    phase: watch::Sender<ConnectionPhase>,
+) -> Result<()> {
+    let admitted = admit(&mut reader, &daemon, asker.controller).await;
     phase.send_replace(
         admitted
             .as_ref()
@@ -802,11 +849,17 @@ pub(crate) async fn handle(
             &query_id,
             stop_request,
         ),
-        Request::HostSession(claims) => tokio::task::spawn_blocking(move || {
-            atlas_core::host::verification::verify(&claims, caller, peer.uid())
-        })
-        .await
-        .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
+        Request::HostSession(claims) => match asker.host {
+            Some((caller, uid)) => tokio::task::spawn_blocking(move || {
+                atlas_core::host::verification::verify(&claims, caller, uid)
+            })
+            .await
+            .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
+            None => failure(
+                Code::Permission,
+                "A host session cannot be verified over this connection",
+            ),
+        },
         // The census waits for the jobs' lock, and the facts look up the
         // account and read the display: neither holds a runtime thread.
         Request::Hello => {
@@ -919,7 +972,7 @@ fn remember(remembering: Option<Remembering>, reply: &Value) {
 /// took, then the policy's own checks. A change those checks refuse is
 /// remembered as refused.
 async fn admit(
-    reader: &mut OwnedReadHalf,
+    reader: &mut Reader,
     daemon: &Daemon,
     controller: bool,
 ) -> std::result::Result<(Request, Policy, Option<Remembering>), (Value, bool)> {
@@ -976,7 +1029,7 @@ fn already_asked() -> Value {
 /// It is remembered as done only once it is: a handler cut while it writes
 /// did nothing, and remembers nothing.
 async fn acknowledge(
-    writer: &mut OwnedWriteHalf,
+    writer: &mut Writer,
     op: &str,
     remembering: Option<Remembering>,
     effect: impl FnOnce(),
@@ -1026,7 +1079,7 @@ async fn serve_run(
     argv: Vec<String>,
     timeout: Duration,
     policy: Policy,
-    connection: (OwnedReadHalf, OwnedWriteHalf, Option<Remembering>),
+    connection: (Reader, Writer, Option<Remembering>),
     phase: watch::Sender<ConnectionPhase>,
 ) -> Result<()> {
     let (mut handler, outcome) = oneshot::channel();
@@ -1087,7 +1140,7 @@ async fn run_registered(
     argv: &[String],
     timeout: Duration,
     policy: Policy,
-    (reader, mut writer, remembering): (&mut OwnedReadHalf, OwnedWriteHalf, Option<Remembering>),
+    (reader, mut writer, remembering): (&mut Reader, Writer, Option<Remembering>),
     phase: &watch::Sender<ConnectionPhase>,
     handler: &mut oneshot::Sender<Result<()>>,
 ) -> Result<()> {
@@ -1157,7 +1210,7 @@ async fn serve_read(
     daemon: &Daemon,
     request: ReadRequest,
     policy: Policy,
-    mut writer: OwnedWriteHalf,
+    mut writer: Writer,
 ) -> Result<()> {
     let screen = daemon.screen;
     let epoch = match screen.epoch() {

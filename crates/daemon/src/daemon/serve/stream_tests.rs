@@ -100,7 +100,14 @@ fn connection_from(
     let (reader, writer) = server.into_split();
     (
         client,
-        tokio::spawn(serve(daemon, reader, writer, side, pin(), backend)),
+        tokio::spawn(serve(
+            daemon,
+            Box::new(reader),
+            Box::new(writer),
+            side,
+            pin(),
+            backend,
+        )),
     )
 }
 

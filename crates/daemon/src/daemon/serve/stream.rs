@@ -2,6 +2,7 @@
 //! only after the controller has checked its independent session proof and
 //! sent READY. The next capture cannot start until delivery has completed.
 use super::Daemon;
+use super::{Reader, Writer};
 use atlas_core::{
     error::{Code, Error, Result},
     protocol::{CaptureBackend, SessionPin, refused},
@@ -19,10 +20,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::unix::{OwnedReadHalf, OwnedWriteHalf},
-};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// A stalled terminal must not hold raw pixels waiting for later playback.
 const WRITE: Duration = Duration::from_millis(200);
@@ -142,7 +140,19 @@ fn stopped() -> Error {
 
 /// Header length, JSON header, then exactly width*height*3 bytes for a
 /// successful frame; failures have no pixel body. No image codec or base64.
+/// A header with nothing after it goes at once, sent on a connection that
+/// holds what it is given, as a session's lane does.
 pub(super) async fn write_header(out: &mut (impl AsyncWrite + Unpin), value: &Value) -> Result<()> {
+    tokio::time::timeout(WRITE, async {
+        start_frame(out, value).await?;
+        out.flush().await.map_err(Error::from)
+    })
+    .await
+    .map_err(|_| stopped())?
+}
+
+/// A frame's header, its pixels to follow in the same deadline and flush.
+async fn start_frame(out: &mut (impl AsyncWrite + Unpin), value: &Value) -> Result<()> {
     let header = serde_json::to_vec(value)?;
     if header.len() > MAX_HEADER {
         return Err(Error::new(
@@ -150,12 +160,8 @@ pub(super) async fn write_header(out: &mut (impl AsyncWrite + Unpin), value: &Va
             "The live frame header is too large",
         ));
     }
-    tokio::time::timeout(WRITE, async {
-        out.write_all(&(header.len() as u32).to_be_bytes()).await?;
-        out.write_all(&header).await
-    })
-    .await
-    .map_err(|_| stopped())??;
+    out.write_all(&(header.len() as u32).to_be_bytes()).await?;
+    out.write_all(&header).await?;
     Ok(())
 }
 
@@ -268,8 +274,8 @@ fn capture(
 /// the action goes on only after every capture for it.
 pub(super) async fn one(
     daemon: Arc<Daemon>,
-    mut reader: OwnedReadHalf,
-    mut writer: OwnedWriteHalf,
+    mut reader: Reader,
+    mut writer: Writer,
     side: u32,
     pin: SessionPin,
 ) -> Result<()> {
@@ -321,13 +327,10 @@ pub(super) async fn one(
     };
     let header = json!({"ok": true, "width": shot.width, "height": shot.height,
         "scale": shot.scale, "session": proof, "daemonPID": std::process::id()});
-    // Room for the whole frame at once: its action waits for it, and the
-    // socket's own small buffer would hand it over in thousands of turns.
-    // Without that room it goes all the same, only slower.
-    let room = shot.rgb.len().saturating_add(MAX_HEADER).min(FRAME_ROOM);
-    let _ = nix::sys::socket::setsockopt(writer.as_ref(), nix::sys::socket::sockopt::SndBuf, &room);
+    // Room for the whole frame at once: its action waits for it.
+    writer.make_room(shot.rgb.len().saturating_add(MAX_HEADER).min(FRAME_ROOM));
     tokio::time::timeout(WRITE, async {
-        write_header(&mut writer, &header).await?;
+        start_frame(&mut writer, &header).await?;
         writer.write_all(&shot.rgb).await?;
         writer.flush().await?;
         Ok::<_, Error>(())
@@ -338,8 +341,8 @@ pub(super) async fn one(
 
 pub(super) async fn serve(
     daemon: Arc<Daemon>,
-    mut reader: OwnedReadHalf,
-    mut writer: OwnedWriteHalf,
+    mut reader: Reader,
+    mut writer: Writer,
     side: u32,
     pin: SessionPin,
     backend: CaptureBackend,
@@ -487,7 +490,7 @@ pub(super) async fn serve(
         // One deadline covers both header and pixels. The next READY is
         // required before the producer creates another frame.
         let delivered = tokio::time::timeout(WRITE, async {
-            write_header(&mut writer, &header).await?;
+            start_frame(&mut writer, &header).await?;
             writer.write_all(&shot.rgb).await?;
             writer.flush().await?;
             Ok::<_, Error>(())

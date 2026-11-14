@@ -145,7 +145,8 @@ async fn a_restart_cut_before_it_happened_is_not_remembered_as_done() {
     };
     assert!(filled > 0);
     assert_eq!(full.kind(), std::io::ErrorKind::WouldBlock);
-    let (_reader, mut writer) = UnixStream::from_std(server).unwrap().into_split();
+    let (_reader, writer) = UnixStream::from_std(server).unwrap().into_split();
+    let mut writer: Writer = Box::new(writer);
     let change = atlas_core::files::Token::parse(CHANGE).unwrap();
     let remembering = daemon.outcomes.begin(change);
     let restarted = AtomicBool::new(false);
@@ -2017,4 +2018,88 @@ async fn a_machine_closes_to_new_commands_only_on_its_own_screen() {
         "closed off its screen"
     );
     assert!(machine(|| true).close_commands().await, "on its own screen");
+}
+
+/// Answer `request` over a stream that is not the helper login's socket,
+/// as a lane of a machine's session is.
+async fn answered_elsewhere(request: &str) -> Value {
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let (reader, writer) = tokio::io::split(server);
+    let asker = Asker {
+        controller: true,
+        host: None,
+    };
+    let served = tokio::spawn(answer(
+        Box::new(reader),
+        Box::new(writer),
+        daemon(false),
+        asker,
+        watch::channel(ConnectionPhase::Refusal).0,
+    ));
+    let (reading, mut writing) = tokio::io::split(client);
+    writing
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let line = BufReader::new(reading)
+        .lines()
+        .next_line()
+        .await
+        .unwrap()
+        .unwrap();
+    served.await.unwrap().unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[tokio::test]
+async fn a_request_is_answered_over_any_stream_as_over_the_socket() {
+    let hello = answered_elsewhere(r#"{"op":"hello"}"#).await;
+    assert_eq!(hello["ok"], true);
+
+    let windows = answered_elsewhere(r#"{"op":"windows"}"#).await;
+    assert_eq!(windows["ok"], true);
+}
+
+#[tokio::test]
+async fn a_host_session_is_never_verified_where_the_connection_cannot_show_its_caller() {
+    let claims = r#"[{"host":"claude","id":"00000000-0000-4000-8000-000000000001","hint":null}]"#;
+    let reply = answered_elsewhere(&format!(r#"{{"op":"host-session","claims":{claims}}}"#)).await;
+
+    assert_eq!(reply["code"], "permission", "{reply}");
+}
+
+#[tokio::test]
+async fn a_stream_refusal_reaches_a_client_over_a_connection_that_holds_what_it_is_given() {
+    let (client, server) = tokio::io::duplex(1 << 16);
+    // A lane holds what it is given until flushed.
+    let (reader, writer) = tokio::io::split(tokio::io::BufWriter::new(server));
+    let asker = Asker {
+        controller: true,
+        host: None,
+    };
+    let served = tokio::spawn(answer(
+        Box::new(reader),
+        Box::new(writer),
+        daemon(true),
+        asker,
+        watch::channel(ConnectionPhase::Refusal).0,
+    ));
+    let (mut reading, mut writing) = tokio::io::split(client);
+    let request = json!({"op": "stream", "maxDimension": 320,
+        "session": {"securitySessionId": 42, "displayId": 7}});
+    writing
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+
+    let mut length = [0; 4];
+    tokio::time::timeout(Duration::from_secs(5), reading.read_exact(&mut length))
+        .await
+        .expect("the refusal was sent, not held")
+        .unwrap();
+    let mut header = vec![0; u32::from_be_bytes(length) as usize];
+    reading.read_exact(&mut header).await.unwrap();
+    let header: Value = serde_json::from_slice(&header).unwrap();
+    assert_eq!(header["code"], "on-console", "{header}");
+    served.await.unwrap().unwrap();
 }
