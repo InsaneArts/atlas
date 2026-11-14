@@ -13,6 +13,7 @@ mod busy;
 mod by_generation;
 mod commands;
 mod executor;
+pub mod executors;
 #[cfg(test)]
 mod faults;
 pub mod interrupt;
@@ -240,6 +241,9 @@ pub struct Controller {
     /// Which pending generations are commands agents started with `run`,
     /// beside the marker.
     commands: PathBuf,
+    /// Who carries out each pending change that is not the desktop's own
+    /// services'.
+    executors: PathBuf,
     /// Who started each of those commands, beside the marker.
     running: PathBuf,
     /// Which host session holds control right now, beside the lock.
@@ -305,6 +309,7 @@ impl Controller {
             label: None,
             causes: directory.join(format!("{name}.causes.json")),
             commands: directory.join(format!("{name}.commands.json")),
+            executors: directory.join(format!("{name}.executors.json")),
             running: directory.join(format!("{name}.running.json")),
             holder: directory.join(format!("{name}.holder.json")),
             waiting: directory.join(format!("{name}.waiting")),

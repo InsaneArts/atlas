@@ -1,0 +1,169 @@
+//! Who carries out each pending change: recovery settles the desktop's own
+//! services' changes and leaves every other executor's for its answer.
+use crate::{
+    executors::{self, Executor},
+    *,
+};
+use atlas_core::files::token;
+
+#[test]
+fn recovery_leaves_a_change_another_executor_carries_out_for_its_answer() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let own = controller.quarantine().unwrap();
+    let theirs = token();
+    let vms = controller.quarantine_by(&theirs, Executor::Vm).unwrap();
+    let own_generation = own.generation().to_owned();
+    drop(own);
+    drop(vms);
+
+    controller.clear().unwrap();
+
+    assert_eq!(controller.pending().unwrap(), std::slice::from_ref(&theirs));
+    assert!(!controller.pending().unwrap().contains(&own_generation));
+    // Its executor's answer settles it.
+    controller.clear_if(&theirs).unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+}
+
+#[test]
+fn a_change_the_desktops_own_services_carry_out_is_settled_by_recovery_as_before() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let generation = token();
+    drop(
+        controller
+            .quarantine_by(&generation, Executor::Input)
+            .unwrap(),
+    );
+
+    controller.clear().unwrap();
+
+    assert!(controller.pending().unwrap().is_empty());
+}
+
+#[test]
+fn an_executor_record_that_cannot_be_read_settles_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let generation = token();
+    drop(
+        controller
+            .quarantine_by(&generation, Executor::Guest)
+            .unwrap(),
+    );
+    std::fs::write(&controller.executors, b"{").unwrap();
+
+    assert!(controller.clear().is_err());
+    assert_eq!(controller.pending().unwrap(), [generation]);
+}
+
+#[test]
+fn a_marker_that_cannot_be_read_beside_another_executors_change_settles_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    drop(controller.quarantine_by(&token(), Executor::Guest).unwrap());
+    std::fs::write(&controller.marker, b"[").unwrap();
+
+    assert!(controller.clear().is_err());
+    assert!(controller.marker.exists());
+    assert!(!executors::read(&controller.executors).unwrap().is_empty());
+}
+
+#[test]
+fn a_damaged_executor_record_goes_once_nothing_is_pending_so_recovery_works_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let theirs = token();
+    drop(controller.quarantine_by(&theirs, Executor::Vm).unwrap());
+    std::fs::write(&controller.executors, b"{").unwrap();
+    assert!(controller.clear().is_err());
+
+    // Its executor answered: nothing is pending any more.
+    controller.clear_if(&theirs).unwrap();
+    drop(controller.quarantine().unwrap());
+
+    controller.clear().unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+}
+
+#[test]
+fn settling_the_last_change_again_keeps_the_markers_removal() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let generation = token();
+    drop(controller.quarantine_as(&generation).unwrap());
+    controller.clear_if(&generation).unwrap();
+
+    // Already gone, as after a removal a crash cut short: it is synced
+    // again, and a sync that fails says so.
+    crate::faults::fail_marker_sync();
+    assert!(controller.clear_if(&generation).is_err());
+    controller.clear_if(&generation).unwrap();
+    assert!(!controller.marker.exists());
+}
+
+#[test]
+fn settling_or_recording_beside_a_marker_that_cannot_be_read_keeps_another_executors_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let theirs = token();
+    drop(controller.quarantine_by(&theirs, Executor::Vm).unwrap());
+    std::fs::write(&controller.marker, b"[").unwrap();
+
+    controller.clear_if(&token()).unwrap();
+    drop(controller.quarantine_by(&token(), Executor::Guest).unwrap());
+
+    let named = executors::read(&controller.executors).unwrap();
+    assert_eq!(named.get(&theirs), Some(&Executor::Vm));
+    assert!(controller.clear().is_err());
+}
+
+#[test]
+fn a_damaged_executor_record_with_nothing_pending_never_blocks_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.make_directory().unwrap();
+    std::fs::write(&controller.executors, b"{").unwrap();
+
+    controller.clear().unwrap();
+
+    assert!(!controller.executors.exists());
+}
+
+#[test]
+fn a_change_that_would_make_the_record_too_large_to_read_is_refused_and_changes_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.make_directory().unwrap();
+    // As many other executors' changes as fit, nearly at the record's size.
+    let mut named = std::collections::BTreeMap::new();
+    while serde_json::to_vec(&named).unwrap().len() < 64 * 1024 - 40 {
+        named.insert(token(), Executor::Station);
+    }
+    let pending: Vec<&String> = named.keys().collect();
+    std::fs::write(&controller.marker, serde_json::to_vec(&pending).unwrap()).unwrap();
+    std::fs::write(&controller.executors, serde_json::to_vec(&named).unwrap()).unwrap();
+    let before = std::fs::read(&controller.executors).unwrap();
+
+    let refused = controller
+        .quarantine_by(&token(), Executor::Station)
+        .unwrap_err();
+
+    assert_eq!(refused.code, "busy");
+    assert_eq!(std::fs::read(&controller.executors).unwrap(), before);
+}
+
+#[test]
+fn a_damaged_executor_record_is_cleared_before_a_new_change_is_taken_with_nothing_pending() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    controller.make_directory().unwrap();
+    std::fs::write(&controller.executors, b"{").unwrap();
+
+    drop(controller.quarantine().unwrap());
+
+    assert!(!controller.executors.exists());
+    controller.clear().unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+}

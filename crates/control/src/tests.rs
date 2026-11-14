@@ -2,6 +2,7 @@
 //! claims, executor records and the viewer's lease. Commands agents started
 //! with `run` and the labels beside the lock and the marker have their own.
 mod commands;
+mod executors;
 mod notes;
 
 use super::*;

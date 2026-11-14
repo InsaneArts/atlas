@@ -8,6 +8,7 @@ use super::{
     by_generation::{self, ByGeneration},
     commands,
     executor::{EXECUTOR_WRITING, claim_executor_running},
+    executors::{self, Executor},
     notes::Note,
     remove_claim,
 };
@@ -290,7 +291,7 @@ impl Controller {
     ///
     /// Returns the failure to write the claim or its marker.
     pub fn quarantine_command(&self) -> Result<Pending> {
-        self.quarantine_marked(&token(), Mark::Command)
+        self.quarantine_marked(&token(), Mark::Command, None)
     }
 
     /// Record a pending mutation under a generation the caller chose, so it
@@ -304,11 +305,30 @@ impl Controller {
     /// Rejects invalid generation names and returns lock or marker-write failures. Registration
     /// alone never acknowledges an effect.
     pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
-        self.quarantine_marked(generation, Mark::Change)
+        self.quarantine_marked(generation, Mark::Change, None)
     }
 
-    /// [`Controller::quarantine_as`], recorded as `mark` says.
-    fn quarantine_marked(&self, generation: &str, mark: Mark) -> Result<Pending> {
+    /// [`Controller::quarantine_as`], for a change `executor` carries out:
+    /// one another executor carries out is named so before the marker names
+    /// it, and recovery leaves it for that executor's answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Controller::quarantine_as`], and when its executor cannot be
+    /// recorded.
+    pub fn quarantine_by(&self, generation: &str, executor: Executor) -> Result<Pending> {
+        let named = (!executor.local()).then_some(executor);
+        self.quarantine_marked(generation, Mark::Change, named)
+    }
+
+    /// [`Controller::quarantine_as`], recorded as `mark` says, its executor
+    /// named when it is not the desktop's own services.
+    fn quarantine_marked(
+        &self,
+        generation: &str,
+        mark: Mark,
+        executor: Option<Executor>,
+    ) -> Result<Pending> {
         let hold = self.interrupt.claim();
         let live = self
             .live(generation)
@@ -340,6 +360,11 @@ impl Controller {
         }
 
         let mut pending = pending(&self.marker)?;
+        // Nothing pending: a damaged executor record names nobody's change,
+        // and is cleared before a new one is taken.
+        if pending.is_empty() && executors::read(&self.executors).is_err() {
+            executors::forget(&self.executors)?;
+        }
         if !pending.iter().any(|entry| entry == generation) {
             pending.push(generation.to_owned());
         }
@@ -359,6 +384,11 @@ impl Controller {
                 )));
             }
             commands::mark(&self.commands, generation, &pending)?;
+        }
+        // Named before the marker names it, like a command's mark: a change
+        // whose executor cannot be named is never recorded.
+        if let Some(executor) = executor {
+            executors::name(&self.executors, generation, executor, &pending)?;
         }
         replace_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         if let Some(label) = &self.label {
@@ -420,9 +450,35 @@ impl Controller {
     /// remain pending even when other records are settled.
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
-        let running: Vec<String> = pending(&self.marker)?
+        // A change another executor carries out waits for its answer.
+        let listed = pending(&self.marker)?;
+        let executors = match executors::read(&self.executors) {
+            Ok(executors) => executors,
+            // Nothing pending: a damaged record names nobody's change.
+            Err(_) if listed.is_empty() => {
+                executors::forget(&self.executors)?;
+                ByGeneration::new()
+            }
+            Err(error) => return Err(error),
+        };
+        // A marker that cannot be read may name one of those: nothing is
+        // settled while another executor holds a change.
+        if listed.iter().any(|entry| entry == UNREADABLE)
+            && executors.values().any(|executor| !executor.local())
+        {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read while another executor holds one; nothing is settled.",
+            ));
+        }
+        let running: Vec<String> = listed
             .into_iter()
-            .filter(|generation| self.in_progress(generation))
+            .filter(|generation| {
+                self.in_progress(generation)
+                    || executors
+                        .get(generation)
+                        .is_some_and(|executor| !executor.local())
+            })
             .collect();
         let prefix = format!("{}.", self.name);
         let replacing = format!(".{prefix}");
@@ -462,6 +518,9 @@ impl Controller {
     /// Under the marker lock, prune ancillary records before publishing settlement.
     /// Lost labels are harmless; lost command marks conservatively become unknown.
     fn keep_pending(&self, pending: &[String]) -> Result<()> {
+        // Who carries out a change decides what recovery may settle, so a
+        // record that cannot be kept in step fails the settlement.
+        executors::keep(&self.executors, pending)?;
         let _ = by_generation::keep::<Key>(&self.causes, pending);
         let _ = commands::keep(&self.commands, pending);
         let _ = by_generation::keep::<Note>(&self.running, pending);
@@ -528,20 +587,33 @@ pub struct Snapshot {
     pub commands: usize,
 }
 
+/// What a marker that cannot be read names: an unknown outcome, pending.
+pub(super) const UNREADABLE: &str = "legacy-unknown";
+
 /// Pending generations in a marker; an unreadable one stays pending as unknown.
 pub(super) fn pending(marker: &Path) -> Result<Vec<String>> {
     match fs::read_to_string(marker) {
-        Ok(text) => {
-            Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
-        }
+        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec![UNREADABLE.into()])),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(context("Read pending marker", marker)(error)),
     }
 }
 
+/// Remove the marker, its last change settled, for good: its folder is
+/// synced, so a crash never brings a settled change back, nor leaves the
+/// station unsure whether it settled one it told a desktop it had.
 fn remove_marker(path: &Path) -> Result<()> {
+    // Gone already, its removal may not have been kept: kept again.
     match fs::remove_file(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => Ok(other?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        other => other?,
     }
+    #[cfg(test)]
+    if super::faults::marker_sync_fails() {
+        return Err(std::io::Error::other("the folder could not be synced").into());
+    }
+    if let Some(folder) = path.parent() {
+        File::open(folder)?.sync_all()?;
+    }
+    Ok(())
 }

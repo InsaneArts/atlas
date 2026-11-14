@@ -11,6 +11,9 @@ thread_local! {
     /// Set to the end of a record's name, the next replacement of that
     /// record on this thread stops before its rename.
     static INTERRUPT_REPLACE: Cell<Option<&'static str>> = const { Cell::new(None) };
+
+    /// Set, the next sync of the marker's folder on this thread fails.
+    static FAIL_MARKER_SYNC: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Stop the next removal of a claim on this thread once its claim file is
@@ -22,6 +25,17 @@ pub(super) fn interrupt_claim_removal() {
 /// Whether the removal of a claim under way stops here, clearing the fault.
 pub(super) fn claim_removal_stops() -> bool {
     INTERRUPT_CLAIM_REMOVAL.with(|interrupt| interrupt.replace(false))
+}
+
+/// Fail the next sync of the marker's folder on this thread.
+pub(super) fn fail_marker_sync() {
+    FAIL_MARKER_SYNC.with(|fail| fail.set(true));
+}
+
+/// Whether the sync of the marker's folder under way fails, clearing the
+/// fault.
+pub(super) fn marker_sync_fails() -> bool {
+    FAIL_MARKER_SYNC.with(|fail| fail.replace(false))
 }
 
 /// Stop the next replacement of the record whose name ends with `name`
