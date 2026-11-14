@@ -340,6 +340,21 @@ struct PanelControllerTests {
     #expect(service.frameCalls == pictures, "a closed panel reads no pictures")
   }
 
+  @Test("while the service's feed is followed the status is read again when it says so, not every pause")
+  func theFeedWakesTheStatusReading() async throws {
+    let service = ScriptedService()
+    service.changes.follow(true)
+    let clock = ManualClock()
+    let controller = PanelController.scripted(service, clock: clock)
+    controller.watch(open: false)
+    try await clock.untilSleeping(for: ServiceChanges.fallback, "the closed panel never waited on the feed")
+    #expect(service.statusCalls == 1)
+
+    service.changes.tell([.asks])
+    try await settle("the feed never woke the status reading") { service.statusCalls == 2 }
+    controller.watch(open: false)
+  }
+
   @Test(
     "pausing or closing with a capture outstanding drops its late reply and reads no more pictures, and reopening reads at once",
     arguments: [true, false]

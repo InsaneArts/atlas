@@ -5,6 +5,9 @@ import Foundation
 ///
 /// ``ViewerClient`` is the live conformer; the app's tests script their own.
 public protocol ViewerService: Sendable {
+  /// What changed, as the service's feed says it: readers wait on it between readings.
+  var changes: ServiceChanges { get }
+
   /// Reads the helper's status.
   ///
   /// - Returns: The status as the service reports it, every missing field at its safe default.

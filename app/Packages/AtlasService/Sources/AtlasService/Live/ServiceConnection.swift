@@ -10,6 +10,12 @@ public final class ServiceConnection: ViewerService {
     initialState: (nil, nil, .detached)
   )
 
+  /// What the attached start's feed says changed.
+  public let changes = ServiceChanges()
+
+  /// Following the attached start's feed, while attached.
+  private let following = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+
   /// A connection not attached yet.
   public init() {}
 
@@ -20,6 +26,19 @@ public final class ServiceConnection: ViewerService {
   ///   - incarnation: The service start it reaches.
   public func attach(_ client: ViewerClient, incarnation: String) {
     state.withLock { $0 = (client, incarnation, .detached) }
+    let changes = changes
+    let follow = Task {
+      await ServiceFollowing.follow(
+        { (position) async throws(ServiceError) in try await client.events(after: position) },
+        into: changes,
+        clock: ContinuousClock()
+      )
+    }
+    let followed = following.withLock { following in
+      defer { following = follow }
+      return following
+    }
+    followed?.cancel()
   }
 
   /// Stops sending: the service is gone until the app attaches again, and each request meanwhile fails with `why`.
@@ -30,6 +49,11 @@ public final class ServiceConnection: ViewerService {
       state.current = nil
       state.why = why
     }
+    following.withLock { following in
+      following?.cancel()
+      following = nil
+    }
+    changes.follow(false)
   }
 
   /// The service start the app is attached to; nil while detached.

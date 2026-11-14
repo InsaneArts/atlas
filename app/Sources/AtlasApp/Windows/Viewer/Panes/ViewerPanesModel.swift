@@ -94,13 +94,16 @@ final class ViewerPanesModel {
     pictures.refresh()
     guard shown, place != .screen else { return }
     let number = work.generation
+    let changes = service.changes
     work.reading = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self?.work.generation == number else { return }
+        let seen = changes.count(of: [.activity])
         await self?.readActivity(number)
         guard self?.work.generation == number, !Task.isCancelled else { return }
-        // A cancelled pause ends at once, and the loop's condition ends the loop.
-        try? await clock.sleep(for: Self.activityEvery)
+        // Read again once the feed says Activity changed; a cancelled pause ends at once, and the loop's condition
+        // ends the loop.
+        await changes.pause(Self.activityEvery, on: [.activity], since: seen, clock: clock)
       }
     }
   }

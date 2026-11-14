@@ -38,6 +38,8 @@ public final class ScriptedService: ViewerService {
   public var releaseRefusal: ServiceError?
   /// Whether the service is there but refuses to give its status, as a busy one does.
   public var busy = false
+  /// What its feed says changed: never followed unless a test says so.
+  public let changes = ServiceChanges()
   /// Status requests made.
   public var statusCalls = 0
   /// Status requests answered, held or failed ones included.

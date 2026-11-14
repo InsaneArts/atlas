@@ -34,17 +34,21 @@ extension ViewerPanesModel {
     work.sessionsPolling = polls
     sessionsReadAt = now
     let number = work.sessionsGeneration
+    let changes = service.changes
+    let kinds: Set<ChangeKind> = [.sessions, .activity]
     work.sessions = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self?.work.sessionsGeneration == number else { return }
+        let seen = changes.count(of: kinds)
         await self?.readSessions(number)
         guard self?.work.sessionsGeneration == number, !Task.isCancelled else { return }
         guard self?.work.sessionsPolling == true else {
           self?.work.sessions = nil
           return
         }
-        // A cancelled pause ends at once, and the loop's condition ends the loop.
-        try? await clock.sleep(for: Self.sessionsEvery)
+        // Read again once the feed says the sessions or what they did changed; a cancelled pause ends at once, and
+        // the loop's condition ends the loop.
+        await changes.pause(Self.sessionsEvery, on: kinds, since: seen, clock: clock)
       }
     }
   }

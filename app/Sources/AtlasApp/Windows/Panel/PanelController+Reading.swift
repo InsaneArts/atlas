@@ -22,7 +22,11 @@ extension PanelController {
       readOpenAtLogin()
       polling.append(Task { [weak self] in await self?.findHelper() })
     }
-    polling.append(repeating(every: open ? Self.openEvery : Self.closedEvery) { await $0.readStatus() })
+    polling.append(
+      repeating(every: open ? Self.openEvery : Self.closedEvery, wakingOn: Set(ChangeKind.allCases)) {
+        await $0.readStatus()
+      }
+    )
     if open && !session.paused { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
   }
 
@@ -57,23 +61,39 @@ extension PanelController {
     iconRequests = [:]
   }
 
-  /// Runs `step` now and then every `pause`, until cancelled or the controller is gone.
+  /// Runs `step` now and again after each pause, until cancelled. A step that shows something the service's feed
+  /// tells of (`kinds`) runs again as soon as the feed says it changed, and while the feed is followed waits for it
+  /// rather than the pause, though never after a status reading that failed.
   ///
   /// - Parameters:
-  ///   - pause: The pause between steps.
-  ///   - step: What to run.
+  ///   - pause: The pause between steps while the feed is not followed.
+  ///   - kinds: What the step shows, as the feed names it; none for a step the feed never tells of.
+  ///   - step: The step.
   /// - Returns: The task running it.
   private func repeating(
     every pause: Duration,
+    wakingOn kinds: Set<ChangeKind> = [],
     _ step: @escaping @MainActor (PanelController) async -> Void
   )
     -> Task<Void, Never>
   {
+    let changes = service.changes
     return Task { [weak self, clock] in
       while !Task.isCancelled {
-        if let controller = self { await step(controller) } else { return }
+        let seen = changes.count(of: kinds)
+        // The controller is held for the step alone, never through the pause.
+        let failed: Bool
+        do {
+          guard let controller = self else { return }
+          await step(controller)
+          failed = controller.answered == false
+        }
         // A cancelled pause ends at once, and the loop's condition ends the loop.
-        try? await clock.sleep(for: pause)
+        if kinds.isEmpty || failed {
+          try? await clock.sleep(for: pause)
+        } else {
+          await changes.pause(pause, on: kinds, since: seen, clock: clock)
+        }
       }
     }
   }
