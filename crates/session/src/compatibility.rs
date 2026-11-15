@@ -30,6 +30,11 @@ pub const MIRRORS: &str = "mirrors-v1";
 pub const JOBS: &str = "jobs-v1";
 /// Updates of the guest's own Atlas, their bundle staged for one.
 pub const UPDATES: &str = "updates-v1";
+/// The guest's read hello says its kept Stop and the work it may still run.
+pub const STOP_REPORT: &str = "stop-report-v1";
+/// Stops and Resumes numbered by the station, each answered once carried
+/// out ([`crate::control::Said::Applied`]).
+pub const ACKNOWLEDGED: &str = "acknowledged-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +54,12 @@ impl Declared {
             capabilities,
             version: env!("CARGO_PKG_VERSION").to_owned(),
         }
+    }
+
+    /// Whether this guest answers numbered Stops and Resumes: only then is
+    /// it told them, and a guest without it is told them as before.
+    pub fn acknowledges(&self) -> bool {
+        judge(self, &[ACKNOWLEDGED]) == Usable::Usable
     }
 
     /// What a guest's first control message declares, read leniently from

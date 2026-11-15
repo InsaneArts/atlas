@@ -162,13 +162,17 @@ pub(super) fn hello(
 }
 
 /// A machine desktop's hello: who and where it is, and what it declares
-/// (`declared`), never the hidden login's capabilities. Read from this
-/// process alone, so a busy guest answers it at once.
+/// (`declared`), never the hidden login's capabilities; whether agents are
+/// admitted now, apart from the Stop its disk keeps; and what work may still
+/// run there. Read from this process and its own records alone, so a busy
+/// guest answers it at once.
 pub(super) fn machine_hello(
     manager: &str,
     declared: &atlas_session::compatibility::Declared,
     posture: Posture,
     input: Input,
+    stop: &Stop,
+    work: Work,
 ) -> Value {
     let held = posture.held();
     json!({
@@ -184,13 +188,68 @@ pub(super) fn machine_hello(
             None => "unknown",
         },
         "account": {"admin": posture.admin},
-        "agents": {"admitted": held.is_none(), "held": held},
+        "agents": {"admitted": held.is_none(), "held": held, "stopped": stop.halted},
         "input": {
             "standing": input.standing,
             "failure": input.failure.as_ref().map(|failure| json!({"code": failure.code, "error": failure.error})),
             "held": input.held(),
         },
+        "stop": match &stop.kept {
+            Some(crate::machine::stop::Kept::Clear) => json!({"state": "clear"}),
+            Some(crate::machine::stop::Kept::Stopped { why }) => {
+                json!({"state": "stopped", "why": why})
+            }
+            None => json!({"state": "unknown"}),
+        },
+        "work": {
+            "state": work.state(),
+            "jobs": told(work.jobs),
+            "changes": told(work.changes),
+            "supervisors": told(work.supervisors),
+        },
     })
+}
+
+/// Whether agents are stopped on a machine desktop: as its disk keeps it,
+/// none when that cannot be told, and whether its changes are refused now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Stop {
+    pub(super) kept: Option<crate::machine::stop::Kept>,
+    pub(super) halted: bool,
+}
+
+/// What work may still run on a machine desktop, each part none when it
+/// cannot be told.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Work {
+    /// Background jobs running, starting or being ended.
+    pub(super) jobs: Option<usize>,
+    /// Supervised commands its keepers hold, running or being ended, a
+    /// job's included.
+    pub(super) changes: Option<usize>,
+    /// Supervisors kept on its disk that no keeper holds and that are not
+    /// known to be done with.
+    pub(super) supervisors: Option<usize>,
+}
+
+impl Work {
+    /// `running` when any part runs, `none` only when every part is known
+    /// to be idle, else `unknown`, which holds as running does.
+    fn state(self) -> &'static str {
+        let parts = [self.jobs, self.changes, self.supervisors];
+        if parts.iter().any(|part| part.is_some_and(|count| count > 0)) {
+            "running"
+        } else if parts.iter().all(Option::is_some) {
+            "none"
+        } else {
+            "unknown"
+        }
+    }
+}
+
+/// A count as the hello says it: the number, or `unknown`.
+fn told(count: Option<usize>) -> Value {
+    count.map_or_else(|| json!("unknown"), |count| json!(count))
 }
 
 /// How the guest's input service stands, as its daemon sees it, and why

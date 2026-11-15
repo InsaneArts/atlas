@@ -9,6 +9,12 @@
 //! dial requests, which are bounded, so a flood of them is refused rather
 //! than queued ahead of a Stop. What comes in is handed on without waiting:
 //! a cancel or a Stop never waits for a dial handler or for work to finish.
+//!
+//! A guest that acknowledges ([`crate::compatibility::ACKNOWLEDGED`]) is told
+//! the person's Stops and Resumes numbered, and answers each, in the order
+//! they came, once its transition is done: a snapshot read on another lane
+//! cannot confirm one, since control and reads travel apart. A generation
+//! lost first leaves it unanswered.
 use crate::{
     authority::{Authority, Retired},
     generation::Generation,
@@ -68,6 +74,15 @@ pub enum Said {
     Release,
     /// The person's Resume, from the station: agents may act again.
     Resume,
+    /// The person's Stop, numbered `seq` in this generation, for a guest
+    /// that acknowledges: answered with [`Said::Applied`] once carried out.
+    Halt { seq: u64 },
+    /// The person's Resume, numbered `seq` in this generation, for a guest
+    /// that acknowledges: answered with [`Said::Applied`] once carried out
+    /// or refused.
+    Lift { seq: u64 },
+    /// From the guest: what the Stop or Resume numbered `seq` came to.
+    Applied { seq: u64, outcome: Outcome },
     /// The station cancels a lane, open or not.
     Cancel { lane: LaneId },
     /// The station asks the guest to open a lane.
@@ -97,7 +112,62 @@ pub enum Said {
     },
 }
 
+/// What a numbered Stop or Resume came to, as the guest answers it once its
+/// transition is done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum Outcome {
+    /// Agents are stopped, the Stop is kept on the guest's disk, and the
+    /// work it ended has ended, or is shown in the guest's hello as still
+    /// being ended.
+    Stopped,
+    /// The Stop is lifted and agents are admitted.
+    Resumed,
+    /// Not carried out, and why: agents stay stopped.
+    Refused { why: Refusal },
+}
+
+/// Why a numbered Stop or Resume was not carried out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Refusal {
+    /// A Stop came after this Resume: its own answer settles it.
+    LaterStop,
+    /// The guest's record of its Stop cannot be read or kept: agents are
+    /// held, but no Resume lifts them.
+    Unkept,
+    /// An update of the guest's Atlas is unresolved.
+    Update,
+    /// Work is still being ended, or is not known to have ended.
+    Work,
+    /// The guest's input is not ready.
+    Input,
+    /// The guest is open to more than Atlas, or how closed it is cannot be
+    /// told: agents' changes are refused there, so the Stop stays.
+    Posture,
+}
+
 impl Said {
+    /// The person's Stop, numbered `seq`, as a guest that `declared` what
+    /// it serves is told it: unnumbered unless it acknowledges.
+    pub fn stop_to(declared: &crate::compatibility::Declared, seq: u64) -> Self {
+        if declared.acknowledges() {
+            Self::Halt { seq }
+        } else {
+            Self::Stop
+        }
+    }
+
+    /// The person's Resume, numbered `seq`, as a guest that `declared` what
+    /// it serves is told it: unnumbered unless it acknowledges.
+    pub fn resume_to(declared: &crate::compatibility::Declared, seq: u64) -> Self {
+        if declared.acknowledges() {
+            Self::Lift { seq }
+        } else {
+            Self::Resume
+        }
+    }
+
     /// Whether it goes ahead of credit, mirrors and dial requests.
     const fn urgent(&self) -> bool {
         !matches!(
@@ -356,6 +426,11 @@ pub trait Guest: Send + Sync {
     fn release(&self);
     /// The person's Resume came.
     fn resume(&self);
+    /// The person's Stop numbered `seq` came: answered once carried out.
+    fn halt(&self, seq: u64);
+    /// The person's Resume numbered `seq` came, in the generation live now:
+    /// answered once carried out or refused.
+    fn lift(&self, seq: u64);
     /// The station's endpoints to mirror now. It must not wait.
     fn mirror(&self, _list: u64, _endpoints: Vec<crate::mirror::Endpoint>) {}
     /// The station asks for lane `lane`: open one and send its header.
@@ -395,6 +470,12 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
                     guest.resume();
                 }
             }
+            Ok(Said::Halt { seq }) => guest.halt(seq),
+            Ok(Said::Lift { seq }) => {
+                if authority.check().is_ok() {
+                    guest.lift(seq);
+                }
+            }
             Ok(Said::Cancel { lane }) => lanes.cancel(lane),
             Ok(Said::Dial { lane, kind }) => {
                 lanes.asked(lane);
@@ -404,7 +485,13 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
             Ok(Said::Settled { changes }) => guest.settled(changes),
             Ok(Said::Mirror { list, endpoints }) => guest.mirror(list, endpoints),
             // A guest never hears its own messages.
-            Ok(Said::Hello { .. } | Said::Taken { .. } | Said::Connect { .. }) | Err(_) => return,
+            Ok(
+                Said::Hello { .. }
+                | Said::Taken { .. }
+                | Said::Connect { .. }
+                | Said::Applied { .. },
+            )
+            | Err(_) => return,
         }
     }
 }
@@ -422,6 +509,8 @@ pub trait Station: Send + Sync {
     /// The guest accepted a mirrored connection and asks for its lane. It
     /// must not wait.
     fn connect(&self, _connection: u64, _endpoint: crate::mirror::Endpoint, _list: u64) {}
+    /// What the Stop or Resume numbered `seq` came to. It must not wait.
+    fn applied(&self, _seq: u64, _outcome: Outcome) {}
 }
 
 /// What the guest's hello says.
@@ -541,6 +630,7 @@ pub async fn station_reads<R: AsyncRead + Unpin>(
                 endpoint,
                 list,
             } => station.connect(connection, endpoint, list),
+            Said::Applied { seq, outcome } => station.applied(seq, outcome),
             _ => {
                 return Err(Error::new(
                     Code::Protocol,

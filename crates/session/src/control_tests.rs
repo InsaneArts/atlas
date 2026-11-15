@@ -1,5 +1,6 @@
 use super::*;
 use crate::{authority::Hook, clock::Manual, credit::Credit, lane::LaneKind};
+use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::{
     future::Future,
@@ -82,6 +83,8 @@ struct Told {
     stops: AtomicUsize,
     releases: AtomicUsize,
     resumes: AtomicUsize,
+    /// Every numbered Stop and Resume, in the order it came.
+    numbered: Mutex<Vec<Said>>,
     dials: Mutex<Vec<LaneId>>,
     settled: Mutex<Vec<atlas_core::files::Token>>,
 }
@@ -97,6 +100,14 @@ impl Guest for Told {
 
     fn resume(&self) {
         self.resumes.fetch_add(1, SeqCst);
+    }
+
+    fn halt(&self, seq: u64) {
+        self.numbered.lock().unwrap().push(Said::Halt { seq });
+    }
+
+    fn lift(&self, seq: u64) {
+        self.numbered.lock().unwrap().push(Said::Lift { seq });
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {
@@ -583,4 +594,155 @@ async fn a_dial_naming_a_lane_kind_this_guest_does_not_know_ends_control_and_ret
     assert!(told.dials.lock().unwrap().is_empty());
     assert_eq!(authority.retired(), Some(Retired::ControlLost));
     drop(near);
+}
+
+#[test]
+fn numbered_stops_resumes_and_their_answers_read_as_written_beside_the_unnumbered() {
+    let written = [
+        (Said::Stop, json!("stop")),
+        (Said::Resume, json!("resume")),
+        (Said::Halt { seq: 3 }, json!({"halt": {"seq": 3}})),
+        (Said::Lift { seq: 4 }, json!({"lift": {"seq": 4}})),
+        (
+            Said::Applied {
+                seq: 3,
+                outcome: Outcome::Stopped,
+            },
+            json!({"applied": {"seq": 3, "outcome": "stopped"}}),
+        ),
+        (
+            Said::Applied {
+                seq: 4,
+                outcome: Outcome::Refused {
+                    why: Refusal::LaterStop,
+                },
+            },
+            json!({"applied": {"seq": 4, "outcome": {"refused": {"why": "later-stop"}}}}),
+        ),
+    ];
+
+    for (said, json) in written {
+        assert_eq!(serde_json::to_value(&said).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Said>(json).unwrap(), said);
+    }
+}
+
+#[test]
+fn a_guest_is_told_numbered_stops_and_resumes_only_when_it_acknowledges() {
+    use crate::compatibility::{ACKNOWLEDGED, Declared};
+    let acknowledging = Declared::ours(vec![ACKNOWLEDGED.to_owned()]);
+    let older = Declared::ours(Vec::new());
+
+    assert_eq!(Said::stop_to(&acknowledging, 7), Said::Halt { seq: 7 });
+    assert_eq!(Said::resume_to(&acknowledging, 8), Said::Lift { seq: 8 });
+    assert_eq!(Said::stop_to(&older, 7), Said::Stop);
+    assert_eq!(Said::resume_to(&older, 8), Said::Resume);
+}
+
+#[tokio::test]
+async fn numbered_stops_and_resumes_are_handed_on_in_order_and_a_resume_only_while_live() {
+    let (authority, lanes, clock) = generation();
+    let (told, credit) = (Told::default(), Credit::default());
+    let (mut near, far) = duplex(1 << 16);
+    for said in [
+        Said::Halt { seq: 1 },
+        Said::Lift { seq: 2 },
+        Said::Halt { seq: 3 },
+    ] {
+        let mut line = serde_json::to_vec(&said).unwrap();
+        line.push(b'\n');
+        near.write_all(&line).await.unwrap();
+    }
+    drop(near);
+    clock.advance(Duration::from_secs(1));
+
+    guest_reads(far, &authority, &lanes, &credit, &told).await;
+
+    assert_eq!(
+        *told.numbered.lock().unwrap(),
+        [
+            Said::Halt { seq: 1 },
+            Said::Lift { seq: 2 },
+            Said::Halt { seq: 3 }
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_numbered_resume_from_a_generation_that_retired_is_never_handed_on() {
+    let (authority, lanes, _clock) = generation();
+    authority.retire(Retired::Lapsed);
+    let (told, credit) = (Told::default(), Credit::default());
+    let (mut near, far) = duplex(1 << 16);
+    near.write_all(b"{\"lift\":{\"seq\":2}}\n{\"halt\":{\"seq\":3}}\n")
+        .await
+        .unwrap();
+    drop(near);
+
+    guest_reads(far, &authority, &lanes, &credit, &told).await;
+
+    assert_eq!(*told.numbered.lock().unwrap(), [Said::Halt { seq: 3 }]);
+}
+
+#[tokio::test]
+async fn a_guest_told_an_answer_only_it_gives_ends_control() {
+    let (authority, lanes, _clock) = generation();
+    let (told, credit) = (Told::default(), Credit::default());
+    let (mut near, far) = duplex(1 << 16);
+    near.write_all(b"{\"applied\":{\"seq\":1,\"outcome\":\"resumed\"}}\n\"stop\"\n")
+        .await
+        .unwrap();
+
+    guest_reads(far, &authority, &lanes, &credit, &told).await;
+
+    assert_eq!(told.stops.load(SeqCst), 0);
+    assert_eq!(authority.retired(), Some(Retired::ControlLost));
+    drop(near);
+}
+
+#[derive(Default)]
+struct Answered(Mutex<Vec<(u64, Outcome)>>);
+
+impl Station for Answered {
+    fn silent(&self) {}
+
+    fn heard_again(&self) {}
+
+    fn applied(&self, seq: u64, outcome: Outcome) {
+        self.0.lock().unwrap().push((seq, outcome));
+    }
+}
+
+#[tokio::test]
+async fn a_station_hears_what_each_numbered_stop_and_resume_came_to_in_order() {
+    let (mut near, far) = duplex(1 << 16);
+    let (answered, credit) = (Arc::new(Answered::default()), Arc::new(Credit::default()));
+    let reading = {
+        let (answered, credit) = (answered.clone(), credit.clone());
+        tokio::spawn(async move { station_reads(BufReader::new(far), &credit, &*answered).await })
+    };
+    let refused = Outcome::Refused {
+        why: Refusal::Input,
+    };
+    for said in [
+        Said::Applied {
+            seq: 1,
+            outcome: Outcome::Stopped,
+        },
+        Said::Applied {
+            seq: 2,
+            outcome: refused,
+        },
+    ] {
+        let mut line = serde_json::to_vec(&said).unwrap();
+        line.push(b'\n');
+        near.write_all(&line).await.unwrap();
+    }
+
+    drop(near);
+    assert!(reading.await.unwrap().is_err());
+    assert_eq!(
+        *answered.0.lock().unwrap(),
+        [(1, Outcome::Stopped), (2, refused)]
+    );
 }

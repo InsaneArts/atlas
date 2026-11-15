@@ -107,6 +107,28 @@ impl Keepers {
         self.any(|_| true)
     }
 
+    /// How many supervisors its keepers hold, their work running or being
+    /// ended, and whether earlier work is not known to have ended, read
+    /// together under the lock a keeper hands its work to recovery under:
+    /// work handed over in between is counted in one or the other.
+    pub(crate) fn snapshot(&self) -> (usize, bool) {
+        let owned = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
+        (owned.len(), self.orphaned())
+    }
+
+    /// Take `supervisor` as a keeper's, its work running.
+    #[cfg(test)]
+    pub(crate) fn hold(&self, supervisor: Instance) {
+        self.set(supervisor, Keeping::Active);
+    }
+
+    /// Leave `supervisor`'s work to recovery, as a keeper whose work's end
+    /// is not proved does.
+    #[cfg(test)]
+    pub(crate) fn leave_to_recovery(&self, supervisor: &Instance) {
+        self.hand_over(supervisor);
+    }
+
     /// Whether a keeper owns `supervisor`: recovery leaves it to them.
     pub(crate) fn owns(&self, supervisor: &Instance) -> bool {
         self.owned

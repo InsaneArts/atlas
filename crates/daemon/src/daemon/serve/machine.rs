@@ -18,7 +18,7 @@ use atlas_core::{
 use atlas_session::{
     authority::{Authority, Hook, Retired},
     clock::Clock,
-    control::{self, Guest, Outbox},
+    control::{self, Guest, Outbox, Outcome, Refusal},
     credit::Credit,
     generation::{Generation, Generations},
     keys::Keypair,
@@ -115,7 +115,8 @@ pub struct Said {
 
 /// The guest's full Stop and Resume: what a Stop from the station, and a
 /// generation lost, carry out. Every one goes to one worker, in the order
-/// it came, so a Resume never undoes a Stop that came after it.
+/// it came, so a Resume never undoes a Stop that came after it, and each
+/// numbered one is answered in that order.
 struct Halting {
     daemon: Arc<Daemon>,
     transitions: tokio::sync::mpsc::UnboundedSender<Transition>,
@@ -125,14 +126,232 @@ struct Halting {
     /// Held while a Stop is taken in or a Resume reopens: the two never
     /// cross. Never held across storage.
     turning: Arc<Held<()>>,
+    /// Shut by a test to hold a Resume between lifting the Stop on disk and
+    /// reopening.
+    #[cfg(test)]
+    reopening: watch::Sender<bool>,
 }
 
 /// What the worker carries out.
 enum Transition {
-    Stop(Why),
+    /// A Stop for `why`, answered when numbered.
+    Stop(Why, Option<Answer>),
     /// A Resume, from the generation it came in, after so many Stops came:
-    /// lifted only while that generation is live and no Stop came since.
-    Resume(Authority, u64),
+    /// lifted only while that generation is live and no Stop came since;
+    /// answered when numbered.
+    Resume(Authority, u64, Option<Answer>),
+}
+
+/// How long a numbered Stop waits for the work it ended to have ended
+/// before it is answered: past it, it is answered as kept, and the hello
+/// shows the work still being ended.
+const ENDING: Duration = Duration::from_secs(10);
+
+/// Where a numbered Stop or Resume is answered: on the control of the
+/// generation it came in, only while that generation is live, so one lost
+/// first leaves it unanswered.
+struct Answer {
+    seq: u64,
+    authority: Authority,
+    outbox: Arc<Outbox>,
+}
+
+impl Answer {
+    fn give(self, outcome: Outcome) {
+        let Self {
+            seq,
+            authority,
+            outbox,
+        } = self;
+        let _ = authority.if_live(|| outbox.say(control::Said::Applied { seq, outcome }));
+    }
+}
+
+/// What a Resume came to.
+enum Resumed {
+    /// The Stop is lifted and agents are admitted.
+    Lifted,
+    /// Agents stay stopped as they were.
+    Refused(Refusal),
+    /// Lifted on disk, then refused at the last moment: a full Stop of its
+    /// own puts it back.
+    PutBack(Refusal),
+}
+
+/// What the worker reads and changes.
+struct Worker {
+    daemon: Arc<Daemon>,
+    stop: Arc<Stop<Arc<dyn Vault>>>,
+    gate: Arc<crate::machine::update::Gate>,
+    /// Every Stop that came, as [`Halting::received`].
+    since: Arc<AtomicU64>,
+    /// As [`Halting::turning`].
+    turn: Arc<Held<()>>,
+    /// How closed the guest is: a numbered Resume is answered `resumed` only
+    /// where agents' changes are admitted.
+    posture: Arc<Seen>,
+    #[cfg(test)]
+    reopening: watch::Receiver<bool>,
+}
+
+impl Worker {
+    /// Carry out a Stop for `why`: saved, then its work ended. Whether it
+    /// was saved.
+    async fn stop(&self, why: Why) -> bool {
+        let saving = self.stop.clone();
+        let saved = tokio::task::spawn_blocking(move || saving.stop(why)).await;
+        // Saved, or as saved as it can be: now its work ends.
+        // Its work is being ended now: none of it counts as settled until
+        // judged, so no Resume passes over it.
+        self.daemon.keepers.ending_all();
+        self.daemon.halted.send_modify(|halt| {
+            halt.stops += 1;
+            halt.halted = true;
+        });
+        if let Some(jobs) = &self.daemon.jobs {
+            let reason = atlas_core::protocol::StopReason::Person;
+            let request = atlas_core::protocol::JobRequest::StopAll { reason };
+            let _ = jobs.serve(request).await;
+        }
+        matches!(saved, Ok(Ok(())))
+    }
+
+    /// Wait, up to [`ENDING`], until no keeper holds work: what a Stop
+    /// ended has ended, or been left to recovery.
+    async fn ended(&self) {
+        let keepers = &self.daemon.keepers;
+        let _ = tokio::time::timeout(ENDING, async {
+            while keepers.keeping() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+    }
+
+    /// A Resume from `authority`'s generation, after `at` Stops came, with
+    /// a Stop not saved since this daemon started if `unsaved`. A
+    /// `numbered` one, whose answer says agents are admitted, also stays
+    /// stopped while the guest's posture refuses their changes.
+    async fn resume(
+        &self,
+        authority: &Authority,
+        at: u64,
+        unsaved: bool,
+        numbered: bool,
+    ) -> Resumed {
+        let (worker, since) = (&self.daemon, &self.since);
+        let current = || authority.check().is_ok() && since.load(SeqCst) == at;
+        if unsaved {
+            return Resumed::Refused(Refusal::Unkept);
+        }
+        if !current() {
+            return Resumed::Refused(Refusal::LaterStop);
+        }
+        if numbered && self.posture.now().await.held().is_some() {
+            return Resumed::Refused(Refusal::Posture);
+        }
+        // Never while an update is unresolved or being admitted, and none
+        // admitted while this commits.
+        let Some(_resuming) = self.gate.resume() else {
+            return Resumed::Refused(Refusal::Update);
+        };
+        // What earlier daemons left, looked at again under this saved Stop,
+        // and never lifted over: work still being ended, or not known to
+        // have ended.
+        let (looking, saving) = (worker.clone(), self.stop.clone());
+        let resolved = tokio::task::spawn_blocking(move || {
+            // Forgotten only under a Stop read back saved.
+            let saved = matches!(saving.kept(), Ok(StopKept::Stopped { .. }));
+            looking.recover_now(saved)
+        })
+        .await
+        .unwrap_or(false);
+        if !resolved || worker.keepers.unsettled() {
+            return Resumed::Refused(Refusal::Work);
+        }
+        if worker.input.as_ref().is_some_and(|input| input.unsettled()) {
+            return Resumed::Refused(Refusal::Input);
+        }
+        if committing(worker) {
+            return Resumed::Refused(Refusal::Work);
+        }
+        if !current() {
+            return Resumed::Refused(Refusal::LaterStop);
+        }
+        let (lifting, checking) = (self.stop.clone(), authority.clone());
+        let lifted = tokio::task::spawn_blocking(move || {
+            // Checked again at the last moment before the disk.
+            checking.check()?;
+            lifting.resume()
+        })
+        .await;
+        if !matches!(lifted, Ok(Ok(()))) {
+            return Resumed::Refused(Refusal::Unkept);
+        }
+        #[cfg(test)]
+        {
+            let mut reopening = self.reopening.clone();
+            let _ = reopening.wait_for(|open| *open).await;
+        }
+        let turned = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
+        // Reopened only while no work stands unsettled, and none can come to
+        // meanwhile.
+        // Input is looked at again here too, last: a service that ended
+        // meanwhile keeps agents stopped.
+        // The generation is looked at without retiring it: its hook halts,
+        // which takes this turn.
+        // A stage authorizes its commit under this turn too, so none starts
+        // committing between here and reopening.
+        let later = authority.if_live(|| Ok(())).is_err() || since.load(SeqCst) != at;
+        let (mut input_held, mut posture_held) = (false, false);
+        let mut reopening = || {
+            !later
+                && !committing(worker)
+                && worker.keepers.settled_then(|| {
+                    let reopen = || worker.halted.send_modify(|halt| halt.halted = false);
+                    // Lifted under the same turn, so a Stop that comes next
+                    // holds input again after it.
+                    match worker.input.as_deref() {
+                        Some(input) => {
+                            let lifted = input.lift_if_settled(reopen);
+                            input_held = !lifted;
+                            lifted
+                        }
+                        None => {
+                            reopen();
+                            true
+                        }
+                    }
+                })
+        };
+        // A numbered one's posture is looked at again with the decision,
+        // and none is taken in meanwhile: storage may have taken a while.
+        let reopened = if numbered {
+            self.posture.admitted_then(reopening).unwrap_or_else(|| {
+                posture_held = true;
+                false
+            })
+        } else {
+            reopening()
+        };
+        if reopened {
+            return Resumed::Lifted;
+        }
+        // Lifted on disk by a Resume its generation no longer gives: a full
+        // Stop of its own puts it back.
+        since.fetch_add(1, SeqCst);
+        worker.halted.send_modify(|halt| halt.halted = true);
+        drop(turned);
+        Resumed::PutBack(if later {
+            Refusal::LaterStop
+        } else if posture_held {
+            Refusal::Posture
+        } else if input_held {
+            Refusal::Input
+        } else {
+            Refusal::Work
+        })
+    }
 }
 
 impl Halting {
@@ -141,116 +360,59 @@ impl Halting {
         daemon: Arc<Daemon>,
         stop: Arc<Stop<Arc<dyn Vault>>>,
         gate: Arc<crate::machine::update::Gate>,
+        posture: Arc<Seen>,
     ) -> Arc<Self> {
         let (transitions, mut coming) = tokio::sync::mpsc::unbounded_channel();
-        let worker = daemon.clone();
         let received = Arc::new(AtomicU64::new(0));
-        let since = received.clone();
         let turning = Arc::new(Held::new(()));
-        let turn = turning.clone();
-        // The worker queues a Stop of its own without keeping its queue open.
-        let again = transitions.downgrade();
+        #[cfg(test)]
+        let reopening = watch::Sender::new(true);
+        let worker = Worker {
+            daemon: daemon.clone(),
+            stop,
+            gate,
+            since: received.clone(),
+            turn: turning.clone(),
+            posture,
+            #[cfg(test)]
+            reopening: reopening.subscribe(),
+        };
         tokio::spawn(async move {
             // A Stop that could not be saved: what agents are is unknown,
             // and no Resume lifts it.
             let mut unsaved = false;
             while let Some(transition) = coming.recv().await {
                 match transition {
-                    Transition::Stop(why) => {
-                        let saving = stop.clone();
-                        let saved = tokio::task::spawn_blocking(move || saving.stop(why)).await;
-                        unsaved |= !matches!(saved, Ok(Ok(())));
-                        // Saved, or as saved as it can be: now its work ends.
-                        // Its work is being ended now: none of it counts as
-                        // settled until judged, so no Resume passes over it.
-                        worker.keepers.ending_all();
-                        worker.halted.send_modify(|halt| {
-                            halt.stops += 1;
-                            halt.halted = true;
-                        });
-                        if let Some(jobs) = &worker.jobs {
-                            let reason = atlas_core::protocol::StopReason::Person;
-                            let request = atlas_core::protocol::JobRequest::StopAll { reason };
-                            let _ = jobs.serve(request).await;
+                    Transition::Stop(why, answer) => {
+                        let saved = worker.stop(why).await;
+                        unsaved |= !saved;
+                        if let Some(answer) = answer {
+                            worker.ended().await;
+                            answer.give(if saved {
+                                Outcome::Stopped
+                            } else {
+                                Outcome::Refused {
+                                    why: Refusal::Unkept,
+                                }
+                            });
                         }
                     }
-                    Transition::Resume(authority, at) => {
-                        let current = || authority.check().is_ok() && since.load(SeqCst) == at;
-                        if unsaved || !current() {
-                            continue;
-                        }
-                        // Never while an update is unresolved or being
-                        // admitted, and none admitted while this commits.
-                        let Some(_resuming) = gate.resume() else {
-                            continue;
+                    Transition::Resume(authority, at, answer) => {
+                        let numbered = answer.is_some();
+                        let resumed = worker.resume(&authority, at, unsaved, numbered).await;
+                        let why = match resumed {
+                            Resumed::Lifted => None,
+                            Resumed::Refused(why) => Some(why),
+                            // Put back before the Resume is answered, and
+                            // before anything that came after it is done.
+                            Resumed::PutBack(why) => {
+                                unsaved |= !worker.stop(Why::ControlLost).await;
+                                Some(why)
+                            }
                         };
-                        // What earlier daemons left, looked at again under
-                        // this saved Stop, and never lifted over: work still
-                        // being ended, or not known to have ended.
-                        let (looking, saving) = (worker.clone(), stop.clone());
-                        let resolved = tokio::task::spawn_blocking(move || {
-                            // Forgotten only under a Stop read back saved.
-                            let saved = matches!(saving.kept(), Ok(StopKept::Stopped { .. }));
-                            looking.recover_now(saved)
-                        })
-                        .await
-                        .unwrap_or(false);
-                        let input_unsettled =
-                            worker.input.as_ref().is_some_and(|input| input.unsettled());
-                        if !resolved
-                            || worker.keepers.unsettled()
-                            || input_unsettled
-                            || committing(&worker)
-                            || !current()
-                        {
-                            continue;
-                        }
-                        let (lifting, checking) = (stop.clone(), authority.clone());
-                        let lifted = tokio::task::spawn_blocking(move || {
-                            // Checked again at the last moment before the disk.
-                            checking.check()?;
-                            lifting.resume()
-                        })
-                        .await;
-                        if !matches!(lifted, Ok(Ok(()))) {
-                            continue;
-                        }
-                        let turned = turn.lock().unwrap_or_else(PoisonError::into_inner);
-                        // Reopened only while no work stands unsettled, and
-                        // none can come to meanwhile.
-                        // Input is looked at again here too, last: a service
-                        // that ended meanwhile keeps agents stopped.
-                        // The generation is looked at without retiring it:
-                        // its hook halts, which takes this turn.
-                        // A stage authorizes its commit under this turn too, so
-                        // none starts committing between here and reopening.
-                        let still_current = authority.if_live(|| Ok(())).is_ok()
-                            && since.load(SeqCst) == at
-                            && !committing(&worker);
-                        if still_current
-                            && worker.keepers.settled_then(|| {
-                                let reopen =
-                                    || worker.halted.send_modify(|halt| halt.halted = false);
-                                // Lifted under the same turn, so a Stop that
-                                // comes next holds input again after it.
-                                match worker.input.as_deref() {
-                                    Some(input) => input.lift_if_settled(reopen),
-                                    None => {
-                                        reopen();
-                                        true
-                                    }
-                                }
-                            })
-                        {
-                            continue;
-                        }
-                        // Lifted on disk by a Resume its generation no longer
-                        // gives: a full Stop of its own puts it back.
-                        since.fetch_add(1, SeqCst);
-                        worker.halted.send_modify(|halt| halt.halted = true);
-                        drop(turned);
-                        if let Some(again) = again.upgrade() {
-                            let _ = again.send(Transition::Stop(Why::ControlLost));
+                        if let Some(answer) = answer {
+                            answer
+                                .give(why.map_or(Outcome::Resumed, |why| Outcome::Refused { why }));
                         }
                     }
                 }
@@ -261,12 +423,15 @@ impl Halting {
             transitions,
             received,
             turning,
+            #[cfg(test)]
+            reopening,
         })
     }
 
     /// Stop agents for `why`: no change is taken from now on, and the
-    /// worker saves the Stop, then ends the work it holds.
-    fn halt(&self, why: Why) {
+    /// worker saves the Stop, then ends the work it holds, and gives
+    /// `answer` when there is one.
+    fn halt(&self, why: Why, answer: Option<Answer>) {
         let _taking = self.turning.lock().unwrap_or_else(PoisonError::into_inner);
         self.received.fetch_add(1, SeqCst);
         self.daemon.halted.send_modify(|halt| halt.halted = true);
@@ -274,13 +439,16 @@ impl Halting {
         if let Some(input) = &self.daemon.input {
             input.hold(true);
         }
-        let _ = self.transitions.send(Transition::Stop(why));
+        let _ = self.transitions.send(Transition::Stop(why, answer));
     }
 
-    /// The person's Resume, in `authority`'s generation.
-    fn resume(&self, authority: Authority) {
+    /// The person's Resume, in `authority`'s generation, giving `answer`
+    /// when there is one.
+    fn resume(&self, authority: Authority, answer: Option<Answer>) {
         let at = self.received.load(SeqCst);
-        let _ = self.transitions.send(Transition::Resume(authority, at));
+        let _ = self
+            .transitions
+            .send(Transition::Resume(authority, at, answer));
     }
 }
 
@@ -292,14 +460,27 @@ struct Hand {
     halting: Arc<Halting>,
     /// The generation its connection is in.
     authority: Authority,
+    /// What the guest says on that connection.
+    outbox: Arc<Outbox>,
     /// The generation's mirrors, if the guest serves them.
     mirror: Option<Arc<crate::machine::mirror::Owner>>,
+}
+
+impl Hand {
+    /// Where the Stop or Resume numbered `seq` is answered.
+    fn answer(&self, seq: u64) -> Answer {
+        Answer {
+            seq,
+            authority: self.authority.clone(),
+            outbox: self.outbox.clone(),
+        }
+    }
 }
 
 impl Guest for Hand {
     fn stop(&self) {
         self.said.stops.fetch_add(1, SeqCst);
-        self.halting.halt(Why::Person);
+        self.halting.halt(Why::Person, None);
     }
 
     fn release(&self) {
@@ -307,7 +488,17 @@ impl Guest for Hand {
     }
 
     fn resume(&self) {
-        self.halting.resume(self.authority.clone());
+        self.halting.resume(self.authority.clone(), None);
+    }
+
+    fn halt(&self, seq: u64) {
+        self.said.stops.fetch_add(1, SeqCst);
+        self.halting.halt(Why::Person, Some(self.answer(seq)));
+    }
+
+    fn lift(&self, seq: u64) {
+        self.halting
+            .resume(self.authority.clone(), Some(self.answer(seq)));
     }
 
     /// The station dials every lane itself: the guest is never asked to.
@@ -382,6 +573,60 @@ async fn start(
     });
 }
 
+/// What work may still run on the guest, each part unknown when it cannot
+/// be told. Blocking.
+///
+/// The supervisors' record is read first, then the keepers and whether work
+/// was handed to recovery, both at once: a supervisor that starts or is
+/// handed over meanwhile is counted, or leaves the supervisors unknown,
+/// never missed.
+fn work(daemon: &Daemon, jobs: Option<&jobs::Jobs>) -> super::super::facts::Work {
+    counted(daemon, jobs, scanned(daemon))
+}
+
+/// [`work`], with `between` run between its two reads.
+#[cfg(test)]
+fn work_scanned_then(
+    daemon: &Daemon,
+    jobs: Option<&jobs::Jobs>,
+    between: impl FnOnce(),
+) -> super::super::facts::Work {
+    let unresolved = scanned(daemon);
+    between();
+    counted(daemon, jobs, unresolved)
+}
+
+/// The supervisors kept that no keeper holds and are not known to be done
+/// with: none when that cannot be told. Blocking.
+fn scanned(daemon: &Daemon) -> Option<usize> {
+    let keepers = &daemon.keepers;
+    daemon.supervising.as_ref().map_or(Some(0), |supervising| {
+        crate::machine::processes::unresolved(
+            &*supervising.kept,
+            &supervising.proofs,
+            |supervisor| keepers.owns(supervisor),
+            |supervisor| !supervisor.ended(),
+        )
+    })
+}
+
+/// What work may still run, the supervisors' record read already as
+/// `unresolved`: the keepers and whether work was handed to recovery read
+/// now, together.
+fn counted(
+    daemon: &Daemon,
+    jobs: Option<&jobs::Jobs>,
+    unresolved: Option<usize>,
+) -> super::super::facts::Work {
+    let (held, orphaned) = daemon.keepers.snapshot();
+    super::super::facts::Work {
+        jobs: jobs.map_or(Some(0), jobs::Jobs::running),
+        changes: Some(held),
+        // Work left that recovery could not show done with is never none.
+        supervisors: unresolved.filter(|left| *left > 0 || !orphaned),
+    }
+}
+
 /// Whether a stage is committing: a Resume waits for what it comes to.
 fn committing(daemon: &Daemon) -> bool {
     daemon
@@ -421,10 +666,8 @@ pub struct Machine {
     /// Blocking work begun for connections not yet authenticated, or that
     /// may be cancelled, still running.
     blocking: Arc<Semaphore>,
-    /// How closed the guest is, as last read, and when: agents' lanes are
-    /// held unless it is closed, and before any reading. (Its lease clock,
-    /// `CLOCK_MONOTONIC`, was seen to count a minute's stall of its VM.)
-    posture: std::sync::Mutex<(super::super::facts::Posture, Option<std::time::Instant>)>,
+    /// How closed the guest is: agents' lanes are held unless it is closed.
+    posture: Arc<Seen>,
     /// Where an update's admission and a Resume pass, never crossing.
     gate: Arc<crate::machine::update::Gate>,
     /// What carries each update to its end.
@@ -435,8 +678,46 @@ pub struct Machine {
 }
 
 /// How long a reading of how closed the guest is holds before an agent's
-/// lane reads it again.
+/// lane, or a numbered Resume, reads it again.
 const POSTURE_FRESH: Duration = Duration::from_secs(10);
+
+/// How closed the guest is, as last read, and when: held unless closed, and
+/// before any reading. (Its lease clock, `CLOCK_MONOTONIC`, was seen to
+/// count a minute's stall of its VM.)
+struct Seen {
+    last: std::sync::Mutex<(super::super::facts::Posture, Option<std::time::Instant>)>,
+    /// Where it is read again, off the runtime.
+    blocking: Arc<Semaphore>,
+}
+
+impl Seen {
+    /// Keep `posture` as read now.
+    fn keep(&self, posture: super::super::facts::Posture) {
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner) =
+            (posture, Some(std::time::Instant::now()));
+    }
+
+    /// Run `then` only while the posture last kept admits agents' changes,
+    /// with none kept meanwhile: none when it holds them.
+    fn admitted_then<T>(&self, then: impl FnOnce() -> T) -> Option<T> {
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        last.0.held().is_none().then(then)
+    }
+
+    /// How closed the guest is: as last read while that is fresh, else
+    /// read again; unknown when it cannot be read now.
+    async fn now(&self) -> super::super::facts::Posture {
+        let (posture, at) = *self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        if at.is_some_and(|at| at.elapsed() < POSTURE_FRESH) {
+            return posture;
+        }
+        let read = bounded::off_runtime(&self.blocking, READ_POSTURE)
+            .await
+            .unwrap_or_default();
+        self.keep(read);
+        read
+    }
+}
 
 /// How closed the guest is now; in tests, closed, so none reads the Mac it
 /// runs on.
@@ -493,7 +774,17 @@ impl Machine {
                 }
             });
         }
-        let halting = Halting::new(daemon.clone(), paired.stop.clone(), gate.clone());
+        let blocking = Arc::new(Semaphore::new(bounded::BLOCKING));
+        let posture = Arc::new(Seen {
+            last: std::sync::Mutex::default(),
+            blocking: blocking.clone(),
+        });
+        let halting = Halting::new(
+            daemon.clone(),
+            paired.stop.clone(),
+            gate.clone(),
+            posture.clone(),
+        );
         let starting = tokio::spawn(start(
             daemon.clone(),
             paired.stop.clone(),
@@ -508,11 +799,11 @@ impl Machine {
             starting: std::sync::Mutex::new(Some(starting)),
             mirrors,
             jobs,
-            posture: std::sync::Mutex::default(),
+            posture,
             gate,
             reconciler,
             serving,
-            blocking: Arc::new(Semaphore::new(bounded::BLOCKING)),
+            blocking,
             said: Arc::default(),
         })
     }
@@ -520,42 +811,20 @@ impl Machine {
     /// Take the guest to be as `posture` says, as a hello would.
     #[cfg(test)]
     pub(in crate::daemon) fn seen_as(&self, posture: super::super::facts::Posture) {
-        self.keep_posture(posture);
-    }
-
-    /// Keep `posture` as read now.
-    fn keep_posture(&self, posture: super::super::facts::Posture) {
-        *self
-            .posture
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            (posture, Some(std::time::Instant::now()));
-    }
-
-    /// How closed the guest is: as last read while that is fresh, else
-    /// read again; unknown when it cannot be read now.
-    async fn posture_now(&self) -> super::super::facts::Posture {
-        let (posture, at) = *self
-            .posture
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if at.is_some_and(|at| at.elapsed() < POSTURE_FRESH) {
-            return posture;
-        }
-        let read = bounded::off_runtime(&self.blocking, READ_POSTURE)
-            .await
-            .unwrap_or_default();
-        self.keep_posture(read);
-        read
+        self.posture.keep(posture);
     }
 
     /// What this guest declares it serves: what it was made with, so it
     /// never declares a service it does not have.
     fn declared(&self) -> atlas_session::compatibility::Declared {
         use atlas_session::compatibility::{
-            CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, STAGE,
+            ACKNOWLEDGED, CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, STAGE, STOP_REPORT,
         };
-        let mut capabilities = vec![CHANGES.to_owned()];
+        let mut capabilities = vec![
+            CHANGES.to_owned(),
+            STOP_REPORT.to_owned(),
+            ACKNOWLEDGED.to_owned(),
+        ];
         if self.daemon.supervising.is_some() {
             capabilities.push(LEFTOVERS.to_owned());
         }
@@ -734,7 +1003,7 @@ impl Machine {
                 Retired::Revoked => Why::Revoked,
                 Retired::Replaced => return,
             };
-            halting.halt(why);
+            halting.halt(why, None);
         });
         // One replacement at a time, its number given under the same lock,
         // so an older generation never replaces a newer one.
@@ -773,6 +1042,7 @@ impl Machine {
             changes: paired.changes.clone(),
             halting: self.halting.clone(),
             authority: authority.clone(),
+            outbox: saying.clone(),
         };
         let reader = (authority.clone(), lanes.clone());
         tasks.0.push(
@@ -858,7 +1128,7 @@ impl Machine {
         // Only the station's reads while the guest is open to more than
         // Atlas, or not yet seen closed.
         if !matches!(header.kind, LaneKind::Read)
-            && let Some(why) = self.posture_now().await.held()
+            && let Some(why) = self.posture.now().await.held()
         {
             return Err(Error::new(Code::Platform, why));
         }
@@ -908,8 +1178,18 @@ impl Machine {
             // workers the generation's watchdog runs on.
             let (manager, declared) = (self.daemon.manager.clone(), self.declared());
             let service = self.daemon.input.clone();
+            let (daemon, jobs, kept) = (
+                self.daemon.clone(),
+                self.jobs.clone(),
+                self.paired.stop.clone(),
+            );
             let saying = bounded::off_runtime(&self.blocking, move || {
                 let posture = READ_POSTURE();
+                let work = work(&daemon, jobs.as_deref());
+                let stop = super::super::facts::Stop {
+                    kept: kept.kept().ok(),
+                    halted: daemon.halted.borrow().halted,
+                };
                 // Read last, after what may have taken a while, and whole.
                 let (standing, failure) = service
                     .as_ref()
@@ -927,14 +1207,16 @@ impl Machine {
                     }),
                     failure,
                 };
-                let hello = super::super::facts::machine_hello(&manager, &declared, posture, input);
+                let hello = super::super::facts::machine_hello(
+                    &manager, &declared, posture, input, &stop, work,
+                );
                 (hello, posture)
             });
             // Ended with its lane, as every request is, however long it waits.
             let hello = tokio::select! {
                 said = saying => match said {
                     Some((hello, posture)) => {
-                        self.keep_posture(posture);
+                        self.posture.keep(posture);
                         hello
                     }
                     None => failure(Code::Busy, "The guest could not say hello now"),

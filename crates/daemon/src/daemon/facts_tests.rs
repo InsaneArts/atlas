@@ -124,13 +124,23 @@ fn the_machine_hello_says_why_agents_are_held() {
         standing: Some("ready"),
         failure: None,
     };
-    let held = machine_hello("Aqua", &declared, open, ready());
-    let admitted = machine_hello("Aqua", &declared, Posture::CLOSED, ready());
+    let held = machine_hello("Aqua", &declared, open, ready(), &clear(), idle());
+    let admitted = machine_hello(
+        "Aqua",
+        &declared,
+        Posture::CLOSED,
+        ready(),
+        &clear(),
+        idle(),
+    );
 
     assert_eq!(held["remoteLogin"], "on");
     assert_eq!(held["agents"]["admitted"], false);
     assert_eq!(held["agents"]["held"], "Remote Login is on in the guest.");
-    assert_eq!(admitted["agents"], json!({"admitted": true, "held": null}));
+    assert_eq!(
+        admitted["agents"],
+        json!({"admitted": true, "held": null, "stopped": false})
+    );
 }
 
 #[test]
@@ -155,6 +165,8 @@ fn the_machine_hello_says_how_input_stands_and_what_the_person_can_do() {
                     error: error.to_owned(),
                 }),
             },
+            &clear(),
+            idle(),
         )["input"]
             .clone()
     };
@@ -194,4 +206,115 @@ fn the_machine_hello_says_how_input_stands_and_what_the_person_can_do() {
     );
     assert_eq!(none["standing"], Value::Null);
     assert!(none["held"].is_string());
+}
+
+/// No Stop kept, and none in effect.
+fn clear() -> Stop {
+    Stop {
+        kept: Some(crate::machine::stop::Kept::Clear),
+        halted: false,
+    }
+}
+
+/// Nothing running, every part known.
+fn idle() -> Work {
+    Work {
+        jobs: Some(0),
+        changes: Some(0),
+        supervisors: Some(0),
+    }
+}
+
+/// A machine hello in every respect closed and ready, but `stop` and `work`.
+fn reporting(stop: &Stop, work: Work) -> Value {
+    let ready = Input {
+        standing: Some("ready"),
+        failure: None,
+    };
+    let declared = atlas_session::compatibility::Declared::ours(Vec::new());
+    machine_hello("Aqua", &declared, Posture::CLOSED, ready, stop, work)
+}
+
+#[test]
+fn the_machine_hello_says_whether_its_stop_is_clear_kept_and_why_or_unknown() {
+    use crate::machine::stop::{Kept, Why};
+    let stopped = |why| Stop {
+        kept: Some(Kept::Stopped { why }),
+        halted: true,
+    };
+
+    let clear = reporting(&clear(), idle());
+    let person = reporting(&stopped(Why::Person), idle());
+    let lost = reporting(&stopped(Why::ControlLost), idle());
+    let unknown = reporting(
+        &Stop {
+            kept: None,
+            halted: true,
+        },
+        idle(),
+    );
+
+    assert_eq!(clear["stop"], json!({"state": "clear"}));
+    assert_eq!(person["stop"], json!({"state": "stopped", "why": "person"}));
+    assert_eq!(
+        lost["stop"],
+        json!({"state": "stopped", "why": "control-lost"})
+    );
+    assert_eq!(unknown["stop"], json!({"state": "unknown"}));
+    assert_eq!(person["agents"]["stopped"], true);
+    // Admission by posture is said apart from the Stop.
+    assert_eq!(person["agents"]["admitted"], true);
+}
+
+#[test]
+fn the_machine_hello_says_work_runs_when_any_part_runs_and_none_only_when_all_are_known() {
+    let with = |jobs, changes, supervisors| {
+        reporting(
+            &clear(),
+            Work {
+                jobs,
+                changes,
+                supervisors,
+            },
+        )["work"]
+            .clone()
+    };
+
+    let none = with(Some(0), Some(0), Some(0));
+    let job = with(Some(1), Some(0), Some(0));
+    let change = with(Some(0), Some(2), Some(0));
+    let left = with(Some(0), Some(0), Some(1));
+    let running_beside_unknown = with(None, Some(1), None);
+
+    assert_eq!(
+        none,
+        json!({"state": "none", "jobs": 0, "changes": 0, "supervisors": 0})
+    );
+    assert_eq!(job["state"], "running");
+    assert_eq!(change["state"], "running");
+    assert_eq!(left["state"], "running");
+    assert_eq!(running_beside_unknown["state"], "running");
+    assert_eq!(running_beside_unknown["jobs"], "unknown");
+}
+
+#[test]
+fn work_any_part_of_which_cannot_be_told_is_never_said_to_be_none() {
+    for unknown in [
+        Work {
+            jobs: None,
+            ..idle()
+        },
+        Work {
+            changes: None,
+            ..idle()
+        },
+        Work {
+            supervisors: None,
+            ..idle()
+        },
+    ] {
+        let work = reporting(&clear(), unknown)["work"].clone();
+
+        assert_eq!(work["state"], "unknown", "{work}");
+    }
 }

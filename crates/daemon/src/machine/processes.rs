@@ -288,13 +288,9 @@ pub fn recover(
     {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let (done, staying): (Vec<Supervised>, Vec<Supervised>) =
-        left.into_iter().partition(|supervised| {
-            supervised.boot != boot
-                || (!running(&supervised.supervisor)
-                    && proof::left(proofs, &supervised.supervisor)
-                        .is_some_and(|code| code == DONE || code == ENDED))
-        });
+    let (done, staying): (Vec<Supervised>, Vec<Supervised>) = left
+        .into_iter()
+        .partition(|supervised| done_with(supervised, &boot, proofs, &running));
     if !retiring {
         return done.is_empty() && staying.is_empty();
     }
@@ -307,6 +303,39 @@ pub fn recover(
         }
     }
     staying.is_empty()
+}
+
+/// How many supervisors in `kept` that no keeper of this daemon `owned` are
+/// not known to be done with, by [`recover`]'s rule, without waiting or
+/// forgetting any: none when the record or this boot cannot be told.
+pub(crate) fn unresolved(
+    kept: &dyn Remembered,
+    proofs: &Path,
+    owned: impl Fn(&Instance) -> bool,
+    running: impl Fn(&Instance) -> bool,
+) -> Option<usize> {
+    let work = kept.kept().ok()?;
+    let boot = atlas_core::process::boot().ok()?;
+    Some(
+        work.iter()
+            .filter(|supervised| !owned(&supervised.supervisor))
+            .filter(|supervised| !done_with(supervised, &boot, proofs, &running))
+            .count(),
+    )
+}
+
+/// Whether `supervised` is done with: from another boot than `boot`, or
+/// gone with its proof of `DONE` or `ENDED` left in `proofs`.
+fn done_with(
+    supervised: &Supervised,
+    boot: &str,
+    proofs: &Path,
+    running: impl Fn(&Instance) -> bool,
+) -> bool {
+    supervised.boot != boot
+        || (!running(&supervised.supervisor)
+            && proof::left(proofs, &supervised.supervisor)
+                .is_some_and(|code| code == DONE || code == ENDED))
 }
 
 /// Keep what changed beside `path`, its name included, for good.

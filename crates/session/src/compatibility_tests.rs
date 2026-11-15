@@ -188,3 +188,14 @@ async fn a_hello_giving_a_field_twice_is_malformed_whatever_the_last_one_says() 
 
     assert_eq!(refused.code, Code::Protocol);
 }
+
+#[test]
+fn only_a_guest_declaring_acknowledgements_acknowledges() {
+    let acknowledging = declaring(PROTOCOL, &[CHANGES, ACKNOWLEDGED], "0.1.4");
+    let older = declaring(PROTOCOL, &[CHANGES, STOP_REPORT], "0.1.3");
+    let other = declaring(PROTOCOL + 1, &[ACKNOWLEDGED], "9.0.0");
+
+    assert!(acknowledging.acknowledges());
+    assert!(!older.acknowledges());
+    assert!(!other.acknowledges());
+}

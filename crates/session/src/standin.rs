@@ -10,7 +10,7 @@ use link::Tasks;
 use crate::{
     authority::{Authority, Hook, Retired},
     clock::Clock,
-    control::{self, Guest, Outbox, Said, Station},
+    control::{self, Guest, Outbox, Outcome, Said, Station},
     credit::Credit,
     generation::{Counted, Generation, Generations},
     keys::Keypair,
@@ -154,7 +154,9 @@ impl StandIn {
             outbox: Arc::new(Outbox::hello(
                 generation,
                 Vec::new(),
-                crate::compatibility::Declared::ours(Vec::new()),
+                crate::compatibility::Declared::ours(vec![
+                    crate::compatibility::ACKNOWLEDGED.to_owned(),
+                ]),
             )),
             credit: Arc::new(Credit::default()),
             tasks: Tasks::default(),
@@ -162,7 +164,11 @@ impl StandIn {
         let (reading, writing) = tokio::io::split(secure);
         live.tasks
             .hold(tokio::spawn(control::send(writing, live.outbox.clone())).abort_handle());
-        let guest = self.clone();
+        let guest = Handler {
+            standin: self.clone(),
+            authority: live.authority.clone(),
+            outbox: live.outbox.clone(),
+        };
         let (authority, lanes, credit) = (
             live.authority.clone(),
             live.lanes.clone(),
@@ -170,7 +176,7 @@ impl StandIn {
         );
         live.tasks.hold(
             tokio::spawn(async move {
-                control::guest_reads(reading, &authority, &lanes, &credit, &*guest).await;
+                control::guest_reads(reading, &authority, &lanes, &credit, &guest).await;
             })
             .abort_handle(),
         );
@@ -178,37 +184,69 @@ impl StandIn {
     }
 }
 
-impl Guest for StandIn {
+/// What one control connection's reader hands on: to the stand-in, and
+/// each numbered Stop or Resume answered on this connection alone, while
+/// its generation is live.
+struct Handler {
+    standin: Arc<StandIn>,
+    authority: Authority,
+    outbox: Arc<Outbox>,
+}
+
+impl Handler {
+    /// Answer the Stop or Resume numbered `seq`: the stand-in carries each
+    /// out at once.
+    fn answer(&self, seq: u64, outcome: Outcome) {
+        let _ = self
+            .authority
+            .if_live(|| self.outbox.say(Said::Applied { seq, outcome }));
+    }
+}
+
+impl Guest for Handler {
     fn stop(&self) {
-        self.stops.fetch_add(1, SeqCst);
+        self.standin.stops.fetch_add(1, SeqCst);
     }
 
     fn release(&self) {
-        self.releases.fetch_add(1, SeqCst);
+        self.standin.releases.fetch_add(1, SeqCst);
     }
 
     fn resume(&self) {
-        self.resumes.fetch_add(1, SeqCst);
+        self.standin.resumes.fetch_add(1, SeqCst);
+    }
+
+    fn halt(&self, seq: u64) {
+        self.standin.stops.fetch_add(1, SeqCst);
+        self.answer(seq, Outcome::Stopped);
+    }
+
+    fn lift(&self, seq: u64) {
+        self.standin.resumes.fetch_add(1, SeqCst);
+        self.answer(seq, Outcome::Resumed);
     }
 
     fn settled(&self, changes: Vec<atlas_core::files::Token>) {
-        self.settled
+        self.standin
+            .settled
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(changes);
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {
-        self.dials
+        let standin = &self.standin;
+        standin
+            .dials
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(lane);
-        let (gate, begun) = (self.dial_gate.clone(), self.dials_begun.clone());
+        let (gate, begun) = (standin.dial_gate.clone(), standin.dials_begun.clone());
         let work = tokio::spawn(async move {
             begun.fetch_add(1, SeqCst);
             let _ = gate.acquire().await;
         });
-        self.dial_work.hold(work.abort_handle());
+        standin.dial_work.hold(work.abort_handle());
     }
 }
 
@@ -223,6 +261,10 @@ pub struct Heard {
     pub connects: std::sync::Mutex<std::collections::VecDeque<Connect>>,
     /// Told whenever a mirror message comes.
     pub mirrored: tokio::sync::Notify,
+    /// Every answer to a numbered Stop or Resume, in the order it came.
+    pub applied: std::sync::Mutex<Vec<(u64, Outcome)>>,
+    /// Told whenever an answer comes.
+    pub answered: tokio::sync::Notify,
 }
 
 /// A guest's request for a mirrored connection's lane.
@@ -247,6 +289,24 @@ impl Heard {
                 return connect;
             }
             mirrored.await;
+        }
+    }
+
+    /// The answer to the Stop or Resume numbered `seq`, once it comes.
+    pub async fn applied(&self, seq: u64) -> Outcome {
+        loop {
+            let answered = self.answered.notified();
+            let found = self
+                .applied
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .find(|(answer, _)| *answer == seq)
+                .map(|(_, outcome)| *outcome);
+            if let Some(outcome) = found {
+                return outcome;
+            }
+            answered.await;
         }
     }
 
@@ -297,6 +357,14 @@ impl Station for Heard {
                 list,
             });
         self.mirrored.notify_waiters();
+    }
+
+    fn applied(&self, seq: u64, outcome: Outcome) {
+        self.applied
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((seq, outcome));
+        self.answered.notify_waiters();
     }
 }
 

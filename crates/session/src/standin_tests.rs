@@ -685,3 +685,65 @@ async fn a_connection_nobody_reads_never_keeps_another_from_crossing() {
         .unwrap();
     assert!(!flooding.is_finished());
 }
+
+#[tokio::test(start_paused = true)]
+async fn numbered_stops_and_resumes_cross_a_slow_link_and_are_answered_in_order() {
+    let link = Link::new(slow());
+    let (standin, station) = (
+        StandIn::new(desktop(), Duration::ZERO),
+        Keypair::generate().unwrap(),
+    );
+    let (_live, controlling, _connection) = connected(&link, &standin, &station).await;
+    assert!(controlling.declared.acknowledges());
+
+    say(&controlling, Said::stop_to(&controlling.declared, 1));
+    say(&controlling, Said::resume_to(&controlling.declared, 2));
+    say(&controlling, Said::stop_to(&controlling.declared, 3));
+
+    let last = tokio::time::timeout(Duration::from_secs(10), controlling.heard.applied(3))
+        .await
+        .expect("an answer");
+    assert_eq!(last, Outcome::Stopped);
+    assert_eq!(
+        *controlling.heard.applied.lock().unwrap(),
+        [
+            (1, Outcome::Stopped),
+            (2, Outcome::Resumed),
+            (3, Outcome::Stopped)
+        ]
+    );
+    assert_eq!(standin.stops.load(SeqCst), 2);
+    assert_eq!(standin.resumes.load(SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_replaced_generations_numbered_stop_is_never_answered_on_the_one_after_it() {
+    let link = Link::new(Conditions::default());
+    let (standin, station) = (
+        StandIn::new(desktop(), Duration::ZERO),
+        Keypair::generate().unwrap(),
+    );
+    let (_first, first_station, _first_connection) = connected(&link, &standin, &station).await;
+    let (_second, second_station, _second_connection) = connected(&link, &standin, &station).await;
+
+    say(&first_station, Said::Halt { seq: 1 });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while standin.stops.load(SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the replaced generation's Stop came");
+    say(&second_station, Said::Lift { seq: 1 });
+
+    let answered = tokio::time::timeout(Duration::from_secs(10), second_station.heard.applied(1))
+        .await
+        .expect("an answer");
+    assert_eq!(answered, Outcome::Resumed);
+    assert_eq!(
+        *second_station.heard.applied.lock().unwrap(),
+        [(1, Outcome::Resumed)]
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(first_station.heard.applied.lock().unwrap().is_empty());
+}

@@ -196,6 +196,17 @@ impl Jobs {
                 .any(|done| matches!(done, Done::Unknown(_)))
     }
 
+    /// How many jobs run, start or are being ended: none when one ended
+    /// without its end proved, which may run still.
+    pub(crate) fn running(&self) -> Option<usize> {
+        let state = self.state();
+        let unproved = state
+            .done
+            .iter()
+            .any(|done| matches!(done, Done::Unknown(_)));
+        (!unproved).then(|| state.launching.max(state.running.len()))
+    }
+
     /// Open job `id`'s log with `flags`, relative to the folder, never
     /// through a link, and only as a regular file.
     fn open_log(&self, id: &JobId, flags: OFlag) -> std::io::Result<File> {

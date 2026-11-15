@@ -2420,7 +2420,8 @@ async fn a_staged_copy_is_listed_then_removed_as_a_change_answered_again_from_it
 #[tokio::test]
 async fn a_guest_declares_only_what_it_was_made_to_serve() {
     use atlas_session::compatibility::{
-        CHANGES, COPIES, INPUT_LANES, LEFTOVERS, PROTOCOL, STAGE, Usable, judge,
+        ACKNOWLEDGED, CHANGES, COPIES, INPUT_LANES, LEFTOVERS, PROTOCOL, STAGE, STOP_REPORT,
+        Usable, judge,
     };
     let served = Served::start().await;
 
@@ -2429,7 +2430,7 @@ async fn a_guest_declares_only_what_it_was_made_to_serve() {
     let declared = &controlling.declared;
     assert_eq!(declared.protocol, PROTOCOL);
     assert_eq!(declared.version, env!("CARGO_PKG_VERSION"));
-    for served in [CHANGES, LEFTOVERS, STAGE, COPIES] {
+    for served in [CHANGES, LEFTOVERS, STAGE, COPIES, STOP_REPORT, ACKNOWLEDGED] {
         assert!(
             declared.capabilities.iter().any(|has| has == served),
             "{declared:?}"
@@ -3871,4 +3872,576 @@ async fn live_a_real_guest_updates_its_atlas_and_settles_the_change() {
         }
     }
     panic!("the update never settled");
+}
+
+/// The guest's own hello, on a read lane of `desktop`.
+async fn hello_of(desktop: &Desktop) -> Value {
+    let replies = ask(desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+    replies.last().cloned().expect("a hello")
+}
+
+/// Say `said` on `controlling`, and what the Stop or Resume numbered `seq`
+/// came to, once answered.
+async fn answered(
+    controlling: &Controlling,
+    said: atlas_session::control::Said,
+    seq: u64,
+) -> atlas_session::control::Outcome {
+    controlling.outbox.say(said).unwrap();
+    tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(seq))
+        .await
+        .expect("an answer")
+}
+
+/// Wait until no update holds a Resume back: the guest has read its
+/// updates' record.
+async fn updates_read(served: &Served) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.machine.gate.resume().is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the updates read");
+}
+
+#[tokio::test]
+async fn a_numbered_stop_is_answered_stopped_once_the_work_it_ended_has_ended() {
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_lines, group) = sleeping(&desktop).await;
+
+    let outcome = answered(&controlling, Said::Halt { seq: 1 }, 1).await;
+
+    assert_eq!(outcome, Outcome::Stopped);
+    assert!(nix::sys::signal::killpg(group, None).is_err(), "still runs");
+    assert!(!served.machine.daemon.keepers.keeping());
+    assert_eq!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped {
+            why: crate::machine::stop::Why::Person
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_numbered_resume_is_answered_resumed_once_agents_are_admitted() {
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    assert!(refused_as_stopped(&desktop).await);
+
+    let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+
+    assert_eq!(outcome, Outcome::Resumed);
+    assert!(!served.machine.daemon.halted.borrow().halted);
+    assert_eq!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Clear
+    );
+    assert!(!refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_numbered_resume_while_input_is_not_ready_is_refused_for_input() {
+    use atlas_session::control::{Outcome, Refusal, Said};
+    // An input service that never starts.
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::new("/nonexistent/atlas".into(), Vec::new()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+
+    let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+
+    assert_eq!(
+        outcome,
+        Outcome::Refused {
+            why: Refusal::Input
+        }
+    );
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_numbered_resume_whose_last_checks_put_the_stop_back_is_never_answered_resumed() {
+    use crate::machine::stop::{Kept, Why};
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let served = Served::start().await;
+    let (controlling, _desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    served.machine.halting.reopening.send_replace(false);
+    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    kept_as(&served, Kept::Clear).await;
+
+    // Work not known to have ended turns up between the disk and reopening.
+    served.machine.daemon.keepers.orphans(true);
+    served.machine.halting.reopening.send_replace(true);
+
+    let outcome = tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(2))
+        .await
+        .expect("an answer");
+    assert_eq!(outcome, Outcome::Refused { why: Refusal::Work });
+    assert!(served.machine.daemon.halted.borrow().halted);
+    assert_eq!(
+        served.machine.paired.stop.kept().unwrap(),
+        Kept::Stopped {
+            why: Why::ControlLost
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_stop_that_comes_while_a_numbered_resume_reopens_is_answered_after_it_and_holds() {
+    use crate::machine::stop::Kept;
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    served.machine.halting.reopening.send_replace(false);
+    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    kept_as(&served, Kept::Clear).await;
+
+    controlling.outbox.say(Said::Halt { seq: 3 }).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.machine.said.stops.load(SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the Stop came");
+    served.machine.halting.reopening.send_replace(true);
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(3))
+            .await
+            .expect("an answer"),
+        Outcome::Stopped
+    );
+    let answers = controlling.heard.applied.lock().unwrap().clone();
+    assert_eq!(
+        answers,
+        [
+            (1, Outcome::Stopped),
+            (
+                2,
+                Outcome::Refused {
+                    why: Refusal::LaterStop
+                }
+            ),
+            (3, Outcome::Stopped),
+        ]
+    );
+    assert!(matches!(
+        served.machine.paired.stop.kept().unwrap(),
+        Kept::Stopped { .. }
+    ));
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_resume_and_a_stop_said_back_to_back_are_answered_in_order_and_leave_agents_stopped() {
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+
+    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    let last = answered(&controlling, Said::Halt { seq: 3 }, 3).await;
+
+    assert_eq!(last, Outcome::Stopped);
+    let answers = controlling.heard.applied.lock().unwrap().clone();
+    let seqs: Vec<u64> = answers.iter().map(|(seq, _)| *seq).collect();
+    assert_eq!(seqs, [1, 2, 3], "{answers:?}");
+    assert!(
+        matches!(
+            answers[1].1,
+            Outcome::Resumed
+                | Outcome::Refused {
+                    why: Refusal::LaterStop
+                }
+        ),
+        "{answers:?}"
+    );
+    assert!(served.machine.daemon.halted.borrow().halted);
+    assert!(matches!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped { .. }
+    ));
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_generation_lost_during_a_numbered_resume_leaves_it_unanswered_and_agents_as_kept() {
+    use crate::machine::stop::Kept;
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, _desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    served.machine.halting.reopening.send_replace(false);
+    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    kept_as(&served, Kept::Clear).await;
+
+    served.link.set(Conditions {
+        partitioned: true,
+        ..Conditions::default()
+    });
+    served.clock.advance(atlas_session::authority::LEASE * 2);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.retired().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the generation lapsed");
+    served.machine.halting.reopening.send_replace(true);
+    served.link.set(Conditions::default());
+
+    kept_as(
+        &served,
+        Kept::Stopped {
+            why: crate::machine::stop::Why::ControlLost,
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let answers = controlling.heard.applied.lock().unwrap().clone();
+    assert_eq!(
+        answers,
+        [(1, Outcome::Stopped)],
+        "answered over a lost generation"
+    );
+    let (_controlling, desktop) = served.control().await;
+    assert_eq!(hello_of(&desktop).await["stop"]["state"], "stopped");
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn the_hello_says_the_guests_stop_is_clear_kept_with_why_or_unknown() {
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+
+    let clear = hello_of(&desktop).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    let stopped = hello_of(&desktop).await;
+    std::fs::write(served.records.path().join("stop"), b"{}").unwrap();
+    let unknown = hello_of(&desktop).await;
+
+    assert_eq!(clear["stop"], json!({"state": "clear"}));
+    assert_eq!(clear["agents"]["stopped"], false);
+    assert_eq!(
+        stopped["stop"],
+        json!({"state": "stopped", "why": "person"})
+    );
+    assert_eq!(stopped["agents"]["stopped"], true);
+    assert_eq!(unknown["stop"], json!({"state": "unknown"}));
+}
+
+#[tokio::test]
+async fn the_hello_says_work_runs_while_a_command_runs_and_none_once_it_ended() {
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let idle = hello_of(&desktop).await;
+    let (_lines, _group) = sleeping(&desktop).await;
+
+    let running = hello_of(&desktop).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    let ended = hello_of(&desktop).await;
+
+    assert_eq!(
+        idle["work"],
+        json!({"state": "none", "jobs": 0, "changes": 0, "supervisors": 0})
+    );
+    assert_eq!(running["work"]["state"], "running", "{running}");
+    assert_eq!(running["work"]["changes"], 1, "{running}");
+    assert_eq!(ended["work"]["state"], "none", "{ended}");
+}
+
+#[tokio::test]
+async fn the_hello_says_work_left_behind_not_known_to_have_ended_runs() {
+    let (records, _left) = left_behind(None);
+    let served = Served::on(records).await;
+    let (_controlling, desktop) = served.control().await;
+
+    let hello = hello_of(&desktop).await;
+
+    assert_eq!(hello["work"]["state"], "running", "{hello}");
+    assert_eq!(hello["work"]["supervisors"], 1, "{hello}");
+}
+
+#[tokio::test]
+async fn the_hello_says_work_is_unknown_when_its_supervisors_cannot_be_told() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    std::fs::write(
+        served
+            .records
+            .path()
+            .join("supervisors")
+            .join("processes.json"),
+        b"{}",
+    )
+    .unwrap();
+
+    let hello = hello_of(&desktop).await;
+
+    assert_eq!(hello["work"]["state"], "unknown", "{hello}");
+    assert_eq!(hello["work"]["supervisors"], "unknown", "{hello}");
+}
+
+/// Against a real guest, as [`live_a_station_pairs_with_a_real_guest_and_hears_its_own_hello`]
+/// reaches one: a numbered Stop and a numbered Resume, each answered by the
+/// guest once applied, and its hello's Stop and work report around them.
+/// Run with `cargo test -p atlas-daemon --lib live_a_real_guest_answers -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "live: needs a real guest through Atlas VM"]
+async fn live_a_real_guest_answers_a_numbered_stop_and_resume_once_applied() {
+    let (controlling, lanes) = live().await;
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .any(|has| has == atlas_session::compatibility::ACKNOWLEDGED),
+        "{:?}",
+        controlling.declared
+    );
+    let report = |said: Vec<Value>| {
+        let hello = said.last().cloned().unwrap_or(Value::Null);
+        json!({"stop": hello["stop"], "work": hello["work"], "agents": hello["agents"]})
+    };
+    println!(
+        "before: {}",
+        report(ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await)
+    );
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Halt { seq: 1 })
+        .unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(30), controlling.heard.applied(1))
+        .await
+        .unwrap();
+    println!("halt 1: {stopped:?}");
+    println!(
+        "stopped: {}",
+        report(ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await)
+    );
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Lift { seq: 2 })
+        .unwrap();
+    let lifted = tokio::time::timeout(Duration::from_secs(60), controlling.heard.applied(2))
+        .await
+        .unwrap();
+    println!("lift 2: {lifted:?}");
+    println!(
+        "after: {}",
+        report(ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await)
+    );
+}
+
+#[tokio::test]
+async fn work_handed_to_recovery_while_the_hello_reads_it_is_never_said_to_be_none() {
+    use crate::{daemon::facts::Work, machine::processes::Supervised};
+    let served = Served::start().await;
+    let (_controlling, _desktop) = served.control().await;
+    let daemon = served.machine.daemon.clone();
+    let supervisor = atlas_core::process::Instance::new(100_501, [1, 0]);
+    daemon
+        .supervising
+        .as_ref()
+        .unwrap()
+        .kept
+        .add(Supervised {
+            boot: atlas_core::process::boot().unwrap(),
+            generation: atlas_session::generation::Generation(1),
+            supervisor,
+            job: None,
+        })
+        .unwrap();
+    daemon.keepers.hold(supervisor);
+    let held = work_scanned_then(&daemon, None, || {});
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let handing = {
+        let (keepers, barrier) = (daemon.keepers.clone(), barrier.clone());
+        std::thread::spawn(move || {
+            barrier.wait();
+            keepers.leave_to_recovery(&supervisor);
+            barrier.wait();
+        })
+    };
+
+    // Handed over after the record was read, before the keepers are.
+    let handed = work_scanned_then(&daemon, None, || {
+        barrier.wait();
+        barrier.wait();
+    });
+
+    handing.join().unwrap();
+    assert_eq!(
+        held,
+        Work {
+            jobs: Some(0),
+            changes: Some(1),
+            supervisors: Some(0),
+        }
+    );
+    assert_eq!(
+        handed,
+        Work {
+            jobs: Some(0),
+            changes: Some(0),
+            supervisors: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_numbered_resume_while_the_guest_is_open_or_unknown_is_refused_and_keeps_the_stop() {
+    use crate::{
+        daemon::facts::Posture,
+        machine::stop::{Kept, Why},
+    };
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let remote_login = Posture {
+        remote_login: Some(true),
+        admin: Some(false),
+    };
+    let admin = Posture {
+        remote_login: Some(false),
+        admin: Some(true),
+    };
+    let unknown = Posture::default();
+    for posture in [remote_login, admin, unknown] {
+        let served = Served::start().await;
+        let (controlling, _desktop) = served.control().await;
+        updates_read(&served).await;
+        assert_eq!(
+            answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+            Outcome::Stopped
+        );
+        served.machine.seen_as(posture);
+
+        let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+
+        assert_eq!(
+            outcome,
+            Outcome::Refused {
+                why: Refusal::Posture
+            },
+            "{posture:?}"
+        );
+        assert!(served.machine.daemon.halted.borrow().halted, "{posture:?}");
+        assert_eq!(
+            served.machine.paired.stop.kept().unwrap(),
+            Kept::Stopped { why: Why::Person },
+            "{posture:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_unnumbered_resume_lifts_the_stop_whatever_the_guests_posture_as_before() {
+    use crate::machine::stop::{Kept, Why};
+    use atlas_session::control::Said;
+    let served = Served::start().await;
+    let (controlling, _desktop) = served.control().await;
+    updates_read(&served).await;
+    served.machine.seen_as(crate::daemon::facts::Posture {
+        remote_login: Some(true),
+        admin: Some(false),
+    });
+    controlling.outbox.say(Said::Stop).unwrap();
+    kept_as(&served, Kept::Stopped { why: Why::Person }).await;
+
+    controlling.outbox.say(Said::Resume).unwrap();
+
+    kept_as(&served, Kept::Clear).await;
+}
+
+#[tokio::test]
+async fn a_numbered_resume_whose_guest_opens_before_it_reopens_puts_the_stop_back_for_posture() {
+    use crate::{
+        daemon::facts::Posture,
+        machine::stop::{Kept, Why},
+    };
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let open = Posture {
+        remote_login: Some(true),
+        admin: Some(false),
+    };
+    for posture in [open, Posture::default()] {
+        let served = Served::start().await;
+        let (controlling, _desktop) = served.control().await;
+        updates_read(&served).await;
+        assert_eq!(
+            answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+            Outcome::Stopped
+        );
+        served.machine.halting.reopening.send_replace(false);
+        controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+        kept_as(&served, Kept::Clear).await;
+
+        // Seen open, or not to be told, after the Stop was lifted on disk.
+        served.machine.seen_as(posture);
+        served.machine.halting.reopening.send_replace(true);
+
+        let outcome = tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(2))
+            .await
+            .expect("an answer");
+        assert_eq!(
+            outcome,
+            Outcome::Refused {
+                why: Refusal::Posture
+            },
+            "{posture:?}"
+        );
+        assert!(served.machine.daemon.halted.borrow().halted, "{posture:?}");
+        assert_eq!(
+            served.machine.paired.stop.kept().unwrap(),
+            Kept::Stopped {
+                why: Why::ControlLost
+            },
+            "{posture:?}"
+        );
+    }
 }
