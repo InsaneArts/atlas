@@ -84,6 +84,76 @@ pub(crate) struct Running {
     unknown: bool,
 }
 
+/// What a process was read to run from.
+enum Read {
+    /// Its program, its arguments and its folder, each as the kernel gave it.
+    Paths {
+        executable: Option<PathBuf>,
+        arguments: Vec<String>,
+        folder: Option<PathBuf>,
+    },
+    /// It ended, even if not yet reaped, or its pid is another's now.
+    Ended,
+    /// It could not be read, even a few times over.
+    Unreadable,
+}
+
+impl Read {
+    /// How many times a process that gives nothing is read before it
+    /// counts as unreadable: one mid-exec or mid-exit gives nothing for a
+    /// moment.
+    const TRIES: usize = 5;
+
+    /// Read `instance`'s paths, then read it again: a process that ended
+    /// meanwhile, or a pid given to another, is not counted.
+    fn of(instance: atlas_core::process::Instance) -> Self {
+        for tried in 1..=Self::TRIES {
+            let pid = instance.pid;
+            let executable = u32::try_from(pid)
+                .ok()
+                .and_then(atlas_core::app_bundle::signature::executable_of);
+            let arguments = atlas_core::process::arguments(pid);
+            let folder = atlas_core::process::cwd(instance);
+            match atlas_core::process::info(pid) {
+                Ok(Some(again)) if again.instance == instance && !again.zombie => {}
+                Ok(_) => return Self::Ended,
+                Err(_) => return Self::Unreadable,
+            }
+            // A process whose program was replaced or deleted since it
+            // started has no path the kernel gives: its arguments still name
+            // it, so it is never counted without them. Nor is one with an
+            // argument relative to a folder unread: the kernel gives even a
+            // deleted folder's path, so an unread one is a failed read.
+            if let Ok(arguments) = arguments {
+                let unplaced = folder.is_none()
+                    && arguments
+                        .iter()
+                        .enumerate()
+                        .any(|(at, argument)| relative(at, argument));
+                if !unplaced {
+                    return Self::Paths {
+                        executable,
+                        arguments,
+                        folder,
+                    };
+                }
+            }
+            if tried < Self::TRIES {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        Self::Unreadable
+    }
+}
+
+/// Whether argument `at`, `argument`, is a path relative to its process's
+/// folder: not absolute, not an option, and not a program named bare, which
+/// was found on the search path, not there.
+fn relative(at: usize, argument: &str) -> bool {
+    let bare = at == 0 && !argument.contains('/');
+    !Path::new(argument).is_absolute() && !bare && !argument.starts_with('-')
+}
+
 impl Running {
     /// Read them now.
     pub(crate) fn now() -> Self {
@@ -100,39 +170,26 @@ impl Running {
         };
         for process in processes.into_iter().filter(|process| !process.zombie) {
             let pid = process.instance.pid;
-            let executable = u32::try_from(pid)
-                .ok()
-                .and_then(atlas_core::app_bundle::signature::executable_of);
-            let arguments = atlas_core::process::arguments(pid);
-            let folder = atlas_core::process::cwd(process.instance);
-            // Read again after its paths: a process that ended meanwhile, or
-            // a pid given to another, is not counted; one that cannot be read
-            // again leaves what runs unknown.
-            match atlas_core::process::info(pid) {
-                Ok(Some(again)) if again.instance == process.instance => {}
-                Ok(_) => continue,
-                Err(_) => {
+            let (executable, arguments, folder) = match Read::of(process.instance) {
+                Read::Paths {
+                    executable,
+                    arguments,
+                    folder,
+                } => (executable, arguments, folder),
+                Read::Ended => continue,
+                Read::Unreadable => {
                     running.unknown = true;
                     continue;
                 }
-            }
-            // A process whose program was replaced or deleted since it started
-            // has no path the kernel gives: its arguments still name it.
-            let Ok(arguments) = arguments else {
-                running.unknown = true;
-                continue;
             };
             let mut paths: Vec<PathBuf> = executable.into_iter().collect();
             for (at, argument) in arguments.iter().enumerate() {
                 let named = Path::new(argument);
-                // A program named bare was found on the search path, not here.
-                let bare = at == 0 && !argument.contains('/');
                 if named.is_absolute() {
                     paths.push(named.to_owned());
-                } else if !bare && !argument.starts_with('-') {
-                    // A path relative to where the process itself is. One
-                    // whose folder cannot be read is in no folder that is
-                    // still there, so in no copy: nothing of it is inside one.
+                } else if relative(at, argument) {
+                    // A path relative to where the process itself is: its
+                    // folder was read whenever such a path is there.
                     if let Some(folder) = &folder {
                         paths.push(folder.join(named));
                     }

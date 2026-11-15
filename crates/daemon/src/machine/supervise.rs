@@ -65,13 +65,13 @@ pub const UNSURE: u8 = 70;
 /// The exit code of a supervisor that started nothing.
 pub const UNSTARTED: u8 = 127;
 
-/// How many times ending the work kills its group's members before it
-/// gives up telling.
-const ENDING_ROUNDS: usize = 10;
+/// How long ending the work keeps killing its group's members before it
+/// gives up telling: a killed process can take a while to go on a busy Mac.
+pub(crate) const ENDING: Duration = Duration::from_millis(300);
 
 /// How long the work has to end once the supervisor is asked to end it,
 /// before it is made to: within the daemon's own grace.
-const TERMINATING: Duration = Duration::from_millis(1500);
+pub(crate) const TERMINATING: Duration = Duration::from_millis(1500);
 
 /// The supervisor's command: run what `words` give under the lifeline on
 /// standard input, the program's output on standard error. The program's
@@ -86,15 +86,35 @@ pub fn start(words: &[OsString]) -> u8 {
         return UNSTARTED;
     };
     supervise(&invocation, UnixStream::from(lifeline));
-    // Nothing it started is left: said for good, or not proved at all.
+    // Nothing it started is left: said for good, or not proved at all. Held
+    // until this process exits, so an ending begun meanwhile never leaves a
+    // proof of its own over this one.
+    std::mem::forget(finishing());
     proved(&invocation.proofs, DONE)
+}
+
+/// The right to leave this supervisor's proof and exit, taken once by
+/// whichever finishes first: its work seen ended, or an ending. Whoever
+/// comes after waits for the exit.
+fn finishing() -> std::sync::MutexGuard<'static, ()> {
+    static FINISHING: Mutex<()> = Mutex::new(());
+    FINISHING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// `code`, once this supervisor's proof of it is left in `proofs`;
 /// [`UNSURE`] when it cannot be.
 fn proved(proofs: &std::path::Path, code: u8) -> u8 {
     match Instance::current() {
-        Some(own) if proof::leave(proofs, &own, code).is_ok() => code,
+        // A proof written whose folder could not be synced still reads back:
+        // its code and its proof never disagree.
+        Some(own)
+            if proof::leave(proofs, &own, code).is_ok()
+                || proof::left(proofs, &own) == Some(code) =>
+        {
+            code
+        }
         _ => UNSURE,
     }
 }
@@ -642,6 +662,9 @@ impl<K: Kernel> Work<K> {
     /// so the code proves what it did: [`ENDED`] once only it was left in
     /// its group, [`UNSURE`] when it could not tell.
     fn end(&self) -> ! {
+        // Its proof and exit are this ending's alone: one that finished
+        // first has this held until it exits.
+        let _finishing = finishing();
         // No program is mid-spawn while this is held, and none starts.
         let _alone = atlas_core::spawn::hold();
         let code = match (self.ending(), &self.proofs) {
@@ -659,7 +682,8 @@ impl<K: Kernel> Work<K> {
         // ended: one that left the group, or whose identity could not be
         // read, is never forgotten between rounds.
         let mut known: HashSet<Instance> = HashSet::new();
-        for _ in 0..ENDING_ROUNDS {
+        let giving_up = std::time::Instant::now() + ENDING;
+        while std::time::Instant::now() < giving_up {
             // Looked for again each round, its own children too, so a
             // program that left the group before any look is still found.
             let looked = self.look().is_some();
