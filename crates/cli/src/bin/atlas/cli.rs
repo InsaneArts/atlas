@@ -102,6 +102,9 @@ pub(super) enum Command {
         #[arg(long)]
         folder: PathBuf,
     },
+    /// A machine desktop's root installer, started by its LaunchDaemon alone.
+    #[command(hide = true)]
+    MachineInstaller,
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {

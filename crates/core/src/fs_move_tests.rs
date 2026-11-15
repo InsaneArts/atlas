@@ -33,3 +33,32 @@ fn a_move_never_replaces_what_is_there() {
     assert_eq!(fs::read_to_string(to.join("other")).unwrap(), "moved");
     assert!(!from.join("item").exists());
 }
+
+#[test]
+fn two_entries_in_two_folders_exchange_places_whole() {
+    let root = tempfile::tempdir().unwrap();
+    let (one, two) = (root.path().join("one"), root.path().join("two"));
+    std::fs::create_dir(&one).unwrap();
+    std::fs::create_dir(&two).unwrap();
+    std::fs::write(one.join("app"), "new").unwrap();
+    std::fs::write(two.join("held"), "old").unwrap();
+    let (first, second) = (fs::File::open(&one).unwrap(), fs::File::open(&two).unwrap());
+
+    exchange_between(
+        &first,
+        &FileName::new("app").unwrap(),
+        &second,
+        &FileName::new("held").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(std::fs::read_to_string(one.join("app")).unwrap(), "old");
+    assert_eq!(std::fs::read_to_string(two.join("held")).unwrap(), "new");
+    let missing = exchange_between(
+        &first,
+        &FileName::new("app").unwrap(),
+        &second,
+        &FileName::new("absent").unwrap(),
+    );
+    assert!(missing.is_err());
+}

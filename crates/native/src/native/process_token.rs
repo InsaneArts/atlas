@@ -59,6 +59,7 @@ unsafe extern "C" {
     fn audit_token_to_euid(token: AuditToken) -> libc::uid_t;
     fn audit_token_to_pid(token: AuditToken) -> libc::pid_t;
     fn audit_token_to_asid(token: AuditToken) -> libc::pid_t;
+    fn audit_token_to_pidversion(token: AuditToken) -> libc::c_int;
 }
 
 /// The kernel's name for one process: this use of its PID, and no later one.
@@ -113,6 +114,13 @@ impl Token {
     pub fn pid(&self) -> i32 {
         // SAFETY: libbsm only decodes the token it is given by value.
         unsafe { audit_token_to_pid(self.0) }
+    }
+
+    /// Its PID's version: which use of that PID it is.
+    pub fn version(&self) -> u32 {
+        // SAFETY: libbsm only decodes the token it is given by value.
+        let version = unsafe { audit_token_to_pidversion(self.0) };
+        u32::try_from(version).unwrap_or_default()
     }
 
     /// Its effective user ID.

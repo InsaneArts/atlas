@@ -121,6 +121,18 @@ fn main() -> ExitCode {
         return launch_job(log, argv0, program);
     }
 
+    // A machine desktop's root installer runs alone, before anything else.
+    #[cfg(target_os = "macos")]
+    if matches!(command, Command::MachineInstaller) {
+        return match atlas_daemon::machine::installer::serve_blocking() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{}", json!(error));
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     // A machine desktop's daemon keeps this thread for its run loop too.
     #[cfg(target_os = "macos")]
     if let Command::Daemon {

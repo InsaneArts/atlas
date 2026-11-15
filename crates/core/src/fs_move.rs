@@ -100,7 +100,9 @@ impl FileName {
         plain.then(|| CString::new(name).ok()).flatten().map(Self)
     }
 
-    pub(crate) fn as_c_str(&self) -> &CStr {
+    /// The name, to give a call that takes one entry of a folder.
+    #[must_use]
+    pub fn as_c_str(&self) -> &CStr {
         &self.0
     }
 }
@@ -139,6 +141,34 @@ pub fn move_between(
     )?;
 
     match from_dir.sync_all().and_then(|()| to_dir.sync_all()) {
+        Ok(()) => Ok(Moved::Synced),
+        Err(error) => Ok(Moved::Unsynced(error)),
+    }
+}
+
+/// Exchange `first` in the folder `first_dir` with `second` in the folder
+/// `second_dir`, both existing, on the same volume, in one atomic step: each
+/// takes the other's place, nothing is overwritten, and an error means
+/// nothing moved.
+///
+/// # Errors
+///
+/// Returns the I/O error of the exchange.
+pub fn exchange_between(
+    first_dir: &fs::File,
+    first: &FileName,
+    second_dir: &fs::File,
+    second: &FileName,
+) -> io::Result<Moved> {
+    rename_at(
+        first_dir.as_raw_fd(),
+        first.as_c_str(),
+        second_dir.as_raw_fd(),
+        second.as_c_str(),
+        Replace::Swap,
+    )?;
+
+    match first_dir.sync_all().and_then(|()| second_dir.sync_all()) {
         Ok(()) => Ok(Moved::Synced),
         Err(error) => Ok(Moved::Unsynced(error)),
     }

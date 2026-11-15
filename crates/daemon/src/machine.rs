@@ -6,6 +6,8 @@ pub mod changes;
 pub mod commitment;
 pub mod generations;
 pub mod input;
+#[cfg(target_os = "macos")]
+pub mod installer;
 pub mod key;
 pub mod launch;
 pub mod mirror;

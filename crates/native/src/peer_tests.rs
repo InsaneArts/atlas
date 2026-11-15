@@ -33,3 +33,31 @@ fn an_apps_signature_names_the_program_inside_its_bundle() {
         Some("/System/Applications/Calculator.app/Contents/MacOS/Calculator".into())
     );
 }
+
+#[test]
+fn a_running_peer_is_named_by_its_token_with_the_build_it_runs() {
+    let (here, _there) = UnixStream::pair().unwrap();
+
+    assert!(running(here.as_fd(), "anchor apple").is_none());
+    let peer = running(here.as_fd(), "always").unwrap();
+
+    assert_eq!(peer.pid, std::process::id());
+    assert_eq!(peer.uid, nix::unistd::geteuid().as_raw());
+    assert!(peer.pid_version > 0);
+    // A code directory hash is twenty bytes.
+    assert_eq!(peer.cdhash.len(), 20);
+}
+
+#[test]
+fn a_signed_programs_cdhash_is_the_one_it_runs_with() {
+    let (here, _there) = UnixStream::pair().unwrap();
+    let me = std::env::current_exe().unwrap();
+
+    let on_disk = file_cdhash(&me).unwrap();
+
+    assert_eq!(
+        Some(on_disk),
+        running(here.as_fd(), "always").map(|peer| peer.cdhash)
+    );
+    assert!(file_cdhash(Path::new("/nonexistent")).is_none());
+}

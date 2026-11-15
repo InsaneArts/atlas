@@ -11,7 +11,7 @@
 use objc2_core_foundation::{CFData, CFDictionary, CFRetained, CFString, CFType, CFURL};
 use objc2_security::{
     SecCSFlags, SecCode, SecRequirement, SecStaticCode, kSecCodeInfoMainExecutable,
-    kSecGuestAttributeAudit,
+    kSecCodeInfoUnique, kSecGuestAttributeAudit,
 };
 use std::{
     os::fd::{AsRawFd, BorrowedFd},
@@ -31,6 +31,75 @@ pub fn verified(socket: BorrowedFd<'_>, executable: &Path, requirement: &str) ->
         && path_of(&code).is_some_and(|path| same_file(&path, executable));
     // The token's sixth word is the process's ID.
     runs.then_some(token[5])
+}
+
+/// The process that connected a socket, as the kernel stamped it then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Peer {
+    pub pid: u32,
+    /// Told apart from any later process given its PID.
+    pub pid_version: u32,
+    /// Its effective account.
+    pub uid: u32,
+    /// The code directory hash of the program it runs: which build it is.
+    pub cdhash: Vec<u8>,
+}
+
+/// The process that connected `socket`, when its running code satisfies
+/// `requirement`, wherever on disk it was started from: one whose bundle
+/// moved since still runs the code it was started with.
+pub fn running(socket: BorrowedFd<'_>, requirement: &str) -> Option<Peer> {
+    let token = peer_token(socket)?;
+    let code = guest(&token)?;
+    if !satisfies(&code, requirement) {
+        return None;
+    }
+    // The token's words: its euid second, its PID sixth, its PID version last.
+    Some(Peer {
+        pid: token[5],
+        pid_version: token[7],
+        uid: token[1],
+        cdhash: cdhash_of(&code)?,
+    })
+}
+
+/// The code directory hash of the program `path`, as its signature says,
+/// when it is signed.
+pub fn file_cdhash(path: &Path) -> Option<Vec<u8>> {
+    let url = CFURL::from_file_path(path)?;
+    let mut on_disk: *const SecStaticCode = std::ptr::null();
+    // SAFETY: `on_disk` is a valid place for the call's result.
+    let status = unsafe {
+        SecStaticCode::create_with_path(&url, SecCSFlags::empty(), NonNull::from(&mut on_disk))
+    };
+    let on_disk = (status == 0)
+        .then_some(NonNull::new(on_disk.cast_mut()))
+        .flatten()?;
+    // SAFETY: on success the call returned a retained static code object.
+    let on_disk = unsafe { CFRetained::from_raw(on_disk) };
+    unique(&on_disk)
+}
+
+/// The code directory hash of what `code` runs.
+fn cdhash_of(code: &SecCode) -> Option<Vec<u8>> {
+    let mut on_disk: *const SecStaticCode = std::ptr::null();
+    // SAFETY: `on_disk` is a valid place for the call's result.
+    let status = unsafe { code.copy_static_code(SecCSFlags::empty(), NonNull::from(&mut on_disk)) };
+    let on_disk = (status == 0)
+        .then_some(NonNull::new(on_disk.cast_mut()))
+        .flatten()?;
+    // SAFETY: on success the call returned a retained static code object.
+    let on_disk = unsafe { CFRetained::from_raw(on_disk) };
+    unique(&on_disk)
+}
+
+/// The code directory hash `on_disk`'s signature names.
+fn unique(on_disk: &SecStaticCode) -> Option<Vec<u8>> {
+    let information = signing_information(on_disk)?;
+    // SAFETY: the key is the framework's own constant string.
+    let key: &CFString = unsafe { kSecCodeInfoUnique };
+    let unique = information.get(key)?.downcast::<CFData>().ok()?;
+    Some(unique.to_vec())
 }
 
 /// The audit token of the process that connected `socket`.
@@ -107,6 +176,17 @@ fn path_of(code: &SecCode) -> Option<std::path::PathBuf> {
 
 /// The main executable `on_disk` names in its signature.
 fn main_executable(on_disk: &SecStaticCode) -> Option<std::path::PathBuf> {
+    let information = signing_information(on_disk)?;
+    // SAFETY: the key is the framework's own constant string.
+    let key: &CFString = unsafe { kSecCodeInfoMainExecutable };
+    let url = information.get(key)?.downcast::<CFURL>().ok()?;
+    url.to_file_path()
+}
+
+/// What `on_disk`'s signature says of it.
+fn signing_information(
+    on_disk: &SecStaticCode,
+) -> Option<CFRetained<CFDictionary<CFString, CFType>>> {
     let mut information: *const CFDictionary = std::ptr::null();
     // SAFETY: `information` is a valid place for the call's result.
     let status = unsafe {
@@ -121,12 +201,7 @@ fn main_executable(on_disk: &SecStaticCode) -> Option<std::path::PathBuf> {
         .flatten()?;
     // SAFETY: on success the call returned a retained dictionary, whose keys
     // are the framework's strings and whose values are CF objects.
-    let information: CFRetained<CFDictionary<CFString, CFType>> =
-        unsafe { CFRetained::cast_unchecked(CFRetained::from_raw(information)) };
-    // SAFETY: the key is the framework's own constant string.
-    let key: &CFString = unsafe { kSecCodeInfoMainExecutable };
-    let url = information.get(key)?.downcast::<CFURL>().ok()?;
-    url.to_file_path()
+    Some(unsafe { CFRetained::cast_unchecked(CFRetained::from_raw(information)) })
 }
 
 /// Whether `found` and `expected` name the same file.

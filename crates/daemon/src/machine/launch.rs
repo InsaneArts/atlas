@@ -102,6 +102,60 @@ pub fn judge(job: &Job, pid: u32, installed: (&Path, &Plist), program: &Path) ->
     root_owned(program)
 }
 
+/// Refuse unless launchd names process `pid` as the job loaded from the
+/// root-owned plist installed at its path, for the machine daemon: as
+/// [`judge`] does, except for the program it runs, which an update may have
+/// moved since that process started. What the root installer asks of a peer,
+/// beside that peer's running code.
+///
+/// # Errors
+///
+/// Refuses, with why, whenever anything does not hold.
+pub(in crate::machine) fn judge_job(job: &Job, pid: u32, installed: (&Path, &Plist)) -> Result<()> {
+    let (at, plist) = installed;
+    if job.path.as_deref().map(Path::new) != Some(at) {
+        return Err(refused(
+            "launchd did not load it from Atlas's installed job",
+        ));
+    }
+    if job.pid != Some(pid) {
+        return Err(refused("launchd runs another process as Atlas's job"));
+    }
+    if plist.label != LABEL {
+        return Err(refused("the installed job has another label"));
+    }
+    if !matches!(
+        plist
+            .program_arguments
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [_, "daemon", "--machine", ..]
+    ) {
+        return Err(refused("the installed job runs something else"));
+    }
+    root_owned(at)
+}
+
+/// Refuse unless launchd names process `pid` as the machine job of the
+/// account `uid`, as [`judge_job`] judges it.
+///
+/// # Errors
+///
+/// Refuses as [`judge_job`] does, or when launchd or the plist cannot be read.
+pub(in crate::machine) async fn prove_job(uid: u32, pid: u32) -> Result<()> {
+    let printed = asked("/bin/launchctl", &["print", &format!("gui/{uid}/{LABEL}")]).await?;
+    let json = asked("/usr/bin/plutil", &["-convert", "json", "-o", "-", PLIST]).await?;
+    let plist: Plist =
+        serde_json::from_slice(&json).map_err(|_| refused("the installed job cannot be read"))?;
+    judge_job(
+        &Job::parse(&String::from_utf8_lossy(&printed)),
+        pid,
+        (Path::new(PLIST), &plist),
+    )
+}
+
 /// The longest launchd or the plist reader may take to answer.
 const ASKING: std::time::Duration = std::time::Duration::from_secs(5);
 
