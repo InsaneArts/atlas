@@ -232,16 +232,33 @@ fn carried(file: &File) -> Result<Vec<xattr::Attribute>> {
 ///
 /// Fails when anything in it cannot be removed, or it lies too deep.
 pub(crate) fn discard(parent: &File, name: &CStr) -> io::Result<()> {
-    remove(parent, name, 0)
+    remove(parent, name, 0, None)
 }
 
-fn remove(parent: &File, name: &CStr, depth: usize) -> io::Result<()> {
+/// Remove the folder `name` in `parent` and everything below it, as
+/// [`discard`] does, but only while it is the folder `node` names
+/// (`dev:ino`): it is opened, checked and emptied through that one
+/// descriptor, so one swapped in meanwhile is never touched.
+///
+/// # Errors
+///
+/// Fails when it is not that folder, or anything in it cannot be removed.
+pub(crate) fn discard_as(parent: &File, name: &CStr, node: &str) -> io::Result<()> {
+    remove(parent, name, 0, Some(node))
+}
+
+fn remove(parent: &File, name: &CStr, depth: usize, node: Option<&str>) -> io::Result<()> {
     let stat = match fstatat(parent, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
         Err(nix::errno::Errno::ENOENT) => return Ok(()),
         Err(error) => return Err(error.into()),
     };
     if kind(&stat) != SFlag::S_IFDIR {
+        if node.is_some() {
+            return Err(io::Error::other(
+                "What is to be removed is not the folder named",
+            ));
+        }
         return unlinkat(parent, name, UnlinkatFlags::NoRemoveDir).map_err(io::Error::from);
     }
     if depth > DEEPEST + 1 {
@@ -260,7 +277,8 @@ fn remove(parent: &File, name: &CStr, depth: usize) -> io::Result<()> {
         }
     };
     let opened = nix::sys::stat::fstat(&folder)?;
-    if (opened.st_dev, opened.st_ino) != (stat.st_dev, stat.st_ino) {
+    let named = node.is_none_or(|node| node == format!("{}:{}", opened.st_dev, opened.st_ino));
+    if (opened.st_dev, opened.st_ino) != (stat.st_dev, stat.st_ino) || !named {
         return Err(io::Error::other(
             "A folder to remove changed while it was removed",
         ));
@@ -275,7 +293,7 @@ fn remove(parent: &File, name: &CStr, depth: usize) -> io::Result<()> {
         }
     }
     for child in names {
-        remove(&folder, &child, depth + 1)?;
+        remove(&folder, &child, depth + 1, None)?;
     }
     unlinkat(parent, name, UnlinkatFlags::RemoveDir).map_err(io::Error::from)
 }

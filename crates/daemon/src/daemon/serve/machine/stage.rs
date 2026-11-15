@@ -3,7 +3,7 @@
 //! lane may go, be cancelled or time out; the transaction still cleans up
 //! and keeps what it came to, and a retry is answered from that.
 use super::{Gate, Machine, Writer, write};
-use crate::machine::stage::{self, Placed, Stages, write::Contents};
+use crate::machine::stage::{self, Placed, Stages, copies, write::Contents};
 use atlas_core::{
     error::{Code, Error},
     files::Token,
@@ -171,7 +171,14 @@ impl Machine {
         if let Some(answered) = self.intend(&lane.change, request.clone()).await {
             return write(&mut writer, &answered).await;
         }
-        // Kept as intended from here: whatever it comes to is kept.
+        // Kept as intended from here: whatever it comes to is kept. A token
+        // being removed is never staged into.
+        if stages.removing(&lane.change) {
+            drop(admitting);
+            let busy = failure(Code::Busy, "The copy is being removed");
+            let reply = self.came_to(lane.change.clone(), busy).await;
+            return write(&mut writer, &reply).await;
+        }
         let running = stages.register(&lane.change);
         drop(admitting);
         let (permit, reserved) = match begin(&stages, &lane, &asked) {
@@ -510,4 +517,140 @@ fn credit(lane: &Lane, bytes: usize) {
         lane: lane.id,
         bytes: bytes as u64,
     });
+}
+
+impl Machine {
+    /// Remove the copy `copy`, still the folder `node` says, as the change
+    /// `change`, already kept as intended, admitted by `gate`. The removal
+    /// owns its work to the end, whatever happens to its lane.
+    pub(super) async fn remove_copy_lane<R>(
+        self: &Arc<Self>,
+        change: Token,
+        copy: Token,
+        node: String,
+        gate: Gate,
+        mut reader: R,
+        mut writer: Writer,
+    ) -> atlas_core::error::Result<()>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        let (lanes, id) = (gate.lanes.clone(), gate.lane);
+        let Some(stages) = self.daemon.stages.clone() else {
+            let refusal = failure(Code::Platform, "This desktop keeps no copies");
+            let reply = self.came_to(change, refusal).await;
+            return write(&mut writer, &reply).await;
+        };
+        if let Some(refusal) = gate.refused() {
+            let reply = self.came_to(change, refusal).await;
+            return write(&mut writer, &reply).await;
+        }
+        let claimed = {
+            let _admitting = stages.admitting.lock().await;
+            stages.place_among().zip(stages.claim(&copy))
+        };
+        let Some((permit, claimed)) = claimed else {
+            let busy = failure(
+                Code::Busy,
+                "The copy is busy, or too many changes are running",
+            );
+            let reply = self.came_to(change, busy).await;
+            return write(&mut writer, &reply).await;
+        };
+        // Counted as committing from here, under the turn a Stop is taken
+        // in, until what it came to is kept: putting the copy right may
+        // already finish an earlier removal, and a Resume waits for it all.
+        let committing = {
+            let _turn = self
+                .halting
+                .turning
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            // Admitted again under the turn: a Stop and Resume while it
+            // waited for its place refuse it here.
+            match gate.authorize(|| true) {
+                None => Ok(stages.commit()),
+                Some(refusal) => Err(refusal),
+            }
+        };
+        let committing = match committing {
+            Ok(committing) => committing,
+            Err(refusal) => {
+                let reply = self.came_to(change, refusal).await;
+                return write(&mut writer, &reply).await;
+            }
+        };
+        // The station hanging up, or sending anything more, ends it before
+        // it is authorized.
+        let hung_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watching = tokio::spawn({
+            let hung_up = hung_up.clone();
+            async move {
+                let mut more = [0_u8; 1];
+                let _ = reader.read(&mut more).await;
+                hung_up.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let latched = hung_up.clone();
+        let (machine, turning) = (self.clone(), self.halting.turning.clone());
+        let mut removal = tokio::spawn(async move {
+            let _held = (claimed, permit, committing);
+            let changes = machine.paired.changes.clone();
+            let (removing, asked, of) = (stages.clone(), change.clone(), copy.clone());
+            let removed = tokio::task::spawn_blocking(move || {
+                let root = removing.root()?;
+                // What an earlier removal or stage of it left is put right
+                // first: until it is, nothing new is done to it, and its
+                // record is never this removal's to forget.
+                if !copies::put_right(root, &changes, &of) {
+                    let busy = failure(
+                        Code::Busy,
+                        "An earlier change to this copy is not yet put right",
+                    );
+                    return Some((copies::Removal::Came(busy), false));
+                }
+                // Authorized under the turn a Stop is taken in.
+                let came = copies::remove(root, &asked, &of, &node, || {
+                    let _turn = turning.lock().unwrap_or_else(PoisonError::into_inner);
+                    gate.authorize(|| !hung_up.load(std::sync::atomic::Ordering::SeqCst))
+                });
+                Some((came, true))
+            })
+            .await;
+            match removed {
+                Ok(Some((copies::Removal::Came(reply), owned))) => {
+                    let kept = machine.came_to(change, reply.clone()).await;
+                    // Its own record goes only once what it came to is kept.
+                    if owned && kept == reply {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            stages.root().map(|root| copies::forget(root, &copy))
+                        })
+                        .await;
+                    }
+                    kept
+                }
+                Ok(Some((copies::Removal::Pending(reply), _))) => reply,
+                Ok(None) | Err(_) => interrupted(
+                    Code::Uncertain,
+                    "What this removal came to is unknown until the desktop starts again",
+                ),
+            }
+        });
+        tokio::select! {
+            joined = &mut removal => {
+                // Done: the lane closes once its reply is written.
+                watching.abort();
+                match joined {
+                    Ok(reply) => write(&mut writer, &reply).await,
+                    Err(_) => Ok(()),
+                }
+            }
+            () = lanes.ended(id) => {
+                // Its lane gone, it may no longer be authorized.
+                latched.store(true, std::sync::atomic::Ordering::SeqCst);
+                watching.abort();
+                Ok(())
+            }
+        }
+    }
 }

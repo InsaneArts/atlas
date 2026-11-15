@@ -2246,3 +2246,38 @@ async fn bytes_past_a_stage_s_last_file_end_it_with_nothing_placed() {
     assert_eq!(reply["ok"], false, "{said:?}");
     assert!(!copies(&served).join(change.as_str()).exists());
 }
+
+#[tokio::test]
+async fn a_staged_copy_is_listed_then_removed_as_a_change_answered_again_from_its_record() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let copy = Token::new();
+    let staged = stage(&desktop, &controlling.credit, &copy, &tree, Sending::Whole).await;
+    assert_eq!(staged.last().unwrap()["ok"], true, "{staged:?}");
+
+    let listed = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "copies", "copy": copy}),
+    )
+    .await;
+    let listed = listed.last().unwrap()["copies"][0].clone();
+    assert_eq!(listed["state"], "placed", "{listed}");
+    assert_eq!(listed["path"], staged.last().unwrap()["path"]);
+    let change = Token::new();
+    let removal =
+        json!({"op": "remove-copy", "copy": copy, "node": listed["node"], "change": change});
+    let lane = || LaneKind::Change {
+        change: change.clone(),
+    };
+    let removed = ask(&desktop, lane(), &removal).await;
+    // Its reply lost on the way, it is asked for again.
+    let again = ask(&desktop, lane(), &removal).await;
+
+    assert_eq!(removed.last().unwrap()["outcome"], "removed", "{removed:?}");
+    assert_eq!(again.last(), removed.last());
+    assert!(!copies(&served).join(copy.as_str()).exists());
+    let left = ask(&desktop, LaneKind::Read, &json!({"op": "copies"})).await;
+    assert_eq!(left.last().unwrap()["copies"], json!([]), "{left:?}");
+}

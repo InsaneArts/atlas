@@ -660,6 +660,25 @@ impl Machine {
         {
             return write(&mut writer, &answered).await;
         }
+        // A copy is removed by the machine's own code, which keeps what it
+        // came to and owns its work to the end.
+        if let LaneKind::Change { change } = &header.kind
+            && let Ok(protocol::Asked {
+                request: Request::RemoveCopy { copy, node },
+                ..
+            }) = protocol::parse(&line)
+        {
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+            };
+            return self
+                .remove_copy_lane(change.clone(), copy, node, gate, reader, writer)
+                .await;
+        }
         line.push(b'\n');
         let reader: Reader = Box::new(std::io::Cursor::new(line).chain(reader));
         let asker = Asker {

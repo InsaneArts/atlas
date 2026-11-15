@@ -1128,6 +1128,30 @@ pub(super) async fn answer(
                 json!({"ok": true, "op": "leftovers", "leftovers": leftovers})
             }
         },
+        Request::Copies { copy, after } => match daemon.stages.clone() {
+            // The helper login's copies are the station's, in its shared folder.
+            None => failure(
+                Code::Platform,
+                "Only a machine desktop keeps copies of its own",
+            ),
+            Some(stages) => tokio::task::spawn_blocking(move || match stages.root() {
+                Some(root) => crate::machine::stage::copies::inventory(
+                    root,
+                    &stages,
+                    copy.as_ref(),
+                    after.as_ref(),
+                ),
+                None => failure(Code::State, "The desktop's folder for copies is not ready"),
+            })
+            .await
+            .unwrap_or_else(|_| failure(Code::Io, "The desktop's copies could not be listed")),
+        },
+        // A machine desktop removes a copy on the lane of its change, before
+        // here; the helper login has none to remove.
+        Request::RemoveCopy { .. } => failure(
+            Code::Platform,
+            "Only a machine desktop removes copies of its own",
+        ),
         Request::Outcome { change } => match &daemon.kept {
             // The disk outlives this process: it says, whatever was asked before.
             Some(kept) => {

@@ -9,7 +9,7 @@
 mod child;
 mod cwd;
 pub use child::exited as child_exited;
-pub(crate) use cwd::cwd;
+pub use cwd::cwd;
 
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};

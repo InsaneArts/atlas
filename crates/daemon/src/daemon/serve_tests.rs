@@ -2155,3 +2155,17 @@ async fn a_resume_never_waits_on_a_recovery_already_under_way() {
 
     assert!(!resolved);
 }
+
+#[tokio::test]
+async fn the_helper_login_keeps_no_copies_of_its_own_to_list_or_remove() {
+    let listed = answered_elsewhere(r#"{"op":"copies"}"#).await;
+    let removed = answered_elsewhere(&format!(
+        r#"{{"op":"remove-copy","copy":"{}","node":"1:2","change":"{}"}}"#,
+        atlas_core::files::Token::new().as_str(),
+        atlas_core::files::Token::new().as_str()
+    ))
+    .await;
+
+    assert_eq!(listed["code"], "platform", "{listed}");
+    assert_eq!(removed["code"], "platform", "{removed}");
+}

@@ -24,6 +24,7 @@ use std::{
     sync::Arc,
 };
 
+pub(crate) mod copies;
 pub(crate) mod write;
 
 /// The operation a stage is kept under in the change records.
@@ -223,6 +224,8 @@ pub struct Stages {
     /// so one change never starts twice.
     pub(crate) admitting: tokio::sync::Mutex<()>,
     running: std::sync::Mutex<std::collections::HashMap<Token, tokio::sync::watch::Receiver<bool>>>,
+    /// The copies being removed now, one removal each.
+    removals: Arc<std::sync::Mutex<std::collections::HashSet<Token>>>,
     permits: Arc<tokio::sync::Semaphore>,
     reserved: Arc<std::sync::Mutex<u64>>,
     committing: Arc<std::sync::atomic::AtomicUsize>,
@@ -255,6 +258,21 @@ impl Drop for Running {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.change);
         self.done.send_replace(true);
+    }
+}
+
+/// A copy taken for one removal: dropped, it is free again.
+pub(crate) struct Claimed {
+    token: Token,
+    removals: Arc<std::sync::Mutex<std::collections::HashSet<Token>>>,
+}
+
+impl Drop for Claimed {
+    fn drop(&mut self) {
+        self.removals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.token);
     }
 }
 
@@ -292,6 +310,7 @@ impl Stages {
             root: std::sync::OnceLock::new(),
             admitting: tokio::sync::Mutex::new(()),
             running: std::sync::Mutex::default(),
+            removals: Arc::default(),
             permits: Arc::new(tokio::sync::Semaphore::new(AT_ONCE)),
             reserved: Arc::default(),
             committing: Arc::default(),
@@ -344,6 +363,7 @@ impl Stages {
     ) -> Result<()> {
         let root = Root::open(&self.path)?;
         recover(&root, changes)?;
+        copies::recover(&root, changes)?;
         let _ = self.root.set(root);
         Ok(())
     }
@@ -386,6 +406,50 @@ impl Stages {
             running: self.clone(),
             done,
         }
+    }
+
+    /// Every token work is registered on now: stages running and copies
+    /// being removed.
+    pub(crate) fn busy(&self) -> Vec<Token> {
+        let mut busy: Vec<Token> = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect();
+        busy.extend(
+            self.removals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .cloned(),
+        );
+        busy
+    }
+
+    /// Whether `token`'s copy is being removed now.
+    pub(crate) fn removing(&self, token: &Token) -> bool {
+        self.removals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(token)
+    }
+
+    /// Take `token`'s copy for one removal, under [`Stages::admitting`]: none
+    /// while it is being removed or staged already.
+    pub(crate) fn claim(&self, token: &Token) -> Option<Claimed> {
+        if self.running(token).is_some() {
+            return None;
+        }
+        let mut removals = self
+            .removals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        removals.insert(token.clone()).then(|| Claimed {
+            token: token.clone(),
+            removals: self.removals.clone(),
+        })
     }
 
     /// A place among the stages running at once, if one is free.

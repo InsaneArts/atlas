@@ -2,7 +2,9 @@
 use super::{Instance, Own, own};
 use std::{os::unix::ffi::OsStringExt, path::PathBuf};
 
-pub(crate) fn cwd(instance: Instance) -> Option<PathBuf> {
+/// The working directory of `instance`, while it is still that process and
+/// this account's.
+pub fn cwd(instance: Instance) -> Option<PathBuf> {
     read(instance, own, native)
 }
 

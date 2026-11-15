@@ -345,6 +345,23 @@ requests! { request =>
     /// Whether work a machine desktop's daemon started may still run:
     /// `running`, `none` or `unknown`.
     "leftovers" Leftovers = Ok(Request::Leftovers),
+    /// The copies a machine desktop keeps: the one `copy` names, or a page
+    /// of them in order, after the one `after` names.
+    "copies" Copies { copy: Option<Token>, after: Option<Token> } = Ok(Request::Copies {
+        copy: token(request, "copy")?,
+        after: token(request, "after")?,
+    }),
+    /// Remove a machine desktop's copy `copy`, while it is still the folder
+    /// `node` says, as `dev:ino`.
+    "remove-copy" RemoveCopy { copy: Token, node: String } = Ok(Request::RemoveCopy {
+        copy: token(request, "copy")?
+            .ok_or_else(|| bad("remove-copy requires the \"copy\" it removes"))?,
+        node: request["node"]
+            .as_str()
+            .filter(|node| (3..=64).contains(&node.len()))
+            .ok_or_else(|| bad("remove-copy requires the \"node\" of its copy"))?
+            .to_owned(),
+    }),
 }
 
 /// One request line: what it asks, and the name it gives the change it
@@ -409,6 +426,8 @@ impl Request {
             Self::Sound { muted: Some(_) } => (Any, None, Mutation("sound")),
             Self::Outcome { .. } => (Any, None, Read("outcome")),
             Self::Leftovers => (Any, None, Read("leftovers")),
+            Self::Copies { .. } => (Any, None, Read("copies")),
+            Self::RemoveCopy { .. } => (Any, None, Mutation("remove-copy")),
         };
         Policy {
             console,
@@ -536,6 +555,16 @@ pub fn parse(line: &[u8]) -> Result<Asked, Value> {
     Ok(Asked {
         request: decode(op, &request)?,
         change: change(&request)?,
+    })
+}
+
+/// The token a request names in `field`, if any.
+fn token(request: &Value, field: &str) -> Result<Option<Token>, Value> {
+    optional(&request[field], |value| {
+        value
+            .as_str()
+            .and_then(Token::parse)
+            .ok_or_else(|| bad(format!("\"{field}\" must be 48 lowercase hex digits")))
     })
 }
 
