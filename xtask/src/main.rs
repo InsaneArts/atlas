@@ -5,7 +5,10 @@
 //! as a GitHub release.
 
 use atlas_core::{
-    app_bundle::{APP_EXECUTABLE, IDENTIFIER, LOGIN_JOB, exact_version},
+    app_bundle::{
+        APP_EXECUTABLE, IDENTIFIER, LOGIN_JOB, VM_BUNDLE, VM_EXECUTABLE, VM_IDENTIFIER,
+        exact_version,
+    },
     digest::read_sha256,
     files::exchange,
 };
@@ -185,6 +188,37 @@ fn info_plist(version: &str) -> String {
     )
 }
 
+/// Atlas VM's Info.plist: no Dock icon, its own identifier.
+fn vm_info_plist(version: &str) -> String {
+    format!(
+        r#"{PLIST_HEAD}	<key>CFBundleIdentifier</key>
+	<string>{VM_IDENTIFIER}</string>
+	<key>CFBundleName</key>
+	<string>Atlas VM</string>
+	<key>CFBundleExecutable</key>
+	<string>{VM_EXECUTABLE}</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>{version}</string>
+	<key>CFBundleVersion</key>
+	<string>{version}</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>{MINIMUM_MACOS}</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>InsaneArts</string>
+{PLIST_TAIL}"#
+    )
+}
+
+/// What the hardened runtime lets Atlas VM do beyond its default: run a VM
+/// with Apple's framework. Nothing else.
+fn vm_entitlements() -> String {
+    format!("{PLIST_HEAD}\t<key>com.apple.security.virtualization</key>\n\t<true/>\n{PLIST_TAIL}")
+}
+
 /// What the hardened runtime lets the app's `atlas` do beyond its default:
 /// record audio, which muting the helper's apps takes once the person allows
 /// it. Nothing else.
@@ -299,6 +333,18 @@ fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
 }
 
 /// `output` holds every architecture and requires no newer macOS than advertised.
+/// Check `binary` is for Apple silicon alone, at the app's minimum macOS.
+fn check_apple_silicon(binary: &Path) -> Result<()> {
+    let archs = output("/usr/bin/lipo", &["-archs", text(binary)?])?;
+    if archs.trim() != "arm64" {
+        return Err(format!(
+            "{} is not for Apple silicon alone: {archs}",
+            binary.display()
+        ));
+    }
+    check_minimum(binary)
+}
+
 fn check_universal(output: &Path) -> Result<()> {
     let archs = self::output("/usr/bin/lipo", &["-archs", text(output)?])?;
     let found: Vec<&str> = archs.split_whitespace().collect();
@@ -519,6 +565,29 @@ fn compile_executables(root: &Path, stage: &Path, host_only: bool) -> Result<Pat
         &[swift.as_slice(), &["--show-bin-path"]].concat(),
     )?;
     let executable = PathBuf::from(bin.trim()).join(APP_EXECUTABLE);
+
+    // Atlas VM, its own package, for Apple silicon only: a Mac VM runs
+    // nowhere else, and its framework types exist only there.
+    let vm_package = root.join("app/Packages/AtlasVM");
+    let mut vm_swift = vec![
+        "build",
+        "-c",
+        "release",
+        "--package-path",
+        text(&vm_package)?,
+    ];
+    if !host_only {
+        vm_swift.extend(["--arch", "arm64"]);
+    }
+    exec(
+        "/usr/bin/swift",
+        &[vm_swift.as_slice(), &["--product", VM_EXECUTABLE]].concat(),
+    )?;
+    let vm_bin = output(
+        "/usr/bin/swift",
+        &[vm_swift.as_slice(), &["--show-bin-path"]].concat(),
+    )?;
+    let vm_executable = PathBuf::from(vm_bin.trim()).join(VM_EXECUTABLE);
     let app = stage.join("Atlas.app");
     let macos = app.join("Contents/MacOS");
 
@@ -541,6 +610,15 @@ fn compile_executables(root: &Path, stage: &Path, host_only: bool) -> Result<Pat
     } else {
         check_universal(&macos.join(APP_EXECUTABLE))?;
     }
+    let vm = app.join(VM_BUNDLE);
+    io(fs::create_dir_all(vm.join("Contents/MacOS")))?;
+    io(fs::write(
+        vm.join("Contents/Info.plist"),
+        vm_info_plist(atlas_core::VERSION),
+    ))?;
+    let vm_inside = vm.join("Contents/MacOS").join(VM_EXECUTABLE);
+    io(fs::copy(&vm_executable, &vm_inside))?;
+    check_apple_silicon(&vm_inside)?;
     Ok(app)
 }
 
@@ -654,6 +732,10 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
         None,
         &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
+    // Atlas VM, a bundle of its own inside, may run a VM and nothing more.
+    let vm_granted = app.with_file_name("AtlasVM.entitlements");
+    io(fs::write(&vm_granted, vm_entitlements()))?;
+    sign(Some(VM_IDENTIFIER), Some(&vm_granted), &app.join(VM_BUNDLE))?;
     sign(None, Some(&granted), app)?;
     // Signing may create a private _CodeSignature directory under a restrictive
     // umask. Normalize it too, then verify the unchanged signed contents.

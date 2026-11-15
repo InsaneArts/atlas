@@ -233,3 +233,24 @@ fn the_app_may_record_audio_and_nothing_else_beyond_the_hardened_runtime() {
 
     assert_eq!(json, r#"{"com.apple.security.device.audio-input":true}"#);
 }
+
+#[test]
+fn atlas_vm_may_run_a_vm_and_nothing_else_beyond_the_hardened_runtime() {
+    let json = plist_json(&vm_entitlements());
+
+    assert_eq!(json, r#"{"com.apple.security.virtualization":true}"#);
+}
+
+#[test]
+fn atlas_vm_has_its_own_identifier_and_no_dock_icon() {
+    let json = plist_json(&vm_info_plist("1.2.3"));
+
+    for expected in [
+        r#""CFBundleIdentifier":"com.insanearts.atlas.vm""#,
+        r#""CFBundleExecutable":"AtlasVM""#,
+        r#""LSUIElement":true"#,
+        r#""CFBundleShortVersionString":"1.2.3""#,
+    ] {
+        assert!(json.contains(expected), "{expected} in {json}");
+    }
+}

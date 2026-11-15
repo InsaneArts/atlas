@@ -8,7 +8,7 @@ final class Folders {
 
   init() throws {
     root = FileManager.default.temporaryDirectory.appending(
-      path: "atlas-vm-\(UUID().uuidString)",
+      path: "avm-\(UUID().uuidString.prefix(8))",
       directoryHint: .isDirectory
     )
     try VMFolder.makePrivate(root)

@@ -15,17 +15,26 @@ let strict: [SwiftSetting] = [
 
 // Atlas VM's rules: a VM's folder and settings, its power, the changes its
 // station asks for, kept before they are done, and when its window may have
-// input. No Virtualization: the program that runs a VM gives these a host.
+// input, in AtlasVMKit, which has no Virtualization; and AtlasVM, the program
+// that runs one VM with Apple's framework and gives those rules a host.
 //
 // Level 0. Foundation only.
 let package = Package(
   name: "AtlasVM",
   platforms: [.macOS(.v14)],
   products: [
-    .library(name: "AtlasVMKit", targets: ["AtlasVMKit"])
+    .library(name: "AtlasVMKit", targets: ["AtlasVMKit"]),
+    .executable(name: "AtlasVM", targets: ["AtlasVM"]),
   ],
   targets: [
     .target(name: "AtlasVMKit", swiftSettings: strict),
+    // The thin program: Apple's framework, the window, and the sockets.
+    .executableTarget(
+      name: "AtlasVM",
+      dependencies: ["AtlasVMKit"],
+      swiftSettings: strict,
+      linkerSettings: [.linkedFramework("Virtualization")]
+    ),
     .testTarget(name: "AtlasVMKitTests", dependencies: ["AtlasVMKit"], swiftSettings: strict),
   ],
   swiftLanguageModes: [.v6]

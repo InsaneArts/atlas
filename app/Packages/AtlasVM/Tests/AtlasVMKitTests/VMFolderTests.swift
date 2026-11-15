@@ -18,7 +18,7 @@ struct VMFolderTests {
     for made in [folder.root, folder.share, folder.changes] {
       try VMFolder.checkPrivate(made)
     }
-    #expect(folder.station.lastPathComponent == "station.sock")
+    #expect(folder.station.lastPathComponent == "station")
   }
 
   @Test("a folder others may read, by its mode or an access entry, or a link in a folder's place, is refused")

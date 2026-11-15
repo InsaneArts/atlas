@@ -13,6 +13,10 @@ public struct Incarnation: Codable, Equatable, Sendable {
   /// An ID no other run has.
   public let id: String
 
+  /// An earlier run whose record could not be read: any VM process of the
+  /// framework's may be one it started.
+  public static let unreadable = Incarnation(pid: 0, startSeconds: 0, startMicroseconds: 0, id: "unreadable")
+
   /// This process's run; none when the kernel does not say when it started.
   public static func current() -> Incarnation? {
     let pid = getpid()

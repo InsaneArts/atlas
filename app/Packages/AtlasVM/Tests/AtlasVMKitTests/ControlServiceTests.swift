@@ -93,13 +93,15 @@ struct ControlServiceTests {
     #expect(await host.calls == ["start", "stop"])
   }
 
-  @Test("an earlier run's own changes wait while it may still run, and are settled by what is there once it is gone")
+  @Test(
+    "under the runner's lock, earlier runs' changes are settled by what is there, a window's only once its VM is gone"
+  )
   func recovery() async throws {
     let folders = try Folders()
     let host = FakeHost(power: .stopped)
     let (service, ledger) = try service(host, in: folders)
-    let gone = Incarnation(pid: 0x7FFF_FFF0, startSeconds: 1, startMicroseconds: 0, id: "gone")
-    let (create, start, on, off, others) = (
+    let lock = try #require(RunnerLock(at: folders.root.appending(path: "Runner.lock")))
+    let (create, start, on, off, own) = (
       ChangeID(String(repeating: "a0", count: 24))!,
       ChangeID(String(repeating: "a1", count: 24))!,
       ChangeID(String(repeating: "a2", count: 24))!,
@@ -110,26 +112,23 @@ struct ControlServiceTests {
       .create(create), .start(start), .window(on, input: true), .window(off, input: false),
     ]
     for operation in asked {
-      #expect(try ledger.begin(operation, by: gone.id) == .new)
+      #expect(try ledger.begin(operation, by: "an earlier run") == .new)
     }
-    #expect(try ledger.begin(.stop(others), by: "another run") == .new)
+    // This very run's own change is never an earlier run's.
+    let this = try #require(await service.answer(.hello).incarnation?.id)
+    #expect(try ledger.begin(.stop(own), by: this) == .new)
 
-    // With no earlier run known, or this very run named, nothing is settled.
-    await service.recover(earlier: nil, vmGone: true)
-    await service.recover(earlier: Incarnation.current(), vmGone: true)
-    #expect(try ledger.unsettled().count == 5)
-
-    // Gone, but its VM not seen gone: the window's changes wait.
-    await service.recover(earlier: gone, vmGone: false)
+    // The VM not seen gone: the window's changes wait.
+    await service.recover(holding: lock, vmGone: false)
     #expect(try ledger.record(create)?.outcome == .done)
     #expect(try ledger.record(start)?.outcome != .done, "its VM is stopped")
-    let waiting = try ledger.unsettled().map(\.operation)
-    #expect(waiting == [.window(on, input: true), .window(off, input: false), .stop(others)])
+    #expect(try ledger.record(on)?.outcome == nil)
+    #expect(try ledger.record(off)?.outcome == nil)
 
-    await service.recover(earlier: gone, vmGone: true)
+    await service.recover(holding: lock, vmGone: true)
     #expect(try ledger.record(on)?.outcome != .done)
     #expect(try ledger.record(off)?.outcome == .done)
-    #expect(try ledger.record(others)?.outcome == nil, "another run's change is never settled")
+    #expect(try ledger.record(own)?.outcome == nil, "this run's change is its own to settle")
     #expect(await host.calls.isEmpty, "nothing was done again")
   }
 

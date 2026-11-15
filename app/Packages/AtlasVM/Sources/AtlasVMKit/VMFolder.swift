@@ -36,12 +36,14 @@ public struct VMFolder: Equatable, Sendable {
   public var share: URL { root.appending(path: "Share", directoryHint: .isDirectory) }
   /// The changes its station asked for.
   public var changes: URL { root.appending(path: "Changes", directoryHint: .isDirectory) }
+  /// The lock the run serving it holds.
+  public var lock: URL { root.appending(path: "Runner.lock") }
   /// The run of its runner it was last served by.
   public var incarnation: URL { root.appending(path: "Incarnation.json") }
   /// The socket its station controls it on.
-  public var control: URL { root.appending(path: "control.sock") }
+  public var control: URL { root.appending(path: "control") }
   /// The socket its station's session reaches its guest on.
-  public var station: URL { root.appending(path: "station.sock") }
+  public var station: URL { root.appending(path: "station") }
 
   /// Make it and its folders if they are not there, each private, and
   /// check that each is.

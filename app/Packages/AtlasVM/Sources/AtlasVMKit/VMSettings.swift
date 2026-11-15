@@ -11,6 +11,10 @@ public struct VMSettings: Equatable, Sendable {
   /// Its one display's height, in pixels.
   public var displayHeight: Int
 
+  /// The vsock port its guest listens on for its station, as Atlas's
+  /// guest daemon does.
+  public static let guestPort: UInt32 = 0x4154
+
   /// What every VM is made with: 4 processors, 8 GB of memory, a 128 GB
   /// disk and one 1920 by 1200 display; no sound.
   public static let standard = VMSettings(

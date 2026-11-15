@@ -16,4 +16,6 @@ public protocol VMHost: Sendable {
   func closeWindow() async throws
   /// Whether the VM's window is open now.
   func windowOpen() async -> Bool
+  /// Whether every VM an earlier run of the runner ran is seen gone now.
+  func earlierGone() async -> Bool
 }

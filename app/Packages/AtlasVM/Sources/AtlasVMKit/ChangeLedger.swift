@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// The changes a station asked a VM's runner for, each kept as asked before
@@ -9,7 +8,7 @@ public struct ChangeLedger: Sendable {
   /// The folder its records are in.
   public let folder: URL
 
-  /// The longest record read.
+  /// The longest record read or written.
   private static let longest = 64 * 1024
 
   /// The records in `folder`, a private folder of this account's.
@@ -41,14 +40,22 @@ public struct ChangeLedger: Sendable {
   public func record(_ change: ChangeID) throws -> ChangeRecord? {
     try VMFolder.checkPrivate(folder)
     let file = folder.appending(path: Self.name(of: change))
-    guard let data = try Self.read(file) else { return nil }
+    let data: Data?
+    do {
+      data = try PrivateFile.read(file, limit: Self.longest)
+      // A record seen is answered only once its folder keeps it.
+      if data != nil {
+        try PrivateFile.sync(folder, for: file)
+      }
+    } catch {
+      throw ChangeLedgerError.unreadable(file)
+    }
+    guard let data else { return nil }
     guard let record = try? JSONDecoder().decode(ChangeRecord.self, from: data),
       record.operation.change == change
     else {
       throw ChangeLedgerError.unreadable(file)
     }
-    // A record seen is answered only once its folder keeps it.
-    try sync(for: file)
     return record
   }
 
@@ -73,29 +80,6 @@ public struct ChangeLedger: Sendable {
     "\(change.text).json"
   }
 
-  /// The bytes of the record `file`: none when there is none; never through
-  /// a link, and only from a file of this account's that others may not
-  /// change.
-  private static func read(_ file: URL) throws -> Data? {
-    // Non-blocking, so a pipe in a record's place never waits for a writer.
-    let descriptor = open(file.path(percentEncoded: false), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-    guard descriptor >= 0 else {
-      if errno == ENOENT { return nil }
-      throw ChangeLedgerError.unreadable(file)
-    }
-    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    var status = stat()
-    guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
-      status.st_uid == getuid(), status.st_mode & 0o022 == 0,
-      let data = try? handle.read(upToCount: longest + 1), data.count <= longest
-    else {
-      throw ChangeLedgerError.unreadable(file)
-    }
-    return data
-  }
-
-  /// Write `record` whole, then put it in place by one rename, each made to
-  /// outlive a crash.
   private func keep(_ record: ChangeRecord, for change: ChangeID) throws {
     try VMFolder.checkPrivate(folder)
     let target = folder.appending(path: Self.name(of: change))
@@ -103,33 +87,10 @@ public struct ChangeLedger: Sendable {
     guard let data = try? JSONEncoder().encode(record), data.count <= Self.longest else {
       throw ChangeLedgerError.unwritable(target)
     }
-    let writing = folder.appending(path: ".\(Self.name(of: change)).writing").path(percentEncoded: false)
-    unlink(writing)
-    let descriptor = open(writing, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else { throw ChangeLedgerError.unwritable(target) }
-    let written = data.withUnsafeBytes { bytes in Darwin.write(descriptor, bytes.baseAddress, bytes.count) }
-    let synced = Self.durable(descriptor)
-    close(descriptor)
-    guard written == data.count, synced, rename(writing, target.path(percentEncoded: false)) == 0 else {
-      unlink(writing)
+    do {
+      try PrivateFile.write(data, to: target)
+    } catch {
       throw ChangeLedgerError.unwritable(target)
     }
-    try sync(for: target)
-  }
-
-  /// Make what changed in the folder outlive a crash, for `file`'s sake.
-  private func sync(for file: URL) throws {
-    let descriptor = open(folder.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    guard descriptor >= 0 else { throw ChangeLedgerError.unwritable(file) }
-    let kept = Self.durable(descriptor)
-    close(descriptor)
-    guard kept else { throw ChangeLedgerError.unwritable(file) }
-  }
-
-  /// Make what was written through `descriptor` reach the disk itself, past
-  /// its cache, as `fsync` alone does not on macOS; `fsync` where the disk
-  /// cannot.
-  private static func durable(_ descriptor: Int32) -> Bool {
-    fcntl(descriptor, F_FULLFSYNC) == 0 || fsync(descriptor) == 0
   }
 }

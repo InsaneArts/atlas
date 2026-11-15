@@ -60,6 +60,13 @@ actor FakeHost: VMHost {
 
   func windowOpen() async -> Bool { windowIsOpen }
 
+  var earlierAreGone = true
+
+  /// Say earlier VMs gone, or not.
+  func earlier(gone: Bool) { earlierAreGone = gone }
+
+  func earlierGone() async -> Bool { earlierAreGone }
+
   func sticking() { windowSticks = true }
 
   func failing(_ name: String?, after: String? = nil) {

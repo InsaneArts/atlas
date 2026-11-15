@@ -10,6 +10,9 @@ public actor ControlService {
   private let incarnation: Incarnation
   /// Whether a change, or recovery, is being done now.
   private var busy = false
+  /// The lock this run serves under, once it recovered: its proof that
+  /// every earlier run has ended.
+  private var lock: RunnerLock?
 
   /// A runner serving `host` as `incarnation`, its changes kept in `ledger`.
   public init(ledger: ChangeLedger, host: any VMHost, incarnation: Incarnation) {
@@ -62,17 +65,18 @@ public actor ControlService {
     }
   }
 
-  /// Settle each change the earlier run `earlier` began and left intended,
-  /// by what is there now, once that run is seen gone; a window's change
-  /// only with `vmGone` too, the VM it ran seen gone, so no window of its
-  /// can still have input. With no earlier run known, or one not seen gone,
-  /// nothing is settled. One that cannot be told stays pending.
-  public func recover(earlier: Incarnation?, vmGone: Bool) async {
-    guard let earlier, earlier.exited() == true, !busy else { return }
+  /// Settle each change an earlier run began and left intended, by what is
+  /// there now. `lock` proves every earlier run has ended: this run holds
+  /// the one lock a run serves under. A window's change is settled only with
+  /// `vmGone` too, the VMs those runs ran seen gone, so no window of theirs
+  /// can still have input. One that cannot be told stays pending.
+  public func recover(holding lock: RunnerLock, vmGone: Bool) async {
+    guard !busy else { return }
+    self.lock = lock
     busy = true
     defer { busy = false }
     guard let unsettled = try? ledger.unsettled() else { return }
-    for record in unsettled where record.run == earlier.id {
+    for record in unsettled where record.run != incarnation.id {
       guard let outcome = await recovered(record.operation, vmGone: vmGone) else { continue }
       try? ledger.settle(record, as: outcome)
     }
@@ -128,10 +132,16 @@ public actor ControlService {
   private func answered(_ record: ChangeRecord, in reply: ControlReply) async -> ControlReply {
     var reply = reply
     var record = record
-    if record.outcome == nil, record.run == incarnation.id, !busy {
+    if record.outcome == nil, record.run == incarnation.id || lock != nil, !busy {
       busy = true
       defer { busy = false }
-      if let outcome = await seen(record.operation, failure: nil),
+      // This run's own is told as it is now; an earlier run's, as recovery
+      // tells it, with whether its VM is gone looked at again.
+      let outcome =
+        record.run == incarnation.id
+        ? await seen(record.operation, failure: nil)
+        : await recovered(record.operation, vmGone: await host.earlierGone())
+      if let outcome,
         let change = record.operation.change,
         stillPending(change),
         (try? ledger.settle(record, as: outcome)) != nil

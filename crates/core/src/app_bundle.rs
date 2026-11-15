@@ -20,6 +20,15 @@ pub const BUNDLE_EXECUTABLE: &str = "Contents/MacOS/atlas";
 /// The app's executable, shipped beside `atlas` in Atlas.app.
 pub const APP_EXECUTABLE: &str = "AtlasApp";
 
+/// Atlas VM's executable, in its own bundle inside Atlas.app.
+pub const VM_EXECUTABLE: &str = "AtlasVM";
+
+/// Atlas VM's bundle, inside Atlas.app.
+pub const VM_BUNDLE: &str = "Contents/Library/Atlas VM.app";
+
+/// Atlas VM's code signing identifier, under Atlas's Developer ID.
+pub const VM_IDENTIFIER: &str = "com.insanearts.atlas.vm";
+
 /// The login agent that runs `atlas menubar` from inside the app; launchd
 /// names the job in XPC_SERVICE_NAME.
 pub const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
