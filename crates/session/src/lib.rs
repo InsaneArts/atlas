@@ -9,6 +9,7 @@
 
 pub mod authority;
 pub mod clock;
+pub mod compatibility;
 pub mod control;
 pub mod credit;
 pub mod generation;

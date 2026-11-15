@@ -151,7 +151,11 @@ impl StandIn {
         let live = Live {
             lanes: Arc::new(Lanes::new(authority.clone())),
             authority,
-            outbox: Arc::new(Outbox::hello(generation, Vec::new())),
+            outbox: Arc::new(Outbox::hello(
+                generation,
+                Vec::new(),
+                crate::compatibility::Declared::ours(Vec::new()),
+            )),
             credit: Arc::new(Credit::default()),
             tasks: Tasks::default(),
         };
@@ -232,6 +236,8 @@ pub struct Controlling {
     pub generation: Generation,
     /// What the guest's hello said it keeps done and unsettled.
     pub unsettled: Vec<atlas_core::files::Token>,
+    /// What it declared it speaks and serves, judged per operation.
+    pub declared: crate::compatibility::Declared,
     pub outbox: Arc<Outbox>,
     pub credit: Arc<Credit>,
     pub heard: Arc<Heard>,
@@ -258,9 +264,12 @@ where
     let secure = connect_as_station(stream, own, desktop_key, desktop, Purpose::Control).await?;
     let (reading, writing) = tokio::io::split(secure);
     let mut reading = BufReader::new(reading);
+    // A guest of another protocol is refused here, before anything is said
+    // to it: no generation of it is ever live for the station.
     let control::Hello {
         generation,
         unsettled,
+        declared,
     } = control::hello(&mut reading).await?;
     let outbox = Arc::new(Outbox::default());
     let tasks = Tasks::default();
@@ -274,6 +283,7 @@ where
     Ok(Controlling {
         generation,
         unsettled,
+        declared,
         outbox,
         credit,
         heard,

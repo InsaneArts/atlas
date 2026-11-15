@@ -413,6 +413,25 @@ impl Machine {
         })
     }
 
+    /// What this guest declares it serves: what it was made with, so it
+    /// never declares a service it does not have.
+    fn declared(&self) -> atlas_session::compatibility::Declared {
+        use atlas_session::compatibility::{
+            CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, STAGE,
+        };
+        let mut capabilities = vec![CHANGES.to_owned()];
+        if self.daemon.supervising.is_some() {
+            capabilities.push(LEFTOVERS.to_owned());
+        }
+        if self.daemon.stages.is_some() {
+            capabilities.extend([STAGE.to_owned(), COPIES.to_owned()]);
+        }
+        if self.daemon.input.is_some() {
+            capabilities.push(INPUT_LANES.to_owned());
+        }
+        Declared::ours(capabilities)
+    }
+
     /// Serve every connection `listener` gives, until it fails.
     ///
     /// # Errors
@@ -517,7 +536,7 @@ impl Machine {
             .unwrap_or_default();
         let authority = Authority::new(generation, self.clock.clone(), hook);
         let lanes = Arc::new(Lanes::new(authority.clone()));
-        let outbox = Arc::new(Outbox::hello(generation, unsettled));
+        let outbox = Arc::new(Outbox::hello(generation, unsettled, self.declared()));
         let credit = Arc::new(Credit::default());
         let saying = outbox.clone();
         let (reading, writing) = tokio::io::split(secure);

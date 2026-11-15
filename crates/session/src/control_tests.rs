@@ -215,7 +215,11 @@ async fn half_a_message_when_the_silence_ends_is_not_lost() {
 #[tokio::test(start_paused = true)]
 async fn the_guests_hello_goes_before_its_first_heartbeat() {
     let (near, far) = duplex(1 << 16);
-    let outbox = Arc::new(Outbox::hello(Generation(8), Vec::new()));
+    let outbox = Arc::new(Outbox::hello(
+        Generation(8),
+        Vec::new(),
+        crate::compatibility::Declared::ours(Vec::new()),
+    ));
     let sending = tokio::spawn(send(near, outbox.clone()));
 
     let mut far = BufReader::new(far);
@@ -440,7 +444,11 @@ async fn credit_however_much_never_queues_ahead_of_a_stop_and_gathers_by_lane() 
 #[tokio::test(start_paused = true)]
 async fn the_guests_hello_goes_first_however_late_sending_starts() {
     let (near, far) = duplex(1 << 16);
-    let outbox = Arc::new(Outbox::hello(Generation(9), Vec::new()));
+    let outbox = Arc::new(Outbox::hello(
+        Generation(9),
+        Vec::new(),
+        crate::compatibility::Declared::ours(Vec::new()),
+    ));
     let sending = send(near, outbox.clone());
     tokio::pin!(sending);
 
@@ -458,7 +466,11 @@ async fn the_guests_hello_goes_first_however_late_sending_starts() {
 async fn a_hello_names_the_changes_the_guest_keeps_unsettled() {
     let (near, far) = duplex(1 << 16);
     let change = atlas_core::files::Token::new();
-    let outbox = Arc::new(Outbox::hello(Generation(3), vec![change.clone()]));
+    let outbox = Arc::new(Outbox::hello(
+        Generation(3),
+        vec![change.clone()],
+        crate::compatibility::Declared::ours(Vec::new()),
+    ));
     let sending = tokio::spawn(send(near, outbox.clone()));
 
     let heard = hello(&mut BufReader::new(far)).await.unwrap();
@@ -512,7 +524,11 @@ async fn a_hello_and_a_settlement_naming_every_change_a_guest_keeps_are_read_who
         .map(|_| atlas_core::files::Token::new())
         .collect();
     let (near, far) = duplex(1 << 20);
-    let outbox = Arc::new(Outbox::hello(Generation(2), named.clone()));
+    let outbox = Arc::new(Outbox::hello(
+        Generation(2),
+        named.clone(),
+        crate::compatibility::Declared::ours(Vec::new()),
+    ));
     outbox
         .say(Said::Settled {
             changes: named.clone(),
@@ -533,24 +549,38 @@ async fn a_hello_and_a_settlement_naming_every_change_a_guest_keeps_are_read_who
 #[test]
 fn a_hello_reads_with_or_without_the_changes_it_names() {
     let change = atlas_core::files::Token::new();
-    let without: Said = serde_json::from_str(r#"{"hello":{"generation":4}}"#).unwrap();
-    let with: Said = serde_json::from_value(
-        serde_json::json!({"hello": {"generation": 4, "unsettled": [change]}}),
-    )
+    let declared = r#""protocol":1,"capabilities":[],"version":"0.1.3""#;
+    let without: Said =
+        serde_json::from_str(&format!(r#"{{"hello":{{"generation":4,{declared}}}}}"#)).unwrap();
+    let with: Said = serde_json::from_value(serde_json::json!({"hello": {
+        "generation": 4, "unsettled": [change], "protocol": 1, "capabilities": [], "version": "0.1.3",
+    }}))
     .unwrap();
 
-    assert_eq!(
-        without,
-        Said::Hello {
-            generation: Generation(4),
-            unsettled: Vec::new()
-        }
-    );
-    assert_eq!(
-        with,
-        Said::Hello {
-            generation: Generation(4),
-            unsettled: vec![change]
-        }
-    );
+    let hello = |unsettled| Said::Hello {
+        generation: Generation(4),
+        unsettled,
+        protocol: 1,
+        capabilities: Vec::new(),
+        version: "0.1.3".into(),
+    };
+    assert_eq!(without, hello(Vec::new()));
+    assert_eq!(with, hello(vec![change]));
+}
+
+#[tokio::test]
+async fn a_dial_naming_a_lane_kind_this_guest_does_not_know_ends_control_and_retires_it() {
+    let (authority, lanes, _clock) = generation();
+    let (told, credit) = (Told::default(), Credit::default());
+    let (mut near, far) = duplex(1 << 16);
+    near.write_all(b"{\"dial\":{\"lane\":3,\"kind\":{\"teleport\":{}}}}\n")
+        .await
+        .unwrap();
+    // Control stays open: only the message ends it.
+
+    guest_reads(far, &authority, &lanes, &credit, &told).await;
+
+    assert!(told.dials.lock().unwrap().is_empty());
+    assert_eq!(authority.retired(), Some(Retired::ControlLost));
+    drop(near);
 }

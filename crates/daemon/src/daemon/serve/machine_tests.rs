@@ -111,6 +111,16 @@ impl Served {
 
     /// A guest serving with `records`, its input service `input` if any.
     async fn with_input(records: Records, input: Option<crate::machine::input::Input>) -> Self {
+        Self::with_parts(records, input, true).await
+    }
+
+    /// A guest serving with `records`, its input service `input` if any,
+    /// and stages if `staging`.
+    async fn with_parts(
+        records: Records,
+        input: Option<crate::machine::input::Input>,
+        staging: bool,
+    ) -> Self {
         let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
         daemon.screen.console = Console::Own;
@@ -132,9 +142,7 @@ impl Served {
             clock.clone(),
             supervising(&records, &vault),
             input,
-            Some(crate::machine::stage::Stages::new(
-                records.path().join("open"),
-            )),
+            staging.then(|| crate::machine::stage::Stages::new(records.path().join("open"))),
         );
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
@@ -2280,4 +2288,67 @@ async fn a_staged_copy_is_listed_then_removed_as_a_change_answered_again_from_it
     assert!(!copies(&served).join(copy.as_str()).exists());
     let left = ask(&desktop, LaneKind::Read, &json!({"op": "copies"})).await;
     assert_eq!(left.last().unwrap()["copies"], json!([]), "{left:?}");
+}
+
+#[tokio::test]
+async fn a_guest_declares_only_what_it_was_made_to_serve() {
+    use atlas_session::compatibility::{
+        CHANGES, COPIES, INPUT_LANES, LEFTOVERS, PROTOCOL, STAGE, Usable, judge,
+    };
+    let served = Served::start().await;
+
+    let (controlling, _desktop) = served.control().await;
+
+    let declared = &controlling.declared;
+    assert_eq!(declared.protocol, PROTOCOL);
+    assert_eq!(declared.version, env!("CARGO_PKG_VERSION"));
+    for served in [CHANGES, LEFTOVERS, STAGE, COPIES] {
+        assert!(
+            declared.capabilities.iter().any(|has| has == served),
+            "{declared:?}"
+        );
+    }
+    assert!(!declared.capabilities.iter().any(|has| has == INPUT_LANES));
+    assert_eq!(judge(declared, &[STAGE, COPIES]), Usable::Usable);
+    assert_eq!(
+        judge(declared, &[INPUT_LANES]),
+        Usable::MissingCapabilities {
+            missing: vec![INPUT_LANES.to_owned()]
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_guest_with_an_input_service_declares_its_input_lanes() {
+    let (_served, controlling, _desktop, _folder, _turn) = with_input_service().await;
+
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .any(|has| has == atlas_session::compatibility::INPUT_LANES)
+    );
+}
+
+#[tokio::test]
+async fn a_guest_started_again_without_stages_is_judged_by_what_it_declares_now() {
+    use atlas_session::compatibility::{COPIES, STAGE, Usable, judge};
+    let served = Served::start().await;
+    let (first, _desktop) = served.control().await;
+    assert_eq!(judge(&first.declared, &[STAGE]), Usable::Usable);
+    let Served { records, vault, .. } = served;
+
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::with_parts((records, vault, changes), None, false).await;
+    let (second, _desktop) = restarted.control().await;
+
+    let has = |name: &str| second.declared.capabilities.iter().any(|has| has == name);
+    assert!(!has(STAGE) && !has(COPIES), "{:?}", second.declared);
+    assert_eq!(
+        judge(&second.declared, &[STAGE]),
+        Usable::MissingCapabilities {
+            missing: vec![STAGE.to_owned()]
+        }
+    );
 }

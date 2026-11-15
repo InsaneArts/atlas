@@ -49,11 +49,16 @@ const LINE: usize = 128 * 1024;
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum Said {
     /// The guest's first message: the generation it gave this connection,
-    /// and the changes it keeps done that the station has not settled.
+    /// the changes it keeps done that the station has not settled, and what
+    /// it declares it speaks and serves, which the station reads before
+    /// anything else ([`crate::compatibility::Declared::of_hello`]).
     Hello {
         generation: Generation,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         unsettled: Vec<Token>,
+        protocol: u32,
+        capabilities: Vec<String>,
+        version: String,
     },
     /// Either end is there.
     Beat,
@@ -188,12 +193,20 @@ impl Outbox {
     }
 
     /// The guest's outbox, its hello first: nothing goes before it. It
-    /// names the changes the guest keeps done and unsettled.
-    pub fn hello(generation: Generation, unsettled: Vec<Token>) -> Self {
+    /// names the changes the guest keeps done and unsettled, and what the
+    /// guest `declared`.
+    pub fn hello(
+        generation: Generation,
+        unsettled: Vec<Token>,
+        declared: crate::compatibility::Declared,
+    ) -> Self {
         let outbox = Self::default();
         outbox.queues().urgent.push_back(Said::Hello {
             generation,
             unsettled,
+            protocol: declared.protocol,
+            capabilities: declared.capabilities,
+            version: declared.version,
         });
         outbox
     }
@@ -261,6 +274,13 @@ pub async fn send<W: AsyncWrite + Unpin>(mut writer: W, outbox: Arc<Outbox>) -> 
 ///
 /// Fails when the connection fails or ends, or what came is not a message.
 pub async fn read<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Said> {
+    let line = line(reader).await?;
+    serde_json::from_slice(&line)
+        .map_err(|_| Error::new(Code::Protocol, "A control message was not understood."))
+}
+
+/// The next control message as it came, whole and within bounds.
+async fn line<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Vec<u8>> {
     let mut line = Vec::new();
     let read = AsyncReadExt::take(&mut *reader, LINE as u64 + 1)
         .read_until(b'\n', &mut line)
@@ -272,8 +292,7 @@ pub async fn read<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Sai
     if !line.ends_with(b"\n") {
         return Err(Error::new(Code::Protocol, "A control message is too long."));
     }
-    serde_json::from_slice(&line)
-        .map_err(|_| Error::new(Code::Protocol, "A control message was not understood."))
+    Ok(line)
 }
 
 /// What the guest does with what the station says, each without waiting:
@@ -350,6 +369,9 @@ pub struct Hello {
     pub generation: Generation,
     /// The changes it keeps done that the station has not settled.
     pub unsettled: Vec<Token>,
+    /// What it speaks and serves, judged per operation
+    /// ([`crate::compatibility::judge`]).
+    pub declared: crate::compatibility::Declared,
 }
 
 /// Of the changes a hello names, those the station settles: each it holds
@@ -368,15 +390,29 @@ pub fn settling(unsettled: &[Token], claimed: impl Fn(&Token) -> bool) -> Vec<To
 ///
 /// # Errors
 ///
-/// Fails when the connection fails, or its first message is not a hello.
+/// Fails when the connection fails, or its first message is not a hello;
+/// and refuses a guest of another protocol, read before anything else in
+/// its hello, whatever that holds.
 pub async fn hello<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Result<Hello> {
-    match read(reader).await? {
-        Said::Hello {
+    let line = line(reader).await?;
+    let message: serde_json::Value = serde_json::from_slice(&line)
+        .map_err(|_| Error::new(Code::Protocol, "A control message was not understood."))?;
+    let declared = crate::compatibility::Declared::of_hello(&message)?;
+    // Another protocol says nothing more this Mac can read: never parsed.
+    if let Some(refusal) = crate::compatibility::judge(&declared, &[]).refusal() {
+        return Err(refusal);
+    }
+    // Parsed again from the bytes as they came, so nothing in them, a field
+    // given twice included, is ever lost to the first reading.
+    match serde_json::from_slice(&line) {
+        Ok(Said::Hello {
             generation,
             unsettled,
-        } => Ok(Hello {
+            ..
+        }) => Ok(Hello {
             generation,
             unsettled,
+            declared,
         }),
         _ => Err(Error::new(
             Code::Protocol,
