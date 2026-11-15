@@ -92,6 +92,24 @@ struct Manifest {
     records: BTreeMap<String, String>,
 }
 
+/// A change kept as intended: what it is, and the digest of the request it
+/// was asked with ([`request_digest`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Intended {
+    pub change: Token,
+    pub operation: String,
+    pub request: String,
+}
+
+/// The digest a change is bound to: of its request, as JSON.
+///
+/// # Errors
+///
+/// Fails when the request cannot be written down.
+pub fn request_digest(request: &Value) -> Result<String> {
+    Ok(bytes_sha256(&serde_json::to_vec(request)?))
+}
+
 /// What the station asks of a change ID it sent.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Asked {
@@ -316,7 +334,7 @@ impl<V: Vault> Changes<V> {
     pub fn ask(&self, change: &Token, operation: &str, request: &Value) -> Result<Asked> {
         let mut last = self.verified();
         let (manifest, mut records) = self.trusted(&mut last)?;
-        let digest = bytes_sha256(&serde_json::to_vec(request)?);
+        let digest = request_digest(request)?;
         if let Some(record) = records.get(change.as_str()) {
             if record.operation != operation || record.request != digest {
                 return Err(Error::new(
@@ -397,6 +415,26 @@ impl<V: Vault> Changes<V> {
             .values()
             .filter(|record| matches!(record.state, State::Done { .. }))
             .map(|record| record.change.clone())
+            .collect())
+    }
+
+    /// Every change kept as intended and not yet done: what recovery looks
+    /// at once nothing can be running it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store is unknown.
+    pub fn intended(&self) -> Result<Vec<Intended>> {
+        let mut last = self.verified();
+        let (_, records) = self.trusted(&mut last)?;
+        Ok(records
+            .values()
+            .filter(|record| record.state == State::Intended)
+            .map(|record| Intended {
+                change: record.change.clone(),
+                operation: record.operation.clone(),
+                request: record.request.clone(),
+            })
             .collect())
     }
 

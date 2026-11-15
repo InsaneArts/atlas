@@ -317,3 +317,25 @@ fn a_reply_too_deep_to_read_back_keeps_what_it_came_to_across_a_restart() {
     };
     assert_eq!(reply, json!({"ok": true, "exitCode": 0, "shortened": true}));
 }
+
+#[test]
+fn only_changes_still_intended_are_listed_as_intended_with_their_operation() {
+    let (_folder, _vault, changes) = paired();
+    let (open, done) = (Token::new(), Token::new());
+    changes
+        .ask(&open, "stage", &json!({"op": "stage"}))
+        .unwrap();
+    changes.ask(&done, "run", &run("ls")).unwrap();
+    changes.done(&done, &json!({"ok": true})).unwrap();
+
+    let intended = changes.intended().unwrap();
+
+    assert_eq!(
+        intended,
+        [Intended {
+            change: open,
+            operation: "stage".into(),
+            request: request_digest(&json!({"op": "stage"})).unwrap(),
+        }]
+    );
+}

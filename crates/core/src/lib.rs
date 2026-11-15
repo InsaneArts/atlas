@@ -32,11 +32,13 @@ pub mod screen;
 pub mod session;
 pub mod single_flight;
 pub mod spawn;
+pub mod stage;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod time;
 pub mod transport;
 pub mod user;
+pub mod xattr;
 
 /// This build's version, as released.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

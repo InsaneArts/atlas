@@ -171,7 +171,11 @@ impl Halting {
                         .unwrap_or(false);
                         let input_unsettled =
                             worker.input.as_ref().is_some_and(|input| input.unsettled());
-                        if !resolved || worker.keepers.unsettled() || input_unsettled || !current()
+                        if !resolved
+                            || worker.keepers.unsettled()
+                            || input_unsettled
+                            || committing(&worker)
+                            || !current()
                         {
                             continue;
                         }
@@ -192,8 +196,11 @@ impl Halting {
                         // that ended meanwhile keeps agents stopped.
                         // The generation is looked at without retiring it:
                         // its hook halts, which takes this turn.
-                        let still_current =
-                            authority.if_live(|| Ok(())).is_ok() && since.load(SeqCst) == at;
+                        // A stage authorizes its commit under this turn too, so
+                        // none starts committing between here and reopening.
+                        let still_current = authority.if_live(|| Ok(())).is_ok()
+                            && since.load(SeqCst) == at
+                            && !committing(&worker);
                         if still_current
                             && worker.keepers.settled_then(|| {
                                 let reopen =
@@ -304,7 +311,16 @@ impl Drop for Tasks {
 /// may have left running stops agents, saved first, and what it left is then
 /// recovered, never forgotten without that saved Stop. Agents stay stopped
 /// when the Stop says so or cannot be told.
-async fn start(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) {
+async fn start(
+    daemon: Arc<Daemon>,
+    stop: Arc<Stop<Arc<dyn Vault>>>,
+    changes: Arc<Changes<Arc<dyn Vault>>>,
+) {
+    // What an earlier daemon staged is put right before any lane is served;
+    // stages are refused when it cannot be.
+    if let Some(stages) = daemon.stages.clone() {
+        let _ = tokio::task::spawn_blocking(move || stages.start(&changes)).await;
+    }
     let reading = (daemon.clone(), stop);
     let (left, saved, clear) = tokio::task::spawn_blocking(move || {
         let (daemon, stop) = reading;
@@ -332,10 +348,20 @@ async fn start(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) {
     });
 }
 
+/// Whether a stage is committing: a Resume waits for what it comes to.
+fn committing(daemon: &Daemon) -> bool {
+    daemon
+        .stages
+        .as_ref()
+        .is_some_and(|stages| stages.committing())
+}
+
 /// The generation live now, and the tasks that keep it.
 struct Live {
     authority: Authority,
     lanes: Arc<Lanes>,
+    /// What the guest says on the generation's control connection.
+    outbox: Arc<Outbox>,
     _tasks: Tasks,
 }
 
@@ -359,17 +385,23 @@ impl Machine {
         clock: Arc<dyn Clock>,
         supervising: Supervising,
         input: Option<crate::machine::input::Input>,
+        stages: Option<crate::machine::stage::Stages>,
     ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
         daemon.supervising = Some(supervising);
         daemon.input = input.map(Arc::new);
+        daemon.stages = stages.map(Arc::new);
         // Nothing is taken until it is known whether agents were stopped,
         // and what an earlier daemon left.
         daemon.halted.send_modify(|halt| halt.halted = true);
         daemon.keepers.orphans(true);
         let daemon = Arc::new(daemon);
         let halting = Halting::new(daemon.clone(), paired.stop.clone());
-        let starting = tokio::spawn(start(daemon.clone(), paired.stop.clone()));
+        let starting = tokio::spawn(start(
+            daemon.clone(),
+            paired.stop.clone(),
+            paired.changes.clone(),
+        ));
         Arc::new(Self {
             daemon,
             paired,
@@ -487,6 +519,7 @@ impl Machine {
         let lanes = Arc::new(Lanes::new(authority.clone()));
         let outbox = Arc::new(Outbox::hello(generation, unsettled));
         let credit = Arc::new(Credit::default());
+        let saying = outbox.clone();
         let (reading, writing) = tokio::io::split(secure);
         let mut tasks = Tasks::default();
         tasks
@@ -528,6 +561,7 @@ impl Machine {
         let replaced = live.replace(Live {
             authority,
             lanes,
+            outbox: saying,
             _tasks: tasks,
         });
         if let Some(replaced) = replaced {
@@ -557,12 +591,16 @@ impl Machine {
         let (secure, header) = tokio::time::timeout(OPENING, opening)
             .await
             .map_err(|_| Error::new(Code::Transport, "A lane did not open in time."))??;
-        let (authority, lanes) = {
+        let (authority, lanes, outbox) = {
             let live = self.live.lock().await;
             let live = live
                 .as_ref()
                 .ok_or_else(|| Error::new(Code::Denied, "No generation is live."))?;
-            (live.authority.clone(), live.lanes.clone())
+            (
+                live.authority.clone(),
+                live.lanes.clone(),
+                live.outbox.clone(),
+            )
         };
         // A lane of another generation, or one cancelled, is refused here;
         // a refused lane is closed, which is all the station hears.
@@ -594,6 +632,23 @@ impl Machine {
                 _ = reader.read(&mut hanging_up) => return Ok(()),
             };
             return write(&mut writer, &reply).await;
+        }
+        // Bytes follow its request: they are the stage's own to read.
+        if let LaneKind::Stage { change } = &header.kind {
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+            };
+            let staged = stage::Lane {
+                change: change.clone(),
+                id: header.lane,
+                gate,
+                outbox,
+            };
+            return self.stage_lane(staged, &line, reader, writer).await;
         }
         if let Err(refusal) = bound(&header, &line) {
             return write(&mut writer, &refusal).await;
@@ -842,6 +897,8 @@ fn bound(header: &Header, line: &[u8]) -> std::result::Result<(), Value> {
         ))
     }
 }
+
+mod stage;
 
 #[cfg(test)]
 #[path = "machine_tests.rs"]

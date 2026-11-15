@@ -11,6 +11,7 @@ pub mod launch;
 pub mod pairing;
 pub mod processes;
 mod record_file;
+pub mod stage;
 pub mod stop;
 pub mod supervise;
 pub mod vault;

@@ -247,6 +247,9 @@ pub struct Daemon {
     /// A machine's input service, its daemon's child; none for the helper
     /// login, whose input service is its own.
     input: Option<Arc<crate::machine::input::Input>>,
+    /// What a machine's station stages into it; none for the helper login,
+    /// whose copies go through the shared folder.
+    stages: Option<Arc<crate::machine::stage::Stages>>,
     /// Whether agents are stopped on a machine desktop, and how many Stops
     /// there have been: no change is taken while stopped, and a command
     /// admitted before a Stop ends with it, a Resume after or not. Never
@@ -318,6 +321,7 @@ impl Daemon {
             supervising: None,
             keepers: Arc::default(),
             input: None,
+            stages: None,
             halted: watch::Sender::new(Halt::default()),
         }
     }
@@ -895,6 +899,26 @@ impl Gate {
             return Some(failure(Code::Cancelled, "The change was cancelled"));
         }
         self.authority.check().err().map(refused)
+    }
+
+    /// Run `then` only while what it admitted may still run: agents not
+    /// stopped since, its lane not cancelled, and its generation live,
+    /// looked at without retiring it, so a caller may hold a lock the
+    /// retirement hook takes. `then` must be short and never wait. The
+    /// refusal when it may not, or when `then` says no.
+    fn authorize(&self, then: impl FnOnce() -> bool) -> Option<Value> {
+        let halt = *self.halted.borrow();
+        if halt.halted || halt.stops != self.stops {
+            return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
+        }
+        if self.lanes.cancelled(self.lane) {
+            return Some(failure(Code::Cancelled, "The change was cancelled"));
+        }
+        match self.authority.if_live(|| Ok(then())) {
+            Ok(true) => None,
+            Ok(false) => Some(failure(Code::Cancelled, "The change was ended")),
+            Err(error) => Some(refused(error)),
+        }
     }
 
     /// Completes once the work it admitted may no longer run: its generation

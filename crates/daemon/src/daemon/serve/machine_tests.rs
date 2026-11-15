@@ -132,6 +132,9 @@ impl Served {
             clock.clone(),
             supervising(&records, &vault),
             input,
+            Some(crate::machine::stage::Stages::new(
+                records.path().join("open"),
+            )),
         );
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
@@ -535,6 +538,7 @@ async fn be_the_guest(spec: &str) {
         Arc::new(atlas_session::clock::Continuous),
         supervising(&_records, &_vault),
         Some(input),
+        None,
     );
     let _ = machine.serve(&Socket(listener)).await;
 }
@@ -1820,4 +1824,425 @@ async fn an_input_lane_of_a_desktop_with_no_input_service_is_refused() {
     .await;
 
     assert_eq!(replies.last().unwrap()["code"], "platform");
+}
+
+/// How a test's station sends a stage's bytes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sending {
+    /// The manifest and every file, as they are.
+    Whole,
+    /// The last byte of the last file changed.
+    Changed,
+    /// The manifest and half the contents, then nothing more.
+    Halfway,
+    /// Every file, then one byte more.
+    Extra,
+}
+
+/// A small tree to stage: a script, a nested file, a link and a
+/// quarantine flag, in a folder of its own.
+fn tree_to_stage() -> (tempfile::TempDir, std::path::PathBuf) {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let folder = tempfile::tempdir().unwrap();
+    let tree = folder.path().join("Tool.app");
+    std::fs::create_dir_all(tree.join("Contents/MacOS")).unwrap();
+    std::fs::write(tree.join("Contents/Info.plist"), b"<plist/>").unwrap();
+    let script = tree.join("Contents/MacOS/tool");
+    std::fs::write(&script, b"#!/bin/sh\necho staged\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    symlink("MacOS/tool", tree.join("Contents/run")).unwrap();
+    let marked = atlas_core::spawn::status(
+        std::process::Command::new("/usr/bin/xattr")
+            .args(["-w", "com.apple.quarantine", "0081;5f;Atlas;"])
+            .arg(&tree),
+    )
+    .unwrap();
+    assert!(marked.success());
+    (folder, tree)
+}
+
+/// Stage `source` as `change` on a lane, its bytes paced by `credit` and
+/// sent as `sending` says: every line the guest said, in order.
+async fn stage(
+    desktop: &Desktop,
+    credit: &Credit,
+    change: &Token,
+    source: &std::path::Path,
+    sending: Sending,
+) -> Vec<Value> {
+    use std::io::Read;
+    let snapshot = atlas_core::stage::Snapshot::of(source).unwrap();
+    let manifest = serde_json::to_vec(&snapshot).unwrap();
+    let request = json!({
+        "op": "stage",
+        "change": change,
+        "name": snapshot.name,
+        "digest": snapshot.digest,
+        "entries": snapshot.entries.len(),
+        "size": snapshot.size(),
+        "attributes": snapshot.attribute_bytes(),
+        "manifest": manifest.len(),
+    });
+    let opened = desktop
+        .open(LaneKind::Stage {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let lane = opened.lane;
+    let (reading, mut writing) = tokio::io::split(opened.stream);
+    let mut lines = BufReader::new(reading).lines();
+    let mut line = serde_json::to_vec(&request).unwrap();
+    line.push(b'\n');
+    writing.write_all(&line).await.unwrap();
+    writing.flush().await.unwrap();
+    let mut said = Vec::new();
+    let Ok(Ok(Some(first))) =
+        tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await
+    else {
+        return said;
+    };
+    let first: Value = serde_json::from_str(&first).unwrap();
+    said.push(first.clone());
+    if first != json!({"ready": true}) {
+        return said;
+    }
+    let mut bytes = (manifest.len() as u64).to_be_bytes().to_vec();
+    bytes.extend(&manifest);
+    let contents_at = bytes.len();
+    for (entry, _, _) in snapshot.files() {
+        let mut read = Vec::new();
+        atlas_core::stage::open_file(source, &entry.path)
+            .unwrap()
+            .read_to_end(&mut read)
+            .unwrap();
+        bytes.extend(read);
+    }
+    match sending {
+        Sending::Whole => {}
+        Sending::Changed => *bytes.last_mut().unwrap() ^= 1,
+        Sending::Halfway => bytes.truncate(contents_at + (bytes.len() - contents_at) / 2),
+        Sending::Extra => bytes.push(b'!'),
+    }
+    // Bounded, so a send the guest stopped taking never holds the test.
+    let _ = tokio::time::timeout(Duration::from_secs(30), async {
+        credit.send(lane, &mut writing, &bytes).await?;
+        writing
+            .flush()
+            .await
+            .map_err(atlas_core::error::Error::from)
+    })
+    .await;
+    while let Ok(Ok(Some(line))) =
+        tokio::time::timeout(Duration::from_secs(20), lines.next_line()).await
+    {
+        said.push(serde_json::from_str(&line).unwrap());
+    }
+    credit.closed(lane);
+    said
+}
+
+/// The guest's copies folder.
+fn copies(served: &Served) -> std::path::PathBuf {
+    served.records.path().join("open")
+}
+
+#[tokio::test]
+async fn a_tree_staged_is_placed_whole_and_what_it_came_to_is_kept() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+
+    let said = stage(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Whole,
+    )
+    .await;
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], true, "{said:?}");
+    let placed = std::path::PathBuf::from(reply["path"].as_str().unwrap());
+    assert_eq!(
+        placed,
+        copies(&served).join(change.as_str()).join("Tool.app")
+    );
+    assert_eq!(
+        atlas_core::stage::Snapshot::of(&placed).unwrap().entries,
+        atlas_core::stage::Snapshot::of(&tree).unwrap().entries
+    );
+    assert!(
+        matches!(served.changes.of(&change).unwrap(), Some(State::Done { reply: ref kept }) if kept == reply)
+    );
+}
+
+#[tokio::test]
+async fn a_stage_asked_again_after_a_restart_is_answered_from_its_record_with_no_bytes_sent() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+    let first = stage(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Whole,
+    )
+    .await;
+    let Served { records, vault, .. } = served;
+
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::on((records, vault, changes)).await;
+    let (controlling, desktop) = restarted.control().await;
+    let again = stage(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Whole,
+    )
+    .await;
+
+    assert_eq!(again.len(), 1, "it asked for the bytes again: {again:?}");
+    assert_eq!(again.last(), first.last());
+}
+
+#[tokio::test]
+async fn bytes_that_are_not_the_manifest_s_leave_nothing_placed_and_are_kept_as_refused() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+
+    let said = stage(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Changed,
+    )
+    .await;
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], false, "{said:?}");
+    assert_ne!(reply["uncertain"], true, "{reply}");
+    let left: Vec<_> = std::fs::read_dir(copies(&served)).unwrap().collect();
+    assert!(left.is_empty(), "something was left: {left:?}");
+    assert!(
+        matches!(served.changes.of(&change).unwrap(), Some(State::Done { reply: ref kept }) if kept == reply)
+    );
+}
+
+#[tokio::test]
+async fn a_stage_naming_another_change_than_its_lane_is_refused() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (lane, asked) = (Token::new(), Token::new());
+
+    let said = ask(
+        &desktop,
+        LaneKind::Stage { change: lane },
+        &json!({
+            "op": "stage", "change": asked, "name": "Tool.app", "digest": "0",
+            "entries": 1, "size": 0, "attributes": 0, "manifest": 2,
+        }),
+    )
+    .await;
+
+    assert_eq!(said.last().unwrap()["code"], "bad-request", "{said:?}");
+    assert_eq!(served.changes.of(&asked).unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_stop_while_a_stage_s_bytes_arrive_leaves_nothing_placed() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+    let staging = copies(&served).join(format!(".staging-{}", change.as_str()));
+    let credit = controlling.credit.clone();
+    let staged = {
+        let (change, tree) = (change.clone(), tree.clone());
+        tokio::spawn(
+            async move { stage(&desktop, &credit, &change, &tree, Sending::Halfway).await },
+        )
+    };
+    for _ in 0..100 {
+        if staging.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(staging.exists(), "the stage never began writing");
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    let said = staged.await.unwrap();
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], false, "{said:?}");
+    assert!(!staging.exists());
+    assert!(!copies(&served).join(change.as_str()).exists());
+}
+
+#[tokio::test]
+async fn a_stage_larger_than_the_bulk_credit_is_placed_whole() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let big: Vec<u8> = (0..3 << 20).map(|at: u32| (at % 251) as u8).collect();
+    std::fs::write(tree.join("Contents/big.bin"), &big).unwrap();
+    let change = Token::new();
+
+    let said = stage(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Whole,
+    )
+    .await;
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], true, "{said:?}");
+    let placed = std::path::PathBuf::from(reply["path"].as_str().unwrap());
+    assert_eq!(std::fs::read(placed.join("Contents/big.bin")).unwrap(), big);
+    assert_eq!(
+        controlling.credit.left(),
+        atlas_session::credit::BULK as usize
+    );
+}
+
+#[tokio::test]
+async fn one_change_staged_twice_at_once_runs_once_and_both_hear_what_it_came_to() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+
+    let (first, second) = tokio::join!(
+        stage(
+            &desktop,
+            &controlling.credit,
+            &change,
+            &tree,
+            Sending::Whole
+        ),
+        stage(
+            &desktop,
+            &controlling.credit,
+            &change,
+            &tree,
+            Sending::Whole
+        ),
+    );
+
+    assert_eq!(first.last(), second.last(), "{first:?} {second:?}");
+    assert_eq!(first.last().unwrap()["ok"], true);
+    let readies = [&first, &second]
+        .iter()
+        .filter(|said| said.first() == Some(&json!({"ready": true})))
+        .count();
+    assert_eq!(readies, 1, "both were told to send");
+}
+
+#[tokio::test]
+async fn a_station_that_hangs_up_once_its_bytes_are_in_has_its_stage_ended_before_it_is_placed() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+    let stages = served.machine.daemon.stages.clone().unwrap();
+    let (held, release) = stages.hold_before_commit();
+    let credit = controlling.credit.clone();
+    let staging = {
+        let (change, tree) = (change.clone(), tree.clone());
+        tokio::spawn(async move { stage(&desktop, &credit, &change, &tree, Sending::Whole).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), held)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The station goes, its lane with it, while the stage waits to commit.
+    staging.abort();
+    let _ = staging.await;
+    let _ = release.send(());
+
+    let mut kept = None;
+    for _ in 0..100 {
+        if let Some(State::Done { reply }) = served.changes.of(&change).unwrap() {
+            kept = Some(reply);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let kept = kept.expect("what it came to was never kept");
+    assert_eq!(kept["ok"], false, "{kept}");
+    assert!(!copies(&served).join(change.as_str()).exists());
+}
+
+#[tokio::test]
+async fn a_stop_received_while_a_stage_waits_to_commit_refuses_its_commit() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+    let stages = served.machine.daemon.stages.clone().unwrap();
+    let (held, release) = stages.hold_before_commit();
+    let credit = controlling.credit.clone();
+    let staging = {
+        let (change, tree) = (change.clone(), tree.clone());
+        tokio::spawn(async move { stage(&desktop, &credit, &change, &tree, Sending::Whole).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), held)
+        .await
+        .unwrap()
+        .unwrap();
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = release.send(());
+    let said = staging.await.unwrap();
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], false, "{said:?}");
+    assert!(!copies(&served).join(change.as_str()).exists());
+}
+
+#[tokio::test]
+async fn bytes_past_a_stage_s_last_file_end_it_with_nothing_placed() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    let change = Token::new();
+    let stages = served.machine.daemon.stages.clone().unwrap();
+    // Held until the extra byte has surely come.
+    let (held, release) = stages.hold_before_commit();
+    let credit = controlling.credit.clone();
+    let staging = {
+        let (change, tree) = (change.clone(), tree.clone());
+        tokio::spawn(async move { stage(&desktop, &credit, &change, &tree, Sending::Extra).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), held)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = release.send(());
+
+    let said = staging.await.unwrap();
+
+    let reply = said.last().unwrap();
+    assert_eq!(reply["ok"], false, "{said:?}");
+    assert!(!copies(&served).join(change.as_str()).exists());
 }
