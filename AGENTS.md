@@ -8,7 +8,8 @@
   allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.
 - All controlled applications, screenshots and injected events belong to the
   configured hidden helper login. Atlas.app's viewer window may run on the main
-  desktop.
+  desktop. On a VM desktop they belong to its guest; Atlas VM, each VM's
+  runner and its launchd agent, runs in the person's own account.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.
   Post only to the session event tap; never fall back to global HID input.
 - Use normal macOS consent. Do not modify TCC. The helper daemon is Atlas's
