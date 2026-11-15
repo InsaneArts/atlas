@@ -1,12 +1,12 @@
 //! Read-only capture timing; never acquires control or sends helper input.
 use atlas_client::client::Client;
-use atlas_core::config::{self, Config};
+use atlas_core::config::{self, desktops::Selected};
 use serde_json::json;
 use std::time::Instant;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new(Config::load(&config::installed_path()?)?)?;
+    let client = Client::new(Selected::load(&config::installed_path()?)?)?;
     for _ in 0..3 {
         let began = Instant::now();
         client.identity().await?;

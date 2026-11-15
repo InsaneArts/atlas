@@ -75,6 +75,7 @@ impl Client {
 
         let first_setup = match self.desktop().kind() {
             Kind::User(login) => crate::user::service::first_setup_in(self, login),
+            Kind::Vm(_) => return Err(self.unreachable()),
         };
         if first_setup {
             return Ok(());

@@ -28,7 +28,7 @@ use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account, app_bundle,
     app_bundle::signed_executable,
-    config::{self, Config},
+    config::{self, Config, desktops::Selected},
     desktop::Desktop,
     error::{Code, Error, Result},
 };
@@ -114,7 +114,7 @@ fn answers(config: &Config) -> bool {
 /// (an `atlas init` stopped earlier), give way, as the window offers the
 /// choice again then.
 fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
-    match account::account_with_uid(previous.desktop().user().uid)? {
+    match account::account_with_uid(previous.user().uid)? {
         Some(other) if asked(uid, &other) || answers(previous) || prepared(&other) => {
             Err(problem(format!(
                 "Atlas already uses {} as its helper; choose {} again",
@@ -147,7 +147,7 @@ fn check_choice(
     previous: &Config,
     keep: impl FnOnce(u32, &Config) -> Result<()>,
 ) -> Result<()> {
-    if selected == Some(previous.desktop().user().uid) {
+    if selected == Some(previous.user().uid) {
         Ok(())
     } else {
         keep(controller, previous)
@@ -261,7 +261,7 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
     let config = match &previous {
-        Some(previous) if previous.desktop().user().uid == helper.uid => {
+        Some(previous) if previous.user().uid == helper.uid => {
             atlas_client::user::setup::configuration::in_home(previous, helper)
         }
         // A repair: only the helper changes. Where records go and what the
@@ -295,7 +295,7 @@ fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity
     // The shared executable (which also makes /Users/Shared/Atlas) and the
     // request first, the settings last: a choice cut short leaves no
     // settings that point at a helper that was never asked.
-    Client::new(config.clone())?.bootstrap_probe()?;
+    Client::new(Selected::provisional(config.clone()))?.bootstrap_probe()?;
 
     let _ownership = controller_of(helper.uid)?.acquire(true)?;
     atlas_daemon::user::setup::pairing::write_request(
@@ -581,7 +581,7 @@ pub fn close_attended(
 /// Returns account-identity or leftover-cleanup failures. Unrelated or unverifiable
 /// resources are not removed.
 pub fn close_leftovers(config_path: &Path) -> Result<Value> {
-    let helper = settings(config_path)?.map(|config| config.desktop().user().uid);
+    let helper = settings(config_path)?.map(|config| config.user().uid);
     let sessions = atlas_core::user::logins::sessions(helper)
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
     let identity = helper.and_then(atlas_daemon::user::setup::identity::verified);
@@ -612,8 +612,8 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
 /// rather than acknowledged.
 pub fn close_helper(config_path: &Path) -> Result<Value> {
     let config = Config::load_user(config_path)?;
-    let client = Client::new(config.clone())?;
-    let uid = config.desktop().user().uid;
+    let client = Client::new(Selected::provisional(config.clone()))?;
+    let uid = config.user().uid;
     let me = nix::unistd::getuid().as_raw();
     let prompt = "Atlas will log out its helper, where Atlas isn't answering.";
 
@@ -822,7 +822,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
     let uid = this_account()?.uid;
     let config = Config::load_user(config_path)?;
     let _ownership = Controller::new(&config.desktop())?.acquire(true)?;
-    let helper = account::account_with_uid(config.desktop().user().uid)?
+    let helper = account::account_with_uid(config.user().uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
     let set_up = atlas_client::user::setup::migrate::in_effect_for(helper.uid, &helper.home)
@@ -1032,19 +1032,19 @@ const BACK_WITHIN: Duration = Duration::from_secs(60);
 /// consent or incomplete setup never counts as finished.
 pub async fn finish(config_path: &Path) -> Result<Value> {
     let config = Config::load_user(config_path)?;
-    let client = Client::new(config.clone())?;
+    let client = Client::new(Selected::provisional(config.clone()))?;
     client.bootstrap_probe()?;
-    ready_to_finish(&client.status().await, config.desktop().user().uid)?;
+    ready_to_finish(&client.status().await, config.user().uid)?;
     atlas_client::user::switch::until_back(BACK_WITHIN).await?;
     // Places this check against the switch in a report's unified log.
     atlas_core::user::login_log::mark("onboarding.finish");
-    ready_to_finish(&client.status().await, config.desktop().user().uid)?;
+    ready_to_finish(&client.status().await, config.user().uid)?;
 
     if !client.controller.pending()?.is_empty() {
         client.restart().await?;
     }
 
-    if let Some(helper) = account::account_with_uid(config.desktop().user().uid)? {
+    if let Some(helper) = account::account_with_uid(config.user().uid)? {
         atlas_client::user::setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 
@@ -1094,7 +1094,7 @@ pub enum HomeChange {
 /// to open the home folder, and `io` with the Terminal line when a change
 /// fails.
 pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) -> Result<Value> {
-    let uid = Config::load_user(config_path)?.desktop().user().uid;
+    let uid = Config::load_user(config_path)?.user().uid;
     let files = match change {
         None => atlas_client::user::home_privacy::status(uid)?,
         Some(HomeChange::Private) => atlas_client::user::home_privacy::make_private(uid)?,

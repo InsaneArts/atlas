@@ -100,7 +100,7 @@ impl Client {
         let deadline = Instant::now() + WAIT;
         let doing = self.doing.as_ref().filter(|_| self.actor == Actor::Agent)?;
         let admitted = self.controller.screen_visible().ok()?;
-        if !self.config.activity.pictures_before_actions || !doing.before().take() {
+        if !self.activity().pictures_before_actions || !doing.before().take() {
             return None;
         }
         let (cancel, cancelled) = oneshot::channel();
@@ -173,8 +173,8 @@ impl Client {
             facts.insert("task".into(), json!(task.as_str()));
         }
         doing.before().named(name.clone(), facts);
-        let keep = self.config.activity.keep();
-        before::save_aside(self.config.output_dir.clone(), name, raw, keep);
+        let keep = self.activity().keep();
+        before::save_aside(self.records().to_path_buf(), name, raw, keep);
     }
 
     /// Take the picture after the action whose picture before is `before`,
@@ -191,7 +191,7 @@ impl Client {
     /// signs the helper in to an account none is taken, and one a sign-in
     /// began or ended during is dropped: both succeed with nothing kept.
     pub async fn picture_after(&self, before: &str, ended: u64) -> Result<()> {
-        let output = self.config.output_dir.clone();
+        let output = self.records().to_path_buf();
         let after = before::after_name(before)
             .ok_or_else(|| Error::new(Code::BadRequest, "Not a picture's name"))?;
         let due = std::time::UNIX_EPOCH + Duration::from_millis(ended) + before::NEXT_WITHIN;
@@ -230,7 +230,7 @@ impl Client {
         if self.controller.still_visible(admitted).is_err() {
             return Ok(());
         }
-        let keep = self.config.activity.keep();
+        let keep = self.activity().keep();
         tokio::task::spawn_blocking(move || before::save(&output, &after, &raw, keep))
             .await
             .map_err(|_| Error::new(Code::Capture, "The picture could not be kept"))?
@@ -269,7 +269,7 @@ impl Client {
         }
         let (name, input) = slot.facts()?;
         let taken = before::time(&name)?;
-        let limit = self.config.activity.typed_text_limit;
+        let limit = self.activity().typed_text_limit;
         let finished = facts::finished(input, row, reply, slot.typed(), limit, taken);
         Some((name, finished))
     }

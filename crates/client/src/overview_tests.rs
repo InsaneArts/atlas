@@ -1673,3 +1673,16 @@ fn typing_in_a_listed_site_is_said_on_the_site_to_the_person_alone() {
 fn the_console_name_is_reused_for_fifteen_seconds() {
     assert_eq!(CONSOLE_NAME.fresh_for(), Duration::from_secs(15));
 }
+
+#[test]
+fn a_vm_desktops_overview_gives_its_one_refusal_never_the_helpers_troubleshooting() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), Some("main"));
+    let refused = client.unreachable();
+    let doctor = crate::capability::Doctor::unreached(json!(refused), client.unreachable());
+
+    let shown = super::overview(&doctor, false, unresolved(0), &[], NOW).value;
+
+    assert_eq!(shown["mode"], "unavailable");
+    assert_eq!(shown["reason"], json!(refused.error));
+}

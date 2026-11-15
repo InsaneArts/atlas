@@ -63,6 +63,7 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     }
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::plan_states_in(client, login, ids).await,
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 
@@ -99,6 +100,7 @@ pub(crate) async fn undo_plan(
         Kind::User(login) => {
             crate::user::environment::undo_plan_in(client, login, ownership, id).await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

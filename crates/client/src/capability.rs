@@ -27,6 +27,23 @@ pub struct Doctor {
     pub(crate) absence: Option<atlas_core::session::Absence>,
 }
 
+impl Doctor {
+    /// The report of a desktop this build cannot reach: `reply`, never
+    /// ready, with `refusal` for its first step and nothing checked.
+    pub(crate) fn unreached(reply: Value, refusal: atlas_core::error::Error) -> Self {
+        Self {
+            diagnosis: atlas_core::session::Diagnosis {
+                observation: atlas_core::session::Observation::decode(&reply),
+                value: reply,
+                ready: false,
+                first_step: atlas_core::session::Guidance::Advice(refusal.error.clone()),
+            },
+            native: NativeState::Unknown,
+            absence: Some(atlas_core::session::Absence::Unreachable(refusal.error)),
+        }
+    }
+}
+
 /// `report` with what is known of native dialogs (`native`, in `state`) and
 /// of web content, and the warning each comes to.
 pub(crate) fn with_capabilities(mut report: Value, state: NativeState, native: Value) -> Value {

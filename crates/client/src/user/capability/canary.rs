@@ -726,7 +726,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         )));
     }
 
-    let uid = client.desktop().user().uid;
+    let uid = client.user_config()?.helper_uid;
     let ownership = client.controller.acquire(false)?;
     let epoch =
         ready_epoch(&Observation::decode(&client.status().await), uid).ok_or_else(|| {

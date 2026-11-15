@@ -174,7 +174,8 @@ pub(super) fn unconfirmed(mut error: Error, names: &[String]) -> Error {
 /// Returns selection, ownership, identity or close failures. A refusal can follow earlier
 /// completed closes; unknown outcomes retain their recovery records.
 pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
-    close_in(client, closing, &handoff::Copies::of(&client.desktop())).await
+    let copies = handoff::Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
+    close_in(client, closing, &copies).await
 }
 
 /// [`close`], with `open`'s `copies`.

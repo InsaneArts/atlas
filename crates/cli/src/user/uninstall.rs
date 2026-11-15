@@ -121,7 +121,8 @@ pub(crate) fn logged_out(found: &Found) -> bool {
     found
         .client
         .as_ref()
-        .is_some_and(|client| logged_out_twice(client.desktop().user().uid))
+        .and_then(|client| client.user_config().ok())
+        .is_some_and(|config| logged_out_twice(config.user().uid))
 }
 
 /// Log the helper `found` names out, under `exclusion`, as
@@ -139,7 +140,7 @@ pub(crate) async fn log_out(
     };
     let target = match (&found.helper, retiring(found.known.as_ref())) {
         (None, _) => Some(crate::user::onboarding::as_root::Target::Orphan(
-            client.desktop().user().uid,
+            client.user_config()?.user().uid,
         )),
         (Some(_), Some(identity)) => Some(crate::user::onboarding::as_root::Target::Helper(
             identity.clone(),
@@ -166,7 +167,7 @@ pub(crate) fn retire(
     let job = retiring(found.known.as_ref());
     let _ownership = exclusion.ok_or_else(|| problem("Atlas lost control of the helper"))?;
 
-    let config = &client.config;
+    let config = client.user_config()?;
     if let Some(helper) = job {
         progress(Progress::Say(
             "Stopping the helper's background job (macOS may ask for your password)…",
@@ -186,14 +187,12 @@ pub(crate) fn retire(
             ));
             warnings.push(format!(
                 "The helper account (user ID {}) no longer exists, so no job was stopped",
-                config.desktop().user().uid
+                config.user().uid
             ));
         }
     }
     // Archive evidence only after the job is gone; it must stop counting as setup.
-    if let Err(error) =
-        atlas_client::user::setup::migrate::archive_uninstalled(config.desktop().user().uid)
-    {
+    if let Err(error) = atlas_client::user::setup::migrate::archive_uninstalled(config.user().uid) {
         warnings.push(format!(
             "The setup record was not set aside: {}",
             error.error
@@ -302,7 +301,11 @@ pub(crate) fn forget_requested_opener(
     let client = found.client.as_ref();
     let Some(pairing) = atlas_daemon::user::setup::pairing::request().filter(|pairing| {
         pairing.controller_uid == me
-            && client.is_none_or(|client| client.desktop().user().uid != pairing.helper_uid)
+            && client.is_none_or(|client| {
+                client
+                    .user_config()
+                    .is_ok_and(|config| config.user().uid != pairing.helper_uid)
+            })
     }) else {
         return;
     };
@@ -426,9 +429,7 @@ pub(crate) fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
 /// and is not known to be another account, and whether it is the one
 /// recorded (`None` without an account).
 pub(crate) fn helper_account(config: &Config) -> (Option<String>, Option<Standing>) {
-    let account = account::account_with_uid(config.desktop().user().uid)
-        .ok()
-        .flatten();
+    let account = account::account_with_uid(config.user().uid).ok().flatten();
     let known = account
         .as_ref()
         .map(atlas_daemon::user::setup::identity::standing_of);

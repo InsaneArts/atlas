@@ -49,6 +49,18 @@ pub(super) fn action(done: &str, value: &Value) -> Rendered {
     Rendered::out(format!("{} {done}{read}", style::ok()))
 }
 
+/// The person's Stop: done, and a line for each desktop whose agents are
+/// held here but whose guest it could not tell.
+pub(super) fn stopped(value: &Value) -> Rendered {
+    let mut lines = vec![format!("{} Stopped the agent", style::ok())];
+    lines.extend(super::observe::warnings(value));
+    for each in super::items(&value["desktops"]) {
+        lines.extend(super::observe::warnings(&each["reply"]));
+    }
+    lines.dedup();
+    Rendered::out(lines.join("\n"))
+}
+
 pub(super) fn typed(value: &Value) -> Rendered {
     let characters = value["typed"].as_u64().unwrap_or(0) as usize;
 

@@ -91,19 +91,24 @@ fn native_refusal(result: &Value) -> Error {
 impl Client {
     /// The input service: where it listens, and the account the kernel must
     /// name at its end.
-    pub(crate) fn input_transport(&self) -> Transport {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM desktop, whose input this build cannot reach yet.
+    pub(crate) fn input_transport(&self) -> Result<Transport> {
         match self.desktop().kind() {
             Kind::User(login) => {
                 #[cfg(any(test, feature = "test-support"))]
                 let peer_uid = self.input_peer_uid.unwrap_or(login.uid);
                 #[cfg(not(any(test, feature = "test-support")))]
                 let peer_uid = login.uid;
-                Transport {
-                    path: self.config.input_socket.clone(),
+                Ok(Transport {
+                    path: self.user_config()?.input_socket.clone(),
                     timeout: Duration::from_secs(5),
                     peer_uid,
-                }
+                })
             }
+            Kind::Vm(_) => Err(self.unreachable()),
         }
     }
 
@@ -118,7 +123,7 @@ impl Client {
             "epoch": verified.session().epoch.input_epoch(),
             "expect": expect,
         });
-        let mut transport = self.input_transport();
+        let mut transport = self.input_transport()?;
         transport.timeout = LOOK_TIMEOUT;
         let connection = transport.connect().await.map_err(Error::certain)?;
         // Once asked, a read with no answer in time is the one the probe
@@ -202,7 +207,7 @@ impl Client {
 
     pub(super) async fn native_request(&self, request: Value) -> Result<Value> {
         let interrupt = self.controller.interrupt();
-        let connection = self.input_transport().connect().await?;
+        let connection = self.input_transport()?.connect().await?;
         let sent = {
             // A signal never drops a half-sent request. Missing replies retain
             // the caller's pending claim through the shared answer path.
@@ -342,6 +347,7 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
         check: Option<Expect>,
     ) -> Result<Value> {
+        self.reachable()?;
         let observation = Observation::decode(status);
         let session = self.desktop().prove(&observation)?;
         // An input service older than this one may call a password field a

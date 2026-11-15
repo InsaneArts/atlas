@@ -17,7 +17,7 @@ use std::{fs, path::Path};
 fn agent(directory: &Path, pictures: Pictures, verb: &'static str) -> (Client, Helper) {
     let (client, helper) = Helper::client(directory, UID);
     let mut client = client.doing(Doing::new(verb));
-    client.config.activity.pictures_before_actions = true;
+    client.helper_config_mut().activity.pictures_before_actions = true;
     let helper = helper
         .serving_input(&client, &[FOCUS_APP, TYPED_FIELDS])
         .taking_pictures(pictures);
@@ -32,7 +32,7 @@ fn input_service(client: &Client, saved: bool, request: &Value) -> Option<Value>
         Some("input") => {
             let slot = client.doing.as_ref().unwrap().before();
             let until = Instant::now() + Duration::from_secs(5);
-            let output = client.config.output_dir.clone();
+            let output = client.helper_config().output_dir.clone();
             let saved_yet = || {
                 slot.name()
                     .is_some_and(|name| before::Listing::of(&output).has(&name))
@@ -101,7 +101,7 @@ async fn an_agents_input_names_the_picture_taken_before_it_was_sent() {
         picture.contains(&key_of),
         "its name says whose action it was"
     );
-    let facts = before::facts(&client.config.output_dir, &picture).unwrap();
+    let facts = before::facts(&client.helper_config().output_dir, &picture).unwrap();
     assert_eq!(
         (
             &facts["action"],
@@ -116,7 +116,7 @@ async fn an_agents_input_names_the_picture_taken_before_it_was_sent() {
 /// The facts kept beside the one picture `client` took.
 fn only_facts(client: &Client) -> Value {
     let [picture] = <[String; 1]>::try_from(pictures(client)).unwrap();
-    before::facts(&client.config.output_dir, &picture).unwrap()
+    before::facts(&client.helper_config().output_dir, &picture).unwrap()
 }
 
 #[tokio::test]
@@ -135,7 +135,7 @@ async fn a_named_click_marks_its_element_window_and_task_and_its_reply_stays_as_
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
     let mut client = client.doing(Doing::new("click"));
-    client.config.activity.pictures_before_actions = true;
+    client.helper_config_mut().activity.pictures_before_actions = true;
     let session = HostSession::new(Host::Codex, "one").unwrap();
     client.task = Some(Task::of(session.key(), Some("probe")).unwrap());
     client.host_session = Some(session);
@@ -204,7 +204,7 @@ async fn a_referenced_click_or_press_marks_the_element_the_input_service_reached
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
         let mut client = client.doing(Doing::new(if press { "press" } else { "click" }));
-        client.config.activity.pictures_before_actions = true;
+        client.helper_config_mut().activity.pictures_before_actions = true;
         let helper = helper
             .serving_input(&client, &[FOCUS_APP, LOOKS, ELEMENT_ACTIONS])
             .taking_pictures(Pictures::Taken);
@@ -286,7 +286,7 @@ async fn the_picture_after_an_action_is_taken_only_when_no_next_step_serves() {
     for next_within in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
-        let output = client.config.output_dir.clone();
+        let output = client.helper_config().output_dir.clone();
         let at = atlas_core::time::timestamp() - 5_000_000_000;
         let first = before::name(at, None, None);
         let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
@@ -337,7 +337,7 @@ async fn a_picture_after_the_helper_never_answers_gives_up_in_time() {
     // Its process ends rather than waiting on with the next action's.
     assert_eq!(error.code, Code::Capture, "{error:?}");
     let after = before::after_name(&first).unwrap();
-    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+    assert!(!before::Listing::of(&client.helper_config().output_dir).has(&after));
 }
 
 #[tokio::test]
@@ -348,7 +348,7 @@ async fn the_persons_input_and_a_setting_turned_off_take_no_picture() {
         if person {
             client.actor = Actor::Viewer;
         } else {
-            client.config.activity.pictures_before_actions = false;
+            client.helper_config_mut().activity.pictures_before_actions = false;
         }
         helper
             .serve(client.input(&key(), None, None), |request| {
@@ -438,7 +438,7 @@ async fn no_text_is_kept_through_an_input_service_that_cannot_tell_a_password_fi
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
     let mut client = client.doing(Doing::new("type"));
-    client.config.activity.pictures_before_actions = true;
+    client.helper_config_mut().activity.pictures_before_actions = true;
     // An older service names a password field by its role alone.
     let helper = helper
         .serving_input(&client, &[FOCUS_APP])
@@ -582,7 +582,7 @@ async fn a_frame_whose_pixels_come_only_after_the_input_leaves_no_trace() {
                 .is_some_and(|(input, released)| input < released),
             "valid pixels came, only after the input: {log:?}"
         );
-        let folder = client.config.output_dir.join(before::FOLDER);
+        let folder = client.helper_config().output_dir.join(before::FOLDER);
         let kept: Vec<_> = fs::read_dir(folder)
             .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
             .unwrap_or_default();
@@ -702,7 +702,7 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
         let fresh = !keeping || actions != key();
         let directory = tempfile::tempdir().unwrap();
         let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
-        client.config.activity.pictures_before_actions = keeping;
+        client.helper_config_mut().activity.pictures_before_actions = keeping;
         client.controller = client
             .controller
             .clone()
@@ -800,7 +800,7 @@ async fn no_picture_after_an_action_is_taken_while_the_person_signs_in() {
 
     assert!(!helper.log().iter().any(|op| op.starts_with("frame")));
     let after = before::after_name(&first).unwrap();
-    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+    assert!(!before::Listing::of(&client.helper_config().output_dir).has(&after));
     client.controller.end_private().unwrap();
     lease.release();
 }

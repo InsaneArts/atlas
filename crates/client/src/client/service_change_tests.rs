@@ -1272,7 +1272,11 @@ async fn only_an_absent_daemon_directory_exempts_a_first_setup_from_checking_job
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     // First setup has already bootstrapped the shared executable.
-    fs::write(&client.config.identity_probe, "installed executable").unwrap();
+    fs::write(
+        &client.helper_config().identity_probe,
+        "installed executable",
+    )
+    .unwrap();
     let daemon = client.link.socket().unwrap().path.parent().unwrap();
     assert!(!daemon.exists());
     drop(client.service_change(false).await.unwrap());

@@ -228,6 +228,7 @@ impl Client {
     /// Returns a refusal to log out, or an error when the helper has not logged
     /// out yet.
     pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
+        self.reachable()?;
         let observation = self.observed().await;
         self.desktop().prove(&observation)?;
         let claim = self.controller.quarantine()?;
@@ -293,6 +294,8 @@ impl Client {
     async fn desktop_gone(&self, seconds: u64) -> bool {
         match self.desktop().kind() {
             Kind::User(login) => crate::user::session::user_gone(self, login, seconds).await,
+            // Not seen to go: a look that cannot be made counts as present.
+            Kind::Vm(_) => false,
         }
     }
 }

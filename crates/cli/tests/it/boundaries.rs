@@ -1,5 +1,6 @@
 use atlas_client::client::Client;
 use atlas_control::Controller;
+use atlas_core::config::desktops::Selected;
 use atlas_core::screen::{frame::Size, png::png_dimensions};
 use atlas_core::{
     actions,
@@ -473,7 +474,9 @@ fn library_construction_cannot_target_the_caller() {
     };
 
     assert_eq!(
-        Client::new(config).err().map(|error| error.code),
+        Client::new(Selected::provisional(config))
+            .err()
+            .map(|error| error.code),
         Some(Code::Identity)
     );
     assert!(!dir.path().join("out").exists());
@@ -720,12 +723,12 @@ async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code(
         .prefix("ust-")
         .tempdir_in("/tmp")
         .unwrap();
-    let mut client = Client::new(config(dir.path())).unwrap();
+    let mut client = Client::new(Selected::provisional(config(dir.path()))).unwrap();
     client.link.socket_mut().peer_uid = current_uid();
-    let listener = UnixListener::bind(&client.config.socket_path).unwrap();
+    let listener = UnixListener::bind(&client.helper_config().socket_path).unwrap();
     let mut hello = status();
-    hello["user"]["uid"] = json!(client.config.helper_uid);
-    hello["sessionProof"]["uid"] = json!(client.config.helper_uid);
+    hello["user"]["uid"] = json!(client.helper_config().helper_uid);
+    hello["sessionProof"]["uid"] = json!(client.helper_config().helper_uid);
     let proof = STANDARD.encode(serde_json::to_vec(&hello["sessionProof"]).unwrap());
     let message = "Session changed during capture; observe again";
     let server = tokio::spawn(async move {
@@ -769,12 +772,12 @@ async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_befo
         .prefix("ust-")
         .tempdir_in("/tmp")
         .unwrap();
-    let mut client = Client::new(config(dir.path())).unwrap();
+    let mut client = Client::new(Selected::provisional(config(dir.path()))).unwrap();
     client.link.socket_mut().peer_uid = current_uid();
-    let listener = UnixListener::bind(&client.config.socket_path).unwrap();
+    let listener = UnixListener::bind(&client.helper_config().socket_path).unwrap();
     let mut hello = status();
-    hello["user"]["uid"] = json!(client.config.helper_uid);
-    hello["sessionProof"]["uid"] = json!(client.config.helper_uid);
+    hello["user"]["uid"] = json!(client.helper_config().helper_uid);
+    hello["sessionProof"]["uid"] = json!(client.helper_config().helper_uid);
     let proof = STANDARD.encode(serde_json::to_vec(&hello["sessionProof"]).unwrap());
     let server = tokio::spawn(async move {
         let mut asked = Value::Null;
@@ -822,7 +825,7 @@ async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_befo
         json!({"x": 0, "y": 0, "width": 400, "height": 300})
     );
 
-    let saved = std::fs::read_dir(&client.config.output_dir)
+    let saved = std::fs::read_dir(&client.helper_config().output_dir)
         .map(|entries| {
             entries
                 .flatten()
@@ -879,7 +882,7 @@ fn config(dir: &std::path::Path) -> Config {
 #[test]
 fn constructing_a_client_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    Client::new(config(dir.path())).unwrap();
+    Client::new(Selected::provisional(config(dir.path()))).unwrap();
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 
     let state = dir.path().join("state");
@@ -892,7 +895,7 @@ fn output_directory_is_created_private_and_never_repermissioned() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let client = Client::new(config(dir.path())).unwrap();
+    let client = Client::new(Selected::provisional(config(dir.path()))).unwrap();
     let output = client.output_dir().unwrap().to_owned();
     let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode();
     assert_eq!(mode(&output) & 0o777, 0o700);
@@ -904,7 +907,7 @@ fn output_directory_is_created_private_and_never_repermissioned() {
     let mut nested = config(dir.path());
     nested.output_dir = dir.path().join("artifacts/runs");
 
-    let output = Client::new(nested)
+    let output = Client::new(Selected::provisional(nested))
         .unwrap()
         .output_dir()
         .unwrap()
@@ -1089,7 +1092,7 @@ fn an_unreadable_installed_build_is_retried_not_cached() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let client = Client::new(config(dir.path())).unwrap();
+    let client = Client::new(Selected::provisional(config(dir.path()))).unwrap();
     assert_eq!(client.installed_build(), None);
 
     let probe = dir.path().join("probe");
@@ -1109,7 +1112,7 @@ fn cloned_clients_share_builds_and_notice_a_replaced_executable() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let dir = tempfile::tempdir().unwrap();
-    let client = Client::new(config(dir.path())).unwrap();
+    let client = Client::new(Selected::provisional(config(dir.path()))).unwrap();
     let clone = client.clone();
     let probe = dir.path().join("probe");
     std::fs::write(&probe, b"abc").unwrap();

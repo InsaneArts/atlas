@@ -38,12 +38,12 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
 
     // Settings that exist but do not load name no helper, so its job stays.
     let (client, unloaded) = match Config::load_user(config_path) {
-        Ok(config) => (Some(Client::new(config)?), None),
+        Ok(config) => (Some(Client::new(Selected::provisional(config))?), None),
         Err(error) if error.code == Code::ConfigInvalid => (None, Some(error.error)),
         Err(_) => (None, None),
     };
 
-    let config = client.as_ref().map(|client| &client.config);
+    let config = client.as_ref().and_then(|client| client.user_config().ok());
     let (helper, known) = config.map_or((None, None), crate::user::uninstall::helper_account);
     let data = config::home()?.join("Library/Application Support/Atlas");
     let leftovers = config

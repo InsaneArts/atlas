@@ -53,8 +53,11 @@ pub(crate) async fn input_exited_in(
     _login: &atlas_core::user::User,
     pid: u32,
 ) -> bool {
+    let Ok(config) = client.user_config() else {
+        return false;
+    };
     matches!(
-        tokio::net::UnixStream::connect(&client.config.input_socket).await,
+        tokio::net::UnixStream::connect(&config.input_socket).await,
         Err(error) if matches!(
             error.kind(),
             std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
@@ -69,7 +72,8 @@ pub(crate) fn service_stop_saved_in(
     _login: &atlas_core::user::User,
 ) -> std::io::Result<bool> {
     client
-        .config
+        .user_config()
+        .map_err(|refused| std::io::Error::other(refused.error))?
         .input_socket
         .with_extension("stopped")
         .try_exists()
@@ -85,14 +89,15 @@ async fn launch_input_in(client: &Client, login: &atlas_core::user::User) -> Res
         ">\"$HOME/Library/Logs/Atlas-input.log\" 2>&1 </dev/null & echo $!",
     );
     let controller_uid = nix::unistd::getuid().as_raw();
+    let config = client.user_config()?;
     let request = json!({
         "op": "run",
         "argv": [
             "/bin/sh", "-c", script, "sh",
-            client.config.identity_probe,
+            config.identity_probe,
             login.uid.to_string(),
             controller_uid.to_string(),
-            client.config.input_socket,
+            config.input_socket,
         ],
         "timeoutMs": 3000,
     });

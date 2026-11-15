@@ -22,6 +22,8 @@ pub enum Kind {
     /// A hidden user on this Mac, kept off the console: what people know
     /// as Second Login.
     User(crate::user::User),
+    /// A VM on this Mac, run by Atlas VM and reached over its session.
+    Vm(crate::vm::Vm),
 }
 
 /// The name a desktop's live state carries: its locks, Stop, pending
@@ -47,6 +49,11 @@ impl RecordKey {
         Self("user".to_owned())
     }
 
+    /// The key of the VM named `id`.
+    pub fn vm(id: &DesktopId) -> Self {
+        Self(format!("vm-{}", id.as_str()))
+    }
+
     /// `text` as a record key: 1 to 64 lowercase letters, digits and dashes.
     pub fn parse(text: &str) -> Option<Self> {
         let plain = text
@@ -64,19 +71,27 @@ impl From<crate::user::User> for Desktop {
     }
 }
 
+impl From<crate::vm::Vm> for Desktop {
+    fn from(vm: crate::vm::Vm) -> Self {
+        Self { kind: Kind::Vm(vm) }
+    }
+}
+
 impl Desktop {
     /// What kind of desktop this is, for an owner to match on.
     pub fn kind(&self) -> &Kind {
         &self.kind
     }
 
-    /// The hidden user this desktop is: the way in for that user's own
-    /// setup, update and removal, which work on its account, its processes
-    /// in this kernel and its files on this disk. Anything that
+    /// The hidden user this desktop is, when it is one: the way in for that
+    /// user's own setup, update and removal, which work on its account, its
+    /// processes in this kernel and its files on this disk. Anything that
     /// differs between kinds matches on [`Desktop::kind`] instead.
-    pub fn user(&self) -> &crate::user::User {
-        let Kind::User(user) = &self.kind;
-        user
+    pub fn user(&self) -> Option<&crate::user::User> {
+        match &self.kind {
+            Kind::User(user) => Some(user),
+            Kind::Vm(_) => None,
+        }
     }
 
     /// The name this desktop's locks and records carry. A second login's
@@ -85,6 +100,8 @@ impl Desktop {
     pub fn id(&self) -> DesktopId {
         let named = match &self.kind {
             Kind::User(user) => user.record_name(),
+            // Atlas VM's own identifier already names it, in the same form.
+            Kind::Vm(vm) => return vm.id.clone(),
         };
         let digest = bytes_sha256(named.as_bytes());
         DesktopId(digest[..DesktopId::LENGTH].to_owned())
@@ -95,6 +112,7 @@ impl Desktop {
     pub fn record_key(&self) -> RecordKey {
         match &self.kind {
             Kind::User(_) => RecordKey::user(),
+            Kind::Vm(vm) => vm.record_key(),
         }
     }
 
@@ -107,6 +125,12 @@ impl Desktop {
     pub fn prove(&self, observation: &Observation) -> Result<Session> {
         match &self.kind {
             Kind::User(login) => observation.require_hidden(login.uid),
+            // A VM proves itself over its session, which the client opens;
+            // one it cannot reach is refused before any observation is read.
+            Kind::Vm(_) => Err(crate::error::Error::new(
+                crate::error::Code::Platform,
+                "This VM desktop's proof comes over its session.",
+            )),
         }
     }
 
@@ -116,6 +140,7 @@ impl Desktop {
     pub fn input_current(&self, observation: &Observation, pid: u32) -> bool {
         match &self.kind {
             Kind::User(login) => observation.input_current(login.uid, pid),
+            Kind::Vm(_) => false,
         }
     }
 
@@ -126,6 +151,8 @@ impl Desktop {
     pub fn left_may_run(&self, left: &[Left], group: Option<i32>) -> bool {
         match &self.kind {
             Kind::User(user) => user.left_may_run(left, group),
+            // A VM's processes are not in this kernel: told only by its guest.
+            Kind::Vm(_) => true,
         }
     }
 
@@ -140,6 +167,7 @@ impl Desktop {
     pub fn orphans_run(&self) -> Result<bool> {
         match &self.kind {
             Kind::User(user) => user.orphans_run(),
+            Kind::Vm(_) => Ok(true),
         }
     }
 
@@ -148,6 +176,7 @@ impl Desktop {
     pub fn instance(&self, pid: u32) -> Option<Instance> {
         match &self.kind {
             Kind::User(_) => crate::user::User::instance(pid),
+            Kind::Vm(_) => None,
         }
     }
 
@@ -156,6 +185,7 @@ impl Desktop {
     pub fn exited(&self, instance: Instance) -> bool {
         match &self.kind {
             Kind::User(_) => crate::user::User::exited(instance),
+            Kind::Vm(_) => false,
         }
     }
 }

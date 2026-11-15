@@ -138,10 +138,14 @@ async fn malformed_point_fields_keep_the_unreadable_window_refusal_first() {
     let directory = tempfile::tempdir().unwrap();
     let client = session(&crate::test_support::client(directory.path()), "one");
     remember(&client, &[window(42, 10.0)]);
-    let path = client.config.output_dir.join("last-windows").join(format!(
-        "{}.json",
-        client.host_session.as_ref().unwrap().key()
-    ));
+    let path = client
+        .helper_config()
+        .output_dir
+        .join("last-windows")
+        .join(format!(
+            "{}.json",
+            client.host_session.as_ref().unwrap().key()
+        ));
     std::fs::write(path, "unreadable json").unwrap();
     let actions = json!([{"type":"click","x":30,"y":40,"count":"two"}]);
     let expected = remembered(&client, None, &actions).unwrap_err();
@@ -295,7 +299,7 @@ async fn point_actions_infer_only_the_observed_owner_in_the_observed_epoch() {
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
         let client = session(&client, "one");
-        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let listener = UnixListener::bind(&client.helper_config().input_socket).unwrap();
         let sent = std::cell::RefCell::new(Vec::new());
         let native = async {
             loop {
@@ -440,14 +444,18 @@ fn a_failed_replacement_keeps_the_previous_point_expectation() {
     let directory = tempfile::tempdir().unwrap();
     let client = session(&crate::test_support::client(directory.path()), "one");
     remember(&client, &[window(42, 10.0)]);
-    let partial = client.config.output_dir.join("last-windows").join(format!(
-        "{}.json.partial",
-        client.host_session.as_ref().unwrap().key()
-    ));
+    let partial = client
+        .helper_config()
+        .output_dir
+        .join("last-windows")
+        .join(format!(
+            "{}.json.partial",
+            client.host_session.as_ref().unwrap().key()
+        ));
     std::fs::create_dir(partial).unwrap();
     assert!(
         crate::last_capture::remember_windows(
-            &client.config.output_dir,
+            &client.helper_config().output_dir,
             client.host_session.as_ref().unwrap().key(),
             Some(&[]),
             &epoch(),
@@ -499,7 +507,7 @@ async fn oversized_window_memory_refuses_point_actions_before_control_is_acquire
         &std::collections::BTreeMap::new(),
     );
     let error = crate::last_capture::remember_windows(
-        &client.config.output_dir,
+        &client.helper_config().output_dir,
         client.host_session.as_ref().unwrap().key(),
         Some(&windows),
         &epoch(),
@@ -558,7 +566,7 @@ async fn unreadable_window_memory_refuses_point_actions_before_control_is_acquir
         let directory = tempfile::tempdir().unwrap();
         let client = session(&crate::test_support::client(directory.path()), "one");
         remember(&client, &[window(42, 10.0)]);
-        let folder = client.config.output_dir.join("last-windows");
+        let folder = client.helper_config().output_dir.join("last-windows");
         let path = folder.join(format!(
             "{}.json",
             client.host_session.as_ref().unwrap().key()
@@ -617,7 +625,7 @@ fn unobserved_and_anonymous_sessions_have_no_remembered_target() {
     let anonymous = crate::test_support::client(directory.path());
     remember(&anonymous, &[window(42, 10.0)]);
     assert!(anonymous.remembered_windows().is_none());
-    assert!(!anonymous.config.output_dir.exists());
+    assert!(!anonymous.helper_config().output_dir.exists());
     let client = session(&anonymous, "one");
     assert!(client.remembered_windows().is_none());
     assert!(
@@ -730,10 +738,14 @@ fn remembering_windows_saves_no_names_and_leaves_session_records_untouched() {
     let mut observed = window(42, 10.0);
     observed.title = Some("private document".into());
     remember(&client, &[observed]);
-    let path = client.config.output_dir.join("last-windows").join(format!(
-        "{}.json",
-        client.host_session.as_ref().unwrap().key()
-    ));
+    let path = client
+        .helper_config()
+        .output_dir
+        .join("last-windows")
+        .join(format!(
+            "{}.json",
+            client.host_session.as_ref().unwrap().key()
+        ));
     let bytes = std::fs::read(&path).unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     assert!(!text.contains("private document") && !text.contains("Editor"));
@@ -754,7 +766,7 @@ fn remembering_windows_saves_no_names_and_leaves_session_records_untouched() {
     std::fs::write(path, "unreadable json").unwrap();
     assert!(
         crate::last_capture::remembered_windows(
-            &client.config.output_dir,
+            &client.helper_config().output_dir,
             client.host_session.as_ref().unwrap().key(),
         )
         .is_err()

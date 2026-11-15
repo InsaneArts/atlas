@@ -7,7 +7,11 @@ use super::{
     unpoisoned,
 };
 use atlas_client::client::Client;
-use atlas_core::{config::Config, error::Error, files};
+use atlas_core::{
+    config::desktops::{Chosen, Selected},
+    error::Error,
+    files,
+};
 use std::{path::Path, sync::Arc};
 
 impl Viewer {
@@ -22,8 +26,11 @@ impl Viewer {
     /// is tried again.
     pub(super) async fn follow_settings(self: &Arc<Self>) {
         let pictures = || {
-            let config = &self.client().config;
-            (config.output_dir.clone(), config.activity.keep())
+            let client = self.client();
+            (
+                client.records().to_path_buf(),
+                client.selected.desktop.activity().keep(),
+            )
         };
         let before = pictures();
         self.apply_settings().await;
@@ -57,22 +64,23 @@ impl Viewer {
             return;
         }
 
-        let Ok(Ok(config)) = tokio::task::spawn_blocking(move || Config::load(&path)).await else {
+        let Ok(Ok(selected)) = tokio::task::spawn_blocking(move || Selected::load(&path)).await
+        else {
             return;
         };
 
         let current = self.client();
-        if config == current.config {
+        if selected == current.selected {
             *unpoisoned(&self.settings_text) = Some(text);
             return;
         }
 
-        if config.same_helper(&current.config) {
-            self.follow_output(&current, config, text).await;
+        if same_helper(&selected, &current.selected) {
+            self.follow_output(&current, selected, text).await;
             return;
         }
 
-        let Ok(mut next) = Client::new(config) else {
+        let Ok(mut next) = Client::new(selected) else {
             return;
         };
         next.actor = current.actor;
@@ -91,7 +99,7 @@ impl Viewer {
             // exclusion are this viewer's to keep.
             let mut interrupted = unpoisoned(&self.interrupted);
             let mut client = unpoisoned(&self.client);
-            if lease.active() || interrupted.is_some() || client.config == next.config {
+            if lease.active() || interrupted.is_some() || client.selected == next.selected {
                 return;
             }
             // The next helper's own interrupted sign-in is taken over before
@@ -112,11 +120,11 @@ impl Viewer {
     }
 
     /// The settings name another output folder for the same helper: serve
-    /// it with `config` (whose file reads `text`) in place of `current`,
+    /// it with `selected` (whose file reads `text`) in place of `current`,
     /// control and all.
-    async fn follow_output(&self, current: &Arc<Client>, config: Config, text: Vec<u8>) {
+    async fn follow_output(&self, current: &Arc<Client>, selected: Selected, text: Vec<u8>) {
         let mut next = Client::clone(current);
-        next.config = config;
+        next.selected = selected;
         let next = Arc::new(next);
 
         {
@@ -150,12 +158,12 @@ impl Viewer {
 
         // Every read comes here: the folder is checked only to move.
         let client = self.client();
-        let moved = client.config.output_dir.join(MENUBAR_RECORD);
+        let moved = client.records().join(MENUBAR_RECORD);
         if moved == path || client.output_dir().is_err() {
             return;
         }
         // A folder another menu bar keeps its record in stays its own.
-        let Ok(alone) = crate::menubar::alone(&client.config.output_dir) else {
+        let Ok(alone) = crate::menubar::alone(client.records()) else {
             return;
         };
 
@@ -167,6 +175,16 @@ impl Viewer {
             *kept = Some((moved, record));
             *unpoisoned(&self.alone) = Some(alone);
         }
+    }
+}
+
+/// Whether `next` names the Second Login `current` does, its output folder
+/// or what the activity keeps aside, so control carries on in it. A VM
+/// desktop's client is made anew, its records folder with it.
+fn same_helper(next: &Selected, current: &Selected) -> bool {
+    match (&next.desktop, &current.desktop) {
+        (Chosen::User(next), Chosen::User(current)) => next.same_helper(current),
+        _ => false,
     }
 }
 

@@ -42,14 +42,8 @@ pub async fn open(
     targets: &[String],
     environment: &[String],
 ) -> Result<Value> {
-    open_in(
-        client,
-        app,
-        targets,
-        environment,
-        &handoff::Copies::of(&client.desktop()),
-    )
-    .await
+    let copies = handoff::Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
+    open_in(client, app, targets, environment, &copies).await
 }
 
 /// Open `url` in the browser `app` (by its name) for the person, under the

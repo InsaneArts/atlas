@@ -7,7 +7,7 @@ use atlas_client::{
     host_session::{Asker, Recovery, brief},
 };
 use atlas_core::{
-    config::Config,
+    config::desktops::Selected,
     desktop::Kind,
     error::{Code, Error, Result},
     host::{Host, HostSession},
@@ -836,8 +836,8 @@ pub fn refresh() -> Value {
 pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String {
     let version = atlas_core::VERSION;
 
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
+    let selected = match Selected::load(config_path) {
+        Ok(selected) => selected,
         Err(error) if error.code == atlas_core::error::Code::Config => {
             return "Atlas is installed but not set up. If the person wants GUI testing, \
                     ask them to open Atlas to finish setup."
@@ -848,7 +848,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         Err(error) => return format!("Atlas {version}: {}", error.error),
     };
 
-    let Ok(client) = Client::new(config.clone()) else {
+    let Ok(client) = Client::new(selected.clone()) else {
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
 
@@ -881,8 +881,9 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    let ready = match config.desktop().kind() {
+    let ready = match selected.desktop().kind() {
         Kind::User(login) => atlas_client::user::capability::doctor(status, login)["ready"] == true,
+        Kind::Vm(_) => return format!("Atlas {version}: {}", selected.unreachable().error),
     };
     if ready {
         let mut line = format!(

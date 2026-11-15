@@ -286,14 +286,14 @@ async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
         .tempdir_in("/tmp")
         .unwrap();
     let uid = 60001;
-    let mut client = Client::new(Config {
+    let mut client = Client::new(Selected::provisional(Config {
         helper_uid: uid,
         socket_path: dir.path().join("helper.sock"),
         identity_probe: dir.path().join("atlas"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("runs"),
         activity: Default::default(),
-    })
+    }))
     .unwrap();
     client.controller = atlas_control::Controller::at(uid, &dir.path().join("state"));
     client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();

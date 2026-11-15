@@ -12,7 +12,11 @@ pub(crate) async fn probe_in(
     run: Run<'_>,
     pid: i64,
 ) -> Result<Value> {
-    let probe = client.config.identity_probe.to_string_lossy().into_owned();
+    let probe = client
+        .user_config()?
+        .identity_probe
+        .to_string_lossy()
+        .into_owned();
     let argv = vec![probe, "elements-info".into(), pid.to_string()];
     client.run(argv, run).await
 }

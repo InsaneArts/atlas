@@ -244,6 +244,8 @@ impl Viewer {
                     )
                     .await
                 }
+                // Named by its guest, which this build cannot ask yet.
+                Kind::Vm(_) => None,
             };
             status.value["overview"]["accountName"] = json!(title);
         }

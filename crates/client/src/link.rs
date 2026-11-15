@@ -1,7 +1,9 @@
 //! How the station reaches a desktop's command service: the helper login's
 //! Unix socket, whose peer the kernel names, or a lane of a machine
-//! desktop's session, whose peer its handshake proves.
+//! desktop's session, whose peer its handshake proves; a desktop this build
+//! cannot reach yet has neither, and is refused.
 use atlas_core::{
+    config::desktops::Selected,
     error::{Code, Error, Result},
     protocol::{self, ConnectionPhase},
     transport::{Pending, Transport, refusal as refusal_of},
@@ -29,6 +31,7 @@ use tokio::{
 pub enum Link {
     Unix(Transport),
     Session(Session),
+    Unreachable(Unreachable),
 }
 
 /// A machine desktop's live generation, as the station reaches it.
@@ -38,12 +41,21 @@ pub struct Session {
     pub timeout: Duration,
 }
 
+/// A desktop this build cannot reach yet: every request is refused, in the
+/// one wording its settings give, before anything is opened.
+#[derive(Clone, Debug)]
+pub struct Unreachable {
+    pub selected: Arc<Selected>,
+    pub timeout: Duration,
+}
+
 impl Link {
     /// How long a request has to be answered.
     pub fn timeout(&self) -> Duration {
         match self {
             Self::Unix(transport) => transport.timeout,
             Self::Session(session) => session.timeout,
+            Self::Unreachable(unreachable) => unreachable.timeout,
         }
     }
 
@@ -53,6 +65,7 @@ impl Link {
         match &mut self {
             Self::Unix(transport) => transport.timeout = timeout,
             Self::Session(session) => session.timeout = timeout,
+            Self::Unreachable(unreachable) => unreachable.timeout = timeout,
         }
         self
     }
@@ -72,6 +85,7 @@ impl Link {
                     session.desktop.id().as_str()
                 ),
             )),
+            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
         }
     }
 
@@ -84,7 +98,7 @@ impl Link {
     pub fn socket_mut(&mut self) -> &mut Transport {
         match self {
             Self::Unix(transport) => transport,
-            Self::Session(_) => panic!("a machine desktop has no socket"),
+            Self::Session(_) | Self::Unreachable(_) => panic!("a machine desktop has no socket"),
         }
     }
 
@@ -125,6 +139,7 @@ impl Link {
                 );
                 Ok((pending, unanswered))
             }
+            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
         }
     }
 
@@ -141,6 +156,7 @@ impl Link {
         let kind = match self {
             Self::Unix(_) => LaneKind::Read,
             Self::Session(session) => lane_for(session, request)?,
+            Self::Unreachable(unreachable) => return Err(unreachable.selected.unreachable()),
         };
         let (pending, unanswered) = self.connect(kind).await?;
         Ok((pending.dispatch(request).await?, unanswered))

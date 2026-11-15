@@ -25,6 +25,9 @@ impl Client {
     /// Returns input-service, transport or local stop-marker failures. A partial result may
     /// have changed one stop marker; follow its uncertainty and recovery information.
     pub async fn hold(&self, on: bool) -> Result<Value> {
+        if let Kind::Vm(_) = self.desktop().kind() {
+            return self.hold_unreached(on);
+        }
         let held = self.hold_input(on).await;
         if !on {
             return held;
@@ -45,6 +48,27 @@ impl Client {
             }
         }
         Ok(reply)
+    }
+
+    /// [`Client::hold`] on a desktop this build cannot reach: a Stop is kept
+    /// on the person's side first, as on any desktop, and its delivery to
+    /// the desktop is said to be unconfirmed, never done; a Resume is
+    /// refused, as the desktop's own Stop is not known.
+    fn hold_unreached(&self, on: bool) -> Result<Value> {
+        if !on {
+            return Err(self.unreachable());
+        }
+        self.controller.note_stop(true)?;
+        Ok(json!({
+            "ok": true,
+            "held": true,
+            "kept": true,
+            "delivered": false,
+            "warnings": [format!(
+                "{} Agents are stopped here all the same.",
+                self.unreachable().error
+            )],
+        }))
     }
 
     /// Ask the helper daemon to end every background job for the person's
@@ -130,7 +154,7 @@ impl Client {
                 "warnings": [format!("{why} Agents are {} here all the same.", if on { "stopped" } else { "free to go on" })],
             }))
         };
-        let Ok(hello) = self.input_transport().call(&json!({"op": "hello"})).await else {
+        let Ok(hello) = self.input_transport()?.call(&json!({"op": "hello"})).await else {
             return unreachable("The helper's input service isn't running.");
         };
         if !has_capability(&hello, HOLD) {
@@ -194,7 +218,7 @@ impl Client {
         }
 
         let marked = self.stop_marked();
-        let hello = self.input_transport().call(&json!({"op": "hello"})).await;
+        let hello = self.input_transport()?.call(&json!({"op": "hello"})).await;
         if marked || hello.is_ok_and(|hello| hello["held"] == true) {
             return Err(Error::stopped());
         }
@@ -213,6 +237,8 @@ impl Client {
     fn service_stop_saved(&self) -> std::io::Result<bool> {
         match self.desktop().kind() {
             Kind::User(login) => crate::user::service::service_stop_saved_in(self, login),
+            // Unknown, never saved or clear: a Resume is held back by it.
+            Kind::Vm(_) => Err(std::io::Error::other(self.unreachable().error)),
         }
     }
 }

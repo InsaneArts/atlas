@@ -91,7 +91,9 @@ pub(super) const STARTING: Duration = Duration::from_secs(10 * 60);
 /// Remove what earlier environment commands left behind that nothing can
 /// use: [`prune_runs`], [`sweep`] and [`clear_discarded`].
 pub(super) fn tidy(client: &Client) {
-    if let Some(shared) = client.config.identity_probe.parent() {
+    if let Ok(config) = client.user_config()
+        && let Some(shared) = config.identity_probe.parent()
+    {
         prune_runs(shared);
         sweep(shared);
         clear_discarded(shared);
@@ -127,7 +129,11 @@ pub(super) fn sweep(shared: &Path) {
 /// started, or one it cannot answer for, stays. A plan removed is settled
 /// gone wherever a task claimed it.
 pub(super) async fn prune(client: &Client, login: &atlas_core::user::User, helper: &str) {
-    let Some(shared) = client.config.identity_probe.parent() else {
+    let Some(shared) = client
+        .user_config()
+        .ok()
+        .and_then(|config| config.identity_probe.parent())
+    else {
         return;
     };
 
@@ -226,7 +232,7 @@ pub(super) fn kept_plan(stage: &Path, id: &str, uid: u32) -> Option<Plan> {
 /// The folder beside the shared command, where plans and requests are kept.
 pub(super) fn shared_folder(client: &Client) -> Result<&Path> {
     client
-        .config
+        .user_config()?
         .identity_probe
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))

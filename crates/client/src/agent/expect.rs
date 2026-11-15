@@ -142,7 +142,7 @@ impl Expected {
             return Ok(None);
         };
         let Some(Observation { windows, epoch }) =
-            crate::last_capture::remembered_windows(&client.config.output_dir, session.key())?
+            crate::last_capture::remembered_windows(client.records(), session.key())?
         else {
             return Ok(None);
         };

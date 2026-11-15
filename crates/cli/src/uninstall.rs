@@ -10,7 +10,10 @@ use inspection::{Found, survey};
 use atlas_client::client::Client;
 use atlas_control::{Controller, Ownership};
 use atlas_core::{
-    config::{self, Config},
+    config::{
+        self, Config,
+        desktops::{Chosen, Selected, Settings},
+    },
     desktop::Kind,
     error::{Code, Error, Result},
 };
@@ -36,6 +39,50 @@ pub enum Progress<'a> {
 
 pub(crate) fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Uninstall, message)
+}
+
+/// Refuse to uninstall while a VM is listed in the settings at
+/// `config_path` or `kept` on this disk, listed or not: removing Atlas's data
+/// takes each VM with it, and nothing here takes a VM down cleanly yet. A
+/// VMs folder that cannot be read may hold one.
+fn refuse_vms(config_path: &Path, kept: Result<Vec<atlas_core::desktop::DesktopId>>) -> Result<()> {
+    let listed: Vec<(String, atlas_core::desktop::DesktopId)> = Settings::load(config_path)
+        .map(|settings| {
+            settings
+                .desktops()
+                .iter()
+                .filter_map(|listed| match &listed.desktop {
+                    Chosen::Vm(vm) => Some((listed.name.clone(), vm.id.clone())),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut vms: Vec<String> = listed.iter().map(|(name, _)| name.clone()).collect();
+    match kept {
+        // One kept but not listed is named by its identifier.
+        Ok(kept) => vms.extend(
+            kept.iter()
+                .filter(|id| !listed.iter().any(|(_, listed)| listed == *id))
+                .map(|id| id.as_str().to_owned()),
+        ),
+        Err(error) => {
+            return Err(problem(format!(
+                "{} Uninstall would take any VM kept there with it, so it stops here.",
+                error.error
+            )));
+        }
+    }
+    let (desktops, them) = match vms.len() {
+        0 => return Ok(()),
+        1 => ("desktop", "it"),
+        _ => ("desktops", "them"),
+    };
+    Err(problem(format!(
+        "This Mac keeps the VM {desktops} {}, which uninstall cannot remove yet; remove {them} \
+         first, then uninstall Atlas.",
+        atlas_core::name::listed(&vms)
+    )))
 }
 
 /// Remove `path` only if it is a link to the app's executable (or the app's
@@ -216,11 +263,13 @@ pub async fn run(
     ask: &dyn Fn(Question) -> Result<bool>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<Value> {
+    refuse_vms(config_path, atlas_client::vm::kept())?;
     let found = survey(config_path)?;
     let uid = found
         .client
         .as_ref()
-        .map(|client| client.desktop().user().uid);
+        .and_then(|client| client.user_config().ok())
+        .map(|config| config.user().uid);
     let other = found.not_the_helper();
     let facts = Facts {
         settings: uid.is_some(),
@@ -759,6 +808,7 @@ async fn settle(
         async {
             match client.desktop().kind() {
                 Kind::User(login) => crate::user::uninstall::observed(client, login).await,
+                Kind::Vm(_) => Err(client.unreachable()),
             }
         },
         |pid| client.stop_input(pid),

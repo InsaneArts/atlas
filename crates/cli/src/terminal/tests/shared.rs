@@ -1,4 +1,5 @@
 use super::*;
+use atlas_core::config::desktops::Selected;
 
 /// Against the menu bar running on this Mac: the terminal finds its frame
 /// service, reads committed pictures from it, and takes control on one
@@ -8,7 +9,7 @@ use super::*;
 async fn the_terminal_shares_the_running_menu_bar_frame_service() {
     let config =
         atlas_core::config::Config::load(&atlas_core::config::installed_path().unwrap()).unwrap();
-    let client = Client::new(config).unwrap();
+    let client = Client::new(Selected::provisional(config)).unwrap();
     let (url, descriptor) = shared(&client).await.expect("a running frame service");
     let mut frames = Frames::Shared {
         descriptor,
@@ -47,7 +48,7 @@ async fn the_terminal_shares_the_running_menu_bar_frame_service() {
 async fn a_shared_terminal_follows_a_restarted_menu_bar() {
     let config =
         atlas_core::config::Config::load(&atlas_core::config::installed_path().unwrap()).unwrap();
-    let client = Client::new(config).unwrap();
+    let client = Client::new(Selected::provisional(config)).unwrap();
     let (url, descriptor) = shared(&client).await.expect("a running frame service");
     let address = Arc::new(std::sync::Mutex::new(url.clone()));
     let mut frames = Frames::Shared {

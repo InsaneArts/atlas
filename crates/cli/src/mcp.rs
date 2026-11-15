@@ -476,6 +476,7 @@ impl Server {
     async fn switch_helper(&self) -> Result<Value> {
         match self.client.desktop().kind() {
             Kind::User(login) => crate::user::switch::switch_to_user(*login).await,
+            Kind::Vm(_) => Err(self.client.unreachable()),
         }
     }
 

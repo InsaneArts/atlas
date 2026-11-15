@@ -33,6 +33,8 @@ pub enum View {
     Readiness,
     /// An input action, said as done: "Clicked at 10, 20".
     Action(String),
+    /// The person's Stop, with any desktop it could only hold here.
+    Stop,
     Type,
     Run,
     Environment,
@@ -117,6 +119,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Elements { values } => checked(value, |value| observe::elements(value, *values)),
         View::Readiness => Rendered::out(observe::readiness(value)),
         View::Action(done) => act::action(done, value),
+        View::Stop => act::stopped(value),
         View::Type => act::typed(value),
         View::Run => act::run(value),
         View::Open(what) => act::opened(what, value),

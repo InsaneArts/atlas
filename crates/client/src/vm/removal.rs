@@ -357,6 +357,16 @@ fn name(path: &Path) -> Result<FileName> {
         })
 }
 
+/// Whether the removal recorded at `marker` is still under way: a finished
+/// one keeps its record, to answer a removal asked again, and holds nothing.
+///
+/// # Errors
+///
+/// Fails when its record cannot be read: it may be under way.
+pub(super) fn under_way(marker: &Path) -> Result<bool> {
+    Ok(read(marker)?.is_some_and(|record| record.step != Step::Done))
+}
+
 /// The record at `marker`; none when there is none.
 fn read(marker: &Path) -> Result<Option<Record>> {
     match std::fs::symlink_metadata(marker) {

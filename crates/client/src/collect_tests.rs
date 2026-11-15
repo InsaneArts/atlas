@@ -54,7 +54,7 @@ impl Place {
     /// Serve reads of the helper's home at the client's socket, as the
     /// daemon does; `asked` counts the requests.
     fn serve(&self) -> Arc<Mutex<usize>> {
-        let listener = UnixListener::bind(&self.client.config.socket_path).unwrap();
+        let listener = UnixListener::bind(&self.client.helper_config().socket_path).unwrap();
         let home = self.home.clone();
         let lie = *self.lie.lock().unwrap();
         let ahead = self.ahead.clone();

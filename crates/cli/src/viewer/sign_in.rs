@@ -104,6 +104,9 @@ impl Viewer {
         body: &Value,
     ) -> Result<Value> {
         let (address, site) = site_of(&body["site"])?;
+        // A desktop this build cannot reach is refused before any browser is
+        // looked for on it.
+        self.client().reachable()?;
         let browser = match body["browser"].as_str() {
             Some(bundle) => Browser::of(bundle).ok_or_else(|| {
                 Error::new(Code::Input, "Atlas opens Google Chrome or Firefox for this")

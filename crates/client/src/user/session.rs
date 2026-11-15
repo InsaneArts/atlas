@@ -15,7 +15,7 @@ pub(crate) async fn session_proof_by_command(
     client: &Client,
     _login: &atlas_core::user::User,
 ) -> Result<Value> {
-    let command = &client.config.identity_probe;
+    let command = &client.user_config()?.identity_probe;
     let request = json!({
         "op": "run",
         "argv": [command, "session-info"],

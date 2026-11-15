@@ -253,6 +253,9 @@ pub enum Absence {
     /// The account (named here) exists but no desktop of it runs: it was
     /// logged out, or the Mac restarted.
     LoggedOut(String),
+    /// This build cannot reach the desktop at all, for the reason given,
+    /// which is what a person is told.
+    Unreachable(String),
 }
 
 /// The doctor's step when input is down or pinned to a display that is
@@ -269,6 +272,7 @@ impl Absence {
         match self {
             Self::Missing => "missing",
             Self::LoggedOut(_) => "loggedOut",
+            Self::Unreachable(_) => "unreachable",
         }
     }
 
@@ -293,6 +297,7 @@ impl Absence {
                 report["account"] = json!(name);
                 LOGGED_OUT
             }
+            Self::Unreachable(why) => why.as_str(),
         };
 
         let running = report["checks"].as_array_mut().and_then(|checks| {

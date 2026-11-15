@@ -840,6 +840,7 @@ fn a_refusal_that_changed_nothing_is_not_resumable() {
 pub(crate) fn user_of(client: &Client) -> atlas_core::user::User {
     match client.desktop().kind() {
         Kind::User(login) => *login,
+        Kind::Vm(_) => panic!("a test of a Second Login"),
     }
 }
 

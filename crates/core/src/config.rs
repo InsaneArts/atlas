@@ -71,6 +71,33 @@ pub struct Config {
     pub activity: Activity,
 }
 
+/// `value`, a path the settings file at `path` gives: its `~/` expanded,
+/// taken beside the file when relative, and resolved, its last entry kept
+/// unless `whole`.
+fn settle_path(value: &Path, path: &Path, whole: bool) -> Result<PathBuf> {
+    if value.as_os_str().is_empty() || value.to_string_lossy().contains('\0') {
+        return Err(Error::new(
+            Code::Config,
+            "Paths must be nonempty and contain no NUL",
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new(Code::Config, "Configuration has no parent directory"))?;
+    let mut value = match value.to_string_lossy().strip_prefix("~/") {
+        Some(rest) => home()?.join(rest),
+        None => value.to_path_buf(),
+    };
+    if value.is_relative() {
+        value = parent.join(&value);
+    }
+    if whole {
+        resolve_path(&value)
+    } else {
+        resolve_parent(&value)
+    }
+}
+
 fn default_output() -> PathBuf {
     PathBuf::from("runs")
 }
@@ -170,9 +197,15 @@ impl Config {
     /// The desktop these settings name: the hidden login of the helper
     /// account.
     pub fn desktop(&self) -> Desktop {
-        Desktop::from(crate::user::User {
+        Desktop::from(self.user())
+    }
+
+    /// The hidden user these settings name: a helper's settings are always
+    /// a Second Login's.
+    pub fn user(&self) -> crate::user::User {
+        crate::user::User {
             uid: self.helper_uid,
-        })
+        }
     }
 
     /// Only output placement and what the activity keeps can change without
@@ -205,7 +238,11 @@ impl Config {
     /// TOML, unknown keys, invalid helper identity or unusable paths, and a refusal of a
     /// desktop the settings do not list.
     pub fn load(path: &Path) -> Result<Self> {
-        Self::load_settings(path)?.chosen()
+        let selected = Self::load_settings(path)?.chosen()?;
+        match selected.desktop {
+            desktops::Chosen::User(config) => Ok(config),
+            desktops::Chosen::Vm(_) => Err(selected.unreachable()),
+        }
     }
 
     /// Load the settings at `path` and take their Second Login: the user
@@ -298,10 +335,6 @@ impl Config {
         crate::session::validate_uid(*helper_uid)?;
         activity.validate()?;
 
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::new(Code::Config, "Configuration has no parent directory"))?;
-
         for (value, whole) in [
             (socket_path, true),
             (output_dir, true),
@@ -310,29 +343,22 @@ impl Config {
             (identity_probe, false),
             (input_socket, true),
         ] {
-            if value.as_os_str().is_empty() || value.to_string_lossy().contains('\0') {
-                return Err(Error::new(
-                    Code::Config,
-                    "Paths must be nonempty and contain no NUL",
-                ));
-            }
-
-            if let Some(rest) = value.to_string_lossy().strip_prefix("~/") {
-                *value = home()?.join(rest);
-            }
-
-            if value.is_relative() {
-                *value = parent.join(&*value);
-            }
-
-            *value = if whole {
-                resolve_path(value)?
-            } else {
-                resolve_parent(value)?
-            };
+            *value = settle_path(value, path, whole)?;
         }
 
         Ok(self)
+    }
+
+    /// The whole Mac's settings as a VM desktop takes them from the list
+    /// file at `path`: its output folder settled as a helper's is, and what
+    /// the activity keeps validated.
+    pub(super) fn settled_shared(
+        output_dir: &Path,
+        activity: &Activity,
+        path: &Path,
+    ) -> Result<PathBuf> {
+        activity.validate()?;
+        settle_path(output_dir, path, true)
     }
 
     /// The configuration as the TOML a user would save.

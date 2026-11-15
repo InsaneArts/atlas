@@ -207,6 +207,7 @@ impl Client {
         loop {
             let exited = match self.desktop().kind() {
                 Kind::User(login) => crate::user::service::input_exited_in(self, login, pid).await,
+                Kind::Vm(_) => return Err(self.unreachable()),
             };
             if exited {
                 return Ok(());
@@ -229,6 +230,7 @@ impl Client {
     async fn spawn_input(&self) -> Result<u32> {
         match self.desktop().kind() {
             Kind::User(login) => crate::user::service::spawn_input_in(self, login).await,
+            Kind::Vm(_) => Err(self.unreachable()),
         }
     }
 }

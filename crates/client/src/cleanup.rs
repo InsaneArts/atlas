@@ -87,7 +87,7 @@ pub async fn for_person(client: &Client, session: &Key, mode: Mode) -> Result<Va
 async fn preview_scope(client: &Client, scope: &Scope) -> Result<Value> {
     let output = client.output_dir()?;
     let loaded = Loaded::of(output, scope)?;
-    preview(&live::Live::reading(client), output, scope, &loaded).await
+    preview(&live::Live::reading(client)?, output, scope, &loaded).await
 }
 
 /// The preview of `scope`'s cleanup: the steps a run would take now, those
@@ -258,6 +258,8 @@ impl Preview {
 }
 
 async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
+    // Refused before control is taken, not once it is held.
+    client.reachable()?;
     let output = client.output_dir()?;
     let agent_adopts = scope.adopting && client.actor == Actor::Agent;
     if agent_adopts {
@@ -279,7 +281,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
         _ => Adopter::Person,
     });
     let applied = apply(
-        &live::Live::acting(client, &ownership, unknown),
+        &live::Live::acting(client, &ownership, unknown)?,
         output,
         scope,
         &loaded,

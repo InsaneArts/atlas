@@ -283,6 +283,13 @@ impl Controller {
         Self::in_directory(&Desktop::from(atlas_core::user::User { uid }), directory)
     }
 
+    /// The controller of `desktop`, of any kind, with its state in
+    /// `directory`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn of_at(desktop: &Desktop, directory: &Path) -> Self {
+        Self::in_directory(desktop, directory)
+    }
+
     /// Locating state is read-only; the directory appears with the first lock.
     fn in_directory(desktop: &Desktop, directory: &Path) -> Self {
         let id = desktop.id();

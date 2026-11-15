@@ -20,8 +20,7 @@ use atlas_client::{
     task::{self, Task},
 };
 use atlas_core::{
-    config::Config,
-    desktop,
+    config::{Config, desktops::Selected},
     error::{Code, Error, Result},
     transport::with_output,
 };
@@ -171,7 +170,7 @@ pub(super) async fn execute(
     let changes = policy.changes_helper();
     let waits = policy.waits(actor);
     let host = if policy.labelled(actor) {
-        match Config::load(&config).and_then(Client::new) {
+        match Selected::load(&config).and_then(Client::new) {
             Ok(client) => atlas_client::host_session::from_env_verified(&client).await,
             Err(_) => HostSession::from_env(),
         }
@@ -187,7 +186,7 @@ pub(super) async fn execute(
         std::env::var_os("ATLAS_TASK").as_deref(),
     )?;
     let client = || {
-        Client::new(Config::load(&config)?).map(|mut client| {
+        Client::new(Selected::load(&config)?).map(|mut client| {
             client.actor = actor;
             client.doing = doing.clone();
             client.host_session = host.clone();
@@ -268,7 +267,7 @@ fn note_outcome(
     result: &Result<Value>,
 ) {
     let copies = atlas_client::handoff::Copies::of(&client.desktop());
-    let facts = host_session::store::ReplyFacts::new(kind, result, &copies);
+    let facts = host_session::store::ReplyFacts::new(kind, result, copies.as_ref());
     if let Some(host) = host {
         let _ = host_session::store::note_facts(client, host, doing, &facts);
     }
@@ -331,7 +330,7 @@ async fn carry_out(
         }
         Command::Activity(args) => activity(&client()?, host, &args),
         Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
-        Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
+        Command::Doctor(args) => doctor::report(&client()?, args.verbose).await,
         Command::VerifyNative { fixture } => {
             atlas_client::user::capability::canary::verify(&client()?, &fixture).await
         }
@@ -929,7 +928,7 @@ fn settings(
     args: &cli::Config,
 ) -> Result<Value> {
     // A desktop the command cannot use refuses before the settings change.
-    client()?;
+    client()?.user_config()?;
     if let Some(state) = args.pictures_before_actions {
         atlas_core::config::keep_pictures(config, state == cli::OnOff::On)?;
     }
@@ -940,11 +939,12 @@ fn settings(
         atlas_core::config::typed_text_limit(config, (limit > 0).then_some(limit))?;
     }
     let client = client()?;
-    let output = &client.config.output_dir;
+    let helper = client.user_config()?;
+    let output = &helper.output_dir;
     if args.delete_pictures {
         atlas_client::before::delete_all(output)?;
     }
-    let mut reply = json!({ "ok": true, "config": client.config, "path": config });
+    let mut reply = json!({ "ok": true, "config": helper, "path": config });
     if args.pictures_summary {
         let (count, bytes) = atlas_client::before::summary(output);
         reply["pictures"] = json!({"count": count, "bytes": bytes});
@@ -962,10 +962,9 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     if atlas_core::config::desktops::Settings::load(config).is_err() {
         return crate::user::switch::switch_on_this_mac(None, args);
     }
+    // A VM desktop is refused here, with the words every command gives it.
     let config = Config::load(config)?;
-    match config.desktop().kind() {
-        desktop::Kind::User(login) => crate::user::switch::switch_on_this_mac(Some(login), args),
-    }
+    crate::user::switch::switch_on_this_mac(Some(&config.user()), args)
 }
 
 /// Refuse `atlas <command>` run as root (with sudo): it would act for root's
@@ -991,18 +990,31 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 /// told even when another could not be; the first failure is returned once
 /// all were tried, and with more than one desktop the reply says what each
 /// one said. The command's own client, when it has one, stops its desktop
-/// as it always has; the others get its labels.
+/// as it always has; the others get its labels. A VM desktop this build
+/// cannot reach keeps its Stop here, and its reply says it was not told.
 async fn stop_everywhere(config: &Path, client: &impl Fn() -> Result<Client>) -> Result<Value> {
     let settings = atlas_core::config::desktops::Settings::load(config)?;
-    let own = client().ok();
+    stop_listed(&settings, client().ok(), |listed| {
+        Client::new(settings.selected(listed))
+    })
+    .await
+}
+
+/// [`stop_everywhere`] over `settings`, with the command's own client
+/// `own`, if any, and `make` making the client of each other desktop.
+async fn stop_listed(
+    settings: &atlas_core::config::desktops::Settings,
+    own: Option<Client>,
+    make: impl Fn(&atlas_core::config::desktops::Listed) -> Result<Client>,
+) -> Result<Value> {
     let mut held = Vec::new();
     for listed in settings.desktops() {
         let mine = own
             .as_ref()
-            .filter(|own| own.desktop().id() == listed.config.desktop().id());
+            .filter(|own| own.desktop() == listed.desktop.desktop());
         let stopped = match mine {
             Some(own) => own.hold(true).await,
-            None => match Client::new(listed.config.clone()) {
+            None => match make(listed) {
                 Ok(mut other) => {
                     if let Some(own) = &own {
                         other.actor = own.actor;

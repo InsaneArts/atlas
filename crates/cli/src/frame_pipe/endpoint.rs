@@ -3,9 +3,10 @@
 //! its record. A reachable or unverifiable socket is never taken over, an
 //! unsafe folder is refused rather than repaired, and only the sockets this
 //! instance bound are ever removed.
+use atlas_client::client::Client;
 use atlas_core::{
     context::context,
-    desktop::{Desktop, Kind},
+    desktop::Kind,
     error::{Code, Error, Result},
     files::{LockFile, LockOpen, open_lock_file},
     name::hex,
@@ -216,17 +217,18 @@ async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<
     }
 }
 
-/// Bind the broker's endpoint for `controller` and `desktop`.
+/// Bind the broker's endpoint for `controller` and `client`'s desktop.
 ///
 /// # Errors
 ///
 /// Refuses an unsafe folder or socket, a service that already runs, or a
 /// socket path too long for a Unix address; returns failures to bind.
-pub(crate) async fn bind(controller: u32, desktop: &Desktop) -> Result<(Listeners, Endpoint)> {
-    match desktop.kind() {
+pub(crate) async fn bind(controller: u32, client: &Client) -> Result<(Listeners, Endpoint)> {
+    match client.desktop().kind() {
         // Keyed by the two accounts, as every earlier build keys it, so
         // builds before and after this one still exclude each other.
         Kind::User(user) => bind_in(Path::new(BASE), controller, user.uid).await,
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

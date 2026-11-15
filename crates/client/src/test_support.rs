@@ -22,7 +22,7 @@ use crate::{
 };
 use atlas_control::Controller;
 use atlas_core::{
-    config::Config,
+    config::{Config, desktops::Selected},
     error::Result,
     test_support::{CONFIGURED_UID, SETTINGS, UID},
 };
@@ -70,7 +70,7 @@ pub fn converse_until(
 /// A client whose endpoints and controller state are entirely temporary. It
 /// keeps no pictures before actions unless a test turns them on.
 pub fn client(directory: &Path) -> Client {
-    let mut client = Client::new(Config {
+    let mut client = Client::new(Selected::provisional(Config {
         helper_uid: UID,
         socket_path: directory.join("helper/absent.sock"),
         identity_probe: directory.join("absent-probe"),
@@ -80,9 +80,31 @@ pub fn client(directory: &Path) -> Client {
             pictures_before_actions: false,
             ..Default::default()
         },
-    })
+    }))
     .unwrap();
     client.controller = Controller::at(UID, &directory.join("state"));
+    client
+}
+
+/// The identifier of the VM desktop [`vm_client`] makes.
+pub const VM_ID: &str = "0123456789abcdef01234567";
+
+/// A client of the VM desktop `work`, its records under `directory`, its
+/// controller state kept there too, with the Second Login `user_entry`
+/// named beside it, if any.
+pub fn vm_client(directory: &Path, user_entry: Option<&str>) -> Client {
+    let id = atlas_core::desktop::DesktopId::parse(VM_ID).unwrap();
+    let selected = Selected {
+        name: "work".to_owned(),
+        desktop: atlas_core::config::desktops::Chosen::Vm(atlas_core::config::desktops::VmConfig {
+            id,
+            output_dir: directory.join("output"),
+            activity: atlas_core::config::Activity::default(),
+        }),
+        user_entry: user_entry.map(str::to_owned),
+    };
+    let mut client = Client::new(selected).unwrap();
+    client.controller = Controller::of_at(&client.desktop(), &directory.join("state"));
     client
 }
 
@@ -128,7 +150,7 @@ pub fn waiting_note(state: &Path, host: Option<&crate::host_session::HostSession
 /// state kept in `directory` too.
 pub fn client_in(directory: &Path) -> Client {
     let config = Config::parse(SETTINGS.as_bytes(), &directory.join("u.toml")).unwrap();
-    let mut client = Client::new(config).unwrap();
+    let mut client = Client::new(Selected::provisional(config)).unwrap();
     client.controller = Controller::at(CONFIGURED_UID, &directory.join("state"));
     client
 }

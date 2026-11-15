@@ -99,7 +99,7 @@ impl Bindings {
             let _held = self.ordered(lock)?;
             let settings = Settings::load(config)?;
             let default = settings.default_desktop();
-            let output = default.config.output_dir.clone();
+            let output = default.desktop.output_dir().to_path_buf();
             let several = settings.desktops().len() > 1;
             let binding = session.map(|session| self.folder.join(session.as_str()));
             let bound = match &binding {

@@ -14,7 +14,7 @@ use atlas_control::Ownership;
 use atlas_core::{
     account::{Account, account_with_uid},
     app_bundle::signed_daemon,
-    config::{Config, home},
+    config::{Config, desktops::Selected, home},
     error::{Code, Error, Result},
     files::save_private,
     session::{Diagnosis, Observation, require_hidden},
@@ -221,7 +221,11 @@ fn helper_argv(
     expected: &Identity,
 ) -> Result<Vec<String>> {
     Ok(vec![
-        client.config.identity_probe.to_string_lossy().into_owned(),
+        client
+            .user_config()?
+            .identity_probe
+            .to_string_lossy()
+            .into_owned(),
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
         "--account".to_owned(),
@@ -305,7 +309,7 @@ async fn await_endpoint(client: &Client) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(atlas_daemon::user::setup::problem(format!(
                 "The helper did not answer in time ({}). Run atlas doctor.",
-                atlas_core::config::tilde(&client.config.socket_path)
+                atlas_core::config::tilde(&client.user_config()?.socket_path)
             )));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -333,7 +337,7 @@ impl Migration {
         Ok(Self {
             path,
             log,
-            client: Client::new(config)?,
+            client: Client::new(Selected::provisional(config))?,
             account: OnceLock::new(),
         })
     }
@@ -484,7 +488,7 @@ impl Migration {
 
         let controller = nix::unistd::getuid().as_raw();
         let socket = endpoint(
-            &self.client.config.socket_path,
+            &self.client.user_config()?.socket_path,
             self.log.plan.uid,
             controller,
         );
@@ -611,14 +615,13 @@ fn basis(config_path: &Path) -> Result<Basis> {
     let config_path = fs::canonicalize(config_path)?;
     let config = Config::load_user(&config_path)?;
     let text = fs::read_to_string(&config_path)?;
-    let account = account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
+    let account = account_with_uid(config.user().uid)?.ok_or_else(|| {
         atlas_daemon::user::setup::problem("The configured helper account does not exist")
     })?;
     let controller = account_with_uid(nix::unistd::getuid().as_raw())?.ok_or_else(|| {
         atlas_daemon::user::setup::problem("The controller account cannot be resolved")
     })?;
-    let layout =
-        atlas_daemon::user::setup::Layout::new(config.desktop().user().uid, account.home.clone());
+    let layout = atlas_daemon::user::setup::Layout::new(config.user().uid, account.home.clone());
 
     Ok(Basis {
         config_path,
@@ -642,14 +645,16 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         ));
     }
 
-    let status = Client::new(config.clone())?.status().await;
-    require_background(&status, config.desktop().user().uid)?;
+    let status = Client::new(Selected::provisional(config.clone()))?
+        .status()
+        .await;
+    require_background(&status, config.user().uid)?;
 
     let program = atlas_core::app_bundle::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
     Ok(Plan {
-        uid: config.desktop().user().uid,
+        uid: config.user().uid,
         controller: base.controller.name,
         home: base.account.home,
         old_label: String::new(),
@@ -758,7 +763,7 @@ fn fresh_start(log: Option<Log>, path: &Path) -> Result<Start> {
 /// The setup log for the configuration at `config_path`: where it is
 /// recorded, and what is recorded there.
 fn recorded_log(config_path: &Path) -> Result<(PathBuf, Option<Log>)> {
-    let path = log_path(Config::load_user(config_path)?.desktop().user().uid)?;
+    let path = log_path(Config::load_user(config_path)?.user().uid)?;
     let log = load_log(&path)?;
     Ok((path, log))
 }
@@ -833,7 +838,7 @@ pub async fn finalize(config_path: &Path, client: &Client, code: Code) -> Result
     }
 
     let status = client.status().await;
-    Ok(doctor_report(status, client.desktop().user()).diagnosis)
+    Ok(doctor_report(status, &client.user_config()?.user()).diagnosis)
 }
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
@@ -868,11 +873,12 @@ pub(crate) async fn fresh_pass(
 /// Returns the failure to verify the helper or to read the job through its
 /// daemon.
 pub async fn managed_job(client: &Client) -> Result<atlas_daemon::user::setup::launchd::JobReport> {
+    let uid = client.user_config()?.user().uid;
     let request = atlas_daemon::user::setup::Request::Inspect {
-        uid: client.desktop().user().uid,
+        uid,
         labels: vec![atlas_daemon::user::setup::LABEL.to_owned()],
     };
-    let expected = setup_identity(client.desktop().user().uid)?;
+    let expected = setup_identity(uid)?;
 
     Ok(atlas_daemon::user::setup::launchd::JobReport::from(
         &inspect(client, &request, &expected).await?["jobs"][atlas_daemon::user::setup::LABEL],

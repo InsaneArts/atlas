@@ -146,12 +146,12 @@ fn agent(client: Client, verb: &'static str) -> Client {
 async fn a_job_start_holds_control_only_until_it_is_acknowledged_and_notes_the_job() {
     let dir = tempfile::tempdir().unwrap();
     let client = agent(client_in(dir.path()), "job-start");
-    let heard = stand_in(&client.config.socket_path, |request| {
+    let heard = stand_in(&client.helper_config().socket_path, |request| {
         assert_eq!(request["action"], "start");
         Some(json!({"ok": true, "op": "job", "action": "start", "job": job_view(ID, "running")}))
     });
     let mut client = client;
-    client.config.helper_uid = 60001;
+    client.helper_config_mut().helper_uid = 60001;
     let ownership = client.controller.acquire_beside_commands().unwrap();
     let reply = started(
         &client,
@@ -200,7 +200,7 @@ async fn a_start_reply_that_does_not_prove_its_job_is_uncertain() {
         for (field, value) in job.as_object().unwrap() {
             view[field] = value.clone();
         }
-        stand_in(&client.config.socket_path, move |_| {
+        stand_in(&client.helper_config().socket_path, move |_| {
             Some(json!({"ok": true, "op": "job", "action": "start", "job": view}))
         });
         let error = started(
@@ -222,7 +222,7 @@ async fn a_start_reply_that_does_not_prove_its_job_is_uncertain() {
 async fn a_lost_start_reply_stays_pending_for_every_agent() {
     let dir = tempfile::tempdir().unwrap();
     let client = agent(client_in(dir.path()), "job-start");
-    stand_in(&client.config.socket_path, |_| None);
+    stand_in(&client.helper_config().socket_path, |_| None);
     let error = started(
         &client,
         PIN,
@@ -251,7 +251,7 @@ async fn a_job_stop_waits_without_control() {
     let observed = Mutex::new(Some(observed));
     let allow_ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ending = allow_ended.clone();
-    stand_in(&client.config.socket_path, move |request| {
+    stand_in(&client.helper_config().socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("stop") => json!({"ok": true, "op": "job", "action": "stop",
                 "job": job_view(ID, "stopping"), "signalled": "SIGTERM"}),
@@ -320,7 +320,7 @@ async fn another_tasks_job_is_refused_without_its_key() {
     let client = agent(client_in(dir.path()), "job-stop");
     let theirs = crate::host_session::Key::parse("3f9a1c07b2e4").unwrap();
     let task = theirs.clone();
-    stand_in(&client.config.socket_path, move |_| {
+    stand_in(&client.helper_config().socket_path, move |_| {
         let mut view = job_view(ID, "running");
         view["task"] = json!(task);
         Some(json!({"ok": true, "op": "job", "action": "show", "job": view}))
@@ -350,7 +350,7 @@ async fn a_job_is_stopped_only_as_its_tasks_record_says() {
     view["task"] = json!(client.task.as_ref().unwrap().key());
     note(&client, None, entry(&viewed(&view)).unwrap()).unwrap();
     // The helper's own record says otherwise; the task's copy is what is sent.
-    let heard = stand_in(&client.config.socket_path, |_| {
+    let heard = stand_in(&client.helper_config().socket_path, |_| {
         Some(
             json!({"ok": false, "code": "job", "reason": "identity", "id": ID,
             "error": "The job is no longer the process Atlas started, so nothing was signalled",
@@ -377,7 +377,7 @@ async fn a_stopped_helper_refuses_job_starts_and_stops_but_lists_them() {
     let dir = tempfile::tempdir().unwrap();
     let client = agent(client_in(dir.path()), "job-start");
     client.controller.note_stop(true).unwrap();
-    let heard = stand_in(&client.config.socket_path, |_| {
+    let heard = stand_in(&client.helper_config().socket_path, |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [job_view(ID, "running")]}))
     });
     let id = JobId::parse(ID).unwrap();
@@ -422,7 +422,7 @@ async fn an_unknown_outcome_blocks_a_job_stop_but_not_a_list() {
     let dir = tempfile::tempdir().unwrap();
     let client = agent(client_in(dir.path()), "job-stop");
     drop(client.controller.quarantine().unwrap());
-    stand_in(&client.config.socket_path, |_| {
+    stand_in(&client.helper_config().socket_path, |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": []}))
     });
     assert_eq!(
@@ -453,7 +453,7 @@ async fn the_persons_stop_asks_the_helper_to_end_every_job() {
     let dir = tempfile::tempdir().unwrap();
     let mut person = client_in(dir.path());
     person.actor = crate::client::Actor::Viewer;
-    let heard = stand_in(&person.config.socket_path, |_| {
+    let heard = stand_in(&person.helper_config().socket_path, |_| {
         Some(json!({"ok": true, "op": "job", "action": "stop-all", "stopping": 1}))
     });
     let reply = person.hold(true).await.unwrap();
@@ -477,7 +477,7 @@ async fn the_persons_stop_asks_the_helper_to_end_every_job() {
     let dir = tempfile::tempdir().unwrap();
     let mut person = client_in(dir.path());
     person.actor = crate::client::Actor::Viewer;
-    stand_in(&person.config.socket_path, |_| None);
+    stand_in(&person.helper_config().socket_path, |_| None);
     let reply = person.hold(true).await.unwrap();
     assert!(
         reply["warnings"]
@@ -566,7 +566,7 @@ async fn a_jobs_log_is_read_without_control_and_a_refusal_keeps_its_code() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
     let _held = client.controller.acquire(false).unwrap();
-    stand_in(&client.config.socket_path, |request| {
+    stand_in(&client.helper_config().socket_path, |request| {
         Some(match request["id"].as_str() {
             Some(ID) => json!({"ok": true, "op": "job", "action": "log", "id": ID,
                 "data": STANDARD.encode(b"hello \xff\n"), "size": 81234,
@@ -591,7 +591,7 @@ async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
     let client = agent(client_in(dir.path()), "job-stop");
     let ended = Arc::new(Mutex::new(false));
     let shown = ended.clone();
-    stand_in(&client.config.socket_path, move |request| {
+    stand_in(&client.helper_config().socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("stop") => json!({"ok": true, "op": "job", "action": "stop",
                 "job": job_view(ID, "stopping"), "signalled": "SIGTERM"}),
@@ -659,7 +659,7 @@ async fn listing_never_rewrites_the_identity_the_task_first_noted() {
     other["state"] = json!("ended");
     other["how"] = json!("exited");
     let listed = other.clone();
-    stand_in(&client.config.socket_path, move |_| {
+    stand_in(&client.helper_config().socket_path, move |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [listed]}))
     });
     let reply = list(&client, false).await.unwrap();
@@ -687,7 +687,7 @@ async fn listing_notes_how_far_a_job_got_when_its_identity_agrees() {
     view["how"] = json!("leader-gone");
     view["left"] = json!([{"pid": 9, "name": "node"}]);
     let listed = view.clone();
-    stand_in(&client.config.socket_path, move |_| {
+    stand_in(&client.helper_config().socket_path, move |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [listed]}))
     });
     let reply = list(&client, false).await.unwrap();
@@ -706,7 +706,7 @@ async fn another_tasks_log_is_read_only_with_its_key() {
     let client = agent(client_in(dir.path()), "job-start");
     let theirs = crate::host_session::Key::parse("3f9a1c07b2e4").unwrap();
     let task = theirs.clone();
-    stand_in(&client.config.socket_path, move |request| {
+    stand_in(&client.helper_config().socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("show") => {
                 let mut view = job_view(ID, "running");
@@ -735,7 +735,7 @@ async fn a_stop_the_helper_could_not_carry_out_for_every_job_is_said() {
     let dir = tempfile::tempdir().unwrap();
     let mut person = client_in(dir.path());
     person.actor = crate::client::Actor::Viewer;
-    stand_in(&person.config.socket_path, |_| {
+    stand_in(&person.helper_config().socket_path, |_| {
         Some(
             json!({"ok": true, "op": "job", "action": "stop-all", "stopping": 1,
             "refused": [{"id": ID, "reason": "identity"}], "unknown": [{"id": "000000000000"}]}),
@@ -790,7 +790,7 @@ fn a_log_out_or_uninstall_counts_what_it_stopped_and_says_what_it_could_not() {
 async fn stopping_every_job_with(stopped: Value) -> Everyone {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
-    stand_in(&client.config.socket_path, move |request| {
+    stand_in(&client.helper_config().socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("stop-all") => stopped.clone(),
             _ => json!({"ok": true, "op": "job", "action": "show", "jobs": []}),
@@ -986,7 +986,7 @@ async fn an_incomplete_stop_of_every_job_is_said_at_logout() {
     for index in 0..CLEANUP_ENTRIES {
         std::fs::write(daemon.join(format!("jobs/unrelated-{index}")), "").unwrap();
     }
-    stand_in(&client.config.socket_path, move |request| {
+    stand_in(&client.helper_config().socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("stop-all") => jobs.stop_all(StopReason::Stopped),
             _ => jobs.show(None),
@@ -1012,7 +1012,7 @@ async fn a_job_no_tasks_record_lists_is_checked_against_the_helper() {
     let dir = tempfile::tempdir().unwrap();
     let client = agent(client_in(dir.path()), "job-stop");
     let mine = client.task.as_ref().unwrap().key().clone();
-    stand_in(&client.config.socket_path, move |_| {
+    stand_in(&client.helper_config().socket_path, move |_| {
         let mut view = job_view(ID, "running");
         view["task"] = json!(mine);
         Some(json!({"ok": true, "op": "job", "action": "show", "job": view}))
@@ -1070,8 +1070,8 @@ fn every_view_the_helper_sends_reads_back_as_it_was_sent() {
 async fn sign_in_admits(jobs: Vec<Value>) -> Result<()> {
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
-    client.config.helper_uid = nix::unistd::getuid().as_raw();
-    stand_in(&client.config.socket_path, move |_| {
+    client.helper_config_mut().helper_uid = nix::unistd::getuid().as_raw();
+    stand_in(&client.helper_config().socket_path, move |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": jobs}))
     });
     require_none(&client).await
@@ -1179,7 +1179,7 @@ async fn a_sign_in_is_refused_when_the_helpers_job_list_cant_be_read() {
         "Atlas couldn't read the helper's background jobs. Try again."
     );
 
-    stand_in(&client.config.socket_path, |_| {
+    stand_in(&client.helper_config().socket_path, |_| {
         Some(
             json!({"ok": false, "code": "job", "reason": "unobserved", "uncertain": false,
             "error": "The helper couldn't account for every job"}),

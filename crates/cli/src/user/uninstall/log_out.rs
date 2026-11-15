@@ -69,7 +69,7 @@ pub(super) async fn log_out_helper(
     ask: &dyn Fn(Question) -> Result<bool>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
-    let uid = client.desktop().user().uid;
+    let uid = client.user_config()?.user().uid;
     let before = client.controller.pending()?;
     let mut way = Way::Ask;
 
@@ -157,7 +157,10 @@ fn root_log_out(
     target: Option<crate::user::onboarding::as_root::Target>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Came {
-    let uid = client.desktop().user().uid;
+    let Ok(config) = client.user_config() else {
+        return Came::Stayed;
+    };
+    let uid = config.user().uid;
     let me = nix::unistd::getuid().as_raw();
     let Some(target) = target else {
         progress(Progress::Say(

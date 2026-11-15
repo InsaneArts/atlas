@@ -60,10 +60,10 @@ fn choosing(
 
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load_user(config_path)?;
-    let (leftovers, blockers) = logins(Some(config.desktop().user().uid));
-    let Some(helper) = account::account_with_uid(config.desktop().user().uid)? else {
+    let (leftovers, blockers) = logins(Some(config.user().uid));
+    let Some(helper) = account::account_with_uid(config.user().uid)? else {
         let mut reply = choosing(me, app, true, (leftovers, blockers))?;
-        reply["helper"] = json!({"exists": false, "uid": config.desktop().user().uid});
+        reply["helper"] = json!({"exists": false, "uid": config.user().uid});
         return Ok(reply);
     };
 
@@ -74,7 +74,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let paired = asked(uid, &helper);
     let signed_in = atlas_core::user::logins::logged_in(helper.uid) == Some(true);
 
-    let client = Client::new(config.clone())?;
+    let client = Client::new(Selected::provisional(config.clone()))?;
     let acceptance = if let Some(pairing) = atlas_daemon::user::setup::pairing::request()
         .filter(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid)
     {
@@ -85,8 +85,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let reply = client.status().await;
     let atlas_core::session::Diagnosis {
         observation, ready, ..
-    } = atlas_client::user::capability::doctor_report(reply.clone(), config.desktop().user())
-        .diagnosis;
+    } = atlas_client::user::capability::doctor_report(reply.clone(), &config.user()).diagnosis;
     let hidden = config.desktop().prove(&observation).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
     let finished = ready

@@ -13,7 +13,6 @@ use atlas_cli::ui::{self, Format, render, style};
 use atlas_control::interrupt::{Interrupt, Stopped};
 use atlas_core::{
     config::Config,
-    desktop::Kind,
     error::{Code, Error},
 };
 use clap::FromArgMatches;
@@ -524,15 +523,14 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
         return error;
     };
 
-    match config.desktop().kind() {
-        // This Mac can see whether the second login is logged out.
-        Kind::User(login) => match atlas_core::user::logins::absence(login.uid) {
-            Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
-                Code::LoggedOut,
-                "The helper is logged out (after a restart or a log-out)",
-            ),
-            _ => error,
-        },
+    // This Mac can see whether the second login is logged out; a VM
+    // desktop's settings do not load as a helper's.
+    match atlas_core::user::logins::absence(config.user().uid) {
+        Some(atlas_core::session::Absence::LoggedOut(_)) => Error::new(
+            Code::LoggedOut,
+            "The helper is logged out (after a restart or a log-out)",
+        ),
+        _ => error,
     }
 }
 
@@ -563,9 +561,8 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     };
 
     let finished = !crate::user::open::chosen_as_helper()
-        && Config::load(config).is_ok_and(|config| match config.desktop().kind() {
-            Kind::User(login) => crate::user::open::set_up_in(login),
-        });
+        // A VM desktop's settings do not load as a helper's: not set up here.
+        && Config::load(config).is_ok_and(|config| crate::user::open::set_up_in(&config.user()));
     let error = if finished {
         viewer_command(&executable, config).exec()
     } else {

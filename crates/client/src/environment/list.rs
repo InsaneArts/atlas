@@ -25,6 +25,7 @@ pub(super) const SHOWN: usize = 50;
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::list_in(client, login, all).await,
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

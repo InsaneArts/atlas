@@ -406,7 +406,7 @@ async fn discovery_writes_no_activity_row() {
     helper.serve(discovered(&client), found).await.unwrap();
     assert!(
         !client
-            .config
+            .helper_config()
             .output_dir
             .join(crate::activity_log::FILE)
             .exists()

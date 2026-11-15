@@ -4,6 +4,7 @@ use atlas_client::{
     sign_ins::{self, Listed},
     test_support::Helper,
 };
+use atlas_core::config::desktops::Selected;
 use atlas_core::test_support::UID;
 use std::path::Path;
 
@@ -330,7 +331,10 @@ async fn the_helper_stays_while_a_sign_in_taken_over_waits_for_the_person() {
     let base = std::fs::canonicalize(dir.path()).unwrap();
     let settings = base.join("u.toml");
     std::fs::write(&settings, atlas_core::test_support::SETTINGS).unwrap();
-    let mut client = Client::new(atlas_core::config::Config::load(&settings).unwrap()).unwrap();
+    let mut client = Client::new(Selected::provisional(
+        atlas_core::config::Config::load(&settings).unwrap(),
+    ))
+    .unwrap();
     client.controller = atlas_control::Controller::at(60001, &base.join("state"));
     client.controller.interrupt_for_test(&github());
     let (_, viewer) = http::bind(client, 0, Some(&settings)).await.unwrap();
@@ -345,5 +349,9 @@ async fn the_helper_stays_while_a_sign_in_taken_over_waits_for_the_person() {
     .unwrap();
     viewer.follow_settings().await;
 
-    assert_eq!(viewer.client().config.helper_uid, 60001, "unchanged");
+    assert_eq!(
+        viewer.client().helper_config().helper_uid,
+        60001,
+        "unchanged"
+    );
 }

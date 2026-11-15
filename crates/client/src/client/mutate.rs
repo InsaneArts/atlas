@@ -288,6 +288,7 @@ impl Client {
             release.is_none() || matches!(mutation, Mutation::Run { .. }),
             "only a command started with run lets go of control while it runs"
         );
+        self.reachable()?;
         let started = Instant::now();
         self.controller.interrupt().check()?;
         let command = release.is_some();
@@ -414,7 +415,7 @@ impl Client {
     pub(super) fn transport_for(&self, mutation: &Mutation<'_>) -> Result<Transport> {
         let daemon = self.link.socket()?;
         Ok(match mutation {
-            Mutation::Input { .. } => self.input_transport(),
+            Mutation::Input { .. } => self.input_transport()?,
             // A long command's reply comes after it ends, and after the
             // helper has stopped whatever it left running.
             Mutation::Run { timeout, .. } => {

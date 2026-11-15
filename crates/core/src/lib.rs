@@ -39,6 +39,7 @@ pub mod test_support;
 pub mod time;
 pub mod transport;
 pub mod user;
+pub mod vm;
 pub mod vsock;
 pub mod xattr;
 

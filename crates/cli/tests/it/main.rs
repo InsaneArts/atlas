@@ -7,3 +7,4 @@ mod desktop_boundaries;
 mod jobs;
 mod machine_supervisor;
 mod references;
+mod vm_desktops;

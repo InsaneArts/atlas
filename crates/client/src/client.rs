@@ -32,10 +32,18 @@ pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::{Seen, WINDOW_LOOKUP};
 
-use crate::{doing::Doing, host_session::HostSession, link::Link, task::Task};
+use crate::{
+    doing::Doing,
+    host_session::HostSession,
+    link::{Link, Unreachable},
+    task::Task,
+};
 use atlas_control::Controller;
 use atlas_core::{
-    config::Config,
+    config::{
+        Config,
+        desktops::{Chosen, Selected},
+    },
     desktop::{Desktop, Kind},
     error::{Code, Error, Result},
     protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
@@ -45,7 +53,11 @@ use atlas_core::{
 pub(crate) use atlas_core::{screen::frame::Size, time::timestamp};
 use serde_json::{Value, json};
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 /// What identifies an installed build without hashing it: its device,
 /// inode, size and modification time.
@@ -113,7 +125,8 @@ impl Actor {
 
 #[derive(Clone)]
 pub struct Client {
-    pub config: Config,
+    /// The desktop this client acts on, as the settings chose it.
+    pub selected: Selected,
     /// How requests reach the desktop.
     pub link: Link,
     /// A local stand-in's socket peer, separate from its reported helper UID.
@@ -141,6 +154,9 @@ pub struct Client {
     /// logged; none for every other client, whose rows are written at once.
     pub person_input: Option<record::PersonInput>,
     installed: BuildCache,
+    /// A VM desktop's records folder beneath the output folder; none for
+    /// Second Login, whose records are the output folder itself.
+    own_records: Option<PathBuf>,
     /// What the person allowed this command once, for its next attempt only.
     granted: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
     /// Whether this command's next input is only its check before typing:
@@ -167,18 +183,28 @@ impl Client {
     ///
     /// Rejects an invalid or non-distinct helper UID and failures creating the local controller
     /// identity. Construction does not verify a running helper session.
-    pub fn new(config: Config) -> Result<Self> {
-        let desktop = config.desktop();
+    pub fn new(selected: Selected) -> Result<Self> {
+        let desktop = selected.desktop();
+        let timeout = Duration::from_secs(30);
         // The command service: where it listens, and the account the
         // kernel must name at its end.
-        let link = match desktop.kind() {
-            Kind::User(login) => {
+        let (link, own_records) = match &selected.desktop {
+            Chosen::User(config) => {
+                let login = config.user();
                 atlas_core::session::validate_uid(login.uid)?;
-                Link::Unix(Transport {
+                let link = Link::Unix(Transport {
                     path: config.socket_path.clone(),
-                    timeout: Duration::from_secs(30),
+                    timeout,
                     peer_uid: login.uid,
-                })
+                });
+                (link, None)
+            }
+            Chosen::Vm(_) => {
+                let link = Link::Unreachable(Unreachable {
+                    selected: Arc::new(selected.clone()),
+                    timeout,
+                });
+                (link, Some(selected.desktop.records()))
             }
         };
         Ok(Self {
@@ -201,13 +227,72 @@ impl Client {
             for_ask: std::sync::Arc::default(),
             #[cfg(test)]
             ask_shown: None,
-            config,
+            own_records,
+            selected,
         })
     }
 
-    /// The desktop this client acts on, as its configuration names it.
+    /// The desktop this client acts on, as its settings name it.
     pub fn desktop(&self) -> Desktop {
-        self.config.desktop()
+        self.selected.desktop()
+    }
+
+    /// The helper's settings, for what only a Second Login does.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM desktop with the one wording for what this build cannot
+    /// do on it.
+    pub fn user_config(&self) -> Result<&Config> {
+        self.selected
+            .desktop
+            .user()
+            .ok_or_else(|| self.unreachable())
+    }
+
+    /// The helper's settings, for a test of a Second Login.
+    ///
+    /// # Panics
+    ///
+    /// On a VM desktop.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn helper_config(&self) -> &Config {
+        self.selected
+            .desktop
+            .user()
+            .expect("a test of a Second Login")
+    }
+
+    /// The helper's settings, for a test that changes them.
+    ///
+    /// # Panics
+    ///
+    /// On a VM desktop.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn helper_config_mut(&mut self) -> &mut Config {
+        match &mut self.selected.desktop {
+            Chosen::User(config) => config,
+            Chosen::Vm(_) => panic!("a test of a Second Login"),
+        }
+    }
+
+    /// Refuse a VM desktop before anything is read or sent: this build
+    /// cannot reach one yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Client::unreachable`] for a VM desktop.
+    pub fn reachable(&self) -> Result<()> {
+        match self.desktop().kind() {
+            Kind::User(_) => Ok(()),
+            Kind::Vm(_) => Err(self.unreachable()),
+        }
+    }
+
+    /// The one refusal of what this build cannot do on a VM desktop, named
+    /// for the desktop this client acts on.
+    pub fn unreachable(&self) -> Error {
+        self.selected.unreachable()
     }
 
     /// What the person allowed this command once, for its next attempt.
@@ -286,8 +371,9 @@ impl Client {
         self
     }
 
-    /// The private output directory, created 0700 (with any missing parents)
-    /// on first use. An existing directory must already be private; it is
+    /// This desktop's private records folder (the output directory itself
+    /// for Second Login, a folder of its own beneath it for a VM), created
+    /// 0700 (with any missing parents) on first use. An existing directory must already be private; it is
     /// never re-permissioned. The umask can only remove mode bits.
     ///
     /// # Errors
@@ -295,20 +381,36 @@ impl Client {
     /// Rejects an existing non-private, foreign-owned or non-directory destination, and returns
     /// directory-creation or inspection failures.
     pub fn output_dir(&self) -> Result<&Path> {
-        atlas_core::files::private_folder(&self.config.output_dir, Code::Config)?;
-        Ok(&self.config.output_dir)
+        let records = self.records();
+        atlas_core::files::private_folder(records, Code::Config)?;
+        Ok(records)
     }
 
+    /// [`Client::output_dir`], neither made nor checked.
+    pub fn records(&self) -> &Path {
+        self.own_records
+            .as_deref()
+            .unwrap_or_else(|| self.selected.desktop.output_dir())
+    }
+
+    /// What the activity keeps.
+    pub(crate) fn activity(&self) -> &atlas_core::config::Activity {
+        self.selected.desktop.activity()
+    }
+
+    /// What the desktop says of itself now, or why it could not be asked.
     pub async fn status(&self) -> Value {
         self.verified_status().await.unwrap_or_else(|e| json!(e))
     }
 
     async fn verified_status(&self) -> Result<Value> {
+        self.reachable()?;
         let mut hello = self.link.call(&json!({"op": "hello"})).await?;
 
         // Do not launch the probe into an unverified UID or the visible desktop.
         let answered_as_configured = match self.desktop().kind() {
             Kind::User(login) => hello["user"]["uid"].as_u64() == Some(login.uid.into()),
+            Kind::Vm(_) => return Err(self.unreachable()),
         };
         if hello["ok"] != true || !answered_as_configured || hello["session"]["onConsole"] != false
         {
@@ -319,7 +421,7 @@ impl Client {
         // before returning: every identity still needs a new input report and
         // a new challenged proof, whose epochs require_hidden compares.
         // Neither result authorizes anything on its own.
-        let input = self.input_transport();
+        let input = self.input_transport()?;
         let request = json!({ "op": "hello" });
         let (input, proof) =
             tokio::join!(input.call(&request), self.session_proof(&hello["daemon"]));
@@ -344,6 +446,7 @@ impl Client {
         }
         match self.desktop().kind() {
             Kind::User(login) => crate::user::session::session_proof_by_command(self, login).await,
+            Kind::Vm(_) => Err(self.unreachable()),
         }
     }
 
@@ -379,6 +482,7 @@ impl Client {
     /// session are checked by. It verifies the helper as
     /// [`Client::identity`] does.
     pub(crate) async fn verify(&self) -> Result<Verified> {
+        self.reachable()?;
         let observation = self.observed().await;
         let session = self.desktop().prove(&observation)?;
         Ok(Verified {
@@ -416,6 +520,7 @@ impl Client {
 
         match self.desktop().kind() {
             Kind::User(login) => crate::user::install::staging_writable_in(self, login)?,
+            Kind::Vm(_) => return Err(self.unreachable()),
         }
 
         Ok(())

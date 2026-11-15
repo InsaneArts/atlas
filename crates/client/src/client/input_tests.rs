@@ -411,9 +411,9 @@ fn preparation_fits_before_the_client_reply_timeout() {
     let client = crate::test_support::client_in(dir.path());
     let budget = atlas_native::native::focus::prepare_budget();
     assert_eq!(budget, std::time::Duration::from_millis(1250));
-    assert!(budget < client.input_transport().timeout);
+    assert!(budget < client.input_transport().unwrap().timeout);
     assert_eq!(
-        client.input_transport().timeout,
+        client.input_transport().unwrap().timeout,
         std::time::Duration::from_secs(5)
     );
 }

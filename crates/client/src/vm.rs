@@ -39,7 +39,55 @@ struct Vms {
     uid: u32,
 }
 
+/// The VMs this account keeps on this disk, listed in settings or not, with
+/// any whose removal is still under way.
+///
+/// # Errors
+///
+/// Fails when the account or its VMs folder cannot be read: VMs may be kept
+/// there.
+pub fn kept() -> Result<Vec<DesktopId>> {
+    Vms::own()?.kept()
+}
+
 impl Vms {
+    /// Every VM folder and pending removal here, by identifier.
+    fn kept(&self) -> Result<Vec<DesktopId>> {
+        let mut kept = Vec::new();
+        for (folder, suffix) in [
+            (self.parent.clone(), ""),
+            (self.parent.join(".removals"), ".json"),
+        ] {
+            let entries = match std::fs::read_dir(&folder) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(Error::new(Code::State, "This Mac's VMs cannot be read.")
+                        .with_source(error));
+                }
+            };
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    Error::new(Code::State, "This Mac's VMs cannot be read.").with_source(error)
+                })?;
+                let name = entry.file_name();
+                let id = name
+                    .to_str()
+                    .and_then(|name| name.strip_suffix(suffix))
+                    .and_then(DesktopId::parse);
+                let Some(id) = id else { continue };
+                // A finished removal's record is kept to answer it again.
+                if !suffix.is_empty() && !removal::under_way(&entry.path())? {
+                    continue;
+                }
+                if !kept.contains(&id) {
+                    kept.push(id);
+                }
+            }
+        }
+        Ok(kept)
+    }
+
     /// This account's.
     fn own() -> Result<Self> {
         let uid = nix::unistd::getuid();

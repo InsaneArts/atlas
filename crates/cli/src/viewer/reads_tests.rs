@@ -53,9 +53,9 @@ fn input_service(
 /// the input service installed for it.
 fn verified(dir: &Path) -> (Arc<Viewer>, Helper, String) {
     let (mut client, helper) = Helper::client(dir, UID);
-    std::fs::write(&client.config.identity_probe, b"installed input").unwrap();
+    std::fs::write(&client.helper_config().identity_probe, b"installed input").unwrap();
     let build = client.installed_build().unwrap();
-    client.config.input_socket = dir.join("input.sock");
+    client.helper_config_mut().input_socket = dir.join("input.sock");
     (
         configured(client, "127.0.0.1:1".into(), None),
         helper,
@@ -76,7 +76,7 @@ async fn shutdown_waits_for_automatic_input_startup_already_in_progress() {
     let dir = tempfile::tempdir().unwrap();
     let (viewer, helper, build) = verified(dir.path());
     let client = viewer.client();
-    let (mut asked, answer) = input_service(&client.config.input_socket, build);
+    let (mut asked, answer) = input_service(&client.helper_config().input_socket, build);
 
     helper
         .serve(
@@ -130,7 +130,7 @@ async fn automatic_input_startup_queued_after_shutdown_sends_no_request() {
     let dir = tempfile::tempdir().unwrap();
     let (viewer, helper, build) = verified(dir.path());
     let client = viewer.client();
-    let (mut asked, _answer) = input_service(&client.config.input_socket, build);
+    let (mut asked, _answer) = input_service(&client.helper_config().input_socket, build);
 
     helper
         .serve(

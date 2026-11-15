@@ -110,6 +110,7 @@ async fn started(
         },
         uid: match client.desktop().kind() {
             Kind::User(login) => login.uid,
+            Kind::Vm(_) => return Err(client.unreachable()),
         },
         pin,
     };
@@ -435,6 +436,8 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
 /// Returns helper or job-list decoding failures. Unreadable supervision state is not
 /// reported as an empty list.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
+    // A desktop this build cannot reach has none it can tell.
+    client.reachable()?;
     let mine = client.task.as_ref().map(|task| task.key().clone());
     let store = client.output_dir().ok().map(Store::at);
     let recorded: Vec<JobEntry> = mine
@@ -730,6 +733,8 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
 pub(crate) fn daemon_listens(client: &Client) -> bool {
     match client.desktop().kind() {
         Kind::User(login) => crate::user::service::daemon_listens_in(client, login),
+        // Not known not to listen, so a failed connection proves no jobs gone.
+        Kind::Vm(_) => true,
     }
 }
 

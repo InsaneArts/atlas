@@ -141,6 +141,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
         Kind::User(login) => {
             crate::user::environment::sync_in(client, login, path, profile, bytes, apply).await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

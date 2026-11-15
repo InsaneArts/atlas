@@ -41,6 +41,7 @@ pub(crate) async fn install_app(
             crate::user::environment::install_app_in(client, login, ownership, id, source, name)
                 .await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 
@@ -74,6 +75,7 @@ pub(crate) async fn remove_app(
         Kind::User(login) => {
             crate::user::environment::remove_app_in(client, login, ownership, id).await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 
@@ -94,6 +96,7 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
         Kind::User(login) => {
             crate::user::environment::install_states_in(client, login, &unique).await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

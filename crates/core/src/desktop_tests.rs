@@ -91,3 +91,43 @@ fn a_desktop_name_is_read_back_as_written_and_nothing_else_is_one() {
         assert_eq!(DesktopId::parse(not_one), None, "{not_one}");
     }
 }
+
+fn machine() -> Desktop {
+    Desktop::from(crate::vm::Vm {
+        id: DesktopId::parse("0123456789abcdef01234567").unwrap(),
+    })
+}
+
+#[test]
+fn a_vm_desktop_is_named_by_its_own_identifier() {
+    assert_eq!(machine().id().as_str(), "0123456789abcdef01234567");
+    assert_eq!(
+        machine().record_key().as_str(),
+        "vm-0123456789abcdef01234567"
+    );
+    assert_ne!(machine().record_key(), RecordKey::user());
+}
+
+#[test]
+fn every_answer_of_a_vm_desktop_holds_work_back() {
+    let desktop = machine();
+    assert_eq!(desktop.user(), None);
+    let observation = Observation::decode(&json!({
+        "ok": true,
+        "user": {"uid": 502},
+        "session": {"onConsole": false},
+    }));
+    assert_eq!(
+        desktop.prove(&observation).unwrap_err().code,
+        crate::error::Code::Platform
+    );
+    assert!(!desktop.input_current(&observation, 1));
+    assert!(
+        desktop.left_may_run(&[], None),
+        "its guest's processes are not seen here"
+    );
+    assert!(desktop.orphans_run().unwrap());
+    assert_eq!(desktop.instance(std::process::id()), None);
+    let mine = login(502).instance(std::process::id()).unwrap();
+    assert!(!desktop.exited(mine), "never seen to end from this Mac");
+}

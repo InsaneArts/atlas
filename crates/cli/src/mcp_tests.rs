@@ -327,7 +327,7 @@ async fn result_flags_match_offered_tools_on_successful_and_failed_calls() {
             if failed {
                 let blocked = dir.path().join("not-a-directory");
                 std::fs::write(&blocked, b"not a directory").unwrap();
-                server.client.config.output_dir = blocked;
+                server.client.helper_config_mut().output_dir = blocked;
             }
             let called = ask(&server, "tools/call", json!({"name": "atlas_status"})).await;
             let result = &called["result"];

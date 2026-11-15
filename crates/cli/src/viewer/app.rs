@@ -305,7 +305,7 @@ impl Viewer {
 pub(super) async fn prune_pictures(viewer: Arc<Viewer>) {
     loop {
         let pruning = unpoisoned(&viewer.outputs).clone();
-        let keep = viewer.client().config.activity.keep();
+        let keep = viewer.client().selected.desktop.activity().keep();
         let next = tokio::task::spawn_blocking(move || {
             pruning
                 .iter()

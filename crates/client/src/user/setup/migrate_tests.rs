@@ -7,7 +7,7 @@ fn every_worker_is_given_the_required_identity() {
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
     };
-    let client = Client::new(config()).unwrap();
+    let client = Client::new(Selected::provisional(config())).unwrap();
     for request in [
         atlas_daemon::user::setup::Request::Inspect {
             uid: 502,
@@ -295,7 +295,7 @@ fn plans_resolve_relative_configuration_against_the_file() {
 
     let migration = Migration::new(dir.path().join("setup-502.json"), log).unwrap();
     assert_eq!(
-        migration.client.config.socket_path,
+        migration.client.helper_config().socket_path,
         fs::canonicalize(dir.path()).unwrap().join("s.sock")
     );
 }

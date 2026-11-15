@@ -5,7 +5,7 @@ fn temporary_client(config: Config) -> Result<Client> {
         config.helper_uid,
         &config.output_dir.parent().unwrap().join("state"),
     );
-    let mut client = Client::new(config)?;
+    let mut client = helper_client(config)?;
     client.controller = controller;
     Ok(client)
 }

@@ -350,7 +350,7 @@ impl Client {
             if let Some((before, facts)) = facts {
                 // Facts that cannot be kept leave the picture unmarked; the
                 // row stands.
-                let _ = crate::before::keep_facts(&client.config.output_dir, &before, &facts);
+                let _ = crate::before::keep_facts(client.records(), &before, &facts);
             }
             client.write_row(row, step, ok)
         })

@@ -2,7 +2,9 @@
 use super::problem;
 use atlas_client::setup::executor;
 use atlas_control::{Controller, ExecutorClaims};
-use atlas_core::{account, app_bundle::signed_executable, error::Result};
+use atlas_core::{
+    account, app_bundle::signed_executable, config::desktops::Selected, error::Result,
+};
 use atlas_native::native::endpoint;
 use serde_json::{Value, json};
 use std::{
@@ -302,12 +304,12 @@ async fn resume(
     stream.set_read_timeout(Some(Duration::from_secs(60)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let controller = Controller::new(&config.desktop())?;
-    let helper = account::account_with_uid(config.desktop().user().uid)?
+    let helper = account::account_with_uid(config.user().uid)?
         .ok_or_else(|| problem("The helper no longer exists"))?;
     let layout = atlas_daemon::user::setup::Layout::new(helper.uid, helper.home);
     let mut agent = super::expected_agent(&layout, pairing.controller_uid)?;
     agent.program = signed_executable()?;
-    let client = atlas_client::client::Client::new(config.clone())?;
+    let client = atlas_client::client::Client::new(Selected::provisional(config.clone()))?;
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         drive(
@@ -412,7 +414,7 @@ pub(super) async fn observe(
         receipt(pairing.helper_uid),
         pairing,
         async || {
-            let client = atlas_client::client::Client::new(config.clone())?;
+            let client = atlas_client::client::Client::new(Selected::provisional(config.clone()))?;
             atlas_client::user::setup::migrate::managed_job(&client).await
         },
         async |pairing| resume(config, pairing).await,

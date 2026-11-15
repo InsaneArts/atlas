@@ -20,7 +20,15 @@ fn settings_that_name_one_helper_are_one_second_login_that_is_the_default() -> R
     let settings = parsed(SETTINGS)?;
     assert_eq!(settings.desktops().len(), 1);
     assert_eq!(settings.default_desktop().name, SECOND_LOGIN);
-    assert_eq!(settings.default_desktop().config.helper_uid, CONFIGURED_UID);
+    assert_eq!(
+        settings
+            .default_desktop()
+            .desktop
+            .user()
+            .unwrap()
+            .helper_uid,
+        CONFIGURED_UID
+    );
     Ok(())
 }
 
@@ -95,7 +103,10 @@ fn a_desktop_given_on_the_command_line_wins_over_a_binding() -> Result<()> {
         bound: Some(RecordKey::parse("elsewhere").unwrap()),
         ..Selection::default()
     };
-    assert_eq!(settings.resolve(&named)?.config.helper_uid, CONFIGURED_UID);
+    assert_eq!(
+        settings.resolve(&named)?.desktop.user().unwrap().helper_uid,
+        CONFIGURED_UID
+    );
     Ok(())
 }
 
@@ -198,4 +209,191 @@ fn a_repair_that_would_outgrow_the_settings_file_is_refused() -> Result<()> {
     repaired.socket_path = directory.path().join("s".repeat(600));
     assert!(with_user(&text, &path, &repaired).is_err());
     Ok(())
+}
+
+const VM_ID: &str = "0123456789abcdef01234567";
+
+/// `LISTED` with a VM desktop named `work` beside its Second Login.
+fn with_vm() -> String {
+    format!("{LISTED}\n[[desktops]]\nname = \"work\"\nkind = \"vm\"\nid = \"{VM_ID}\"\n")
+}
+
+/// Settings that list the VM desktop `work` alone.
+const VM_ONLY: &str = "default = \"work\"\noutput_dir = \"out\"\n\n\
+                       [[desktops]]\nname = \"work\"\nkind = \"vm\"\n\
+                       id = \"0123456789abcdef01234567\"\n";
+
+fn named(name: &str) -> Selection {
+    Selection {
+        flag: Some(name.to_owned()),
+        ..Selection::default()
+    }
+}
+
+#[test]
+fn settings_with_a_vm_entry_load_and_resolve_it_by_name() -> Result<()> {
+    let settings = parsed(&with_vm())?;
+    assert_eq!(settings.desktops().len(), 2);
+    let work = settings.resolve(&named("work"))?;
+    let Chosen::Vm(vm) = &work.desktop else {
+        panic!("work is a VM desktop: {work:?}");
+    };
+    assert_eq!(vm.id.as_str(), VM_ID);
+    assert_eq!(
+        work.record_key(),
+        RecordKey::parse(&format!("vm-{VM_ID}")).unwrap()
+    );
+    assert_eq!(
+        settings.resolve(&Selection::default())?.name,
+        SECOND_LOGIN,
+        "the default stays the Second Login"
+    );
+    let only = parsed(VM_ONLY)?;
+    assert_eq!(only.default_desktop().name, "work");
+    assert!(only.user().is_err(), "no Second Login is listed");
+    Ok(())
+}
+
+#[test]
+fn a_vm_identifier_that_is_not_24_lowercase_hex_digits_is_refused() {
+    for id in [
+        "",
+        "0123",
+        "0123456789ABCDEF01234567",
+        "0123456789abcdef0123456g",
+    ] {
+        let text = with_vm().replace(VM_ID, id);
+        assert!(refusal(&text).contains("is not a VM's identifier"), "{id}");
+    }
+}
+
+#[test]
+fn one_vm_listed_twice_is_refused_under_any_names() {
+    let twice = format!(
+        "{}\n[[desktops]]\nname = \"again\"\nkind = \"vm\"\nid = \"{VM_ID}\"\n",
+        with_vm()
+    );
+    assert!(refusal(&twice).contains("twice"));
+}
+
+#[test]
+fn a_second_login_beside_a_vm_keeps_its_identity_and_root_records() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    let alone = Settings::parse(LISTED.as_bytes(), &path)?;
+    let beside = Settings::parse(with_vm().as_bytes(), &path)?;
+    let (alone, beside) = (
+        alone.resolve(&named(SECOND_LOGIN))?,
+        beside.resolve(&named(SECOND_LOGIN))?,
+    );
+    assert_eq!(alone, beside);
+    assert_eq!(
+        beside.desktop.desktop().id().as_str(),
+        "6a68ff188341e5b9ba04c83b",
+        "the digest of helper:60001 that every earlier build gave it"
+    );
+    assert_eq!(beside.record_key(), RecordKey::user());
+    assert_eq!(beside.desktop.records(), beside.desktop.output_dir());
+    Ok(())
+}
+
+#[test]
+fn a_vm_desktops_records_live_in_a_folder_of_its_own() -> Result<()> {
+    let settings = parsed(&with_vm())?;
+    let work = &settings.resolve(&named("work"))?.desktop;
+    assert_eq!(
+        work.records(),
+        work.output_dir()
+            .join("desktops")
+            .join(format!("vm-{VM_ID}"))
+    );
+    assert_eq!(work.output_dir(), settings.user()?.output_dir);
+    Ok(())
+}
+
+#[test]
+fn repairing_the_second_login_keeps_the_vm_listed_beside_it() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    let text = with_vm();
+    let mut repaired = Settings::parse(text.as_bytes(), &path)?.user()?;
+    repaired.helper_uid = 60002;
+    let written = with_user(&text, &path, &repaired)?;
+    let settings = Settings::parse(written.as_bytes(), &path)?;
+    assert_eq!(settings.user()?.helper_uid, 60002, "{written}");
+    let work = settings.resolve(&named("work"))?;
+    assert_eq!(work.record_key().as_str(), format!("vm-{VM_ID}"));
+    Ok(())
+}
+
+#[test]
+fn a_vm_desktop_is_refused_in_one_wording_that_names_the_second_login() -> Result<()> {
+    let settings = parsed(&with_vm().replace("\"second-login\"", "\"main\""))?;
+    let refused = settings
+        .selected(settings.resolve(&named("work"))?)
+        .unreachable();
+    assert_eq!(refused.code, Code::Platform);
+    assert_eq!(
+        refused.error,
+        "work is a VM desktop, which this build of Atlas cannot reach yet."
+    );
+    assert_eq!(
+        refused.details["next"],
+        "Run it again with --desktop main to use Second Login."
+    );
+    Ok(())
+}
+
+#[test]
+fn a_vm_desktop_alone_is_refused_with_no_other_desktop_to_try() -> Result<()> {
+    let settings = parsed(VM_ONLY)?;
+    let selected = settings.selected(settings.default_desktop());
+    assert_eq!(selected.user_entry, None);
+    let refused = selected.unreachable();
+    assert_eq!(
+        refused.error,
+        "work is a VM desktop, which this build of Atlas cannot reach yet."
+    );
+    assert!(!refused.error.contains("--desktop"));
+    assert!(
+        !refused.details["next"]
+            .as_str()
+            .unwrap()
+            .contains("--desktop")
+    );
+    Ok(())
+}
+
+#[test]
+fn a_vm_desktop_does_not_load_as_a_second_logins_settings() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    std::fs::write(&path, VM_ONLY)?;
+    let selected = Selected::load(&path)?;
+    assert_eq!(selected.name, "work");
+    assert_eq!(
+        Config::load(&path).unwrap_err().error,
+        selected.unreachable().error
+    );
+    Ok(())
+}
+
+#[test]
+fn a_vm_naming_the_same_desktop_as_the_second_login_is_refused_in_either_order() {
+    let helper = crate::desktop::Desktop::from(crate::user::User {
+        uid: CONFIGURED_UID,
+    })
+    .id();
+    let vm = format!(
+        "[[desktops]]\nname = \"work\"\nkind = \"vm\"\nid = \"{}\"\n",
+        helper.as_str()
+    );
+    let user = "[[desktops]]\nname = \"second-login\"\nkind = \"user\"\n\
+                helper_uid = 60001\nsocket_path = \"c.sock\"\n\
+                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+    let head = "default = \"second-login\"\noutput_dir = \"out\"\n\n";
+
+    for text in [format!("{head}{user}\n{vm}"), format!("{head}{vm}\n{user}")] {
+        assert!(refusal(&text).contains("twice"), "{text}");
+    }
 }

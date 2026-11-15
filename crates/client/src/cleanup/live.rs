@@ -35,22 +35,34 @@ pub(super) struct Live<'a> {
 
 impl<'a> Live<'a> {
     /// Hands that only read, for a preview.
-    pub(super) fn reading(client: &'a Client) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a desktop whose copies this build does not know.
+    pub(super) fn reading(client: &'a Client) -> Result<Self> {
+        Ok(Self {
             client,
             ownership: None,
-            copies: Copies::of(&client.desktop()),
+            copies: Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?,
             unknown: false,
-        }
+        })
     }
 
     /// Hands that act under `ownership`.
-    pub(super) fn acting(client: &'a Client, ownership: &'a Ownership, unknown: bool) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// As [`Live::reading`].
+    pub(super) fn acting(
+        client: &'a Client,
+        ownership: &'a Ownership,
+        unknown: bool,
+    ) -> Result<Self> {
+        Ok(Self {
             ownership: Some(ownership),
             unknown,
-            ..Self::reading(client)
-        }
+            ..Self::reading(client)?
+        })
     }
 
     fn held(&self) -> Result<&Ownership> {

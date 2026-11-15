@@ -72,6 +72,7 @@ pub async fn helper_report(
         .unwrap_or_else(|_| json!(late()));
     let mut doctor = match client.desktop().kind() {
         Kind::User(login) => crate::user::overview::user_report(login, reply, until, idle).await,
+        Kind::Vm(_) => crate::capability::Doctor::unreached(reply, client.unreachable()),
     };
     let status = &mut doctor.diagnosis.value;
 
@@ -409,6 +410,9 @@ fn mode(
                 Mode::LoggedOut,
                 "The helper is logged out, so agents can't use it".to_owned(),
             ),
+            Some(atlas_core::session::Absence::Unreachable(why)) => {
+                (Mode::Unavailable, why.clone())
+            }
             Some(atlas_core::session::Absence::Missing) => (
                 Mode::Unavailable,
                 "The helper account no longer exists. Open Getting Started to set up a new one."

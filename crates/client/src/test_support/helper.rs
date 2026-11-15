@@ -91,7 +91,7 @@ impl Helper {
     /// running the test.
     pub fn client(directory: &Path, uid: u32) -> (Client, Self) {
         let mut client = super::client(directory);
-        client.config.helper_uid = uid;
+        client.helper_config_mut().helper_uid = uid;
         client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
         std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
@@ -308,7 +308,7 @@ impl Helper {
     /// says hello with `capabilities` and hands every other request to the
     /// test as the daemon's are.
     pub fn serving_input(mut self, client: &Client, capabilities: &[&str]) -> Self {
-        self.input = Some(UnixListener::bind(&client.config.input_socket).unwrap());
+        self.input = Some(UnixListener::bind(&client.helper_config().input_socket).unwrap());
         self.capabilities = capabilities.iter().map(|&name| name.to_owned()).collect();
         self
     }

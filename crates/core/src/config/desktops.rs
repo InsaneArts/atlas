@@ -5,7 +5,7 @@
 //! list desktops under `[[desktops]]` with a `default`; output placement and
 //! what the activity keeps stay settings of the whole Mac.
 use super::{Activity, Config, default_output, parse_toml};
-use crate::desktop::RecordKey;
+use crate::desktop::{Desktop, DesktopId, RecordKey};
 use crate::error::{Code, Error, Result};
 use serde::Deserialize;
 use std::{
@@ -48,7 +48,127 @@ pub struct Settings {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Listed {
     pub name: String,
-    pub config: Config,
+    pub desktop: Chosen,
+}
+
+/// A desktop's settings, by kind: a Second Login's are its helper's
+/// [`Config`]; a VM's, its identifier.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Chosen {
+    User(Config),
+    Vm(VmConfig),
+}
+
+/// A VM desktop's settings, with those of the whole Mac.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VmConfig {
+    pub id: DesktopId,
+    pub output_dir: PathBuf,
+    pub activity: Activity,
+}
+
+/// What a client is built from: the desktop chosen, by the name the
+/// settings give it, and the name of the Second Login they list, if any,
+/// for advice that sends a person there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Selected {
+    pub name: String,
+    pub desktop: Chosen,
+    pub user_entry: Option<String>,
+}
+
+impl Chosen {
+    /// The desktop these settings name.
+    pub fn desktop(&self) -> Desktop {
+        match self {
+            Self::User(config) => config.desktop(),
+            Self::Vm(vm) => Desktop::from(crate::vm::Vm { id: vm.id.clone() }),
+        }
+    }
+
+    /// Where the whole Mac keeps its runs.
+    pub fn output_dir(&self) -> &Path {
+        match self {
+            Self::User(config) => &config.output_dir,
+            Self::Vm(vm) => &vm.output_dir,
+        }
+    }
+
+    /// Where this desktop's own records live: Second Login's at the root of
+    /// the output folder, as before there were other desktops; any other's
+    /// in a folder of its own beneath it, named by its record key.
+    pub fn records(&self) -> PathBuf {
+        match self {
+            Self::User(config) => config.output_dir.clone(),
+            Self::Vm(vm) => vm
+                .output_dir
+                .join("desktops")
+                .join(self.desktop().record_key().as_str()),
+        }
+    }
+
+    /// What the activity keeps.
+    pub fn activity(&self) -> &Activity {
+        match self {
+            Self::User(config) => &config.activity,
+            Self::Vm(vm) => &vm.activity,
+        }
+    }
+
+    /// A Second Login's settings, when these are one's.
+    pub fn user(&self) -> Option<&Config> {
+        match self {
+            Self::User(config) => Some(config),
+            Self::Vm(_) => None,
+        }
+    }
+}
+
+impl Selected {
+    /// Load the settings at `path` and take the desktop this process chose
+    /// ([`choose_for_process`]), of whichever kind.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`], but a VM desktop is taken, not refused.
+    pub fn load(path: &Path) -> Result<Self> {
+        Config::load_settings(path)?.chosen()
+    }
+
+    /// The refusal of what a VM desktop cannot do from this build yet, naming
+    /// the VM in one wording for every command and every surface. Its own
+    /// next step, which the command line alone shows, stands in for the one
+    /// its code would give (about this Mac) and names the Second Login to use
+    /// instead when the settings list one.
+    pub fn unreachable(&self) -> Error {
+        let next = match &self.user_entry {
+            Some(user) => format!("Run it again with --desktop {user} to use Second Login."),
+            None => "Nothing was sent to it. A later Atlas reaches VM desktops.".to_owned(),
+        };
+        Error::new(
+            Code::Platform,
+            format!(
+                "{} is a VM desktop, which this build of Atlas cannot reach yet.",
+                self.name
+            ),
+        )
+        .with("next", serde_json::json!(next))
+    }
+
+    /// A Second Login not yet saved in settings, as onboarding builds one
+    /// before it writes them.
+    pub fn provisional(config: Config) -> Self {
+        Self {
+            name: SECOND_LOGIN.to_owned(),
+            desktop: Chosen::User(config),
+            user_entry: None,
+        }
+    }
+
+    /// The desktop chosen.
+    pub fn desktop(&self) -> Desktop {
+        self.desktop.desktop()
+    }
 }
 
 /// What chooses the desktop of a command, strongest first; with nothing,
@@ -87,6 +207,10 @@ enum Entry {
         socket_path: PathBuf,
         identity_probe: PathBuf,
         input_socket: PathBuf,
+    },
+    Vm {
+        name: String,
+        id: String,
     },
 }
 
@@ -129,25 +253,48 @@ impl Settings {
         let file: ListFile = parse_toml(bytes, path)?;
         let mut desktops = Vec::with_capacity(file.desktops.len());
         for entry in file.desktops {
-            let Entry::User {
-                name,
-                helper_uid,
-                socket_path,
-                identity_probe,
-                input_socket,
-            } = entry;
-            let config = Config {
-                helper_uid,
-                socket_path,
-                identity_probe,
-                input_socket,
-                output_dir: file.output_dir.clone(),
-                activity: file.activity.clone(),
-            };
-            desktops.push(Listed {
-                name,
-                config: config.settled(path)?,
-            });
+            match entry {
+                Entry::User {
+                    name,
+                    helper_uid,
+                    socket_path,
+                    identity_probe,
+                    input_socket,
+                } => {
+                    let config = Config {
+                        helper_uid,
+                        socket_path,
+                        identity_probe,
+                        input_socket,
+                        output_dir: file.output_dir.clone(),
+                        activity: file.activity.clone(),
+                    };
+                    desktops.push(Listed {
+                        name,
+                        desktop: Chosen::User(config.settled(path)?),
+                    });
+                }
+                Entry::Vm { name, id } => {
+                    let Some(id) = DesktopId::parse(&id) else {
+                        return Err(invalid(format!(
+                            "\"{id}\" is not a VM's identifier: Atlas VM gives each one 24 \
+                             lowercase hexadecimal digits"
+                        )));
+                    };
+                    desktops.push(Listed {
+                        name,
+                        desktop: Chosen::Vm(VmConfig {
+                            id,
+                            output_dir: Config::settled_shared(
+                                &file.output_dir,
+                                &file.activity,
+                                path,
+                            )?,
+                            activity: file.activity.clone(),
+                        }),
+                    });
+                }
+            }
         }
         let settings = Self {
             default: file.default,
@@ -163,7 +310,7 @@ impl Settings {
             default: SECOND_LOGIN.to_owned(),
             desktops: vec![Listed {
                 name: SECOND_LOGIN.to_owned(),
-                config,
+                desktop: Chosen::User(config),
             }],
         }
     }
@@ -190,12 +337,24 @@ impl Settings {
                     listed.name
                 )));
             }
-            match listed.config.desktop().kind() {
-                crate::desktop::Kind::User(_) => users += 1,
+            if listed.desktop.user().is_some() {
+                users += 1;
+                if users > 1 {
+                    return Err(invalid("The settings list more than one Second Login"));
+                }
             }
-        }
-        if users > 1 {
-            return Err(invalid("The settings list more than one Second Login"));
+            // Two entries naming one desktop would share its locks and
+            // records, whatever their kinds and order.
+            let id = listed.desktop.desktop().id();
+            if self.desktops[..index]
+                .iter()
+                .any(|earlier| earlier.desktop.desktop().id() == id)
+            {
+                return Err(invalid(format!(
+                    "The settings list the desktop {} twice",
+                    id.as_str()
+                )));
+            }
         }
         if self.named(&self.default).is_none() {
             return Err(invalid(format!(
@@ -225,7 +384,7 @@ impl Settings {
     fn keyed(&self, key: &RecordKey) -> Option<&Listed> {
         self.desktops
             .iter()
-            .find(|listed| listed.config.desktop().record_key() == *key)
+            .find(|listed| listed.desktop.desktop().record_key() == *key)
     }
 
     /// The desktop `selection` chooses.
@@ -274,7 +433,7 @@ impl Settings {
     ///
     /// Returns the failure of this process's choice, and refuses a chosen
     /// desktop the settings no longer list.
-    pub(super) fn chosen(&self) -> Result<Config> {
+    pub(super) fn chosen(&self) -> Result<Selected> {
         let listed = match CHOSEN.get() {
             Some(Ok(key)) => self.keyed(key).ok_or_else(|| {
                 Error::new(
@@ -285,7 +444,20 @@ impl Settings {
             Some(Err((code, message))) => return Err(Error::new(*code, message.clone())),
             None => self.resolve(&Selection::from_env(None))?,
         };
-        Ok(listed.config.clone())
+        Ok(self.selected(listed))
+    }
+
+    /// `listed` as a client is built from it.
+    pub fn selected(&self, listed: &Listed) -> Selected {
+        Selected {
+            name: listed.name.clone(),
+            desktop: listed.desktop.clone(),
+            user_entry: self
+                .desktops
+                .iter()
+                .find(|listed| listed.desktop.user().is_some())
+                .map(|listed| listed.name.clone()),
+        }
     }
 
     /// The `user` desktop: its own setup, update and removal work on it,
@@ -297,13 +469,8 @@ impl Settings {
     pub fn user(&self) -> Result<Config> {
         self.desktops
             .iter()
-            .find(|listed| {
-                matches!(
-                    listed.config.desktop().kind(),
-                    crate::desktop::Kind::User(_)
-                )
-            })
-            .map(|listed| listed.config.clone())
+            .find_map(|listed| listed.desktop.user())
+            .cloned()
             .ok_or_else(|| Error::new(Code::Config, "The settings list no Second Login"))
     }
 }
@@ -381,7 +548,7 @@ fn invalid(message: impl Into<String>) -> Error {
 impl Listed {
     /// The name this desktop's records carry.
     pub fn record_key(&self) -> RecordKey {
-        self.config.desktop().record_key()
+        self.desktop.desktop().record_key()
     }
 }
 

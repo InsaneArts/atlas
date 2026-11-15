@@ -30,6 +30,8 @@ pub async fn from_env_verified(client: &Client) -> Option<HostSession> {
         Kind::User(login) => {
             crate::user::host_session::verified_by_user(client, login, local).await
         }
+        // Unproved, as when a check fails: its proof comes with its session.
+        Kind::Vm(_) => local,
     }
 }
 

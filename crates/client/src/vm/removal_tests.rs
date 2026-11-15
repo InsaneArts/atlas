@@ -274,3 +274,31 @@ fn a_job_a_late_bootstrap_brings_after_the_proof_keeps_the_removal_from_done() {
             >= 2
     );
 }
+
+#[test]
+fn a_finished_removal_holds_no_vm_and_one_under_way_does() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+
+    remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert!(
+        vms.kept().unwrap().is_empty(),
+        "a finished removal kept a VM"
+    );
+    let mut record = read(&vms.removal(&desktop())).unwrap().unwrap();
+    record.step = Step::Deleting;
+    keep(&vms, &vms.removal(&desktop()), &record).unwrap();
+    assert_eq!(vms.kept().unwrap(), vec![desktop()]);
+}
+
+#[test]
+fn a_removal_record_that_cannot_be_read_may_hold_a_vm() {
+    let (_home, vms) = home();
+    std::fs::create_dir_all(vms.removal(&desktop()).parent().unwrap()).unwrap();
+    std::fs::write(vms.removal(&desktop()), "not a record").unwrap();
+
+    assert!(vms.kept().is_err());
+}

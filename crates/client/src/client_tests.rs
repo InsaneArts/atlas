@@ -31,12 +31,12 @@ pub(super) fn native_client() -> (tempfile::TempDir, Client, UnixListener, Sessi
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = client_in(dir.path());
     client.controller = Controller::at(atlas_core::test_support::UID, &dir.path().join("state"));
-    client.config.helper_uid = nix::unistd::getuid().as_raw();
-    client.link = Link::Unix(client.input_transport());
-    let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+    client.helper_config_mut().helper_uid = nix::unistd::getuid().as_raw();
+    client.link = Link::Unix(client.input_transport().unwrap());
+    let listener = UnixListener::bind(&client.helper_config().input_socket).unwrap();
     let session = Session {
         epoch: Epoch {
-            uid: client.config.helper_uid,
+            uid: client.helper_config().helper_uid,
             capture_pid: 123,
             display: Display {
                 width: 100.0,
@@ -168,7 +168,7 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
     ] {
         let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let (client, helper) = Helper::client(dir.path(), UID);
-        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let listener = UnixListener::bind(&client.helper_config().input_socket).unwrap();
         let expected = Expected::new(target, window, None).unwrap().unwrap();
         let text = "x".repeat(150);
         let mut caller = Box::pin(helper.serve(
@@ -236,7 +236,7 @@ async fn named_clicks_carry_the_helper_identity_even_when_the_controller_cannot_
     for target in [Target::Name("Editor".into()), Target::Pid(pid)] {
         let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let (client, helper) = Helper::client(dir.path(), UID);
-        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let listener = UnixListener::bind(&client.helper_config().input_socket).unwrap();
         let filter = ElementFilter {
             name: Some("Save".into()),
             ..ElementFilter::default()
@@ -364,7 +364,7 @@ async fn verification_reuses_decoded_capability_facts_without_another_helper_req
         (Some("missing"), false),
     ] {
         let (_dir, mut client, listener, _) = native_client();
-        client.config.helper_uid = 7001;
+        client.helper_config_mut().helper_uid = 7001;
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
         let mut status = verified_status(&[SHUTDOWN, "future-input"]);
         status["daemon"]["capabilities"] = json!([SESSION_PIN, "future-daemon", null, 1]);
@@ -384,7 +384,7 @@ async fn verification_reuses_decoded_capability_facts_without_another_helper_req
         let (mut proof, request) = received(&mut caller, &listener, "run").await;
         assert_eq!(
             request["argv"],
-            json!([client.config.identity_probe, "session-info"])
+            json!([client.helper_config().identity_probe, "session-info"])
         );
         assert_eq!(request["timeoutMs"], 3000);
         answer(&mut proof, json!({"ok": true, "exitCode": 0, "timedOut": false,
@@ -429,7 +429,7 @@ async fn verification_reuses_decoded_capability_facts_without_another_helper_req
 /// nothing was.
 async fn connected(status: &Value, check: Option<Expect>) -> (Result<Value>, bool) {
     let (_dir, mut client, listener, _) = native_client();
-    client.config.helper_uid = 7001;
+    client.helper_config_mut().helper_uid = 7001;
     let actions = json!([{"type": "key", "key": "a"}]);
     let _ownership = client.controller.acquire(false).unwrap();
     let (outcome, accepted) = tokio::join!(
@@ -1047,8 +1047,8 @@ async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value)
     let (dir, mut client, input, _session) = native_client();
     client.actor = Actor::Viewer;
     // As in use, commands go to the daemon's socket.
-    client.link.socket_mut().path = client.config.socket_path.clone();
-    let daemon = UnixListener::bind(&client.config.socket_path).unwrap();
+    client.link.socket_mut().path = client.helper_config().socket_path.clone();
+    let daemon = UnixListener::bind(&client.helper_config().socket_path).unwrap();
     let mut caller = Box::pin(client.hold(true));
     let mut hello = dispatched(&mut caller, &input, "hello").await;
     assert!(client.controller.stop_noted());
@@ -1291,7 +1291,10 @@ async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
     assert_eq!(refused.code, "stopped");
     assert!(!refused.uncertain, "nothing started");
 
-    let marker = person.config.input_socket.with_extension("stopped");
+    let marker = person
+        .helper_config()
+        .input_socket
+        .with_extension("stopped");
     fs::write(&marker, b"").unwrap();
     let refused = person.hold(false).await.unwrap_err();
     assert_eq!(refused.code, "stopped");
@@ -1312,7 +1315,7 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
     let mut person = client.clone();
     person.actor = Actor::Viewer;
     // The person's Stop finds no daemon keeping jobs to end.
-    person.link.socket_mut().path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.helper_config().socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let run = || run_of(&["true"], 1000);
     let ownership = acting.controller.acquire(false).unwrap();
@@ -1326,7 +1329,7 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
     assert_eq!(stopped["held"], true);
     assert!(
         !acting
-            .config
+            .helper_config()
             .input_socket
             .with_extension("stopped")
             .exists()
@@ -1556,7 +1559,7 @@ async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fa
     let mut person = client.clone();
     person.actor = Actor::Viewer;
     // The person's Stop finds no daemon keeping jobs to end.
-    person.link.socket_mut().path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.helper_config().socket_path.clone();
     let acting = client.doing(Doing::new("run"));
     let ownership = acting.controller.acquire(false).unwrap();
     let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));
@@ -1965,7 +1968,7 @@ impl Client {
 
     pub(crate) fn remembered_windows(&self) -> Option<crate::last_capture::Observation> {
         crate::last_capture::remembered_windows(
-            &self.config.output_dir,
+            &self.helper_config().output_dir,
             self.host_session.as_ref()?.key(),
         )
         .unwrap()
@@ -2045,7 +2048,7 @@ async fn identity_reads_input_and_challenged_proof_together_but_waits_for_both()
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
         std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
         let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
-        let input = UnixListener::bind(&client.config.input_socket).unwrap();
+        let input = UnixListener::bind(&client.helper_config().input_socket).unwrap();
         let mut status = verified_status(&[]);
         status["daemon"]["capabilities"] = json!([atlas_core::protocol::SESSION_PROOF]);
         let mut caller = Box::pin(client.identity());
@@ -2095,7 +2098,7 @@ async fn an_unverified_daemon_never_starts_either_independent_read() {
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
         std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
         let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
-        let input = UnixListener::bind(&client.config.input_socket).unwrap();
+        let input = UnixListener::bind(&client.helper_config().input_socket).unwrap();
         let mut status = verified_status(&[]);
         status["user"]["uid"] = json!(uid);
         status["session"]["onConsole"] = json!(on_console);
@@ -2404,4 +2407,95 @@ async fn an_allow_after_the_observation_freshness_limit_still_runs_through_a_fre
         looks[1].duration_since(looks[0]) >= Duration::from_secs(8),
         "the first look was past its limit when the person answered"
     );
+}
+
+#[tokio::test]
+async fn a_vm_desktops_status_is_its_one_refusal_and_nothing_is_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), Some("main"));
+    let refused = client.unreachable();
+    assert_eq!(
+        refused.error,
+        "work is a VM desktop, which this build of Atlas cannot reach yet."
+    );
+    let status = client.status().await;
+    assert_eq!(status["ok"], false);
+    assert_eq!(status["code"], "platform");
+    assert_eq!(status["error"], refused.error.as_str());
+    assert_eq!(status["next"], refused.details["next"]);
+    assert!(
+        status.get("sessionProof").is_none(),
+        "no proof was asked for"
+    );
+    for error in [
+        client.identity().await.unwrap_err(),
+        client.verify().await.unwrap_err(),
+        client.link.call(&json!({"op": "hello"})).await.unwrap_err(),
+        client.input_transport().unwrap_err(),
+    ] {
+        assert_eq!(error.code, Code::Platform);
+        assert_eq!(error.error, refused.error);
+    }
+}
+
+#[tokio::test]
+async fn a_change_to_a_vm_desktop_is_refused_before_anything_is_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let refused = client.unreachable();
+    let changed = client
+        .mutate(Mutation::Logout { force: false }, None, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(changed.error, refused.error);
+    assert!(!changed.uncertain, "nothing was sent");
+    let shot = client
+        .capture(Size::Standard, None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(shot.error, refused.error);
+    assert!(client.controller.pending().unwrap().is_empty());
+    let root: Vec<_> = fs::read_dir(dir.path().join("output"))
+        .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        root.iter().all(|name| name == "desktops"),
+        "nothing lands in the root records: {root:?}"
+    );
+}
+
+#[test]
+fn a_vm_desktops_records_live_beneath_the_output_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let records = dir
+        .path()
+        .join("output/desktops")
+        .join(format!("vm-{}", crate::test_support::VM_ID));
+    assert_eq!(client.output_dir().unwrap(), records);
+    assert!(records.is_dir());
+    assert!(client.user_config().is_err());
+}
+
+#[tokio::test]
+async fn discovery_on_a_vm_desktop_is_its_one_refusal_never_a_proof() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), Some("main"));
+
+    let refused =
+        crate::environment::discovery::discover(&client, &["cat".to_owned()], &[], &[], &[])
+            .await
+            .unwrap_err();
+
+    assert_eq!(refused.error, client.unreachable().error);
+}
+
+#[tokio::test]
+async fn a_vm_desktops_job_list_is_its_one_refusal_never_an_empty_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), Some("main"));
+
+    let refused = crate::jobs::list(&client, true).await.unwrap_err();
+
+    assert_eq!(refused.error, client.unreachable().error);
 }

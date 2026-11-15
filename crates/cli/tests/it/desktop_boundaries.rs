@@ -1283,6 +1283,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: the name the desktop's account goes by",
     ),
     (
+        "crates/cli/src/viewer/settings.rs",
+        &["same_helper"],
+        "owner: whether settings the viewer follows keep the helper it serves",
+    ),
+    (
         "crates/client/src/agent/elements.rs",
         &["probe"],
         "owner: the inspection tool the desktop runs",
@@ -1305,6 +1310,16 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/client/src/client.rs",
         &["Client::new"],
         "exception: the link, a local socket to the user",
+    ),
+    (
+        "crates/client/src/client.rs",
+        &["Client::reachable"],
+        "owner: which desktops this build can reach",
+    ),
+    (
+        "crates/client/src/client.rs",
+        &["Client::user_config"],
+        "exception: the way in for the user's own setup, update and removal: its helper's settings",
     ),
     (
         "crates/client/src/client/input.rs",
@@ -1422,8 +1437,10 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         &[
             "Config",
             "Config::desktop",
+            "Config::load",
             "Config::same_helper",
             "Config::settled",
+            "Config::user",
         ],
         "exception: the flat settings file, which names one user",
     ),
@@ -1436,6 +1453,28 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/core/src/config/desktops.rs",
         &["Entry", "Settings::parse", "Settings::validate"],
         "owner: the settings list, whose entries are each written by kind",
+    ),
+    (
+        "crates/core/src/config/desktops.rs",
+        &[
+            "Chosen",
+            "Chosen::activity",
+            "Chosen::desktop",
+            "Chosen::output_dir",
+            "Chosen::records",
+            "Chosen::user",
+        ],
+        "owner: a desktop's settings, by kind, and where its records live",
+    ),
+    (
+        "crates/core/src/config/desktops.rs",
+        &["Selected::provisional", "Settings::one"],
+        "exception: the flat settings file, which names one user",
+    ),
+    (
+        "crates/core/src/config/desktops.rs",
+        &["Settings::selected"],
+        "owner: the Second Login a refusal on another desktop names",
     ),
     (
         "crates/core/src/config/desktops.rs",

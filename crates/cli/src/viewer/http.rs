@@ -82,7 +82,7 @@ pub(super) fn configured(
     client.actor = atlas_client::client::Actor::Viewer;
     client.person_input = Some(atlas_client::client::PersonInput::default());
     let prefix = format!("/{}/", files::token());
-    let outputs = vec![client.config.output_dir.clone()];
+    let outputs = vec![client.records().to_path_buf()];
     Arc::new(Viewer {
         client: std::sync::Mutex::new(Arc::new(client)),
         settings: settings.map(Path::to_path_buf),

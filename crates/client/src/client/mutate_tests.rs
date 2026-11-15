@@ -698,7 +698,14 @@ async fn other_commands_keep_control_for_their_whole_run() {
 async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
-    std::fs::write(client.config.input_socket.with_extension("stopped"), b"").unwrap();
+    std::fs::write(
+        client
+            .helper_config()
+            .input_socket
+            .with_extension("stopped"),
+        b"",
+    )
+    .unwrap();
     let run = || run_of(&["true"], 1000);
 
     let acting = client.clone().doing(Doing::new("run"));
@@ -780,7 +787,7 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
-    client.config.helper_uid = me;
+    client.helper_config_mut().helper_uid = me;
     client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let reply = finished(group);
     assert_eq!(started_group(&reply), Some(group));
@@ -808,7 +815,7 @@ async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_i
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
-    client.config.helper_uid = me;
+    client.helper_config_mut().helper_uid = me;
     client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let claim = client.controller.quarantine_command().unwrap();
     // The record of leftover work can't be written: a folder stands there.
@@ -860,7 +867,7 @@ async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
-    client.config.helper_uid = me;
+    client.helper_config_mut().helper_uid = me;
     client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let claim = client.controller.quarantine().unwrap();
 

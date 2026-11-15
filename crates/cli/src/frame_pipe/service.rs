@@ -66,7 +66,7 @@ pub(crate) async fn start(
 ) -> Result<Service> {
     let controller = nix::unistd::getuid().as_raw();
     let helper = client.link.socket()?.peer_uid;
-    let (listeners, endpoint) = endpoint::bind(controller, &client.desktop()).await?;
+    let (listeners, endpoint) = endpoint::bind(controller, &client).await?;
     let (service, bootstrap) = (Hex32::random(), Hex64::random());
     let descriptor = json!({
         "recordVersion": 1,

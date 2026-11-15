@@ -93,7 +93,7 @@ async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() 
     let verified = Verified {
         session: Session {
             epoch: Epoch {
-                uid: client.config.helper_uid,
+                uid: client.helper_config().helper_uid,
                 capture_pid: 123,
                 input_pid: 456,
                 security_session_id: 42,

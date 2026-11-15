@@ -100,6 +100,7 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
     }
     let person = match client.desktop().kind() {
         Kind::User(login) => crate::user::shared::person_home(login),
+        Kind::Vm(_) => return Err(client.unreachable()),
     };
     for source in files {
         if let Some(refused) = given(source, person.as_deref()) {

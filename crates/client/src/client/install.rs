@@ -28,6 +28,7 @@ impl Client {
     fn install_probe(&self, recovery: bool) -> Result<Value> {
         match self.desktop().kind() {
             Kind::User(login) => crate::user::install::install_on_this_disk(self, login, recovery),
+            Kind::Vm(_) => Err(self.unreachable()),
         }
     }
 
@@ -36,6 +37,8 @@ impl Client {
     pub fn installed_build(&self) -> Option<String> {
         let key = match self.desktop().kind() {
             Kind::User(login) => crate::user::install::build_key_on_this_disk(self, login)?,
+            // Not known to be installed, so nothing is taken as up to date.
+            Kind::Vm(_) => return None,
         };
         if let Some((cached, build)) = self.installed.lock().ok()?.as_ref()
             && *cached == key
@@ -48,6 +51,7 @@ impl Client {
         // changing the identity key.
         let build = match self.desktop().kind() {
             Kind::User(login) => crate::user::install::build_on_this_disk(self, login)?,
+            Kind::Vm(_) => return None,
         };
 
         if let Ok(mut cache) = self.installed.lock() {

@@ -3,8 +3,7 @@ use atlas_cli::ui::progress::Spinner;
 use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
-    config::Config,
-    desktop::Kind,
+    config::{Config, desktops::Selected},
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
@@ -17,6 +16,11 @@ fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
         Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+/// A client of the Second Login `config` names: an update moves it alone.
+fn helper_client(config: Config) -> Result<Client> {
+    Client::new(Selected::provisional(config))
 }
 
 /// Say whether a newer release is out, or update the app, then hand over to
@@ -40,7 +44,7 @@ pub(super) async fn run(
         args.version,
         host,
         allow_disrupt,
-        Client::new,
+        helper_client,
     )
     .await
 }
@@ -171,7 +175,7 @@ fn restart_menubar(executable: &std::path::Path, config: &std::path::Path, port:
 /// Atlas process runs.
 fn stop_menubar(config: &std::path::Path) -> Result<Option<u16>> {
     let output = Config::load_user(config)
-        .and_then(Client::new)
+        .and_then(helper_client)
         .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf));
     atlas_cli::menubar::stop_located(output)
 }
@@ -236,9 +240,7 @@ async fn preflight(
     client: Option<&Client>,
 ) -> Result<()> {
     if let Some(loaded) = set_up(config)? {
-        match loaded.desktop().kind() {
-            Kind::User(login) => crate::user::update::preflight_in(config, program, login).await?,
-        }
+        crate::user::update::preflight_in(config, program, &loaded.user()).await?;
     }
     if let Some(client) = client {
         client.require_service_idle().await?;
@@ -258,7 +260,7 @@ pub(super) async fn update_finish(
     allow_disrupt: bool,
 ) -> Result<Value> {
     super::dispatch::as_yourself("update")?;
-    update_finish_using(config, host, allow_disrupt, Client::new).await
+    update_finish_using(config, host, allow_disrupt, helper_client).await
 }
 
 async fn update_finish_using(
@@ -277,9 +279,7 @@ async fn update_finish_using(
     client.require_service_idle().await?;
     let daemon = client.status().await["daemon"]["pid"].is_number();
     let executable = std::env::current_exe()?;
-    let steps = match loaded.desktop().kind() {
-        Kind::User(login) => crate::user::update::helper_steps_in(login, daemon),
-    };
+    let steps = crate::user::update::helper_steps_in(&loaded.user(), daemon);
     let finished = if let Some(steps) = steps {
         let done = match run_steps(&steps, |step| {
             let mut command = std::process::Command::new(&executable);

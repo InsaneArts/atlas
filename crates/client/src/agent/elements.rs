@@ -331,6 +331,7 @@ pub(super) async fn app_elements_within(
 async fn probe(client: &Client, run: Run<'_>, pid: i64) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => crate::user::elements::probe_in(client, login, run, pid).await,
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

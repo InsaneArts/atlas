@@ -43,10 +43,12 @@ pub(crate) struct CopyIdentity {
 }
 
 impl Copies {
-    /// The copies `desktop` opens.
-    pub fn of(desktop: &Desktop) -> Self {
+    /// The copies `desktop` opens; none for a VM desktop, whose copies this
+    /// build does not make yet.
+    pub fn of(desktop: &Desktop) -> Option<Self> {
         match desktop.kind() {
-            Kind::User(_) => Self::in_shared_folder(),
+            Kind::User(_) => Some(Self::in_shared_folder()),
+            Kind::Vm(_) => None,
         }
     }
 
@@ -295,11 +297,13 @@ pub(crate) async fn hand_over(
     targets: Vec<Target>,
     running: &[AppRow],
 ) -> Result<Handed> {
-    refuse_targets(&targets, &Copies::of(&client.desktop()))?;
+    let copies = Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
+    refuse_targets(&targets, &copies)?;
     match client.desktop().kind() {
         Kind::User(login) => {
             crate::user::copies::hand_over_to(client, login, ownership, targets, running).await
         }
+        Kind::Vm(_) => Err(client.unreachable()),
     }
 }
 

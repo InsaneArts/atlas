@@ -205,10 +205,11 @@ async fn prepare_and_install(
 pub async fn restart_helper(client: &Client) -> Result<()> {
     let _exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
+    let config = client.user_config()?;
     let transport = atlas_core::transport::Transport {
-        path: client.config.socket_path.clone(),
+        path: config.socket_path.clone(),
         timeout: Duration::from_secs(10),
-        peer_uid: client.desktop().user().uid,
+        peer_uid: config.helper_uid,
     };
 
     let pending = client.controller.quarantine()?;

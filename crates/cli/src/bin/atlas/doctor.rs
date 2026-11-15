@@ -48,7 +48,7 @@ pub(crate) struct Observed {
 }
 
 /// Read and enrich the report, retaining full facts for people or verbose output.
-pub(super) async fn report(client: &Client, verbose: bool) -> Value {
+pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error::Result<Value> {
     let Observed {
         mut report,
         mut first_steps,
@@ -56,6 +56,8 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         restarts,
     } = match client.desktop().kind() {
         Kind::User(login) => crate::user::doctor::user_report(client, login).await,
+        // Refused as every command on it is, in the failure's own words.
+        Kind::Vm(_) => return Err(client.unreachable()),
     };
 
     // Every command keeps a lock and screenshots in the person's Library;
@@ -100,6 +102,8 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     if verbose || ui::human() {
         match client.desktop().kind() {
             Kind::User(login) => crate::user::doctor::user_files(login, &mut report).await,
+            // None: a VM's files are its guest's.
+            Kind::Vm(_) => {}
         }
         // Account names are the person's: only when the person asks, in
         // text on a terminal, never in output an agent could read.
@@ -110,9 +114,9 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
             report["accounts"] =
                 json!(accounts.iter().map(|entry| &entry.name).collect::<Vec<_>>());
         }
-        report
+        Ok(report)
     } else {
-        atlas_client::capability::summary(report)
+        Ok(atlas_client::capability::summary(report))
     }
 }
 

@@ -56,14 +56,14 @@ async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
     use atlas_core::host::Host;
 
     let dir = tempfile::tempdir().unwrap();
-    let mut client = Client::new(Config {
+    let mut client = Client::new(Selected::provisional(Config {
         helper_uid: 60001,
         socket_path: dir.path().join("helper.sock"),
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("out"),
         activity: Default::default(),
-    })
+    }))
     .unwrap();
     let host = HostSession::new(Host::Named, "worker").unwrap();
     client.controller =
@@ -150,14 +150,14 @@ async fn a_sessions_first_read_defers_another_sessions_service_change() {
 #[test]
 fn a_rollback_a_command_finished_is_settled_in_the_task_that_claimed_the_plan() {
     let dir = tempfile::tempdir().unwrap();
-    let client = Client::new(Config {
+    let client = Client::new(Selected::provisional(Config {
         helper_uid: 60001,
         socket_path: dir.path().join("helper.sock"),
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("out"),
         activity: Default::default(),
-    })
+    }))
     .unwrap();
     let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas_core::files::token());
     let tasks = client.output_dir().unwrap().join("tasks");
@@ -886,4 +886,47 @@ async fn every_look_at_the_screen_is_refused_while_the_person_signs_in() {
 
     client.controller.end_private().unwrap();
     lease.release();
+}
+
+/// Settings that list the Second Login `main` and the VM desktop `work`.
+const BOTH: &str = "default = \"main\"\noutput_dir = \"out\"\n\n\
+                    [[desktops]]\nname = \"main\"\nkind = \"user\"\nhelper_uid = 60001\n\
+                    socket_path = \"c.sock\"\nidentity_probe = \"probe\"\ninput_socket = \"i.sock\"\n\n\
+                    [[desktops]]\nname = \"work\"\nkind = \"vm\"\nid = \"0123456789abcdef01234567\"\n";
+
+#[tokio::test]
+async fn a_stop_keeps_a_vm_desktops_hold_and_says_it_did_not_reach_it_while_another_desktop_fails()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let settings =
+        atlas_core::config::desktops::Settings::parse(BOTH.as_bytes(), &dir.path().join("u.toml"))
+            .unwrap();
+    let state = dir.path().join("state");
+    let made = |listed: &atlas_core::config::desktops::Listed| match listed.desktop {
+        atlas_core::config::desktops::Chosen::User(_) => {
+            Err(Error::new(Code::Io, "The helper could not be told"))
+        }
+        atlas_core::config::desktops::Chosen::Vm(_) => {
+            let mut client = Client::new(settings.selected(listed))?;
+            client.controller = atlas_control::Controller::of_at(&client.desktop(), &state);
+            Ok(client)
+        }
+    };
+    let error = stop_listed(&settings, None, made).await.unwrap_err();
+    assert_eq!(error.error, "The helper could not be told");
+    let each = &error.details["desktops"];
+    assert_eq!(each[0]["desktop"], "main");
+    assert_eq!(each[1]["desktop"], "work");
+    let work = &each[1]["reply"];
+    assert_eq!(work["held"], true, "{work}");
+    assert_eq!(work["delivered"], false, "{work}");
+    assert!(
+        work["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("work is a VM desktop, which this build of Atlas cannot reach yet"),
+        "{work}"
+    );
+    let vm = made(&settings.desktops()[1]).unwrap();
+    assert!(vm.controller.stop_noted(), "the VM's Stop is kept here");
 }

@@ -37,7 +37,10 @@ async fn only_the_person_resumes_agents() {
 async fn a_running_command_hears_of_a_stop_from_its_saved_marker() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
-    let marker = client.config.input_socket.with_extension("stopped");
+    let marker = client
+        .helper_config()
+        .input_socket
+        .with_extension("stopped");
 
     let waiting = tokio::time::timeout(Duration::from_millis(500), client.stopped_while_running());
     assert!(waiting.await.is_err(), "no stop, no end");
@@ -52,7 +55,7 @@ async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
     let (_dir, mut person, input, _session) = native_client();
     person.actor = Actor::Viewer;
     // No daemon runs, so none keeps jobs to end.
-    person.link.socket_mut().path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.helper_config().socket_path.clone();
     let mut stopping = Box::pin(person.hold(true));
     let mut hello = dispatched(&mut stopping, &input, "hello").await;
     answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
@@ -80,7 +83,7 @@ async fn a_stop_returns_ok_with_uncertainty_and_a_warning_when_native_hold_is_un
     let (_dir, mut person, input, _session) = native_client();
     person.actor = Actor::Viewer;
     // No daemon runs, so none keeps jobs to end.
-    person.link.socket_mut().path = person.config.socket_path.clone();
+    person.link.socket_mut().path = person.helper_config().socket_path.clone();
     let mut stopping = Box::pin(person.hold(true));
     let mut hello = dispatched(&mut stopping, &input, "hello").await;
     answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
@@ -109,7 +112,10 @@ async fn resume_keeps_the_local_stop_until_the_helpers_stop_can_be_cleared() {
     let (_dir, client, listener, _session) = native_client();
     let mut person = client;
     person.actor = Actor::Viewer;
-    let marker = person.config.input_socket.with_extension("stopped");
+    let marker = person
+        .helper_config()
+        .input_socket
+        .with_extension("stopped");
     let mut stopping = Box::pin(person.hold(true));
     let mut hello = dispatched(&mut stopping, &listener, "hello").await;
     answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
@@ -158,4 +164,35 @@ async fn resume_clears_the_local_stop_only_after_native_acknowledgment() {
         assert_eq!(resuming.await.is_ok(), acknowledged);
         assert_eq!(person.controller.stop_noted(), !acknowledged);
     }
+}
+
+#[tokio::test]
+async fn a_stop_on_a_vm_desktop_is_kept_here_and_said_not_to_have_reached_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut person = crate::test_support::vm_client(dir.path(), Some("main"));
+    person.actor = Actor::Viewer;
+    let reply = person.hold(true).await.unwrap();
+    assert_eq!(reply["held"], true);
+    assert_eq!(reply["kept"], true);
+    assert_eq!(reply["delivered"], false);
+    assert!(
+        reply["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with(&person.unreachable().error),
+        "{reply}"
+    );
+    assert!(person.controller.stop_noted());
+    assert!(person.stop_marked());
+}
+
+#[tokio::test]
+async fn a_resume_on_a_vm_desktop_is_refused_and_its_stop_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut person = crate::test_support::vm_client(dir.path(), None);
+    person.actor = Actor::Viewer;
+    person.controller.note_stop(true).unwrap();
+    let refused = person.hold(false).await.unwrap_err();
+    assert_eq!(refused.error, person.unreachable().error);
+    assert!(person.controller.stop_noted());
 }

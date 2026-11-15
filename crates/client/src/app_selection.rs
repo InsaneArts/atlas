@@ -53,6 +53,8 @@ fn app_program(executable: &str) -> bool {
 pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
     match desktop.kind() {
         Kind::User(login) => crate::user::shared::atlas_bundle(login),
+        // Not known: nothing reaches a close on this desktop yet.
+        Kind::Vm(_) => None,
     }
 }
 
@@ -61,6 +63,8 @@ pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
 pub fn installed(desktop: &Desktop, name: &str) -> bool {
     match desktop.kind() {
         Kind::User(login) => crate::user::shared::in_applications(login, name),
+        // Not looked for, so never taken as installed.
+        Kind::Vm(_) => false,
     }
 }
 

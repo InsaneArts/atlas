@@ -193,7 +193,7 @@ impl Policy {
             Command::Elements(elements) => Self::read(View::Elements {
                 values: elements.values,
             }),
-            Command::Stop => Self::read(View::Action("Stopped the agent".into())),
+            Command::Stop => Self::read(View::Stop),
             Command::Resume => Self::read(View::Action("Resumed the agent".into())),
             Command::Wait(wait) => Self::read(View::Wait {
                 gone: wait.gone || wait.state == Some(cli::ElementState::Gone),

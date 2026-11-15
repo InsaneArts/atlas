@@ -22,7 +22,7 @@ use atlas_core::{
     account::{Account, account_named, account_with_uid},
     acl::Acl,
     app_bundle::{executable_of, signature},
-    config::Config,
+    config::{Config, desktops::Selected},
     digest::file_sha256,
     error::{Code, Error, Result},
     session::{require_hidden, validate_target_uid},
@@ -374,10 +374,10 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
                 "No account named {name} exists on this Mac"
             ))
         }),
-        (None, Some(config)) => account_with_uid(config.desktop().user().uid)?.ok_or_else(|| {
+        (None, Some(config)) => account_with_uid(config.user().uid)?.ok_or_else(|| {
             atlas_daemon::user::setup::problem(format!(
                 "Configured helper UID {} has no account",
-                config.desktop().user().uid
+                config.user().uid
             ))
         }),
         (None, None) => Err(Error::new(
@@ -402,7 +402,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
 
     let conflict = config
         .as_ref()
-        .is_some_and(|config| config.desktop().user().uid != account.uid);
+        .is_some_and(|config| config.user().uid != account.uid);
 
     // Otherwise the configuration atlas init would write; shown, never
     // written, by preview.
@@ -447,7 +447,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         "screenSharing": screen_sharing(),
     });
 
-    let client = Client::new(effective)?;
+    let client = Client::new(Selected::provisional(effective))?;
     observe(&client, account.uid, &mut report).await;
     report["nextSteps"] = json!(next_steps(&report));
 

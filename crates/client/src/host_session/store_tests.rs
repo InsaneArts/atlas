@@ -35,8 +35,13 @@ fn remember_windows(client: &Client, key: &Key) {
             scale: 1.0,
         },
     };
-    crate::last_capture::remember_windows(&client.config.output_dir, key, Some(&[]), &epoch)
-        .unwrap();
+    crate::last_capture::remember_windows(
+        &client.helper_config().output_dir,
+        key,
+        Some(&[]),
+        &epoch,
+    )
+    .unwrap();
 }
 
 fn store(client: &Client) -> Store {
@@ -57,7 +62,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
         client,
         session,
         Some(&Doing::new(verb)),
-        &ReplyFacts::new(kind, &Ok(reply), &Copies::in_shared_folder()),
+        &ReplyFacts::new(kind, &Ok(reply), Some(&Copies::in_shared_folder())),
         || now,
     )
     .unwrap();
@@ -68,7 +73,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
 fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
     let kind = Kind::Environment { changes };
     let result = Ok(reply);
-    let facts = ReplyFacts::new(kind, &result, &Copies::in_shared_folder());
+    let facts = ReplyFacts::new(kind, &result, Some(&Copies::in_shared_folder()));
     note_at(client, session, None, &facts, || TEST_NOW).unwrap();
     forget_rolled_back_facts(client, &facts).unwrap();
 }
@@ -270,12 +275,16 @@ fn an_absent_reply_leaves_existing_copy_labels_intact() {
     let facts = ReplyFacts::new(
         Kind::Open,
         &Err(Error::new(Code::Transport, "No reply").uncertain()),
-        &Copies::in_shared_folder(),
+        Some(&Copies::in_shared_folder()),
     );
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
 
-    let facts = ReplyFacts::new(Kind::Open, &Ok(Value::Null), &Copies::in_shared_folder());
+    let facts = ReplyFacts::new(
+        Kind::Open,
+        &Ok(Value::Null),
+        Some(&Copies::in_shared_folder()),
+    );
     note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
     record.copies.truncate(64);
     assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
@@ -395,7 +404,7 @@ fn settlement_uses_decoded_facts_even_when_its_projection_changes() {
     let kind = Kind::Environment { changes: true };
     let mut projection = Ok(json!({"ok": true, "phase": "rolledBack", "planId": plan,
         "keptTargets": ["private target"], "retainedDirectories": []}));
-    let facts = ReplyFacts::new(kind, &projection, &Copies::in_shared_folder());
+    let facts = ReplyFacts::new(kind, &projection, Some(&Copies::in_shared_folder()));
     projection.as_mut().unwrap()["phase"] = json!("future");
     projection.as_mut().unwrap()["planId"] = json!("private token");
     projection.as_mut().unwrap()["keptTargets"] = json!([]);
@@ -943,13 +952,16 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     assert_eq!(store.read(&idle.key), None);
     for record in [&copied, &planned, &recent, &boundary] {
         assert!(
-            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
-                .unwrap()
-                .is_some()
+            crate::last_capture::remembered_windows(
+                &client.helper_config().output_dir,
+                &record.key
+            )
+            .unwrap()
+            .is_some()
         );
     }
     assert!(
-        crate::last_capture::remembered_windows(&client.config.output_dir, &idle.key)
+        crate::last_capture::remembered_windows(&client.helper_config().output_dir, &idle.key)
             .unwrap()
             .is_none()
     );
@@ -996,9 +1008,12 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
     assert_eq!(gone, 3 + 1);
     for record in with_leftovers.iter().chain(&others) {
         assert_eq!(
-            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
-                .unwrap()
-                .is_some(),
+            crate::last_capture::remembered_windows(
+                &client.helper_config().output_dir,
+                &record.key
+            )
+            .unwrap()
+            .is_some(),
             store.read(&record.key).is_some(),
         );
     }

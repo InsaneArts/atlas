@@ -13,7 +13,11 @@ use super::{
     *,
 };
 use atlas_client::overview::READ_DEADLINE;
-use atlas_core::{config::Config, files, test_support::SETTINGS};
+use atlas_core::{
+    config::{Config, desktops::Selected},
+    files,
+    test_support::SETTINGS,
+};
 use axum::{
     body::{Body, to_bytes},
     extract::Request,
@@ -860,7 +864,7 @@ async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
     let settings = base.join("u.toml");
     std::fs::write(&settings, SETTINGS).unwrap();
 
-    let mut client = Client::new(Config::load(&settings).unwrap()).unwrap();
+    let mut client = Client::new(Selected::provisional(Config::load(&settings).unwrap())).unwrap();
     let controller = atlas_control::Controller::at(60001, &base.join("state"));
     client.controller = controller.clone();
     let (_, viewer) = bind(client, 0, Some(&settings)).await.unwrap();
@@ -873,7 +877,11 @@ async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
     viewer.lease.lock().await.acquire(&controller).unwrap();
 
     viewer.follow_settings().await;
-    assert_eq!(viewer.client().config.helper_uid, 60001, "unchanged");
+    assert_eq!(
+        viewer.client().helper_config().helper_uid,
+        60001,
+        "unchanged"
+    );
     assert!(viewer.lease.lock().await.active());
 
     std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"moved\"")).unwrap();
@@ -894,7 +902,7 @@ async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
     .unwrap();
     viewer.follow_settings().await;
 
-    assert_eq!(viewer.client().config.helper_uid, 60002);
+    assert_eq!(viewer.client().helper_config().helper_uid, 60002);
     assert!(!viewer.lease.lock().await.active());
     assert_eq!(controller.unresolved().unwrap().len(), 1);
 
@@ -977,8 +985,8 @@ fn input_service(
 /// A client whose input service is the stand-in at `socket`.
 fn client_with_input(dir: &Path, socket: &Path) -> Client {
     let mut client = client(dir);
-    client.config.input_socket = socket.to_owned();
-    client.config.helper_uid = nix::unistd::getuid().as_raw();
+    client.helper_config_mut().input_socket = socket.to_owned();
+    client.helper_config_mut().helper_uid = nix::unistd::getuid().as_raw();
     client
 }
 
@@ -1241,7 +1249,7 @@ async fn control_being_taken_keeps_the_viewer_on_its_helper() {
     assert!(taken.controller.pending().unwrap().is_empty());
 
     viewer.follow_settings().await;
-    assert_eq!(viewer.client().config.helper_uid, 60002);
+    assert_eq!(viewer.client().helper_config().helper_uid, 60002);
     assert!(asked.try_recv().is_err(), "nothing more asked of it");
 }
 
@@ -2658,7 +2666,7 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             client.controller = client.controller.labelled(own.as_ref());
             client.link.socket_mut().peer_uid = nix::unistd::getuid().as_raw();
             client.input_peer_uid = Some(client.link.socket().unwrap().peer_uid);
-            std::fs::write(&client.config.identity_probe, b"installed build").unwrap();
+            std::fs::write(&client.helper_config().identity_probe, b"installed build").unwrap();
             let build = client.installed_build().unwrap();
             let other = recovery_session("worker");
             let at = atlas_core::time::now_ms() - if other_owner { 120_001 } else { 0 };
@@ -2692,7 +2700,7 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
 
             std::fs::create_dir_all(client.link.socket().unwrap().path.parent().unwrap()).unwrap();
             let daemon = UnixListener::bind(&client.link.socket().unwrap().path).unwrap();
-            let mut input = UnixListener::bind(&client.config.input_socket).unwrap();
+            let mut input = UnixListener::bind(&client.helper_config().input_socket).unwrap();
             let previous_pid = i32::MAX as u32;
             assert!(!atlas_client::test_support::process_exists(previous_pid));
             let mut capture_pid = 123;
@@ -2709,14 +2717,14 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
                     peer.read_line(&mut line).await.unwrap();
                     let request: Value = serde_json::from_str(&line).unwrap();
                     let proof = json!({
-                        "ok": true, "uid": client.config.helper_uid,
+                        "ok": true, "uid": client.helper_config().helper_uid,
                         "hasGraphicAccess": true, "onConsole": false,
                         "parentPID": capture_pid, "securitySessionID": 42,
                         "displayID": 7, "width": 100, "height": 100,
                     });
                     let reply = match (native, request["op"].as_str().unwrap()) {
                         (false, "hello") => json!({
-                            "ok": true, "user": {"uid": client.config.helper_uid},
+                            "ok": true, "user": {"uid": client.helper_config().helper_uid},
                             "daemon": {"pid": capture_pid},
                             "session": {"managerName": "Aqua", "onConsole": false},
                             "display": {"width": 100, "height": 100, "scale": 1},
@@ -2759,7 +2767,7 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
                                 Code::Busy
                             );
                             changes.push("shutdown");
-                            std::fs::remove_file(&client.config.input_socket).unwrap();
+                            std::fs::remove_file(&client.helper_config().input_socket).unwrap();
                             json!({"ok": true})
                         }
                         (false, "run") => {
@@ -2769,7 +2777,8 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
                                 Code::Busy
                             );
                             changes.push("spawn");
-                            input = UnixListener::bind(&client.config.input_socket).unwrap();
+                            input =
+                                UnixListener::bind(&client.helper_config().input_socket).unwrap();
                             replaced = true;
                             atlas_client::test_support::completed("456\n")
                         }

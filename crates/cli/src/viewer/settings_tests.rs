@@ -9,7 +9,7 @@ use std::time::Duration;
 /// own record kept in `out`.
 async fn followed(base: &Path, settings: &Path) -> (Arc<Viewer>, std::path::PathBuf) {
     std::fs::write(settings, SETTINGS).unwrap();
-    let mut client = Client::new(Config::load(settings).unwrap()).unwrap();
+    let mut client = Client::new(Selected::load(settings).unwrap()).unwrap();
     client.controller = atlas_control::Controller::at(60001, &base.join("state"));
     let (_, viewer) = bind(client, 0, Some(settings)).await.unwrap();
 
@@ -58,7 +58,7 @@ async fn an_unchanged_settings_file_retries_a_failed_viewer_record_move() {
         obstruct(&moved);
         std::fs::write(&settings, changed).unwrap();
         viewer.follow_settings().await;
-        assert_eq!(viewer.client().config.helper_uid, uid);
+        assert_eq!(viewer.client().helper_config().helper_uid, uid);
         assert_eq!(viewer.client().output_dir().unwrap(), base.join(folder));
         assert!(record.exists(), "{folder}: discovery stays where it was");
         assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, record);
@@ -254,11 +254,13 @@ fn screenshot_rows_keep_the_folder_they_were_listed_from() {
         .await;
 
         let text = SETTINGS.replace("\"out\"", "\"moved\"").into_bytes();
-        let config = Config::parse(&text, &dir.path().join("u.toml")).unwrap();
-        viewer.follow_output(&original, config, text).await;
+        let config = atlas_core::config::Config::parse(&text, &dir.path().join("u.toml")).unwrap();
+        viewer
+            .follow_output(&original, Selected::provisional(config), text)
+            .await;
         assert_ne!(
-            viewer.client().config.output_dir,
-            original.config.output_dir
+            viewer.client().helper_config().output_dir,
+            original.helper_config().output_dir
         );
         release.send(()).unwrap();
         worker.await.unwrap();

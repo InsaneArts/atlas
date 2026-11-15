@@ -5,7 +5,7 @@
 //! cargo run --release --package atlas-client --example profile_stream -- [SIDE] [FRAMES] [cg|sck]
 use atlas_client::client::{Client, live::LiveStream};
 use atlas_core::{
-    config::{self, Config},
+    config::{self, desktops::Selected},
     frame_pipe::diagnostics::{Outcome, Ring},
     protocol::CaptureBackend,
 };
@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("sck") => CaptureBackend::ScreenCaptureKit,
         _ => CaptureBackend::CoreGraphics,
     };
-    let client = Client::new(Config::load(&config::installed_path()?)?)?;
+    let client = Client::new(Selected::load(&config::installed_path()?)?)?;
     let mut stream = LiveStream::connect(&client, side, backend)
         .await?
         .ok_or("The helper offers no raw stream")?;

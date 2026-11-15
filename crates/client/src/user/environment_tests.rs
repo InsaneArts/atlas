@@ -238,7 +238,7 @@ async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
     aged(&locked);
     let mut client = crate::test_support::client(&sandbox.root);
     // An account that resolves to a name, as the helper's does.
-    client.config.helper_uid = nix::unistd::getuid().as_raw();
+    client.helper_config_mut().helper_uid = nix::unistd::getuid().as_raw();
     let missing = apply(&client, &atlas_core::files::token())
         .await
         .unwrap_err();
@@ -366,7 +366,7 @@ async fn a_preview_works_while_another_controller_holds_the_lock_and_leaves_no_m
     assert!(!requests(&stage));
     assert!(
         !client
-            .config
+            .helper_config()
             .output_dir
             .join(crate::activity_log::FILE)
             .exists()

@@ -9,7 +9,7 @@ use atlas_client::setup::{FULL_NAME, missing};
 use atlas_client::{client::Client, setup};
 use atlas_core::{
     account,
-    config::{self, Config},
+    config::{self, Config, desktops::Selected},
     error::{Code, Error, Result},
 };
 use atlas_daemon::identity::Identity;
@@ -330,7 +330,7 @@ pub(crate) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     let name = helper.name.clone();
     // Whether an earlier run already finished setup (decides the first-run steps).
     let settled_before = atlas_client::user::setup::migrate::settled(helper.uid);
-    let mut client = Client::new(config.clone())?;
+    let mut client = Client::new(Selected::provisional(config.clone()))?;
     client.host_session = atlas_core::host::HostSession::from_env();
     client.allow_disrupt = allow_disrupt;
 
@@ -350,8 +350,7 @@ pub(crate) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 
     // Ready now, set up before, and running this very build throughout.
     let status = client.status().await;
-    if atlas_client::user::capability::doctor(status.clone(), config.desktop().user())["ready"]
-        == true
+    if atlas_client::user::capability::doctor(status.clone(), &config.user())["ready"] == true
         && settled_before
         && atlas_core::session::input_build_current(&status)
     {
@@ -365,7 +364,7 @@ pub(crate) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 
     done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
-    if !daemon_answers(&client, config.desktop().user().uid).await {
+    if !daemon_answers(&client, config.user().uid).await {
         start_helper(
             &client,
             &config,
@@ -518,9 +517,7 @@ async fn start_helper(
 
     if installed {
         let _spinner = Spinner::new("Waiting for the helper to start…");
-        started =
-            daemon_answers_within(client, config.desktop().user().uid, Duration::from_secs(2))
-                .await;
+        started = daemon_answers_within(client, config.user().uid, Duration::from_secs(2)).await;
         if started {
             mark_since_lock("answering");
         }
@@ -610,8 +607,7 @@ async fn install_job(
     let log = atlas_client::user::setup::job::prepare_helper(client, helper, expected).await?;
 
     spinner.set("Starting the helper…");
-    let answered =
-        daemon_answers_within(client, config.desktop().user().uid, Duration::from_secs(1)).await;
+    let answered = daemon_answers_within(client, config.user().uid, Duration::from_secs(1)).await;
     drop(spinner);
     if !answered {
         return Err(problem(format!(
@@ -656,7 +652,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             "Permissions",
             "Screen Recording · Accessibility already allowed",
         );
-        wait_until_back(client, config.desktop().user().uid, &status).await?;
+        wait_until_back(client, config.user().uid, &status).await?;
     } else {
         heading(&format!("Allow Atlas in {name}'s account"));
 
@@ -674,7 +670,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         loop {
             // The person is here, in their own account: offer the way over.
             if client.status().await["session"]["onConsole"] != true {
-                offer_lock(name, config.desktop().user().uid)?;
+                offer_lock(name, config.user().uid)?;
             }
 
             // Done once the helper has been on screen and is hidden again (or
@@ -705,8 +701,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             // macOS applies a new Screen Recording grant to new processes
             // only, so the helper restarts to pick up what the person allowed.
             if !missing(&client.status().await).is_empty() {
-                wait_until_back(client, config.desktop().user().uid, &client.status().await)
-                    .await?;
+                wait_until_back(client, config.user().uid, &client.status().await).await?;
                 let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
                 atlas_client::user::setup::job::restart_helper(client).await?;
             }
@@ -738,7 +733,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         done("Permissions", "Screen Recording · Accessibility");
         // Both can be on while the person is still in the helper: the checks
         // below need it in the background again.
-        wait_until_back(client, config.desktop().user().uid, &client.status().await).await?;
+        wait_until_back(client, config.user().uid, &client.status().await).await?;
     }
 
     Ok(())

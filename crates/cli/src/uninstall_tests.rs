@@ -164,14 +164,14 @@ fn deletion_without_a_complete_acknowledgement_stays_pending() {
 #[tokio::test]
 async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() {
     let dir = tempfile::tempdir().unwrap();
-    let mut client = Client::new(Config {
+    let mut client = Client::new(Selected::provisional(Config {
         helper_uid: 7001,
         socket_path: dir.path().join("no-daemon.sock"),
         input_socket: dir.path().join("no-input.sock"),
         identity_probe: dir.path().join("atlas"),
         output_dir: dir.path().join("runs"),
         activity: Default::default(),
-    })
+    }))
     .unwrap();
     client.controller = Controller::at(7001, &dir.path().join("control"));
     let pending = client.controller.quarantine().unwrap();
@@ -225,14 +225,14 @@ fn removable(dir: &Path, loaded: bool) -> Found {
     let output = dir.join("runs");
     fs::create_dir(&output).unwrap();
     fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
-    let client = Client::new(Config {
+    let client = Client::new(Selected::provisional(Config {
         helper_uid: 7001,
         socket_path: dir.join("no-daemon.sock"),
         input_socket: dir.join("no-input.sock"),
         identity_probe: dir.join("atlas"),
         output_dir: output,
         activity: Default::default(),
-    })
+    }))
     .unwrap();
     let found = Found {
         app: dir.join("Atlas.app"),
@@ -997,4 +997,80 @@ fn only_a_choice_to_keep_it_off_survives_uninstall() {
         !keeps_login_choice(true, None),
         "unknown: setup decides again"
     );
+}
+
+#[test]
+fn uninstall_is_refused_while_the_settings_list_a_vm_naming_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("u.toml");
+    let vm = |name: &str, id: char| {
+        format!(
+            "\n[[desktops]]\nname = \"{name}\"\nkind = \"vm\"\nid = \"{}\"\n",
+            id.to_string().repeat(24)
+        )
+    };
+    std::fs::write(
+        &path,
+        format!(
+            "default = \"work\"\noutput_dir = \"out\"\n{}{}",
+            vm("work", 'a'),
+            vm("test", 'b')
+        ),
+    )
+    .unwrap();
+    // Kept on disk too, as a listed VM is: named once, by its name.
+    let kept = vec![atlas_core::desktop::DesktopId::parse(&"a".repeat(24)).unwrap()];
+    let refused = refuse_vms(&path, Ok(kept)).unwrap_err();
+    assert_eq!(refused.code, Code::Uninstall);
+    assert_eq!(
+        refused.error,
+        "This Mac keeps the VM desktops work and test, which uninstall cannot remove yet; \
+         remove them first, then uninstall Atlas."
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "nothing was touched"
+    );
+
+    std::fs::write(&path, atlas_core::test_support::SETTINGS).unwrap();
+    assert!(
+        refuse_vms(&path, Ok(Vec::new())).is_ok(),
+        "a Second Login alone goes on"
+    );
+    assert!(refuse_vms(&dir.path().join("missing.toml"), Ok(Vec::new())).is_ok());
+}
+
+#[test]
+fn uninstall_is_refused_while_a_vm_is_kept_on_this_disk_though_no_settings_list_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing.toml");
+    let id = atlas_core::desktop::DesktopId::parse(&"c".repeat(24)).unwrap();
+
+    let refused = refuse_vms(&path, Ok(vec![id])).unwrap_err();
+
+    assert_eq!(refused.code, Code::Uninstall);
+    assert!(refused.error.contains(&"c".repeat(24)), "{}", refused.error);
+}
+
+#[test]
+fn uninstall_is_refused_when_this_macs_vms_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing.toml");
+
+    let refused = refuse_vms(
+        &path,
+        Err(Error::new(Code::State, "This Mac's VMs cannot be read.")),
+    )
+    .unwrap_err();
+
+    assert_eq!(refused.code, Code::Uninstall);
+    assert!(refused.error.starts_with("This Mac's VMs cannot be read."));
+}
+
+#[test]
+fn uninstall_goes_on_with_no_vm_listed_or_kept() {
+    let dir = tempfile::tempdir().unwrap();
+
+    refuse_vms(&dir.path().join("missing.toml"), Ok(Vec::new())).unwrap();
 }

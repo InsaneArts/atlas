@@ -92,8 +92,9 @@ enum Left {
 
 impl ReplyFacts {
     /// Decode only Atlas names and settlement facts, never private reply text.
-    /// Copies are known by `copies`, those of the desktop the reply came from.
-    pub fn new(kind: Kind, result: &Result<Value>, copies: &Copies) -> Self {
+    /// Copies are known by `copies`, those of the desktop the reply came from;
+    /// with none, the reply names none.
+    pub fn new(kind: Kind, result: &Result<Value>, copies: Option<&Copies>) -> Self {
         let refused_code = |code: &str| matches!(code, "busy" | "stopped" | "uncertain");
         let reply = match result {
             Err(error) => {
@@ -587,7 +588,7 @@ pub fn note(
         client,
         session,
         doing,
-        &ReplyFacts::new(kind, result, &copies),
+        &ReplyFacts::new(kind, result, copies.as_ref()),
     )
 }
 
@@ -657,7 +658,7 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 #[cfg(test)]
 fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
     let copies = Copies::of(&client.desktop());
-    forget_rolled_back_facts(client, &ReplyFacts::new(kind, result, &copies))
+    forget_rolled_back_facts(client, &ReplyFacts::new(kind, result, copies.as_ref()))
 }
 
 /// Forget the rollback decoded by `dispatch::note_outcome`.
@@ -686,7 +687,7 @@ fn capture_named(path: &Value) -> Option<Capture> {
 fn tokens<'a>(
     listed: &'a Value,
     field: &'a str,
-    copies: &'a Copies,
+    copies: Option<&'a Copies>,
 ) -> impl Iterator<Item = Token> + 'a {
     listed
         .as_array()
@@ -698,7 +699,7 @@ fn tokens<'a>(
             } else {
                 &entry[field]
             };
-            copies.token_of(path.as_str()?)
+            copies?.token_of(path.as_str()?)
         })
 }
 

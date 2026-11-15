@@ -1,5 +1,6 @@
 use super::*;
 use crate::viewer::http::configured;
+use atlas_core::config::desktops::Selected;
 
 /// A viewer that reads nothing, and the upkeep reads it makes, each sent
 /// with the time it began.
@@ -64,9 +65,10 @@ async fn a_service_nobody_reads_follows_its_settings() {
     let base = std::fs::canonicalize(dir.path()).unwrap();
     let settings = base.join("u.toml");
     std::fs::write(&settings, atlas_core::test_support::SETTINGS).unwrap();
-    let client =
-        atlas_client::client::Client::new(atlas_core::config::Config::load(&settings).unwrap())
-            .unwrap();
+    let client = atlas_client::client::Client::new(Selected::provisional(
+        atlas_core::config::Config::load(&settings).unwrap(),
+    ))
+    .unwrap();
     let (_, viewer) = crate::viewer::http::bind(client, 0, Some(&settings))
         .await
         .unwrap();

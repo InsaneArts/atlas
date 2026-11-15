@@ -42,10 +42,8 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     // given or the bundle it leads to.
     let target = Target::Path(bundle);
     crate::credential_files::refuse([path])?;
-    handoff::refuse_targets(
-        std::slice::from_ref(&target),
-        &handoff::Copies::of(&client.desktop()),
-    )?;
+    let copies = handoff::Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
+    handoff::refuse_targets(std::slice::from_ref(&target), &copies)?;
     let app = atlas_core::name::bounded(name.trim_end_matches(".app"));
     let output = client.output_dir()?;
     let claims = Claims::in_store(Tasks::at(output), task.clone());
@@ -95,7 +93,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     if let Some(token) = transport {
         let session = task.session().clone();
         let gone = matches!(
-            handoff::Copies::of(&client.desktop()).remove(&token, &session, running),
+            copies.remove(&token, &session, running),
             handoff::CopyRemoval::Removed | handoff::CopyRemoval::AlreadyGone
         );
         if gone {

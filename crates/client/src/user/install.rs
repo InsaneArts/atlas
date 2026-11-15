@@ -55,7 +55,7 @@ fn shared_folder(folder: &Path) -> Result<()> {
 /// environment plans are staged beside the shared Atlas command for it to
 /// read; a missing folder is setup's concern, not this check's.
 pub(crate) fn staging_writable_in(client: &Client, _login: &atlas_core::user::User) -> Result<()> {
-    if let Some(shared) = client.config.identity_probe.parent()
+    if let Some(shared) = client.user_config()?.identity_probe.parent()
         && shared.is_dir()
     {
         atlas_core::files::probe_write(shared)?;
@@ -72,7 +72,7 @@ pub(crate) fn install_on_this_disk(
     recovery: bool,
 ) -> Result<Value> {
     let source = fs::canonicalize(std::env::current_exe()?)?;
-    let target = &client.config.identity_probe;
+    let target = &client.user_config()?.identity_probe;
 
     let shared = target
         .parent()
@@ -150,7 +150,7 @@ pub(crate) fn build_key_on_this_disk(
     client: &Client,
     _login: &atlas_core::user::User,
 ) -> Option<BuildKey> {
-    let metadata = fs::metadata(&client.config.identity_probe).ok()?;
+    let metadata = fs::metadata(&client.user_config().ok()?.identity_probe).ok()?;
     Some((
         metadata.dev(),
         metadata.ino(),
@@ -166,6 +166,6 @@ pub(crate) fn build_on_this_disk(
     client: &Client,
     _login: &atlas_core::user::User,
 ) -> Option<String> {
-    atlas_core::digest::probe_executable(&client.config.identity_probe)
+    atlas_core::digest::probe_executable(&client.user_config().ok()?.identity_probe)
         .and_then(|path| file_sha256(&path))
 }
