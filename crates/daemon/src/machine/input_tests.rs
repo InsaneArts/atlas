@@ -261,3 +261,14 @@ async fn an_earlier_service_still_running_keeps_another_from_starting() {
     );
     assert_eq!(services(folder.path()).len(), 1);
 }
+
+#[test]
+fn a_service_that_failed_to_start_is_read_by_the_last_line_it_wrote() {
+    let said = b"starting\n{\"ok\":false,\"code\":\"permission\",\"error\":\"The input process does not have Accessibility permission\"}\n";
+
+    let failure = Failure::of(said).unwrap();
+
+    assert_eq!(failure.code, "permission");
+    assert!(failure.error.contains("Accessibility"));
+    assert_eq!(Failure::of(b"no json here\n"), None);
+}

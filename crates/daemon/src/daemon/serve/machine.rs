@@ -856,9 +856,26 @@ impl Machine {
             // Its account's facts may wait on the directory service: off the
             // workers the generation's watchdog runs on.
             let (manager, declared) = (self.daemon.manager.clone(), self.declared());
+            let service = self.daemon.input.clone();
             let saying = bounded::off_runtime(&self.blocking, move || {
                 let posture = READ_POSTURE();
-                let hello = super::super::facts::machine_hello(&manager, &declared, posture);
+                // Read last, after what may have taken a while, and whole.
+                let (standing, failure) = service
+                    .as_ref()
+                    .map(|service| service.snapshot())
+                    .map_or((None, None), |(standing, failure)| {
+                        (Some(standing), failure)
+                    });
+                let input = super::super::facts::Input {
+                    standing: standing.map(|standing| match standing {
+                        crate::machine::input::Standing::Starting => "starting",
+                        crate::machine::input::Standing::Ready => "ready",
+                        crate::machine::input::Standing::Gone => "gone",
+                        crate::machine::input::Standing::CleanupUnknown => "cleanupUnknown",
+                    }),
+                    failure,
+                };
+                let hello = super::super::facts::machine_hello(&manager, &declared, posture, input);
                 (hello, posture)
             });
             // Ended with its lane, as every request is, however long it waits.

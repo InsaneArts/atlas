@@ -120,8 +120,12 @@ fn the_machine_hello_says_why_agents_are_held() {
         admin: Some(false),
     };
 
-    let held = machine_hello("Aqua", &declared, open);
-    let admitted = machine_hello("Aqua", &declared, Posture::CLOSED);
+    let ready = || Input {
+        standing: Some("ready"),
+        failure: None,
+    };
+    let held = machine_hello("Aqua", &declared, open, ready());
+    let admitted = machine_hello("Aqua", &declared, Posture::CLOSED, ready());
 
     assert_eq!(held["remoteLogin"], "on");
     assert_eq!(held["agents"]["admitted"], false);
@@ -134,4 +138,60 @@ fn the_guest_posture_is_read_without_failing() {
     let posture = Posture::now();
 
     assert_eq!(posture.held().is_none(), posture == Posture::CLOSED);
+}
+
+#[test]
+fn the_machine_hello_says_how_input_stands_and_what_the_person_can_do() {
+    let declared = atlas_session::compatibility::Declared::ours(Vec::new());
+    let input = |standing: Option<&'static str>, failure: Option<(&str, &str)>| {
+        machine_hello(
+            "Aqua",
+            &declared,
+            Posture::CLOSED,
+            Input {
+                standing,
+                failure: failure.map(|(code, error)| crate::machine::input::Failure {
+                    code: code.to_owned(),
+                    error: error.to_owned(),
+                }),
+            },
+        )["input"]
+            .clone()
+    };
+
+    let ready = input(Some("ready"), None);
+    let unallowed = input(
+        Some("gone"),
+        Some((
+            "permission",
+            "The input process does not have Accessibility permission",
+        )),
+    );
+    let failed = input(
+        Some("gone"),
+        Some(("identity", "Native input requires the session")),
+    );
+    let starting = input(Some("starting"), None);
+    let unsure = input(Some("cleanupUnknown"), None);
+    let none = input(None, None);
+
+    assert_eq!(ready["held"], Value::Null);
+    assert_eq!(ready["standing"], "ready");
+    assert_eq!(unallowed["failure"]["code"], "permission");
+    assert!(
+        unallowed["held"]
+            .as_str()
+            .unwrap()
+            .contains("Privacy & Security")
+    );
+    assert_eq!(failed["held"], "Native input requires the session");
+    assert!(starting["held"].as_str().unwrap().contains("starting"));
+    assert!(
+        unsure["held"]
+            .as_str()
+            .unwrap()
+            .contains("not been confirmed")
+    );
+    assert_eq!(none["standing"], Value::Null);
+    assert!(none["held"].is_string());
 }

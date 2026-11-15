@@ -131,6 +131,49 @@ struct Inner {
     lost: std::sync::atomic::AtomicBool,
     /// The deadline the last renewal gave, on the continuous clock.
     renewed: Mutex<Option<(Generation, u64)>>,
+    /// Why the last service ended before it was ready, as it said itself;
+    /// none once one is ready.
+    failure: Mutex<Option<Failure>>,
+}
+
+/// What an input service said as it failed to start: its code and words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Failure {
+    pub(crate) code: String,
+    pub(crate) error: String,
+}
+
+impl Failure {
+    /// The failure the last line of `said` gives, when it is one Atlas
+    /// writes.
+    fn of(said: &[u8]) -> Option<Self> {
+        let line = said
+            .split(|byte| *byte == b'\n')
+            .rev()
+            .find(|line| !line.is_empty())?;
+        let failed: serde_json::Value = serde_json::from_slice(line).ok()?;
+        Some(Self {
+            code: failed["code"].as_str()?.to_owned(),
+            error: failed["error"].as_str()?.to_owned(),
+        })
+    }
+}
+
+impl Inner {
+    /// Say the service stands as `standing`, under the lock its failure is
+    /// kept under, so a snapshot never pairs one service's standing with
+    /// another's failure.
+    fn stand(&self, standing: Standing) {
+        let _failure = self.failure.lock().unwrap_or_else(PoisonError::into_inner);
+        self.standing.send_replace(standing);
+    }
+
+    /// Say the service is ready: no failure from then.
+    fn ready(&self) {
+        let mut failure = self.failure.lock().unwrap_or_else(PoisonError::into_inner);
+        *failure = None;
+        self.standing.send_replace(Standing::Ready);
+    }
 }
 
 impl Drop for Input {
@@ -208,10 +251,23 @@ impl Input {
             turning: Mutex::new(()),
             lost: std::sync::atomic::AtomicBool::new(false),
             renewed: Mutex::new(None),
+            failure: Mutex::new(None),
         });
         tokio::spawn(keep_running(inner.clone(), starter));
         tokio::spawn(renew(inner.clone()));
         Self { inner }
+    }
+
+    /// How the service stands now, with why the last one ended before it
+    /// was ready, read together, so the two belong to one moment.
+    pub(crate) fn snapshot(&self) -> (Standing, Option<Failure>) {
+        // Every change of standing is made under this lock too.
+        let failure = self
+            .inner
+            .failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        (*self.inner.standing.borrow(), failure.clone())
     }
 
     /// How the service stands now, and as it changes.
@@ -498,10 +554,10 @@ async fn keep_running(inner: Arc<Inner>, starter: Starter) {
     let mut ending = inner.ending.subscribe();
     while !*ending.borrow() {
         if !earlier_gone(&starter).await {
-            inner.standing.send_replace(Standing::CleanupUnknown);
+            inner.stand(Standing::CleanupUnknown);
         } else if let Ok(ended) = run_one(&inner, &starter).await {
             let left = atlas_native::native::service::held_input(&inner.folder) != Some(false);
-            inner.standing.send_replace(if left {
+            inner.stand(if left {
                 Standing::CleanupUnknown
             } else {
                 Standing::Gone
@@ -526,10 +582,30 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
         .args(&starter.arguments)
         .stdin(Stdio::from(OwnedFd::from(theirs)))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // What it says as it fails, in the words Atlas writes, kept.
+        .stderr(Stdio::piped())
+        .env("ATLAS_JSON", "1")
         .kill_on_drop(true);
     let mut child = atlas_core::spawn::spawn_async(&mut command)?;
     drop(command);
+    // Read to its end, so a service that writes much never waits on it;
+    // only the last of it kept.
+    let said = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut said = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while let Ok(read) = tokio::io::AsyncReadExt::read(&mut stderr, &mut chunk).await {
+                if read == 0 {
+                    break;
+                }
+                said.extend_from_slice(&chunk[..read]);
+                let over = said.len().saturating_sub(SAID);
+                said.drain(..over);
+            }
+            said
+        })
+    });
+
     ours.set_nonblocking(true)?;
     let (reading, writing) = tokio::net::UnixStream::from_std(ours)?.into_split();
     let (control, controls) = mpsc::channel(CONTROL);
@@ -548,7 +624,7 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
     });
     tokio::spawn(write(writing, controls, datas, link.clone(), closed));
     tokio::spawn(read(reading, inner.clone(), link.clone()));
-    inner.standing.send_replace(Standing::Starting);
+    inner.stand(Standing::Starting);
     // A new service holds nothing an earlier one did, and knows nothing
     // of what was said to it: the hold first, then the live generation.
     let earlier = {
@@ -586,7 +662,7 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|revoked| !earlier.contains(revoked));
-        inner.standing.send_replace(Standing::Ready);
+        inner.ready();
         tokio::select! {
             () = lost.notified() => {}
             _ = child.wait() => {}
@@ -596,7 +672,7 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
     // Lost: no longer ready from this moment, before anything else.
     {
         let _turning = inner.turning.lock().unwrap_or_else(PoisonError::into_inner);
-        inner.standing.send_replace(Standing::Gone);
+        inner.stand(Standing::Gone);
     }
     *inner.link.lock().unwrap_or_else(PoisonError::into_inner) = None;
     // Its channel ends cleanly first, so it ends as it does on its own:
@@ -606,8 +682,18 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
     if tokio::time::timeout(ENDING, child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
+    if !ready
+        && let Some(said) = said
+        && let Ok(Ok(said)) = tokio::time::timeout(ENDING, said).await
+        && let Some(failure) = Failure::of(&said)
+    {
+        *inner.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+    }
     Ok(ready)
 }
+
+/// The most a service's failure is read of.
+const SAID: usize = 16 * 1024;
 
 /// Whether the service says it is ready, asked until it does.
 async fn ready(link: &Arc<Link>) -> bool {

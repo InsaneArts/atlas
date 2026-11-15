@@ -168,6 +168,7 @@ pub(super) fn machine_hello(
     manager: &str,
     declared: &atlas_session::compatibility::Declared,
     posture: Posture,
+    input: Input,
 ) -> Value {
     let held = posture.held();
     json!({
@@ -184,7 +185,44 @@ pub(super) fn machine_hello(
         },
         "account": {"admin": posture.admin},
         "agents": {"admitted": held.is_none(), "held": held},
+        "input": {
+            "standing": input.standing,
+            "failure": input.failure.as_ref().map(|failure| json!({"code": failure.code, "error": failure.error})),
+            "held": input.held(),
+        },
     })
+}
+
+/// How the guest's input service stands, as its daemon sees it, and why
+/// the last one ended before it was ready, as that service said itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Input {
+    /// `starting`, `ready`, `gone` or `cleanupUnknown`; none when the
+    /// guest has no input service.
+    pub(super) standing: Option<&'static str>,
+    pub(super) failure: Option<crate::machine::input::Failure>,
+}
+
+impl Input {
+    /// Why agents' changes wait on input, in the person's words; none once
+    /// it is ready.
+    fn held(&self) -> Option<String> {
+        let failed = self.failure.as_ref();
+        Some(match (self.standing, failed) {
+            (Some("ready"), _) => return None,
+            (None, _) => "This guest has no input service.".to_owned(),
+            (_, Some(failure)) if failure.code == "permission" => {
+                "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents wait for it."
+                    .to_owned()
+            }
+            (_, Some(failure)) => failure.error.clone(),
+            (Some("starting"), None) => "The guest's input service is starting.".to_owned(),
+            (Some("cleanupUnknown"), None) => {
+                "Input cleanup has not been confirmed; agents wait for it.".to_owned()
+            }
+            (Some(_), None) => "The guest's input service is not running.".to_owned(),
+        })
+    }
 }
 
 /// How closed a machine desktop's guest is to anyone but Atlas: whether
