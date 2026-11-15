@@ -7,7 +7,7 @@
 use super::Lease;
 use crate::machine::{
     processes::{Remembered, Supervised},
-    supervise::{DONE, ENDED, RENEW, proof},
+    supervise::{DONE, ENDED, RENEW, STOP, proof},
 };
 use atlas_core::{error::Code, process::Instance, protocol::failure};
 use serde_json::Value;
@@ -161,6 +161,8 @@ pub(super) async fn keep(
         admitted,
         kept,
         keepers,
+        mut stops,
+        judged,
         ..
     } = lease;
     keepers.set(supervisor, Keeping::Active);
@@ -199,7 +201,7 @@ pub(super) async fn keep(
         }
         None => {
             let _ = verdict.send(Verdict::Went);
-            renew(&mut lifeline, &mut over).await;
+            renew(&mut lifeline, &mut over, stops.as_mut()).await;
             drop(lifeline);
         }
     }
@@ -226,13 +228,18 @@ pub(super) async fn keep(
     } else {
         keepers.hand_over(&supervisor);
     }
+    if let Some(judged) = judged {
+        let _ = judged.send(proven);
+    }
 }
 
 /// Renew over `lifeline` until the lease is `over` or the supervisor is
-/// gone.
+/// gone, passing on each graceful stop from `stops` with its grace and
+/// renewing on through it.
 async fn renew(
     lifeline: &mut OwnedWriteHalf,
     over: &mut std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+    mut stops: Option<&mut tokio::sync::mpsc::UnboundedReceiver<u16>>,
 ) {
     let mut every = tokio::time::interval(RENEWAL);
     // The first tick is the word to start, already given.
@@ -241,8 +248,20 @@ async fn renew(
         tokio::select! {
             biased;
             () = over.as_mut() => return,
+            // A renewal due goes ahead of any stop, so stops never starve it.
             _ = every.tick() => {
                 if lifeline.write_all(&[RENEW]).await.is_err() {
+                    return;
+                }
+            }
+            Some(grace) = async {
+                match stops.as_mut() {
+                    Some(stops) => stops.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let [high, low] = grace.to_be_bytes();
+                if lifeline.write_all(&[STOP, high, low]).await.is_err() {
                     return;
                 }
             }

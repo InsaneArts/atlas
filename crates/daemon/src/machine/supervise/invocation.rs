@@ -126,6 +126,9 @@ pub fn told(status: ExitStatus) -> Vec<u8> {
 /// The frame that says the program started.
 pub const STARTED: &[u8] = b"started\n";
 
+/// The frame that says a stop the daemon asked for has begun.
+pub const STOPPING: &[u8] = b"stopping\n";
+
 /// The program's end a whole frame tells; none for anything else.
 pub fn heard(frame: &[u8]) -> Option<ExitStatus> {
     let raw = frame.strip_prefix(b"status ")?.strip_suffix(b"\n")?;

@@ -43,6 +43,13 @@ use invocation::Invocation;
 /// What the daemon writes to renew the lease.
 pub const RENEW: u8 = b'.';
 
+/// The lifeline's word to end the work gracefully: followed by the grace, in
+/// milliseconds, as two bytes, most significant first.
+pub const STOP: u8 = b'!';
+
+/// The least and the most grace a stop may give.
+pub const GRACE: std::ops::RangeInclusive<u16> = 1_000..=60_000;
+
 /// How often the supervisor looks, at most.
 const LOOK: Duration = Duration::from_millis(100);
 
@@ -102,12 +109,24 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
     // The lease runs from before anything starts, and a clock that cannot
     // be read starts nothing.
     let lease = Arc::new(Lease::start(Continuous, invocation.lease).unwrap_or_else(|| work.end()));
+    // One ending, whichever asks first: SIGTERM or the daemon's STOP.
+    let begun = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // Asked to end, before anything could be started that it must end.
-    if !on_terminate(Arc::clone(&work), Arc::clone(&lease)) {
+    if !on_terminate(Arc::clone(&work), Arc::clone(&lease), Arc::clone(&begun)) {
         work.end();
     }
-    let mut telling = lifeline.try_clone().unwrap_or_else(|_| work.end());
-    if !listen(lifeline, Arc::clone(&lease)) || !watch(Arc::clone(&lease), Arc::clone(&work)) {
+    // One writer for every frame, whichever thread says it.
+    let telling = Arc::new(Mutex::new(
+        lifeline.try_clone().unwrap_or_else(|_| work.end()),
+    ));
+    let ending = Ending {
+        work: Arc::clone(&work),
+        begun,
+        telling: Arc::clone(&telling),
+    };
+    if !listen(lifeline, Arc::clone(&lease), ending)
+        || !watch(Arc::clone(&lease), Arc::clone(&work))
+    {
         work.end();
     }
     // The program's output, both streams, is this process's standard
@@ -133,7 +152,7 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
         work.end();
     };
     // The daemon hears it started before anything else it hears of it.
-    if telling.write_all(invocation::STARTED).is_err() {
+    if say(&telling, invocation::STARTED).is_err() {
         work.end();
     }
     // The program has the output now: this process keeps none of it open.
@@ -144,7 +163,7 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
         if !told && let Some(status) = child.try_wait().unwrap_or_else(|_| work.end()) {
             // Said once; a daemon that no longer listens changes nothing,
             // as only the lifeline says whether the work lives on.
-            let _ = telling.write_all(&invocation::told(status));
+            let _ = say(&telling, &invocation::told(status));
             told = true;
         }
         let left = work.look().unwrap_or_else(|| work.end());
@@ -168,6 +187,7 @@ fn let_go_of_output() -> std::io::Result<()> {
 fn on_terminate<K: Kernel + 'static, C: Clock + 'static>(
     work: Arc<Work<K>>,
     lease: Arc<Lease<C>>,
+    begun: Arc<std::sync::atomic::AtomicBool>,
 ) -> bool {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -185,16 +205,9 @@ fn on_terminate<K: Kernel + 'static, C: Clock + 'static>(
     std::thread::Builder::new()
         .spawn(move || {
             runtime.block_on(terms.recv());
-            {
-                // Nothing starts once it is asked to end, told to or not:
-                // with no spawn under way, starting is closed and what was
-                // started is asked to end.
-                let _alone = atlas_core::spawn::hold();
-                lease.close();
-                work.terminate();
-            }
-            std::thread::sleep(TERMINATING);
-            work.end();
+            // Its own TERM to its group reaches it too: once a STOP began the
+            // ending, that changes nothing.
+            graceful(&begun, &work, &lease, TERMINATING, None);
         })
         .is_ok()
 }
@@ -316,11 +329,81 @@ impl<C: Clock> Lease<C> {
     }
 }
 
-/// Read the lifeline on a thread of its own, each renewal kept as it is
-/// received. False when the thread cannot be started.
-fn listen<C: Clock + 'static>(
+/// How the work ends gracefully, asked once by whichever comes first, and
+/// where the supervisor says so.
+struct Ending<K> {
+    work: Arc<Work<K>>,
+    begun: Arc<std::sync::atomic::AtomicBool>,
+    telling: Arc<Mutex<UnixStream>>,
+}
+
+/// Say `frame` to the daemon whole, whichever thread says it.
+fn say(telling: &Mutex<UnixStream>, frame: &[u8]) -> std::io::Result<()> {
+    telling
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .write_all(frame)
+}
+
+/// Begin ending the work gracefully, once, whatever asks: starting closes,
+/// everything it started is asked to end, and after `grace` everything left
+/// is ended. Whether this call began it; a later one changes nothing, the
+/// grace included.
+fn graceful<K: Kernel + 'static, C: Clock>(
+    begun: &std::sync::atomic::AtomicBool,
+    work: &Arc<Work<K>>,
+    lease: &Lease<C>,
+    grace: Duration,
+    acknowledge: Option<&Mutex<UnixStream>>,
+) -> bool {
+    if begun.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    end_gracefully(work, lease, grace, acknowledge);
+    true
+}
+
+/// End the work gracefully, the ending already claimed: say so if asked
+/// to, close starting, ask everything to end, and after `grace` end what is
+/// left.
+fn end_gracefully<K: Kernel + 'static, C: Clock>(
+    work: &Arc<Work<K>>,
+    lease: &Lease<C>,
+    grace: Duration,
+    acknowledge: Option<&Mutex<UnixStream>>,
+) {
+    // Said before anything is signalled: a program that ends at once on its
+    // TERM can then never take the supervisor with it before the daemon
+    // heard the stop begin.
+    if let Some(telling) = acknowledge {
+        let _ = say(telling, invocation::STOPPING);
+    }
+    {
+        // Nothing starts once it is asked to end, told to or not: with no
+        // spawn under way, starting is closed and what was started is asked
+        // to end.
+        let _alone = atlas_core::spawn::hold();
+        lease.close();
+        work.terminate();
+    }
+    let ending = Arc::clone(work);
+    let waited = std::thread::Builder::new().spawn(move || {
+        std::thread::sleep(grace);
+        ending.end();
+    });
+    if waited.is_err() {
+        work.end();
+    }
+}
+
+/// Read the lifeline on a thread of its own: each renewal kept as it is
+/// received, and a STOP begun at once with its grace and said back, while
+/// renewals still come through the grace. False when the thread cannot be
+/// started.
+fn listen<C: Clock + 'static, K: Kernel + 'static>(
     mut lifeline: impl Read + Send + 'static,
     lease: Arc<Lease<C>>,
+    ending: Ending<K>,
 ) -> bool {
     std::thread::Builder::new()
         .spawn(move || {
@@ -328,6 +411,31 @@ fn listen<C: Clock + 'static>(
             loop {
                 match lifeline.read(&mut byte) {
                     Ok(1) if byte[0] == RENEW => lease.renew(),
+                    Ok(1) if byte[0] == STOP => {
+                        let mut grace = [0; 2];
+                        if lifeline.read_exact(&mut grace).is_err() {
+                            return lease.lose();
+                        }
+                        let millis = u16::from_be_bytes(grace).clamp(*GRACE.start(), *GRACE.end());
+                        let grace = Duration::from_millis(u64::from(millis));
+                        // Claimed here, in the order read: only the first
+                        // stop, or a SIGTERM before it, sets the grace.
+                        if ending.begun.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            continue;
+                        }
+                        // Carried out on a thread of its own: this one only
+                        // reads, so renewals and the lifeline's end are never
+                        // held up.
+                        let (work, telling) =
+                            (Arc::clone(&ending.work), Arc::clone(&ending.telling));
+                        let ending_lease = Arc::clone(&lease);
+                        let started = std::thread::Builder::new().spawn(move || {
+                            end_gracefully(&work, &ending_lease, grace, Some(&telling));
+                        });
+                        if started.is_err() {
+                            return lease.lose();
+                        }
+                    }
                     Err(error) if error.kind() == ErrorKind::Interrupted => {}
                     Ok(_) | Err(_) => return lease.lose(),
                 }

@@ -449,6 +449,12 @@ pub(super) struct Lease {
     /// Where its supervisor is kept on the desktop's disk.
     pub(super) kept: Arc<dyn Remembered>,
     pub(super) keepers: Arc<Keepers>,
+    /// Where a job's graceful stops come from, each its grace in
+    /// milliseconds; none for a command.
+    pub(super) stops: Option<tokio::sync::mpsc::UnboundedReceiver<u16>>,
+    /// Where the keeper says, once it has judged the work's end, whether it
+    /// was proved ended; none for a command.
+    pub(super) judged: Option<oneshot::Sender<bool>>,
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.
@@ -507,6 +513,8 @@ struct Told {
 /// One frame a supervisor said.
 enum Heard {
     Started,
+    /// A stop the daemon asked for has begun.
+    Stopping,
     Ended(ExitStatus),
     /// It went without saying more, or said something else.
     Gone,
@@ -523,6 +531,9 @@ impl Told {
                 if frame == invocation::STARTED && !self.started {
                     self.started = true;
                     return Heard::Started;
+                }
+                if frame == invocation::STOPPING {
+                    return Heard::Stopping;
                 }
                 return invocation::heard(&frame).map_or(Heard::Gone, Heard::Ended);
             }
@@ -541,7 +552,7 @@ impl Told {
     async fn ended(&mut self) -> Option<ExitStatus> {
         loop {
             match self.hear().await {
-                Heard::Started => {}
+                Heard::Started | Heard::Stopping => {}
                 Heard::Ended(status) => return Some(status),
                 Heard::Gone => return None,
             }

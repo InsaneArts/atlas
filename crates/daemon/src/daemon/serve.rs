@@ -1543,6 +1543,8 @@ async fn run_registered(
                 admitted: Box::new(move || still.refused().or_else(|| uncertain(&keepers))),
                 kept: supervising.kept.clone(),
                 keepers: daemon.keepers.clone(),
+                stops: None,
+                judged: None,
             }
         });
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;

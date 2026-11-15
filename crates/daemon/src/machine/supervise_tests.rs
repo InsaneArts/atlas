@@ -71,7 +71,7 @@ fn told(lifeline: &mut UnixStream) -> Option<ExitStatus> {
                 break;
             }
         }
-        if frame != invocation::STARTED {
+        if frame != invocation::STARTED && frame != invocation::STOPPING {
             return invocation::heard(&frame);
         }
     }
@@ -713,4 +713,107 @@ fn a_pid_taken_by_another_process_never_brings_in_that_process_s_children() {
             .contains(&Instance::new(NO_PROCESS + 1, [1, 0])),
         "an unrelated child was taken for work"
     );
+}
+
+#[test]
+fn a_stop_gives_the_work_its_whole_grace_however_it_is_signalled_meanwhile() {
+    let (mut child, mut lifeline) =
+        supervisor(&["/usr/bin/perl", "-e", "$SIG{TERM} = 'IGNORE'; sleep 30"]);
+    let group = Pid::from_raw(child.id() as i32);
+    let mut started = [0; 8];
+    lifeline.read_exact(&mut started).unwrap();
+    assert_eq!(&started, invocation::STARTED);
+    // Long enough for the program to set itself to ignore TERM.
+    std::thread::sleep(Duration::from_millis(500));
+    lifeline.write_all(&[RENEW]).unwrap();
+    let [high, low] = 3_000_u16.to_be_bytes();
+    lifeline.write_all(&[RENEW, STOP, high, low]).unwrap();
+    let mut stopping = [0; 9];
+    lifeline.read_exact(&mut stopping).unwrap();
+    assert_eq!(&stopping, invocation::STOPPING);
+    let mut renewing = lifeline.try_clone().unwrap();
+    let renewals = std::thread::spawn(move || {
+        for _ in 0..30 {
+            if renewing.write_all(&[RENEW]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    // Its own TERM to its group reaches the supervisor too, and so may
+    // another: neither cuts the grace to its own.
+    kill(group, Signal::SIGTERM).unwrap();
+
+    std::thread::sleep(Duration::from_millis(2_200));
+    assert!(
+        killpg(group, None).is_ok(),
+        "ended before its grace was over"
+    );
+    assert!(ends_within(&mut child, Duration::from_secs(3)));
+    drop(lifeline);
+    renewals.join().unwrap();
+}
+
+#[test]
+fn a_stop_is_cut_short_once_the_lifeline_goes() {
+    let (mut child, mut lifeline) =
+        supervisor(&["/usr/bin/perl", "-e", "$SIG{TERM} = 'IGNORE'; sleep 30"]);
+    let mut started = [0; 8];
+    lifeline.read_exact(&mut started).unwrap();
+    let [high, low] = 60_000_u16.to_be_bytes();
+    lifeline.write_all(&[RENEW, STOP, high, low]).unwrap();
+    let mut stopping = [0; 9];
+    lifeline.read_exact(&mut stopping).unwrap();
+
+    drop(lifeline);
+
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
+}
+
+#[test]
+fn a_stop_is_said_to_have_begun_even_when_the_program_ends_at_once_on_it() {
+    let (mut child, mut lifeline) = supervisor(&["/bin/sleep", "30"]);
+    let mut started = [0; 8];
+    lifeline.read_exact(&mut started).unwrap();
+    let [high, low] = 5_000_u16.to_be_bytes();
+
+    lifeline.write_all(&[RENEW, STOP, high, low]).unwrap();
+
+    let mut said = Vec::new();
+    let _ = lifeline.read_to_end(&mut said);
+    assert!(said.starts_with(invocation::STOPPING), "{said:?}");
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
+}
+
+#[test]
+fn a_second_stop_never_shortens_the_first_one_s_grace() {
+    let (mut child, mut lifeline) =
+        supervisor(&["/usr/bin/perl", "-e", "$SIG{TERM} = 'IGNORE'; sleep 30"]);
+    let group = Pid::from_raw(child.id() as i32);
+    let mut started = [0; 8];
+    lifeline.read_exact(&mut started).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let [long_high, long_low] = 3_000_u16.to_be_bytes();
+    let [short_high, short_low] = 1_000_u16.to_be_bytes();
+
+    lifeline
+        .write_all(&[
+            RENEW, STOP, long_high, long_low, STOP, short_high, short_low,
+        ])
+        .unwrap();
+
+    let mut renewing = lifeline.try_clone().unwrap();
+    let renewals = std::thread::spawn(move || {
+        for _ in 0..30 {
+            if renewing.write_all(&[RENEW]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(2_000));
+    assert!(killpg(group, None).is_ok(), "the second stop's grace won");
+    assert!(ends_within(&mut child, Duration::from_secs(3)));
+    drop(lifeline);
+    renewals.join().unwrap();
 }

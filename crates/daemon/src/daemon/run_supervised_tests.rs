@@ -83,6 +83,8 @@ fn kept_in(
         admitted,
         kept,
         keepers: Arc::default(),
+        stops: None,
+        judged: None,
     }
 }
 
