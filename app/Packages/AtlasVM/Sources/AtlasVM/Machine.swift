@@ -15,6 +15,8 @@ final class Machine {
 
   /// How long a stop asked of the guest may take before the VM is turned off.
   private static let stopping = Duration.seconds(60)
+  /// The longest a made VM waits for the process that installed it to end.
+  private static let installerEnding = Duration.seconds(60)
 
   /// The VM in `folder`, of the desktop `desktop`, served by the run
   /// `record`.
@@ -116,10 +118,29 @@ final class Machine {
       options: []
     )
     try makeDisk()
+    let before = MachineProcess.running() ?? []
+    try await install(from: image)
+    // The process that installed it holds its storage until it ends, and a
+    // start before then fails: it is made once that process is seen gone.
+    await installerEnded(since: before)
+    try PrivateFile.write(Data(), to: made)
+  }
+
+  /// Install macOS from `image` on a VM of its own, which goes once done.
+  private func install(from image: URL) async throws {
     let machine = VZVirtualMachine(configuration: try MachineConfiguration.make(folder, settings: settings))
     let installer = VZMacOSInstaller(virtualMachine: machine, restoringFromImageAt: image)
     try await installer.install()
-    try PrivateFile.write(Data(), to: made)
+  }
+
+  /// Wait, bounded, until no framework VM process started since `before` is
+  /// left: past the bound a start may still fail once, and is asked again.
+  private func installerEnded(since before: [MachineProcess]) async {
+    let giving = ContinuousClock.now + Self.installerEnding
+    while ContinuousClock.now < giving {
+      if let now = MachineProcess.running(), now.allSatisfy({ before.contains($0) }) { return }
+      try? await Task.sleep(for: .milliseconds(500))
+    }
   }
 
   /// An ASIF disk of the VM's size, which takes only what its guest fills.
