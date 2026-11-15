@@ -244,6 +244,9 @@ pub struct Daemon {
     supervising: Option<crate::machine::processes::Supervising>,
     /// The supervisors its keepers own, and how each stands.
     keepers: Arc<run::keeper::Keepers>,
+    /// A machine's input service, its daemon's child; none for the helper
+    /// login, whose input service is its own.
+    input: Option<Arc<crate::machine::input::Input>>,
     /// Whether agents are stopped on a machine desktop, and how many Stops
     /// there have been: no change is taken while stopped, and a command
     /// admitted before a Stop ends with it, a Resume after or not. Never
@@ -314,6 +317,7 @@ impl Daemon {
             kept: None,
             supervising: None,
             keepers: Arc::default(),
+            input: None,
             halted: watch::Sender::new(Halt::default()),
         }
     }

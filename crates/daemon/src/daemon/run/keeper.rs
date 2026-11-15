@@ -88,15 +88,11 @@ impl Keepers {
     }
 
     /// Run `then` only while every keeper's work may run, with none able to
-    /// change how it stands meanwhile: whether it ran.
-    pub(crate) fn settled_then(&self, then: impl FnOnce()) -> bool {
+    /// change how it stands meanwhile: whether it ran and did what it is
+    /// for.
+    pub(crate) fn settled_then(&self, then: impl FnOnce() -> bool) -> bool {
         let keepers = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
-        let settled =
-            !self.orphaned() && keepers.values().all(|keeping| *keeping == Keeping::Active);
-        if settled {
-            then();
-        }
-        settled
+        !self.orphaned() && keepers.values().all(|keeping| *keeping == Keeping::Active) && then()
     }
 
     /// Whether any work is being ended, or is not known to have ended: a

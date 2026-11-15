@@ -5,6 +5,7 @@
 pub mod changes;
 pub mod commitment;
 pub mod generations;
+pub mod input;
 pub mod key;
 pub mod launch;
 pub mod pairing;

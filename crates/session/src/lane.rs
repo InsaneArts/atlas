@@ -39,6 +39,9 @@ pub enum LaneKind {
     Change { change: Token },
     /// A stage committed.
     Stage { change: Token },
+    /// A request to the desktop's input service, passed to it as it is: a
+    /// read names no change, and a change names its own.
+    Input { change: Option<Token> },
 }
 
 /// The first message on a lane; a field it does not know is refused.

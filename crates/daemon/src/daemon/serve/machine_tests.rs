@@ -106,6 +106,11 @@ impl Served {
 
     /// A guest serving with `records`, as a daemon that started finds them.
     async fn on(records: Records) -> Self {
+        Self::with_input(records, None).await
+    }
+
+    /// A guest serving with `records`, its input service `input` if any.
+    async fn with_input(records: Records, input: Option<crate::machine::input::Input>) -> Self {
         let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
         daemon.screen.console = Console::Own;
@@ -121,7 +126,13 @@ impl Served {
             changes: changes.clone(),
             stop: stopping(&records, &vault),
         };
-        let machine = Machine::new(daemon, paired, clock.clone(), supervising(&records, &vault));
+        let machine = Machine::new(
+            daemon,
+            paired,
+            clock.clone(),
+            supervising(&records, &vault),
+            input,
+        );
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let machine = machine.clone();
@@ -511,11 +522,19 @@ async fn be_the_guest(spec: &str) {
     let writing = public.with_extension("pub.new");
     std::fs::write(&writing, said).unwrap();
     std::fs::rename(writing, public).unwrap();
+    // Its input service, a child of its own, as a guest's daemon keeps one.
+    let input_folder = _records.path().join("input");
+    std::fs::create_dir_all(&input_folder).unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::of_these_tests(&input_folder),
+        input_folder,
+    );
     let machine = Machine::new(
         daemon,
         paired,
         Arc::new(atlas_session::clock::Continuous),
         supervising(&_records, &_vault),
+        Some(input),
     );
     let _ = machine.serve(&Socket(listener)).await;
 }
@@ -585,7 +604,14 @@ async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidde
     .await;
     let child_pid = guest.child.id().unwrap();
 
-    let replies = ask(&guest.desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+    // A guest still starting under load may take a few tries to answer.
+    let mut replies = Vec::new();
+    for _ in 0..3 {
+        replies = ask(&guest.desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+        if !replies.is_empty() {
+            break;
+        }
+    }
     let hello = replies.last().unwrap().clone();
     guest.child.kill().await.unwrap();
 
@@ -1216,10 +1242,41 @@ async fn a_guest_killed_with_no_restart_leaves_none_of_its_work_running() {
     .await;
     let left = leaving(&guest.desktop).await;
     assert!(!gone_within(left, Duration::ZERO).await);
+    let input = input_services_of(guest.child.id().unwrap()).await;
+    assert!(!input.is_empty(), "the guest runs its input service");
 
     guest.child.kill().await.unwrap();
 
     assert!(gone_within(left, Duration::from_secs(2)).await);
+    for pid in input {
+        assert!(
+            gone_within(pid, Duration::from_secs(5)).await,
+            "its input service outlived it"
+        );
+    }
+}
+
+/// The input services the guest `parent` started, once one is up.
+async fn input_services_of(parent: u32) -> Vec<i32> {
+    let parent = i32::try_from(parent).unwrap();
+    for _ in 0..100 {
+        let found: Vec<i32> = atlas_core::process::children(parent)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|pid| {
+                atlas_core::process::arguments(*pid).is_ok_and(|arguments| {
+                    arguments
+                        .iter()
+                        .any(|argument| argument.contains("an_input_service_runs"))
+                })
+            })
+            .collect();
+        if !found.is_empty() {
+            return found;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Vec::new()
 }
 
 #[tokio::test]
@@ -1528,4 +1585,239 @@ async fn running_work_never_hides_a_record_that_cannot_be_trusted() {
     .unwrap();
 
     assert_eq!(leftovers(&desktop).await, "unknown");
+}
+
+#[tokio::test]
+async fn a_stop_holds_input_and_a_resume_lifts_it_once_it_is_settled() {
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::of_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let input = served.machine.daemon.input.clone().unwrap();
+    let standing = input.standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(input.word(), (1, true), "a Stop holds input");
+
+    assert!(
+        resumed(&controlling, &desktop).await,
+        "a Resume lifts it once input is settled"
+    );
+    assert_eq!(input.word(), (2, false), "a Resume lifts the hold");
+    let mut settled = false;
+    for _ in 0..50 {
+        if !input.unsettled() {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(settled, "the lifting was acknowledged");
+}
+
+#[tokio::test]
+async fn a_resume_while_input_is_not_ready_lifts_nothing() {
+    // An input service that never starts.
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::new("/nonexistent/atlas".into(), Vec::new()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert!(
+        !resumed(&controlling, &desktop).await,
+        "lifted with input not ready"
+    );
+    let input = served.machine.daemon.input.as_ref().unwrap();
+    assert_eq!(input.word(), (1, true), "the hold was lifted");
+}
+
+/// A guest with a real input service, and the station's way to its lanes,
+/// once the service is ready.
+async fn with_input_service() -> (
+    Served,
+    Controlling,
+    Desktop,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard<'static, ()>,
+) {
+    let turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::of_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    (served, controlling, desktop, folder, turn)
+}
+
+#[tokio::test]
+async fn a_read_on_an_input_lane_is_answered_by_the_input_service() {
+    let (_served, _controlling, desktop, _folder, _turn) = with_input_service().await;
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Input { change: None },
+        &json!({"op": "hello"}),
+    )
+    .await;
+
+    let hello = replies.last().unwrap();
+    assert!(
+        hello.get("ready").is_some(),
+        "not the input service's hello: {hello}"
+    );
+}
+
+#[tokio::test]
+async fn a_change_on_an_input_lane_is_kept_and_answered_again_from_what_it_came_to() {
+    let (served, _controlling, desktop, _folder, _turn) = with_input_service().await;
+    let change = Token::new();
+    let release = json!({"op": "release", "owner": Token::new(), "change": change});
+    let lane = LaneKind::Input {
+        change: Some(change.clone()),
+    };
+    let first = ask(&desktop, lane.clone(), &release).await;
+    let first = first.last().unwrap().clone();
+    let kept = served.changes.of(&change).unwrap();
+    assert!(
+        matches!(kept, Some(crate::machine::changes::State::Done { ref reply }) if *reply == first),
+        "{kept:?}"
+    );
+    // A reply the service never gives: only the record can answer with it.
+    let recorded = json!({"ok": true, "only": "the record"});
+    served.changes.done(&change, &recorded).unwrap();
+
+    let again = tokio::join!(
+        ask(&desktop, lane.clone(), &release),
+        ask(&desktop, lane.clone(), &release),
+        ask(&desktop, lane.clone(), &release),
+    );
+
+    for again in [again.0, again.1, again.2] {
+        assert_eq!(again.last(), Some(&recorded), "run again: {again:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_change_asked_again_while_agents_are_stopped_is_answered_from_its_record() {
+    let (served, controlling, desktop, _folder, _turn) = with_input_service().await;
+    let (done, intended, new) = (Token::new(), Token::new(), Token::new());
+    let request = |change: &Token| json!({"op": "release", "owner": "agent", "change": change});
+    let recorded = json!({"ok": true, "only": "the record"});
+    served
+        .changes
+        .ask(&done, "release", &request(&done))
+        .unwrap();
+    served.changes.done(&done, &recorded).unwrap();
+    served
+        .changes
+        .ask(&intended, "release", &request(&intended))
+        .unwrap();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let lane = |change: &Token| LaneKind::Input {
+        change: Some(change.clone()),
+    };
+
+    let done_again = ask(&desktop, lane(&done), &request(&done)).await;
+    let intended_again = ask(&desktop, lane(&intended), &request(&intended)).await;
+    let refused = ask(&desktop, lane(&new), &request(&new)).await;
+
+    assert_eq!(done_again.last(), Some(&recorded), "{done_again:?}");
+    let intended_again = intended_again.last().unwrap();
+    assert_eq!(intended_again["uncertain"], true, "{intended_again}");
+    let refused = refused.last().unwrap();
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_ne!(refused["uncertain"], true, "{refused}");
+    let kept = served.changes.of(&new).unwrap();
+    assert!(
+        matches!(kept, Some(crate::machine::changes::State::Done { ref reply }) if reply == refused),
+        "{kept:?}"
+    );
+}
+
+#[tokio::test]
+async fn what_an_input_lane_was_not_opened_for_is_refused() {
+    let (_served, _controlling, desktop, _folder, _turn) = with_input_service().await;
+    let change = Token::new();
+
+    let unnamed = ask(
+        &desktop,
+        LaneKind::Input {
+            change: Some(change.clone()),
+        },
+        &json!({"op": "release", "owner": Token::new()}),
+    )
+    .await;
+    let held = ask(
+        &desktop,
+        LaneKind::Input {
+            change: Some(change),
+        },
+        &json!({"op": "hold", "on": false}),
+    )
+    .await;
+    let read_with_a_change = ask(
+        &desktop,
+        LaneKind::Input {
+            change: Some(Token::new()),
+        },
+        &json!({"op": "hello"}),
+    )
+    .await;
+
+    for replies in [unnamed, held, read_with_a_change] {
+        let reply = replies.last().unwrap();
+        assert_eq!(reply["code"], "bad-request", "{reply}");
+    }
+}
+
+#[tokio::test]
+async fn an_input_lane_of_a_desktop_with_no_input_service_is_refused() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Input { change: None },
+        &json!({"op": "hello"}),
+    )
+    .await;
+
+    assert_eq!(replies.last().unwrap()["code"], "platform");
 }

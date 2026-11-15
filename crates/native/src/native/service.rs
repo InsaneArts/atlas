@@ -31,7 +31,7 @@ use tokio::{
 };
 
 mod batch;
-pub(crate) mod channel;
+pub mod channel;
 mod machine;
 mod operations;
 mod request;
@@ -1034,15 +1034,110 @@ pub async fn serve_machine(
     channel: std::os::unix::net::UnixStream,
     folder: &Path,
 ) -> Result<()> {
+    // Starting can take seconds; a daemon that is gone meanwhile ends it at
+    // once, before it holds anything.
+    let starting = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    end_if_hung_up(&channel, starting.clone())?;
     let engine = Engine::new(uid)?;
     let _ = super::windows::windows();
     let service = Service::ready(engine, &folder.join("input"), Gate::machine()).await?;
+    starting.store(false, std::sync::atomic::Ordering::SeqCst);
     channel.set_nonblocking(true)?;
     let channel = machine::Channel::open(UnixStream::from_std(channel)?, service.clone());
     let settler = channel.settler();
     service
         .listen(Source::Channel(channel), Some(settler))
         .await
+}
+
+/// What a request to the input service is, as a machine desktop's daemon
+/// judges a lane by it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// It only reads: the service's hello, an app's elements.
+    Read,
+    /// It changes what the service holds or does, under the change it names.
+    Mutation(Option<Token>),
+    /// Kept for the daemon itself, or nothing the service knows: the hold,
+    /// a reset, shutdown, what a change came to.
+    Admin,
+}
+
+/// What the request `line` is: none when it is not one.
+#[must_use]
+pub fn classify(line: &[u8]) -> Option<Kind> {
+    let (request, change) = Request::decode_named(line).ok()?;
+    Some(match request {
+        Request::Hello | Request::Elements { .. } => Kind::Read,
+        Request::Input { .. }
+        | Request::Acquire { .. }
+        | Request::Renew { .. }
+        | Request::Release { .. } => Kind::Mutation(change.ok()?),
+        Request::Hold { .. }
+        | Request::Reset { .. }
+        | Request::Shutdown { .. }
+        | Request::Outcome { .. }
+        | Request::Unknown { .. } => Kind::Admin,
+    })
+}
+
+/// Whether the machine input service whose files are in `folder` left input
+/// held, as its journal says: none when the journal cannot be read, is not
+/// one, or is another account's, which is not known either way.
+#[must_use]
+pub fn held_input(folder: &Path) -> Option<bool> {
+    let path = folder.join("input").with_extension("held.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    let held: super::journal::Held = serde_json::from_slice(&bytes).ok()?;
+    (held.epoch.uid == nix::unistd::getuid().as_raw())
+        .then(|| held.button.is_some() || !held.keys.is_empty() || held.flags != 0)
+}
+
+/// Watch `channel` on a thread of its own, and end this process the moment
+/// its daemon hangs up while it is still `starting`: once started, the
+/// channel's reader takes its end as loss.
+fn end_if_hung_up(
+    channel: &std::os::unix::net::UnixStream,
+    starting: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
+    use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
+    use std::os::fd::{AsFd, AsRawFd};
+    let watched = channel.as_fd().try_clone_to_owned()?;
+    let queue = Kqueue::new().map_err(std::io::Error::from)?;
+    let ident = usize::try_from(watched.as_raw_fd()).map_err(|_| worker_failed())?;
+    // Told on each new arrival and at the end, never read: what is waiting
+    // stays for the channel's reader.
+    let watch = KEvent::new(
+        ident,
+        EventFilter::EVFILT_READ,
+        EvFlags::EV_ADD | EvFlags::EV_CLEAR,
+        FilterFlag::empty(),
+        0,
+        0,
+    );
+    queue
+        .kevent(&[watch], &mut [], None)
+        .map_err(std::io::Error::from)?;
+    std::thread::Builder::new().spawn(move || {
+        let _watched = watched;
+        while starting.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut told = [watch];
+            let Ok(count) = queue.kevent(&[], &mut told, None) else {
+                return;
+            };
+            if count > 0
+                && told[0].flags().contains(EvFlags::EV_EOF)
+                && starting.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                std::process::exit(0);
+            }
+        }
+    })?;
+    Ok(())
 }
 
 /// Where a service's connections come from.

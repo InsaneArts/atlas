@@ -5,17 +5,17 @@
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// The most bytes one frame carries.
-pub(crate) const PAYLOAD: usize = 64 * 1024;
+pub const PAYLOAD: usize = 64 * 1024;
 
 /// One connection's number on the channel, chosen by the daemon.
-pub(crate) type Connection = u32;
+pub type Connection = u32;
 
 /// One generation of the desktop's session, as the daemon numbers them.
-pub(crate) type Generation = u64;
+pub type Generation = u64;
 
 /// What one frame says.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Frame {
+pub enum Frame {
     /// Start a connection, for a generation.
     Open(Connection, Generation),
     /// Bytes on a connection, either way.
@@ -52,12 +52,18 @@ mod kind {
 
 /// Why a frame could not be read: the channel is lost either way.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Lost;
+pub struct Lost;
+
+impl std::fmt::Display for Lost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("The input service's channel was lost")
+    }
+}
 
 impl Frame {
     /// The frame as it travels: kind, connection, generation, length, then
     /// the bytes, all big-endian.
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Vec<u8> {
         let (kind, connection, generation, bytes): (u8, Connection, Generation, Vec<u8>) =
             match self {
                 Self::Open(connection, generation) => {
@@ -89,7 +95,7 @@ impl Frame {
     /// # Errors
     ///
     /// [`Lost`] when the stream ends, fails, or says what is not a frame.
-    pub(crate) async fn read(reader: &mut (impl AsyncRead + Unpin)) -> Result<Self, Lost> {
+    pub async fn read(reader: &mut (impl AsyncRead + Unpin)) -> Result<Self, Lost> {
         let mut head = [0; 17];
         reader.read_exact(&mut head).await.map_err(|_| Lost)?;
         let [kind, rest @ ..] = head;
@@ -145,7 +151,7 @@ impl Frame {
     /// # Errors
     ///
     /// [`Lost`] when it cannot be written, or carries too much.
-    pub(crate) async fn write(&self, writer: &mut (impl AsyncWrite + Unpin)) -> Result<(), Lost> {
+    pub async fn write(&self, writer: &mut (impl AsyncWrite + Unpin)) -> Result<(), Lost> {
         if let Self::Data(_, bytes) = self
             && (bytes.is_empty() || bytes.len() > PAYLOAD)
         {

@@ -158,6 +158,25 @@ impl Authority {
         }
     }
 
+    /// How long the lease holds from now, with no heartbeat meanwhile: none
+    /// once the generation retired or its lease lapsed, which retires it.
+    pub fn remaining(&self) -> Option<Duration> {
+        let (left, lapsed) = {
+            let mut state = self.state();
+            match self.live(&mut state) {
+                Ok(now) => (
+                    Some(LEASE.saturating_sub(now.saturating_sub(state.heard))),
+                    None,
+                ),
+                Err(lapse) => (None, Some(lapse)),
+            }
+        };
+        if let Some((cause, retired_now)) = lapsed {
+            self.told(cause, retired_now);
+        }
+        left
+    }
+
     /// Whether an effect may run now. Called immediately before each one;
     /// a lease found lapsed retires the generation.
     ///

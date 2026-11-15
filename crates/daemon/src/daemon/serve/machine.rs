@@ -169,7 +169,10 @@ impl Halting {
                         })
                         .await
                         .unwrap_or(false);
-                        if !resolved || worker.keepers.unsettled() || !current() {
+                        let input_unsettled =
+                            worker.input.as_ref().is_some_and(|input| input.unsettled());
+                        if !resolved || worker.keepers.unsettled() || input_unsettled || !current()
+                        {
                             continue;
                         }
                         let (lifting, checking) = (stop.clone(), authority.clone());
@@ -185,9 +188,21 @@ impl Halting {
                         let turned = turn.lock().unwrap_or_else(PoisonError::into_inner);
                         // Reopened only while no work stands unsettled, and
                         // none can come to meanwhile.
+                        // Input is looked at again here too, last: a service
+                        // that ended meanwhile keeps agents stopped.
                         if current()
                             && worker.keepers.settled_then(|| {
-                                worker.halted.send_modify(|halt| halt.halted = false)
+                                let reopen =
+                                    || worker.halted.send_modify(|halt| halt.halted = false);
+                                // Lifted under the same turn, so a Stop that
+                                // comes next holds input again after it.
+                                match worker.input.as_deref() {
+                                    Some(input) => input.lift_if_settled(reopen),
+                                    None => {
+                                        reopen();
+                                        true
+                                    }
+                                }
                             })
                         {
                             continue;
@@ -218,6 +233,10 @@ impl Halting {
         let _taking = self.turning.lock().unwrap_or_else(PoisonError::into_inner);
         self.received.fetch_add(1, SeqCst);
         self.daemon.halted.send_modify(|halt| halt.halted = true);
+        // Input is held on receipt, whatever saving the Stop comes to.
+        if let Some(input) = &self.daemon.input {
+            input.hold(true);
+        }
         let _ = self.transitions.send(Transition::Stop(why));
     }
 
@@ -294,6 +313,11 @@ async fn start(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) {
     .await
     .unwrap_or((true, false, false));
     daemon.halted.send_modify(|halt| halt.halted = !clear);
+    // Stopped before it started, or unable to tell: input is held before
+    // anything is served.
+    if !clear && let Some(input) = &daemon.input {
+        input.hold(true);
+    }
     if !left {
         daemon.keepers.orphans(false);
         return;
@@ -330,9 +354,11 @@ impl Machine {
         paired: Paired,
         clock: Arc<dyn Clock>,
         supervising: Supervising,
+        input: Option<crate::machine::input::Input>,
     ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
         daemon.supervising = Some(supervising);
+        daemon.input = input.map(Arc::new);
         // Nothing is taken until it is known whether agents were stopped,
         // and what an earlier daemon left.
         daemon.halted.send_modify(|halt| halt.halted = true);
@@ -492,6 +518,9 @@ impl Machine {
         tasks
             .0
             .push(tokio::spawn(watchdog(authority.clone())).abort_handle());
+        if let Some(input) = &self.daemon.input {
+            input.live(authority.generation().0, authority.clone());
+        }
         let replaced = live.replace(Live {
             authority,
             lanes,
@@ -543,6 +572,25 @@ impl Machine {
         let Ok(mut line) = line else {
             return Ok(());
         };
+        // Passed to the input service as it is, once judged here.
+        if let LaneKind::Input { change } = &header.kind {
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+            };
+            let mut hanging_up = [0; 1];
+            let reply = tokio::select! {
+                reply = self.input_lane(change.as_ref(), &line, &gate) => reply,
+                () = ended(&lanes, header.lane) => return Ok(()),
+                // The station sends nothing after its request: anything more,
+                // or its end, is its hanging up, which ends the request too.
+                _ = reader.read(&mut hanging_up) => return Ok(()),
+            };
+            return write(&mut writer, &reply).await;
+        }
         if let Err(refusal) = bound(&header, &line) {
             return write(&mut writer, &refusal).await;
         }
@@ -584,6 +632,12 @@ impl Machine {
         // intent left behind that nothing could finish.
         protocol::parse(line).ok()?;
         let request: Value = serde_json::from_slice(line).ok()?;
+        self.intend(change, request).await
+    }
+
+    /// Keep `change`, asked for with `request`, as intended: none when it is
+    /// new and may run now, else the reply to give instead.
+    async fn intend(&self, change: &atlas_core::files::Token, request: Value) -> Option<Value> {
         let operation = request["op"].as_str().unwrap_or_default().to_owned();
         let (changes, change) = (self.paired.changes.clone(), change.clone());
         let asked = tokio::task::spawn_blocking(move || changes.ask(&change, &operation, &request))
@@ -606,6 +660,124 @@ impl Machine {
             Err(error) => Some(serde_json::json!(error.uncertain())),
         }
     }
+}
+
+impl Machine {
+    /// Pass the request `line` on an input lane to the input service, once
+    /// it is what the lane was opened for: a read names no change, a change
+    /// names the lane's, is admitted by `gate` right before, and is kept as
+    /// intended before it goes and with what it came to before its reply.
+    async fn input_lane(
+        &self,
+        lane: Option<&atlas_core::files::Token>,
+        line: &[u8],
+        gate: &Gate,
+    ) -> Value {
+        use atlas_native::native::service::Kind;
+        let Some(input) = self.daemon.input.as_deref() else {
+            return failure(Code::Platform, "This desktop has no input service");
+        };
+        let change = match (atlas_native::native::service::classify(line), lane) {
+            (Some(Kind::Read), None) => None,
+            (Some(Kind::Mutation(Some(asked))), Some(lane)) if asked == *lane => Some(asked),
+            (Some(Kind::Mutation(None)), _) => {
+                return failure(Code::BadRequest, "A change to input names its change");
+            }
+            _ => {
+                return failure(
+                    Code::BadRequest,
+                    "The request is not what its lane was opened for",
+                );
+            }
+        };
+        if let Some(change) = &change {
+            let Ok(request) = serde_json::from_slice::<Value>(line) else {
+                return failure(Code::BadRequest, "The request could not be read");
+            };
+            // One asked before is answered from what it came to, Stop or
+            // not: only new work is admitted.
+            if let Some(answered) = self.intend(change, request).await {
+                return answered;
+            }
+            // Admitted once its intent is kept: a Stop before or meanwhile
+            // ends it here, before it goes, and it is kept as refused.
+            if let Some(refusal) = gate.refused() {
+                return self.came_to(change.clone(), refusal).await;
+            }
+        }
+        // A Stop, or the generation ending, while it runs ends it too.
+        let reply = tokio::select! {
+            reply = forward(input, gate.authority.generation().0, line) => reply,
+            () = gate.over() => Err(Error::new(
+                Code::Stopped,
+                "Agents were stopped while the change ran",
+            )
+            .uncertain()),
+        };
+        let Some(change) = change else {
+            return reply.unwrap_or_else(|error| failure(error.code, error.error));
+        };
+        // Sent: what it came to is unknown unless the service said.
+        let reply = reply.unwrap_or_else(|error| serde_json::json!(error.uncertain()));
+        self.came_to(change, reply).await
+    }
+
+    /// Keep `reply` as what `change` came to, before it is given: one that
+    /// cannot be kept goes as uncertain.
+    async fn came_to(&self, change: atlas_core::files::Token, reply: Value) -> Value {
+        let (changes, kept) = (self.paired.changes.clone(), reply.clone());
+        let done = tokio::task::spawn_blocking(move || changes.done(&change, &kept))
+            .await
+            .is_ok_and(|done| done.is_ok());
+        if done {
+            reply
+        } else {
+            serde_json::json!(
+                Error::new(
+                    Code::Uncertain,
+                    "What this change came to could not be kept"
+                )
+                .uncertain()
+            )
+        }
+    }
+}
+
+/// Send `line` to the input service for `generation`, and read its one
+/// reply.
+///
+/// # Errors
+///
+/// Fails when the service is not running, or ends without replying.
+async fn forward(
+    input: &crate::machine::input::Input,
+    generation: u64,
+    line: &[u8],
+) -> Result<Value> {
+    let mut opened = input.open(generation)?;
+    let mut sent = line.to_vec();
+    sent.push(b'\n');
+    opened.send(&sent).await?;
+    let unanswered =
+        || Error::new(Code::Native, "The input service ended without answering").uncertain();
+    // Exactly one line, whole and within bounds, that is a reply.
+    let mut said = Vec::new();
+    while !said.contains(&b'\n') {
+        let bytes = opened.said.recv().await.ok_or_else(unanswered)?;
+        said.extend(bytes);
+        if said.len() > MAX_REQUEST {
+            return Err(unanswered());
+        }
+    }
+    let line = said.strip_suffix(b"\n").ok_or_else(unanswered)?;
+    if line.contains(&b'\n') {
+        return Err(unanswered());
+    }
+    let reply: Value = serde_json::from_slice(line).map_err(|_| unanswered())?;
+    if !reply.get("ok").is_some_and(Value::is_boolean) {
+        return Err(unanswered());
+    }
+    Ok(reply)
 }
 
 /// Completes once a lane's work must end at once: the lane cancelled, or
