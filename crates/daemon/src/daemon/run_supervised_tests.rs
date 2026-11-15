@@ -85,6 +85,7 @@ fn kept_in(
         keepers: Arc::default(),
         stops: None,
         judged: None,
+        job: None,
     }
 }
 

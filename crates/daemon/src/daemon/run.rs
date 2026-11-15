@@ -54,6 +54,13 @@ const MAX_OUTPUT: usize = 16 * 1024 * 1024;
 
 /// How long a timed-out group has between SIGTERM and SIGKILL.
 const GRACE: Duration = Duration::from_secs(2);
+// A supervisor TERMed with its group proves its work ended within this
+// grace, before the group's SIGKILL takes it too.
+const _: () = assert!(
+    crate::machine::supervise::TERMINATING.as_millis()
+        + crate::machine::supervise::ENDING.as_millis()
+        < GRACE.as_millis()
+);
 
 /// How long output is still collected after the command itself exits, when
 /// something it left running keeps the pipe open.
@@ -434,7 +441,7 @@ const LEASE: Duration = Duration::from_secs(2);
 /// What a command on a machine desktop runs under: the supervisor that ends
 /// its work once the daemon is gone or stops renewing, where it is kept
 /// before it starts, and what ends the renewing.
-pub(super) struct Lease {
+pub(in crate::daemon) struct Lease {
     pub(super) supervisor: Supervisor,
     /// Where supervisors leave their proof.
     pub(super) proofs: PathBuf,
@@ -455,6 +462,9 @@ pub(super) struct Lease {
     /// Where the keeper says, once it has judged the work's end, whether it
     /// was proved ended; none for a command.
     pub(super) judged: Option<oneshot::Sender<bool>>,
+    /// The background job it runs, kept beside its supervisor; none for a
+    /// command.
+    pub(super) job: Option<crate::machine::processes::JobRecord>,
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.
@@ -477,41 +487,44 @@ pub(super) async fn run_unless(
 }
 
 /// A command running in a process group of its own.
-struct Spawned {
-    child: Owned,
+pub(in crate::daemon) struct Spawned {
+    pub(in crate::daemon) child: Owned,
     /// Its standard output and error, merged.
     pipe: pipe::Receiver,
-    group: Pid,
+    pub(in crate::daemon) group: Pid,
     started: Instant,
     /// What its supervisor says of the program, when it has one.
-    told: Option<Told>,
+    pub(in crate::daemon) told: Option<Told>,
+    /// Its supervisor, as read while it was still held unreaped.
+    pub(in crate::daemon) supervisor: Option<atlas_core::process::Instance>,
 }
 
 /// Who holds the command's own child, unreaped while its group may still
 /// be signalled.
-enum Owned {
+pub(in crate::daemon) enum Owned {
     /// The command, which reaps it.
     Here(tokio::process::Child),
     /// Its supervisor's keeper, which reaps it once this is dropped: once
     /// the command is done signalling its group.
-    Kept(#[expect(dead_code, reason = "held only to be dropped")] oneshot::Sender<()>),
+    /// Held only to be dropped, which lets its keeper reap the supervisor.
+    Kept(oneshot::Sender<()>),
 }
 
 /// The supervisor's end of the lifeline, as the daemon reads it: that the
 /// program started, then how it ended, each said once; and what its keeper
 /// said of the word to start.
-struct Told {
+pub(in crate::daemon) struct Told {
     lifeline: OwnedReadHalf,
     said: Vec<u8>,
     started: bool,
-    verdict: oneshot::Receiver<Verdict>,
+    pub(in crate::daemon) verdict: oneshot::Receiver<Verdict>,
     /// Set once the command stops waiting for its program to start: its
     /// keeper gives no word to start after.
     starting: Arc<std::sync::Mutex<bool>>,
 }
 
 /// One frame a supervisor said.
-enum Heard {
+pub(in crate::daemon) enum Heard {
     Started,
     /// A stop the daemon asked for has begun.
     Stopping,
@@ -523,7 +536,7 @@ enum Heard {
 impl Told {
     /// The next frame the supervisor says. Anything it said before it went
     /// is read first.
-    async fn hear(&mut self) -> Heard {
+    pub(in crate::daemon) async fn hear(&mut self) -> Heard {
         let mut chunk = [0; invocation::FRAME];
         loop {
             if let Some(end) = self.said.iter().position(|byte| *byte == b'\n') {
@@ -563,12 +576,14 @@ impl Told {
 /// Spawn with merged output in a group of its own, retaining the child until
 /// pipe setup either succeeds or has killed and reaped it. Under a `lease`,
 /// the group is its supervisor's, and the program runs in it once its keeper
-/// says so.
-async fn spawn(
+/// says so; its output goes to `log` when one is given, as a job's does, and
+/// to the pipe otherwise.
+pub(in crate::daemon) async fn spawn(
     argv: &[String],
     home: Option<&Path>,
     unless: Unless<'_>,
     lease: Option<Lease>,
+    log: Option<OwnedFd>,
 ) -> Result<Spawned, Value> {
     // The protocol never passes an empty argv; refuse one rather than panic.
     let Some((name, arguments)) = argv.split_first() else {
@@ -607,7 +622,7 @@ async fn spawn(
                 .args(lease.supervisor.arguments(&invocation))
                 .stdin(Stdio::from(OwnedFd::from(theirs)))
                 .stdout(Stdio::null())
-                .stderr(Stdio::from(OwnedFd::from(writer)));
+                .stderr(Stdio::from(log.unwrap_or_else(|| OwnedFd::from(writer))));
             lifeline = Some(daemon);
             command
         }
@@ -656,7 +671,7 @@ async fn spawn(
             return Err(interrupted(Code::SpawnFailed, error.to_string()));
         }
     };
-    let (child, told) = match (halves, lease) {
+    let (child, told, supervisor) = match (halves, lease) {
         (Some((reading, writing)), Some(lease)) => {
             // A supervisor told nothing starts nothing: one this cannot name
             // is let go, and ends itself.
@@ -682,9 +697,9 @@ async fn spawn(
                 verdict: hearing,
                 starting,
             };
-            (Owned::Kept(released), Some(told))
+            (Owned::Kept(released), Some(told), Some(supervisor))
         }
-        _ => (Owned::Here(child), None),
+        _ => (Owned::Here(child), None, None),
     };
 
     Ok(Spawned {
@@ -693,6 +708,7 @@ async fn spawn(
         group,
         started,
         told,
+        supervisor,
     })
 }
 
@@ -855,7 +871,7 @@ async fn run_at(
     unless: Unless<'_>,
     lease: Option<Lease>,
 ) -> Value {
-    let mut spawned = match spawn(argv, home.as_deref(), unless, lease).await {
+    let mut spawned = match spawn(argv, home.as_deref(), unless, lease, None).await {
         Ok(spawned) => spawned,
         Err(refusal) => return refusal,
     };

@@ -195,6 +195,12 @@ impl Served {
     }
 }
 
+/// A read answered from what the guest keeps, asking macOS nothing: a
+/// hello reads permissions and displays, which a busy Mac can take many
+/// seconds to give.
+static QUICK_READ: std::sync::LazyLock<Value> =
+    std::sync::LazyLock::new(|| json!({"op": "job", "action": "show"}));
+
 /// Send `request` on a lane of `kind`, and read its lines until the lane
 /// ends: none when it was refused before any reply.
 async fn ask(desktop: &Desktop, kind: LaneKind, request: &Value) -> Vec<Value> {
@@ -220,7 +226,7 @@ async fn a_read_on_a_lane_of_the_live_generation_is_answered() {
     let served = Served::start().await;
     let (_controlling, desktop) = served.control().await;
 
-    let replies = ask(&desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+    let replies = ask(&desktop, LaneKind::Read, &QUICK_READ).await;
 
     assert_eq!(replies.last().unwrap()["ok"], true, "{replies:?}");
 }
@@ -287,7 +293,7 @@ async fn a_newer_control_connection_retires_the_generation_before_it_and_refuses
             .await
             .is_empty()
     );
-    let replies = ask(&new, LaneKind::Read, &json!({"op": "hello"})).await;
+    let replies = ask(&new, LaneKind::Read, &QUICK_READ).await;
     assert_eq!(replies.last().unwrap()["ok"], true);
 }
 
@@ -1382,6 +1388,7 @@ fn left_behind(code: Option<u8>) -> (Records, crate::machine::processes::Supervi
         boot: atlas_core::process::boot().unwrap(),
         generation: atlas_session::generation::Generation(1),
         supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+        job: None,
     };
     supervising.kept.add(supervised.clone()).unwrap();
     if let Some(code) = code {
@@ -1560,6 +1567,7 @@ async fn work_kept_from_another_boot_is_forgotten_before_none_is_said() {
         boot: "an earlier boot".into(),
         generation: atlas_session::generation::Generation(1),
         supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+        job: None,
     };
     kept.add(earlier).unwrap();
 
@@ -2972,4 +2980,372 @@ async fn a_link_full_of_stalled_mirrors_still_carries_a_stage_and_a_stop_and_rel
     );
     again.abort();
     drop(stalled);
+}
+
+/// Start a background job running `argv` for `lifetime_ms` as `change`:
+/// the guest's last reply.
+async fn job_start(desktop: &Desktop, change: &Token, argv: &[&str], lifetime_ms: u64) -> Value {
+    let request = json!({
+        "op": "job", "action": "start", "argv": argv, "lifetimeMs": lifetime_ms,
+        "uid": nix::unistd::getuid().as_raw(), "change": change,
+    });
+    let said = ask(
+        desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+    said.last().cloned().unwrap_or(Value::Null)
+}
+
+/// What the guest shows of job `id`.
+async fn job_shown(desktop: &Desktop, id: &str) -> Value {
+    let said = ask(
+        desktop,
+        LaneKind::Read,
+        &json!({"op": "job", "action": "show", "id": id}),
+    )
+    .await;
+    said.last().unwrap()["job"].clone()
+}
+
+/// Whether the group `pgid` leads ends within `within`.
+async fn group_ends(pgid: i32, within: Duration) -> bool {
+    let group = nix::unistd::Pid::from_raw(pgid);
+    tokio::time::timeout(within, async {
+        while nix::sys::signal::killpg(group, None).is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// Job `id`'s state once it says it has ended, within `within`.
+async fn job_ended(desktop: &Desktop, id: &str, within: Duration) -> Value {
+    let started = std::time::Instant::now();
+    loop {
+        let shown = job_shown(desktop, id).await;
+        if shown["state"] == "ended" || started.elapsed() > within {
+            return shown;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_job_runs_past_its_lane_and_its_log_holds_what_it_said() {
+    use base64::Engine;
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    let started = job_start(
+        &desktop,
+        &Token::new(),
+        &["/bin/sh", "-c", "echo said; exec sleep 30"],
+        60_000,
+    )
+    .await;
+
+    let job = &started["job"];
+    assert_eq!(job["state"], "running", "{started}");
+    assert_eq!(job["pid"], job["pgid"]);
+    let id = job["id"].as_str().unwrap();
+    let mut logged = String::new();
+    for _ in 0..50 {
+        let said = ask(
+            &desktop,
+            LaneKind::Read,
+            &json!({"op": "job", "action": "log", "id": id, "bytes": 4096}),
+        )
+        .await;
+        logged = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(said.last().unwrap()["data"].as_str().unwrap_or_default())
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default();
+        if logged.contains("said") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(logged.contains("said"), "{logged:?}");
+    assert_eq!(job_shown(&desktop, id).await["state"], "running");
+    assert!(
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(job["pgid"].as_i64().unwrap() as i32),
+            None
+        )
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn a_job_stopped_by_its_identity_ends_and_one_stopped_by_another_runs_on() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await;
+    let job = started["job"].clone();
+    let id = job["id"].as_str().unwrap();
+    let expect =
+        json!({"boot": job["boot"], "pid": job["pid"], "start": job["start"], "pgid": job["pgid"]});
+    let mut wrong = expect.clone();
+    wrong["pid"] = json!(1);
+    let stop = |expect: &Value| {
+        let change = Token::new();
+        let request = json!({"op": "job", "action": "stop", "id": id, "expect": expect, "graceMs": 2000, "change": change});
+        (change, request)
+    };
+
+    let (change, request) = stop(&wrong);
+    let refused = ask(&desktop, LaneKind::Change { change }, &request).await;
+    let (change, request) = stop(&expect);
+    let stopped = ask(&desktop, LaneKind::Change { change }, &request).await;
+
+    assert_eq!(refused.last().unwrap()["reason"], "identity", "{refused:?}");
+    assert_eq!(
+        stopped.last().unwrap()["signalled"],
+        "SIGTERM",
+        "{stopped:?}"
+    );
+    let ended = job_ended(&desktop, id, Duration::from_secs(10)).await;
+    assert_eq!(ended["state"], "ended", "{ended}");
+    assert_eq!(ended["how"], "stopped", "{ended}");
+}
+
+#[tokio::test]
+async fn a_job_s_lifetime_ends_it() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 1_500).await;
+    let pgid = started["job"]["pgid"].as_i64().unwrap() as i32;
+
+    assert!(group_ends(pgid, Duration::from_secs(10)).await, "{started}");
+    let ended = job_ended(
+        &desktop,
+        started["job"]["id"].as_str().unwrap(),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(ended["how"], "timeout", "{ended}");
+}
+
+#[tokio::test]
+async fn a_job_that_exits_by_itself_is_shown_with_its_code() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(
+        &desktop,
+        &Token::new(),
+        &["/bin/sh", "-c", "sleep 1; exit 7"],
+        60_000,
+    )
+    .await;
+
+    let ended = job_ended(
+        &desktop,
+        started["job"]["id"].as_str().unwrap(),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    assert_eq!(ended["how"], "exited", "{ended}");
+    assert_eq!(ended["exitCode"], 7, "{ended}");
+}
+
+/// A job pinned to the session Atlas verified starts only in that session:
+/// one pinned elsewhere is refused before its program runs.
+#[tokio::test]
+async fn a_job_pinned_to_another_session_is_refused_before_it_runs() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let pinned = |session: Value| {
+        let change = Token::new();
+        let request = json!({
+            "op": "job", "action": "start", "argv": ["/bin/sleep", "30"], "lifetimeMs": 60_000,
+            "uid": nix::unistd::getuid().as_raw(), "change": change, "session": session,
+        });
+        (change, request)
+    };
+
+    let (change, elsewhere) = pinned(json!({"securitySessionId": 43, "displayId": 7}));
+    let said = ask(&desktop, LaneKind::Change { change }, &elsewhere).await;
+    assert_eq!(said.last().unwrap()["code"], "session-changed", "{said:?}");
+    let shown = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "job", "action": "show"}),
+    )
+    .await;
+    assert_eq!(
+        shown.last().unwrap()["jobs"],
+        json!([]),
+        "nothing ran: {shown:?}"
+    );
+
+    let (change, here) = pinned(json!({"securitySessionId": 42, "displayId": 7}));
+    let said = ask(&desktop, LaneKind::Change { change }, &here).await;
+    assert_eq!(said.last().unwrap()["ok"], true, "{said:?}");
+}
+
+#[tokio::test]
+async fn a_stop_ends_every_job() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await;
+    let pgid = started["job"]["pgid"].as_i64().unwrap() as i32;
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+
+    assert!(group_ends(pgid, Duration::from_secs(10)).await);
+    let id = started["job"]["id"].as_str().unwrap();
+    let ended = job_ended(&desktop, id, Duration::from_secs(10)).await;
+    assert_eq!(ended["how"], "person", "a person's Stop: {ended}");
+}
+
+#[tokio::test]
+async fn a_new_generation_ends_the_jobs_of_the_one_before() {
+    let served = Served::start().await;
+    let (_first, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await;
+    let pgid = started["job"]["pgid"].as_i64().unwrap() as i32;
+
+    let (_second, second) = served.control().await;
+
+    assert!(group_ends(pgid, Duration::from_secs(10)).await);
+    let id = started["job"]["id"].as_str().unwrap();
+    let ended = job_ended(&second, id, Duration::from_secs(10)).await;
+    assert_eq!(
+        ended["how"], "gone",
+        "its generation went, no one stopped it: {ended}"
+    );
+}
+
+#[tokio::test]
+async fn a_job_running_through_a_silent_partition_ends_once_its_lease_lapses_and_its_stop_is_saved()
+{
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await;
+    let pgid = started["job"]["pgid"].as_i64().unwrap() as i32;
+    served.link.set(Conditions {
+        partitioned: true,
+        ..Conditions::default()
+    });
+
+    // No request, heartbeat or check: only time passes.
+    served.clock.advance(atlas_session::authority::LEASE * 2);
+
+    assert!(
+        group_ends(pgid, Duration::from_secs(10)).await,
+        "the job ran on"
+    );
+    assert!(matches!(
+        served.machine.paired.stop.kept().unwrap(),
+        crate::machine::stop::Kept::Stopped { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_job_start_asked_again_is_answered_from_its_record_and_starts_nothing() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let first = job_start(&desktop, &change, &["/bin/sleep", "30"], 60_000).await;
+
+    let again = job_start(&desktop, &change, &["/bin/sleep", "30"], 60_000).await;
+
+    assert_eq!(again, first);
+    let every = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "job", "action": "show"}),
+    )
+    .await;
+    let jobs = every.last().unwrap()["jobs"].as_array().unwrap().len();
+    assert_eq!(jobs, 1, "{every:?}");
+}
+
+#[tokio::test]
+async fn stopping_every_job_at_once_is_refused_on_a_machine() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+
+    let said = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "job", "action": "stop-all", "reason": "person", "change": change}),
+    )
+    .await;
+
+    assert_eq!(said.last().unwrap()["code"], "platform", "{said:?}");
+}
+
+#[tokio::test]
+async fn a_guest_that_keeps_jobs_declares_them() {
+    let served = Served::start().await;
+
+    let (controlling, _desktop) = served.control().await;
+
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .any(|has| has == atlas_session::compatibility::JOBS)
+    );
+}
+
+#[tokio::test]
+async fn a_job_whose_supervisor_is_killed_from_outside_is_unknown_never_ended() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await;
+    let supervisor = started["job"]["pid"].as_i64().unwrap() as i32;
+    let id = started["job"]["id"].as_str().unwrap().to_owned();
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(supervisor),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+
+    let mut shown = Value::Null;
+    for _ in 0..100 {
+        shown = job_shown(&desktop, &id).await;
+        if shown["state"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(shown["state"], "unknown", "{shown}");
+    // What it left is not proved gone: the program, outside its supervisor.
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(supervisor),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}
+
+#[tokio::test]
+async fn more_than_eight_jobs_run_at_once() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    let mut started = Vec::new();
+    for _ in 0..10 {
+        started.push(job_start(&desktop, &Token::new(), &["/bin/sleep", "30"], 60_000).await);
+    }
+
+    for (at, job) in started.iter().enumerate() {
+        assert_eq!(job["job"]["state"], "running", "job {at}: {job}");
+    }
 }

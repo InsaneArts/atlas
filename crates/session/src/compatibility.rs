@@ -26,6 +26,8 @@ pub const COPIES: &str = "copies-v1";
 pub const INPUT_LANES: &str = "input-lanes-v1";
 /// The station's loopback endpoints mirrored in the guest.
 pub const MIRRORS: &str = "mirrors-v1";
+/// Background jobs, run as supervised work.
+pub const JOBS: &str = "jobs-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

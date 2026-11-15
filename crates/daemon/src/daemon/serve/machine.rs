@@ -389,6 +389,9 @@ pub struct Machine {
     starting: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Its mirrors of the station's loopback endpoints, if it serves them.
     mirrors: Option<crate::machine::mirror::Mirrors>,
+    /// Its background jobs, kept beside its supervisors; none when it has
+    /// none, or their folder could not be made.
+    jobs: Option<Arc<jobs::Jobs>>,
     pub said: Arc<Said>,
 }
 
@@ -406,6 +409,12 @@ impl Machine {
         daemon.supervising = Some(supervising);
         daemon.input = input.map(Arc::new);
         daemon.stages = stages.map(Arc::new);
+        let jobs = daemon.supervising.as_ref().and_then(|supervising| {
+            let folder = supervising.proofs.with_file_name("jobs");
+            jobs::Jobs::open(&folder, nix::unistd::getuid().as_raw())
+                .ok()
+                .map(Arc::new)
+        });
         // Nothing is taken until it is known whether agents were stopped,
         // and what an earlier daemon left.
         daemon.halted.send_modify(|halt| halt.halted = true);
@@ -425,6 +434,7 @@ impl Machine {
             halting,
             starting: std::sync::Mutex::new(Some(starting)),
             mirrors,
+            jobs,
             said: Arc::default(),
         })
     }
@@ -448,6 +458,9 @@ impl Machine {
         if self.mirrors.is_some() {
             capabilities.push(atlas_session::compatibility::MIRRORS.to_owned());
         }
+        if self.jobs.is_some() {
+            capabilities.push(atlas_session::compatibility::JOBS.to_owned());
+        }
         Declared::ours(capabilities)
     }
 
@@ -465,6 +478,19 @@ impl Machine {
             .take();
         if let Some(starting) = starting {
             let _ = starting.await;
+        }
+        // What an earlier daemon's jobs left in their folder goes, but what
+        // their records still name: before any lane is taken, so no job of
+        // this daemon's can have started yet.
+        if let Some((jobs, supervising)) = self.jobs.clone().zip(self.daemon.supervising.as_ref()) {
+            let (kept, sweeping) = (supervising.kept.clone(), jobs.clone());
+            let swept = tokio::task::spawn_blocking({
+                let kept = kept.clone();
+                move || sweeping.sweep(&*kept)
+            })
+            .await;
+            // Their work may still write, unproved ended: their logs stay bounded.
+            jobs.bound_kept(swept.unwrap_or_default(), &kept);
         }
         let (lanes, controls) = (
             Arc::new(Semaphore::new(LANES)),
@@ -753,6 +779,22 @@ impl Machine {
                 .remove_copy_lane(change.clone(), copy, node, gate, reader, writer)
                 .await;
         }
+        // Background jobs are the machine's own too: started and stopped as
+        // changes it keeps, and read from what it keeps of them.
+        if let Ok(protocol::Asked {
+            request: Request::Job(job),
+            ..
+        }) = protocol::parse(&line)
+        {
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+            };
+            return self.job_lane(&header.kind, job, gate, writer).await;
+        }
         line.push(b'\n');
         let reader: Reader = Box::new(std::io::Cursor::new(line).chain(reader));
         let asker = Asker {
@@ -991,6 +1033,7 @@ fn bound(header: &Header, line: &[u8]) -> std::result::Result<(), Value> {
     }
 }
 
+mod jobs;
 mod stage;
 
 #[cfg(test)]

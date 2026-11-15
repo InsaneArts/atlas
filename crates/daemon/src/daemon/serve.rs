@@ -1545,6 +1545,7 @@ async fn run_registered(
                 keepers: daemon.keepers.clone(),
                 stops: None,
                 judged: None,
+                job: None,
             }
         });
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;

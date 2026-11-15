@@ -43,6 +43,24 @@ pub struct Supervised {
     /// The generation it was started for.
     pub generation: Generation,
     pub supervisor: Instance,
+    /// The background job it runs, when it runs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<JobRecord>,
+}
+
+/// What a background job a supervisor runs is, as kept beside it: never its
+/// arguments, which may carry secrets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobRecord {
+    pub id: atlas_core::protocol::JobId,
+    pub name: String,
+    pub task: Option<atlas_core::host::Key>,
+    pub session: Option<atlas_core::host::Key>,
+    pub started_at: u64,
+    pub ends_at: u64,
+    /// The change that started it.
+    pub change: atlas_core::files::Token,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

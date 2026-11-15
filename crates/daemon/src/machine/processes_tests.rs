@@ -20,6 +20,7 @@ fn supervised(pid: i32) -> Supervised {
         boot: "boot".into(),
         generation: Generation(3),
         supervisor: Instance::new(pid, [1, 0]),
+        job: None,
     }
 }
 

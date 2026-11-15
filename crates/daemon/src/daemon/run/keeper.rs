@@ -136,7 +136,7 @@ impl Keepers {
 }
 
 /// What the keeper tells the command about its start.
-pub(super) enum Verdict {
+pub(in crate::daemon) enum Verdict {
     /// Told to start: whether it did, its supervisor says.
     Went,
     /// Never told to start: nothing ran.
@@ -163,6 +163,7 @@ pub(super) async fn keep(
         keepers,
         mut stops,
         judged,
+        job,
         ..
     } = lease;
     keepers.set(supervisor, Keeping::Active);
@@ -171,6 +172,7 @@ pub(super) async fn keep(
             boot,
             generation,
             supervisor,
+            job,
         })
         .map_err(|error| failure(error.code, error.error));
     // Kept before the word to start, and always waited for: the lease, not
