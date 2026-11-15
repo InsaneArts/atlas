@@ -96,27 +96,51 @@ pub fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result
     }
 
     // Settings that list desktops keep every other one: only the Second
-    // Login's helper changes.
-    let before = fs::read_to_string(path)?;
+    // Login's helper changes. The file is read through the guarded reader
+    // and replaced through its folder's own descriptor, never by its name.
+    let changed = || {
+        problem(format!(
+            "{} changed while Atlas was updating it; run atlas init again",
+            config::tilde(path)
+        ))
+    };
+    let (resolved, identity, before) = read_settings(path)?;
     let toml = config::desktops::with_user(&before, path, config)?;
-    atlas_core::files::write_beside(
-        path,
-        0o600,
-        |file| Ok(file.write_all(toml.as_bytes())?),
-        |temporary| {
-            let changed = || {
-                problem(format!(
-                    "{} changed while Atlas was updating it; run atlas init again",
-                    config::tilde(path)
-                ))
-            };
-            let current = Config::load_user(path).map_err(|error| changed().with_source(error))?;
-            if current != *previous || fs::read_to_string(path)? != before {
-                return Err(changed());
-            }
-            Ok(fs::rename(temporary, path)?)
-        },
-    )
+    let parent = resolved.parent().unwrap_or_else(|| Path::new("/"));
+    let name = resolved
+        .file_name()
+        .ok_or_else(|| problem(format!("{} names no file", config::tilde(path))))?;
+    let folder = atlas_core::checked::folder(parent)?;
+    let current = Config::load_user(path).map_err(|error| changed().with_source(error))?;
+    let (_, now, again) = read_settings(path)?;
+    if current != *previous
+        || now != identity
+        || again != before
+        || folder.entry_identity(name)? != Some(identity)
+    {
+        return Err(changed());
+    }
+    folder.replace(name, toml.as_bytes(), 0o600)
+}
+
+/// The most of a settings file read: more than any settings file holds.
+const SETTINGS_LIMIT: u64 = 64 * 1024;
+
+/// The settings at `path`, read through the guarded reader: their real
+/// path, which file they are, and their text.
+fn read_settings(
+    path: &Path,
+) -> Result<(std::path::PathBuf, atlas_core::checked::Identity, String)> {
+    let reading = atlas_core::checked::read(path)?;
+    let resolved = reading.path().to_path_buf();
+    let identity = reading.identity()?;
+    let bytes = reading.read_up_to(SETTINGS_LIMIT + 1)?;
+    if bytes.len() as u64 > SETTINGS_LIMIT {
+        return Err(problem(format!("{} is too large", config::tilde(path))));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| problem(format!("{} is not UTF-8 text", config::tilde(path))))?;
+    Ok((resolved, identity, text))
 }
 
 /// Keep the selected account through configuration, refusing UID reassignment

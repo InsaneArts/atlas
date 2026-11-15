@@ -1683,3 +1683,89 @@ async fn a_profile_whose_file_or_reference_is_a_store_is_refused_before_the_help
         assert_eq!(error.code, Code::Credentials, "{name}: {error}");
     }
 }
+
+#[tokio::test]
+async fn a_manifest_or_profile_in_atlas_own_folder_is_refused_before_it_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let folder = atlas_core::config::home()
+        .unwrap()
+        .join(atlas_core::own_folder::FOLDER);
+    let manifest = folder.join("VMs/0123456789abcdef01234567/Share/pairing-secret");
+    let profile = folder.join("Station/vm-0123456789abcdef01234567/profile.toml");
+
+    let refusals = [
+        sync(&client, &manifest, false).await.unwrap_err(),
+        profile::sync(&client, &profile, false).await.unwrap_err(),
+        profile::load(&profile).err().unwrap(),
+    ];
+    for error in refusals {
+        assert_eq!(error.code, Code::Credentials, "{error}");
+        assert_eq!(error.error, atlas_core::own_folder::REFUSAL);
+    }
+}
+
+/// A secret that must never be said back from a file that does not parse.
+const CANARY: &str = "CANARY-7f3a91c2e8";
+
+/// Files that do not parse, each with the canary where a parser would quote
+/// it: as the whole file, a key, a value of the wrong type, a value of an
+/// unknown kind and a key given twice.
+fn malformed() -> [String; 6] {
+    [
+        format!("{CANARY}\n"),
+        format!("version = 2\n{} = 1\n", CANARY.replace('-', "_")),
+        format!("version = \"{CANARY}\"\n"),
+        format!("files = \"{CANARY}\"\n"),
+        format!("version = 2\nversion = \"{CANARY}\"\n"),
+        format!("version = 2\ntoken = {CANARY}\n"),
+    ]
+}
+
+#[tokio::test]
+async fn a_manifest_or_profile_that_does_not_parse_never_says_what_it_holds() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let folder = fs::canonicalize(directory.path()).unwrap();
+    for (index, text) in malformed().into_iter().enumerate() {
+        let file = folder.join(format!("malformed-{index}.toml"));
+        fs::write(&file, &text).unwrap();
+        let errors = [
+            sync(&client, &file, false).await.unwrap_err(),
+            profile::sync(&client, &file, false).await.unwrap_err(),
+            profile::load(&file).err().unwrap(),
+        ];
+        for error in errors {
+            let said = serde_json::to_string(&error).unwrap();
+            assert!(!said.contains(CANARY), "{text}: {said}");
+            assert!(!said.contains(&CANARY.replace('-', "_")), "{text}: {said}");
+            assert!(
+                said.contains("malformed-"),
+                "{text}: it names the file: {said}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_manifest_or_profile_past_its_limit_is_refused_not_cut_short() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let folder = fs::canonicalize(directory.path()).unwrap();
+    // Valid TOML up to the limit, with more after it that a cut would lose.
+    let mut text = "version = 2\n".to_owned();
+    while text.len() < MAX_MANIFEST as usize {
+        text.push_str("# padding\n");
+    }
+    text.push_str("files = []\n");
+    let file = folder.join("large.toml");
+    fs::write(&file, &text).unwrap();
+
+    let errors = [
+        sync(&client, &file, false).await.unwrap_err(),
+        profile::load(&file).err().unwrap(),
+    ];
+    for error in errors {
+        assert!(error.error.contains("too large"), "{error}");
+    }
+}

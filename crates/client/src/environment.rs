@@ -102,9 +102,16 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 /// Returns manifest, identity, staging or worker failures. Apply may leave a retained
 /// transaction; preview does not authorize later effects.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
-    let manifest = fs::canonicalize(manifest)
-        .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
-    let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
+    // The manifest is read through the one guarded reader: stabilized, its
+    // folders proven unchangeable by any other account, read through the
+    // descriptor it opened, never reopened by name.
+    let reading = atlas_core::checked::read(manifest)?;
+    let manifest = reading.path().to_path_buf();
+    let bytes = reading.read_up_to(MAX_MANIFEST + 1)?;
+    if bytes.len() as u64 > MAX_MANIFEST {
+        return Err(Error::new(Code::Input, "The manifest is too large"));
+    }
+    let selection: Manifest = parse_toml(&bytes, &manifest)?;
     match client.desktop().kind() {
         Kind::User(login) => {
             crate::user::environment::stage::freeze(

@@ -14,7 +14,11 @@ use atlas_core::{
     files,
 };
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 impl Viewer {
     /// Pass `line` to the app this viewer serves.
@@ -417,22 +421,59 @@ pub async fn render_menubar(
         CONNECTIONS,
         std::future::pending(),
     ));
-    let mut paths = Vec::new();
-    let mut outcome = Ok(());
-
-    for (name, dark) in [("light", false), ("dark", true)] {
-        let path = directory.join(format!("menubar-{name}.png"));
-        outcome = crate::menubar::render(program, &viewer.url, &path, dark).await;
-        if outcome.is_err() {
-            break;
-        }
-
-        paths.push(path);
-    }
+    let outcome = render_into(program, &viewer, directory).await;
 
     server.abort();
     let _ = viewer.release(None).await;
-    outcome?;
+    let paths = outcome?;
 
     Ok(json!({"ok": true, "paths": paths}))
+}
+
+/// Render each panel into a private folder of this process's own, then
+/// publish it into `directory` through that folder's own descriptor: the
+/// renderer never writes where another account could have put a link, and
+/// the destination is never Atlas's own folder nor one another account can
+/// change. The published paths.
+async fn render_into(
+    program: &crate::menubar::Program,
+    viewer: &Arc<Viewer>,
+    directory: &Path,
+) -> Result<Vec<PathBuf>> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    // The destination, proven unchangeable by any other account, opened once.
+    let published = atlas_core::checked::folder(directory)?;
+    // A private folder of this process's own, which no other account may
+    // write, for the renderer to write into.
+    let private = std::env::temp_dir().join(format!("atlas-render-{}", atlas_core::files::token()));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&private)
+        .map_err(|error| atlas_core::error::Error::writing(&private, error))?;
+    let cleanup = scopeguard(&private);
+
+    let mut paths = Vec::new();
+    for (name, dark) in [("light", false), ("dark", true)] {
+        let file = format!("menubar-{name}.png");
+        let into = private.join(&file);
+        crate::menubar::render(program, &viewer.url, &into, dark).await?;
+        let bytes = std::fs::read(&into)
+            .map_err(|error| atlas_core::error::Error::writing(&into, error))?;
+        published.replace(std::ffi::OsStr::new(&file), &bytes, 0o644)?;
+        paths.push(published.path().join(&file));
+    }
+    drop(cleanup);
+    Ok(paths)
+}
+
+/// Remove a private render folder when the render ends, however it ends.
+fn scopeguard(folder: &Path) -> impl Drop {
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    Cleanup(folder.to_path_buf())
 }

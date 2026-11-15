@@ -5,7 +5,8 @@
 //! folder is refused too. Nothing is read. A hard link or a renamed copy of
 //! a store is not recognized, and a folder is not searched for files named
 //! like one. Nothing is refused while the person lets agents copy sign-ins
-//! in ([`crate::sign_in_copies`]).
+//! in ([`crate::sign_in_copies`]), except Atlas's own folder, which is
+//! refused whatever they chose ([`atlas_core::own_folder`]).
 use atlas_core::error::{Code, Error, Result};
 use std::{
     collections::VecDeque,
@@ -108,31 +109,48 @@ const STORE_FILES: &[(&str, &str)] = &[
 /// The `.env` files that are examples, with no secrets in them.
 const ENV_EXAMPLES: &[&str] = &[".env.example", ".env.sample", ".env.template"];
 
-/// Refuses the first of `paths` that is, or holds, one of the person's
-/// stores of sign-ins or secrets, before anything is copied. Each path is
-/// checked as written and with its symlinks resolved; one that does not
-/// exist is checked as written, so its own refusal comes later as before.
+/// Refuses the first of `paths` that is, or holds, Atlas's own folder or one
+/// of the person's stores of sign-ins or secrets, before anything is copied.
+/// Each path is checked as written and with its symlinks resolved; one that
+/// does not exist is checked as written, so its own refusal comes later as
+/// before.
 ///
 /// # Errors
 ///
 /// Returns a `credentials` refusal naming the store and the selection's file
-/// name, never its full path.
+/// name, never its full path, or the failure to find this account's home.
 pub(crate) fn refuse<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<()> {
-    let home = atlas_core::config::home().ok();
+    let paths: Vec<&Path> = paths.into_iter().collect();
+    let home = atlas_core::config::home()?;
     // Tests prove the refusals whatever the person chose on the Mac running them; the choice has a test of its own.
     if cfg!(test) {
-        return refuse_in(paths, home.as_deref());
+        refuse_own_folder(&paths, &home)?;
+        return refuse_in(paths, Some(&home));
     }
-    refuse_at(paths, home.as_deref())
+    refuse_at(&paths, &home)
 }
 
-/// [`refuse`] for the person whose home folder is `home`: nothing is refused
-/// while they let agents copy sign-ins in.
-fn refuse_at<'a>(paths: impl IntoIterator<Item = &'a Path>, home: Option<&Path>) -> Result<()> {
-    if home.is_some_and(crate::sign_in_copies::allowed_in) {
+/// Refuses the first of `paths` in Atlas's own folder in `home`, that folder
+/// or one holding it: as written, where its links lead, and where it leads as
+/// a Finder alias, which `open` follows.
+fn refuse_own_folder(paths: &[&Path], home: &Path) -> Result<()> {
+    for path in paths {
+        atlas_core::own_folder::refuse_in(path, home)?;
+        for led in atlas_native::alias::leads_to(path) {
+            atlas_core::own_folder::refuse_in(&led, home)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`refuse`] for the person whose home folder is `home`: Atlas's own folder
+/// always, and nothing else while they let agents copy sign-ins in.
+fn refuse_at(paths: &[&Path], home: &Path) -> Result<()> {
+    refuse_own_folder(paths, home)?;
+    if crate::sign_in_copies::allowed_in(home) {
         return Ok(());
     }
-    refuse_in(paths, home)
+    refuse_in(paths.iter().copied(), Some(home))
 }
 
 /// [`refuse`] with `home` as the home folder; with none, only the store

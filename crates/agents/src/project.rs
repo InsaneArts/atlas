@@ -28,18 +28,21 @@ pub fn project(dir: &Path) -> Result<Value> {
     let claude = dir.join("CLAUDE.md");
     let mut plans = vec![(agents.clone(), read_instructions(&agents)?)];
 
-    if let Some(text) = read_instructions(&claude)?
+    if let Some(read) = read_instructions(&claude)?
         && !same_place(&claude, &agents)
-        && !text.contains("@AGENTS.md")
+        && !read.text.contains("@AGENTS.md")
     {
-        plans.push((claude, Some(text)));
+        plans.push((claude, Some(read)));
     }
 
     // Check every file before changing any.
     let mut changes = Vec::new();
 
-    for (path, before) in plans {
-        let before = before.unwrap_or_default();
+    for (path, read) in plans {
+        let before = read
+            .as_ref()
+            .map(|read| read.text.clone())
+            .unwrap_or_default();
         let after = with_section(&before).ok_or_else(|| {
             problem(format!(
                 "{} has an Atlas marker without its pair. Remove the lines \
@@ -47,12 +50,12 @@ pub fn project(dir: &Path) -> Result<Value> {
                 path.display()
             ))
         })?;
-        changes.push((path, before, after));
+        changes.push((path, read, before, after));
     }
 
     let mut files = Vec::new();
 
-    for (path, before, after) in changes {
+    for (path, read, before, after) in changes {
         let change = if before == after {
             "unchanged"
         } else if before.contains(SECTION_START) {
@@ -62,7 +65,7 @@ pub fn project(dir: &Path) -> Result<Value> {
         };
 
         if before != after {
-            replace_file(&path, after.as_bytes())?;
+            replace_file(&path, read.as_ref(), after.as_bytes())?;
         }
 
         files.push(json!({"path": path, "change": change}));
@@ -108,9 +111,10 @@ fn forget_in(dir: &Path, record: &Path) -> Result<Value> {
         if path == claude && same_place(&claude, &agents) {
             continue;
         }
-        let Some(before) = read_instructions(&path)? else {
+        let Some(read) = read_instructions(&path)? else {
             continue;
         };
+        let before = read.text.clone();
         let after = without_section(&before).ok_or_else(|| {
             problem(format!(
                 "{} has an Atlas marker without its pair. Remove the lines \
@@ -118,22 +122,20 @@ fn forget_in(dir: &Path, record: &Path) -> Result<Value> {
                 path.display()
             ))
         })?;
-        changes.push((path, before, after));
+        changes.push((path, read, before, after));
     }
 
     let mut files = Vec::new();
-    for (path, before, after) in changes {
+    for (path, read, before, after) in changes {
         // A link stays: its target is cleared as teaching wrote through it.
         let linked = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_symlink());
         let change = if before == after {
             "absent"
         } else if after.trim().is_empty() && !linked && !aliased {
-            std::fs::remove_file(&path).map_err(|error| {
-                problem(format!("Could not remove {}: {error}", path.display()))
-            })?;
+            remove_instructions(&path, &read)?;
             "removed"
         } else {
-            replace_file(&path, after.as_bytes())?;
+            replace_file(&path, Some(&read), after.as_bytes())?;
             "removed"
         };
         files.push(json!({"path": path, "change": change}));
@@ -224,7 +226,7 @@ fn remember(record: &Path, dir: &Path, keep: bool) -> Result<()> {
     if keep {
         listed.push(dir);
     }
-    replace_file(record, &serde_json::to_vec_pretty(&listed)?)
+    replace_record(record, &serde_json::to_vec_pretty(&listed)?)
 }
 
 /// What surrounds the Atlas section in an instruction file.
@@ -276,18 +278,109 @@ fn without_section(text: &str) -> Option<String> {
     }
 }
 
-/// An instruction file's text, or None when there is none.
-fn read_instructions(path: &Path) -> Result<Option<String>> {
-    let target = file_target(path)
-        .map_err(|error| problem(format!("Could not read {}: {error}", path.display())))?;
-    match std::fs::read_to_string(target) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(problem(format!(
-            "Could not read {}: {error}",
-            path.display()
-        ))),
+/// An instruction file as it was read: its text, the real file it is, and
+/// which file that was, so a later change acts only on that very file.
+struct Instructions {
+    text: String,
+    target: PathBuf,
+    identity: atlas_core::checked::Identity,
+    mode: u32,
+}
+
+/// An instruction file, or None when there is none. A link is followed to
+/// its real target once, then the target is read through the one guarded
+/// reader: never Atlas's own folder, its folders proven unchangeable by any
+/// other account, read through the descriptor it opened.
+fn read_instructions(path: &Path) -> Result<Option<Instructions>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Nothing there is no instructions; a link whose target cannot be
+    // resolved is a project to repair, as before, not an empty file.
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(problem(format!(
+                "Could not read {}: {error}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
     }
+    let target = std::fs::canonicalize(path)
+        .map_err(|error| problem(format!("Could not read {}: {error}", path.display())))?;
+    let reading = atlas_core::checked::read(&target)?;
+    let identity = reading.identity()?;
+    let target = reading.path().to_path_buf();
+    let (file, bytes) = reading.read_keeping(INSTRUCTIONS_LIMIT + 1)?;
+    if bytes.len() as u64 > INSTRUCTIONS_LIMIT {
+        return Err(problem(format!("{} is too large", path.display())));
+    }
+    let mode = file
+        .metadata()
+        .map_or(0o644, |metadata| metadata.permissions().mode() & 0o777);
+    let text =
+        String::from_utf8(bytes).map_err(|_| problem(format!("{} is not text", path.display())))?;
+    Ok(Some(Instructions {
+        text,
+        target,
+        identity,
+        mode,
+    }))
+}
+
+/// The folder an instruction file `target` is in, proven unchangeable by
+/// any other account, and its name there.
+fn instructions_folder<'a>(
+    path: &Path,
+    target: &'a Path,
+) -> Result<(atlas_core::checked::Folder, &'a std::ffi::OsStr)> {
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            problem(format!(
+                "Could not write {}: it has no folder",
+                path.display()
+            ))
+        })?;
+    let name = target.file_name().ok_or_else(|| {
+        problem(format!(
+            "Could not write {}: it has no name",
+            path.display()
+        ))
+    })?;
+    Ok((atlas_core::checked::folder(parent)?, name))
+}
+
+/// Refuse when the instruction file at `name` in `folder` is no longer the
+/// one `read` was.
+fn still_read(
+    path: &Path,
+    folder: &atlas_core::checked::Folder,
+    name: &std::ffi::OsStr,
+    read: &Instructions,
+) -> Result<()> {
+    if folder.entry_identity(name)? == Some(read.identity) {
+        return Ok(());
+    }
+    Err(problem(format!(
+        "{} changed while Atlas was updating it; run this again",
+        path.display()
+    )))
+}
+
+/// Remove the instruction file `read`, read at `path`, through its folder's
+/// descriptor, only while it is still that very file.
+fn remove_instructions(path: &Path, read: &Instructions) -> Result<()> {
+    let (folder, name) = instructions_folder(path, &read.target)?;
+    still_read(path, &folder, name, read)?;
+    if !folder.remove_if_same(name, read.identity)? {
+        return Err(problem(format!(
+            "{} changed while Atlas was updating it; run this again",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// `text` with the Atlas section in place of an earlier one, or appended;
@@ -309,19 +402,46 @@ fn with_section(text: &str) -> Option<String> {
     Some(format!("{text}{gap}{block}"))
 }
 
-/// Replace a file through a temporary file beside it, so a failure leaves
-/// the old text whole, saying which one could not be written. A link is
-/// followed and its target replaced; the file keeps its permissions.
-fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
+/// Replace a project's instruction file: the very file `read` was, or, with
+/// none read, the file at `path` (a link followed to its real target once).
+/// It is written through its folder's own descriptor, proven to be one no
+/// other account can change and never Atlas's own, a temporary file placed
+/// there with no link followed and renamed over it, keeping its permissions.
+fn replace_file(path: &Path, read: Option<&Instructions>, bytes: &[u8]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let replaced = || -> Result<()> {
-        let target = file_target(path)?;
-        let mode = std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode() & 0o777);
-        atlas_core::files::write_atomic(&target, bytes, mode)
+    let target = match read {
+        Some(read) => read.target.clone(),
+        None => file_target(path)
+            .map_err(|error| problem(format!("Could not write {}: {error}", path.display())))?,
     };
+    let (folder, name) = instructions_folder(path, &target)?;
+    let mode = match read {
+        Some(read) => {
+            still_read(path, &folder, name, read)?;
+            read.mode
+        }
+        None => std::fs::metadata(&target).map_or(0o644, |meta| meta.permissions().mode() & 0o777),
+    };
+    folder.replace(name, bytes, mode)
+}
 
-    replaced().map_err(|error| problem(format!("Could not write {}: {error}", path.display())))
+/// Replace Atlas's own record of taught projects, which lives in its own
+/// folder: the own-folder guard is not for it.
+fn replace_record(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target = file_target(path)
+        .map_err(|error| problem(format!("Could not write {}: {error}", path.display())))?;
+    write_target(path, &target, bytes)
+}
+
+/// Write `bytes` to `target`, the resolved place of `path`, keeping its
+/// permissions and replacing it whole.
+fn write_target(path: &Path, target: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(target).map_or(0o644, |m| m.permissions().mode() & 0o777);
+    atlas_core::files::write_atomic(target, bytes, mode)
+        .map_err(|error| problem(format!("Could not write {}: {error}", path.display())))
 }
 
 /// Resolve an existing file, refusing links whose targets cannot be resolved.

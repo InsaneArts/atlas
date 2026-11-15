@@ -173,7 +173,7 @@ fn the_status_is_read_soon_after_a_row_and_every_few_seconds_otherwise() {
 fn the_screen_is_kept_every_second_while_someone_acts_and_now_and_then_otherwise() {
     let dir = tempfile::tempdir().unwrap();
     let start = Instant::now();
-    let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+    let mut watch = Watch::new(Some(Frames::open(&dir.path().join("frames")).unwrap()));
 
     for (state, due) in [
         ("working", true),
@@ -207,7 +207,7 @@ fn missing_or_nonstring_retained_state_never_requests_a_frame() {
         json!({"state": 7}),
         json!({"state": true}),
     ] {
-        let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+        let mut watch = Watch::new(Some(Frames::open(&dir.path().join("frames")).unwrap()));
         assert!(!watch.frame_due(Instant::now()), "nothing known yet");
         assert!(
             watch
@@ -277,8 +277,7 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
         );
     let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let frames = dir.path().join("frames");
-    atlas_core::files::private_folder(&frames, Code::Usage).unwrap();
-    let mut watch = Watch::new(Some(frames.clone()));
+    let mut watch = Watch::new(Some(Frames::open(&frames).unwrap()));
     let mut lines = Lines {
         stdout: std::io::stdout(),
         written: Instant::now(),
@@ -326,25 +325,31 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
 
 #[test]
 fn a_kept_screen_is_written_whole_and_forgotten_with_its_record() {
-    let dir = tempfile::tempdir().unwrap();
-    replace(dir.path(), "frame.png", b"png").unwrap();
-    replace(dir.path(), "frame.json", b"{}").unwrap();
-    assert_eq!(fs::read(dir.path().join("frame.png")).unwrap(), b"png");
-    assert!(!dir.path().join("frame.png.partial").exists());
-    let mode = fs::metadata(dir.path().join("frame.png")).unwrap().mode();
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join("frames");
+    let frames = Frames::open(&dir).unwrap();
+    frames
+        .with(|folder| {
+            replace(folder, "frame.png", b"png").unwrap();
+            replace(folder, "frame.json", b"{}").unwrap();
+        })
+        .unwrap();
+    assert_eq!(fs::read(dir.join("frame.png")).unwrap(), b"png");
+    assert!(!dir.join("frame.png.partial").exists());
+    let mode = fs::metadata(dir.join("frame.png")).unwrap().mode();
     assert_eq!(mode & 0o777, 0o600);
 
-    let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+    let mut watch = Watch::new(Some(frames.clone()));
     watch.kept = Some([0; 32]);
     watch.last_id = 3;
     watch.forget_frame();
-    assert!(!dir.path().join("frame.png").exists());
-    assert!(!dir.path().join("frame.json").exists());
+    assert!(!dir.join("frame.png").exists());
+    assert!(!dir.join("frame.json").exists());
     assert_eq!(watch.last_id, 3, "ids go on from where they were");
 
-    fs::write(dir.path().join("frame.png.partial"), b"half").unwrap();
-    clear(dir.path());
-    assert!(!dir.path().join("frame.png.partial").exists());
+    fs::write(dir.join("frame.png.partial"), b"half").unwrap();
+    frames.clear();
+    assert!(!dir.join("frame.png.partial").exists());
 }
 
 #[test]
@@ -481,7 +486,7 @@ fn watch_preserves_unknown_future_state_without_inventing_readiness() {
     ] {
         let reading = Reading::decode(json!({"overview": {"state": state, "future": 3}}));
         assert_eq!(reading.state.is_string(), accepted);
-        let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+        let mut watch = Watch::new(Some(Frames::open(&dir.path().join("frames")).unwrap()));
         let line = watch.news(&reading, "viewer", None).unwrap();
         assert_eq!(line["overview"]["state"], state);
         assert_eq!(line["overview"]["future"], 3);
@@ -500,7 +505,7 @@ fn frame_cadence_uses_the_retained_state_instead_of_the_projection() {
     let mut reading = Reading::decode(json!({"ready": false, "overview": {"state": "working"}}));
     reading.value["ready"] = json!(true);
     reading.value["overview"]["state"] = json!("notReady");
-    let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+    let mut watch = Watch::new(Some(Frames::open(&dir.path().join("frames")).unwrap()));
     let line = watch.news(&reading, "viewer", None).unwrap();
     assert_eq!(line["ready"], false);
     assert!(watch.frame_due(start));
@@ -612,4 +617,37 @@ async fn a_menu_bar_that_keeps_a_feed_is_followed() {
 
     assert_eq!(following.told(), 1, "a reset reads everything again, once");
     serving.abort();
+}
+
+#[test]
+fn a_frames_folder_is_refused_before_anything_is_made_when_its_parent_can_be_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let open = dir.path().join("open");
+    fs::create_dir(&open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o0777)).unwrap();
+    let frames = open.join("frames");
+
+    let error = Frames::open(&frames).err().unwrap();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(!frames.exists(), "nothing was made");
+}
+
+#[test]
+fn frames_are_written_and_the_folder_removed_through_its_own_descriptor() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("frames");
+    let frames = Frames::open(&path).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o700);
+    // The name now leads elsewhere; the frames still go to the folder opened.
+    let moved = dir.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("elsewhere"), &path).unwrap();
+    frames
+        .with(|folder| replace(folder, "frame.png", b"png").unwrap())
+        .unwrap();
+    assert_eq!(fs::read(moved.join("frame.png")).unwrap(), b"png");
+    assert!(!dir.path().join("elsewhere").exists());
+
+    frames.clear();
+    assert!(!moved.join("frame.png").exists());
 }

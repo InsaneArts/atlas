@@ -8,8 +8,7 @@ use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
-    io::Write,
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -170,27 +169,85 @@ fn a_week() -> u32 {
 }
 
 /// Parse user-authored TOML. Unknown keys are rejected by the target type and
-/// errors name the file and the offending line.
+/// errors name the file, the line and column, and why, but never the file's
+/// text: a parser's own message can quote a key or a value it read, and the
+/// file may be one an agent named that holds secrets.
 ///
 /// # Errors
 ///
-/// Returns an error naming the file and the offending key.
+/// Returns an error naming the file, where in it and why.
 pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
-    let text = std::str::from_utf8(bytes).map_err(|error| {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
         Error::new(
             Code::Config,
             format!("{} is not UTF-8 text", origin.display()),
         )
-        .with_source(error)
     })?;
 
     toml::from_str(text).map_err(|error| {
-        Error::new(
-            Code::Config,
-            format!("{}: {}", origin.display(), error.to_string().trim_end()),
-        )
-        .with_source(error)
+        // Whether the text is TOML at all decides what can be said of it.
+        let why = match toml::from_str::<toml::Table>(text) {
+            Err(_) => NOT_TOML.to_owned(),
+            Ok(_) => unusable(error.message()),
+        };
+        unparsed(&origin.display().to_string(), text, error.span(), &why)
     })
+}
+
+/// Why text that is not TOML at all does not parse.
+pub(crate) const NOT_TOML: &str = "this is not valid TOML";
+
+/// The failure to parse `text`, the file shown as `shown`, at the bytes
+/// `span` for the reason `why`, which must not quote the text.
+pub(crate) fn unparsed(
+    shown: &str,
+    text: &str,
+    span: Option<std::ops::Range<usize>>,
+    why: &str,
+) -> Error {
+    let at = span
+        .and_then(|span| text.get(..span.start))
+        .map(|before| {
+            let line = before.matches('\n').count() + 1;
+            let column = before
+                .rsplit('\n')
+                .next()
+                .map_or(0, |last| last.chars().count())
+                + 1;
+            format!(", line {line}, column {column}")
+        })
+        .unwrap_or_default();
+    Error::new(Code::Config, format!("{shown}{at}: {why}"))
+}
+
+/// Why TOML that parsed does not fit the settings it is read as, from the
+/// deserializer's `message`, in Atlas's own words: the message itself can
+/// quote what the file says. A missing field is named by the settings' own
+/// type, never by the file.
+fn unusable(message: &str) -> String {
+    if let Some(field) = message
+        .strip_prefix("missing field `")
+        .and_then(|rest| rest.strip_suffix('`'))
+        .filter(|field| {
+            field
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        })
+    {
+        return format!("{field} is missing");
+    }
+    let why = if message.starts_with("unknown field") {
+        "a setting there is not one Atlas knows"
+    } else if message.starts_with("unknown variant") {
+        "a kind there is not one Atlas knows"
+    } else if message.starts_with("invalid type") {
+        "a value there has the wrong type"
+    } else if message.starts_with("duplicate") {
+        "a setting there is given twice"
+    } else {
+        "a value there is not one Atlas can use"
+    };
+    why.to_owned()
 }
 
 impl Config {
@@ -257,10 +314,13 @@ impl Config {
     }
 
     fn load_settings(path: &Path) -> Result<Settings> {
-        let path = fs::canonicalize(path).map_err(|error| {
-            // Only a path with nothing there is "not set up"; a dangling link
-            // or an unreadable folder is a file to repair, which init would
-            // not replace.
+        // Atlas's own folder is refused whether or not a file is there, so a
+        // path into it is never read nor taken for "not set up".
+        crate::own_folder::refuse(path)?;
+        // A path with nothing there is "not set up"; a dangling link, a loop
+        // or an unreadable folder is a file to repair, which init would not
+        // replace, so it says which file and why.
+        let resolved = fs::canonicalize(path).map_err(|error| {
             if fs::symlink_metadata(path)
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
             {
@@ -277,27 +337,31 @@ impl Config {
                 .with_source(error)
             }
         })?;
-
-        // A file that exists but does not load is never "not set up": init
-        // would refuse to replace it, so say which file and why.
-        Self::read(&path).map_err(|error| {
+        // Read the resolved settings through the one guarded reader: its
+        // folders proven unchangeable by any other account, opened without
+        // following a link, read through that descriptor. A security refusal
+        // stays as it is; anything else is a file to repair.
+        let repair = |error: Error| {
+            if error.code == Code::Credentials {
+                return error;
+            }
             Error::new(
                 Code::ConfigInvalid,
                 format!(
                     "Atlas could not read its settings in {}: {}",
-                    tilde(&path),
+                    tilde(&resolved),
                     error.error
                 ),
             )
             .with_source(error)
-        })
+        };
+        let reading = crate::checked::read(&resolved).map_err(repair)?;
+        Self::read(reading).map_err(repair)
     }
 
-    fn read(path: &Path) -> Result<Settings> {
-        let file = fs::File::open(path).map_err(|error| {
-            Error::new(Code::Io, format!("Open settings: {error}")).with_source(error)
-        })?;
-        let bytes = crate::files::read_up_to(file, LIMIT + 1).map_err(|error| {
+    fn read(reading: crate::checked::Reading) -> Result<Settings> {
+        let path = reading.path().to_path_buf();
+        let bytes = reading.read_up_to(LIMIT + 1).map_err(|error| {
             Error::new(Code::Io, format!("Read settings: {error}")).with_source(error)
         })?;
 
@@ -305,7 +369,7 @@ impl Config {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
         }
 
-        Settings::parse(&bytes, path)
+        Settings::parse(&bytes, &path)
     }
 
     /// Parse settings text of the form that names one helper as if it were
@@ -414,52 +478,91 @@ pub fn typed_text_limit(path: &Path, limit: Option<u32>) -> Result<()> {
 /// How long a settings write waits for another to finish.
 const WRITING: Duration = Duration::from_secs(5);
 
+/// The settings file at `path` as one settings write holds it: its folder,
+/// proven unchangeable by any other account; its name there; the file opened
+/// through the guarded reader and locked for this writer alone; which file
+/// that is; and its bytes, read through that descriptor.
+struct Locked {
+    folder: crate::checked::Folder,
+    name: std::ffi::OsString,
+    file: crate::files::LockFile,
+    identity: crate::checked::Identity,
+    before: Vec<u8>,
+    mode: u32,
+    resolved: PathBuf,
+}
+
 /// The settings file at `path`, locked for this writer alone, so two
 /// settings writes never lose one another's change: the lock is on the file
-/// in place, taken again when another writer replaced it meanwhile.
-fn locked(path: &Path) -> Result<crate::files::LockFile> {
+/// opened through the guarded reader, taken again when another writer
+/// replaced it meanwhile. Nothing is read or written by its name again.
+fn locked(path: &Path) -> Result<Locked> {
     let deadline = Instant::now() + WRITING;
     loop {
-        let file = fs::File::open(path).map_err(context("Read settings in", path))?;
-        let file = crate::files::LockFile(file);
+        let reading = crate::checked::read(path)?;
+        let resolved = reading.path().to_path_buf();
+        let identity = reading.identity()?;
+        let file = crate::files::LockFile(reading.into_file());
         crate::files::lock_retrying(&file, crate::files::Lock::Exclusive, deadline, |deadline| {
             Instant::now() < deadline
         })
         .map_err(|_| {
             Error::new(
                 Code::Config,
-                format!("{} is being updated; try again", tilde(path)),
+                format!("{} is being updated; try again", tilde(&resolved)),
             )
         })?;
-        let (held, placed) = (file.0.metadata()?, fs::metadata(path)?);
-        if (held.dev(), held.ino()) == (placed.dev(), placed.ino()) {
-            return Ok(file);
+        let parent = resolved.parent().unwrap_or_else(|| Path::new("/"));
+        let name = resolved
+            .file_name()
+            .ok_or_else(|| Error::new(Code::Config, "Settings name no file"))?
+            .to_os_string();
+        let folder = crate::checked::folder(parent)?;
+        if folder.entry_identity(&name)? != Some(identity) {
+            continue;
         }
+        let before = held_bytes(&file)?;
+        let mode = file.0.metadata()?.permissions().mode() & 0o777;
+        return Ok(Locked {
+            folder,
+            name,
+            file,
+            identity,
+            before,
+            mode,
+            resolved,
+        });
     }
+}
+
+/// The locked settings file's bytes, read through its descriptor from the
+/// start, refused past the limit.
+fn held_bytes(file: &crate::files::LockFile) -> Result<Vec<u8>> {
+    use std::io::{Seek, SeekFrom};
+
+    let mut reader = file.0.try_clone()?;
+    reader.seek(SeekFrom::Start(0))?;
+    let bytes = crate::files::read_up_to(reader, LIMIT + 1)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
+    }
+    Ok(bytes)
 }
 
 /// Set `key` of `[activity]` to `value`, or leave it out with none, in the
 /// settings at `path`, changing nothing else in the file. Another settings
 /// write waits its turn.
 fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
-    let path = fs::canonicalize(path).map_err(context("Read settings in", path))?;
-    let _writing = locked(&path)?;
-    let read = || -> Result<Vec<u8>> {
-        let file = fs::File::open(&path)?;
-        let bytes = crate::files::read_up_to(file, LIMIT + 1)?;
-        if bytes.len() as u64 > LIMIT {
-            return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
-        }
-        Ok(bytes)
-    };
-    let before = read()?;
+    let held = locked(path)?;
+    let path = held.resolved.clone();
+    let before = held.before.clone();
     let invalid = |error: &dyn std::fmt::Display| {
         Error::new(Code::Config, format!("{}: {error}", tilde(&path)))
     };
-    let mut document = std::str::from_utf8(&before)
-        .map_err(|error| invalid(&error))?
+    let text = std::str::from_utf8(&before).map_err(|_| invalid(&"it is not UTF-8 text"))?;
+    let mut document = text
         .parse::<toml_edit::DocumentMut>()
-        .map_err(|error| invalid(&error))?;
+        .map_err(|error| unparsed(&tilde(&path), text, error.span(), NOT_TOML))?;
     let not_a_table = || invalid(&"activity is not a table");
     match value {
         Some(mut value) => {
@@ -501,24 +604,20 @@ fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Resu
     }
     Settings::parse(text.as_bytes(), &path)?;
 
-    let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
-    crate::files::write_beside(
-        &path,
-        mode,
-        |file| Ok(file.write_all(text.as_bytes())?),
-        |temporary| {
-            if read()? != before {
-                return Err(Error::new(
-                    Code::Config,
-                    format!(
-                        "{} changed while Atlas was updating it; try again",
-                        tilde(&path)
-                    ),
-                ));
-            }
-            fs::rename(temporary, &path).map_err(context("Place settings at", &path))
-        },
-    )
+    // Still the very file locked and read, unchanged: then it is replaced
+    // through its folder's own descriptor.
+    if held.folder.entry_identity(&held.name)? != Some(held.identity)
+        || held_bytes(&held.file)? != before
+    {
+        return Err(Error::new(
+            Code::Config,
+            format!(
+                "{} changed while Atlas was updating it; try again",
+                tilde(&path)
+            ),
+        ));
+    }
+    held.folder.replace(&held.name, text.as_bytes(), held.mode)
 }
 
 fn missing(path: &Path) -> Error {

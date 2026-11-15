@@ -6,5 +6,6 @@ mod cli_contract;
 mod desktop_boundaries;
 mod jobs;
 mod machine_supervisor;
+mod own_boundaries;
 mod references;
 mod vm_desktops;

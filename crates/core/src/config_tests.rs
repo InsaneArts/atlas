@@ -38,31 +38,21 @@ fn only_output_placement_preserves_the_helper_on_reload() -> Result<()> {
 }
 
 #[test]
-fn a_settings_open_failure_names_only_the_step_and_cause() {
+fn a_missing_settings_file_is_not_set_up() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("missing.toml");
-    let cause = fs::File::open(&path).unwrap_err();
-    let error = Config::read(&path).unwrap_err();
-    assert_eq!(error.code, Code::Io);
-    assert!(!error.uncertain);
-    assert_eq!(error.error, format!("Open settings: {cause}"));
+    let error = Config::load(&path).unwrap_err();
+    assert_eq!(error.code, Code::Config);
+    assert!(error.error.contains("not set up"), "{error}");
 }
 
 #[test]
-fn a_settings_read_failure_names_the_path_once_and_keeps_the_cause() {
+fn a_settings_path_that_is_a_folder_is_refused_not_read() {
     let directory = tempfile::tempdir().unwrap();
     let path = fs::canonicalize(directory.path()).unwrap();
-    let cause = fs::read(&path).unwrap_err();
     let error = Config::load(&path).unwrap_err();
-    assert_eq!(error.code, Code::ConfigInvalid);
     assert!(!error.uncertain);
-    assert_eq!(
-        error.error,
-        format!(
-            "Atlas could not read its settings in {}: Read settings: {cause}",
-            tilde(&path)
-        )
-    );
+    assert!(error.error.contains("not a file"), "{error}");
 }
 
 /// A probe that is a link keeps its own path, so install replaces the
@@ -309,4 +299,84 @@ fn a_picture_setting_that_would_outgrow_the_settings_file_is_refused() -> Result
     assert_eq!(keep_days(&path, 3).unwrap_err().code, Code::Config);
     assert_eq!(fs::read_to_string(&path)?, written, "nothing is written");
     Ok(())
+}
+
+/// A secret that must never be said back from a settings file that does
+/// not parse.
+const CANARY: &str = "CANARY-5d1e07b9aa";
+
+/// Settings that do not parse, each with the canary where a parser would
+/// quote it: the whole file, a key, a value of the wrong type, an unquoted
+/// value, a kind Atlas does not know and a key given twice.
+fn malformed() -> [String; 6] {
+    [
+        format!("{CANARY}\n"),
+        format!("helper_uid = 1\n{} = 1\n", CANARY.replace('-', "_")),
+        format!("helper_uid = \"{CANARY}\"\n"),
+        format!("helper_uid = 1\ntoken = {CANARY}\n"),
+        format!("default = \"a\"\n[[desktops]]\nname = \"a\"\nkind = \"{CANARY}\"\n"),
+        format!("socket_path = \"x\"\nsocket_path = \"{CANARY}\"\n"),
+    ]
+}
+
+#[test]
+fn settings_that_do_not_parse_say_where_and_why_but_never_what_they_hold() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, text) in malformed().into_iter().enumerate() {
+        let path = directory.path().join(format!("settings-{index}.toml"));
+        fs::write(&path, &text).unwrap();
+        let errors = [
+            Config::load(&path).unwrap_err(),
+            Settings::load(&path).unwrap_err(),
+            keep_days(&path, 3).unwrap_err(),
+            desktops::with_user(
+                &text,
+                &path,
+                &Config::parse(crate::test_support::SETTINGS.as_bytes(), &path).unwrap(),
+            )
+            .unwrap_err(),
+        ];
+        for error in errors {
+            let said = serde_json::to_string(&error).unwrap();
+            assert!(!said.contains(CANARY), "{text}: {said}");
+            assert!(!said.contains(&CANARY.replace('-', "_")), "{text}: {said}");
+            assert!(said.contains(&format!("settings-{index}.toml")), "{said}");
+        }
+    }
+}
+
+#[test]
+fn a_parse_failure_names_the_line_and_column_and_atlas_own_reason() {
+    let origin = Path::new("/tmp/atlas.toml");
+    let not_toml = parse_toml::<Config>(b"helper_uid = 1\nsecret here\n", origin).unwrap_err();
+    assert_eq!(
+        not_toml.error,
+        "/tmp/atlas.toml, line 2, column 8: this is not valid TOML"
+    );
+    let unknown = parse_toml::<Config>(b"helper_uid = 1\nsecret = 1\n", origin).unwrap_err();
+    assert_eq!(
+        unknown.error,
+        "/tmp/atlas.toml, line 2, column 1: a setting there is not one Atlas knows"
+    );
+    let missing = parse_toml::<Config>(b"helper_uid = 1\n", origin).unwrap_err();
+    assert_eq!(
+        missing.error,
+        "/tmp/atlas.toml, line 1, column 1: socket_path is missing"
+    );
+    assert!(not_toml.source.is_none(), "no cause keeps the text either");
+}
+
+#[test]
+fn settings_in_atlas_own_folder_are_refused_before_they_are_read() {
+    let path = home()
+        .unwrap()
+        .join(crate::own_folder::FOLDER)
+        .join("VMs/0123456789abcdef01234567/Share/pairing-secret");
+    for error in [
+        Config::load(&path).unwrap_err(),
+        Settings::load(&path).unwrap_err(),
+    ] {
+        assert_eq!(error.code, Code::Credentials);
+        assert_eq!(error.error, crate::own_folder::REFUSAL);
+    }
 }

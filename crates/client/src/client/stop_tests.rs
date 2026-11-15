@@ -196,3 +196,92 @@ async fn a_resume_on_a_vm_desktop_is_refused_and_its_stop_stays() {
     assert_eq!(refused.error, person.unreachable().error);
     assert!(person.controller.stop_noted());
 }
+
+#[tokio::test]
+async fn a_resume_whose_reply_is_late_keeps_a_newer_stop_whose_caller_died_before_telling_anyone() {
+    let (dir, client, listener, _session) = native_client();
+    let mut person = client;
+    person.actor = Actor::Viewer;
+    person.controller.note_stop(true).unwrap();
+    let mut resuming = Box::pin(person.hold(false));
+    let mut hello = dispatched(&mut resuming, &listener, "hello").await;
+    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+    let mut hold = dispatched(&mut resuming, &listener, "hold").await;
+
+    // While the reply is late, another process notes a newer Stop and dies
+    // before it reaches the helper or anything else.
+    atlas_control::Controller::at(atlas_core::test_support::UID, &dir.path().join("state"))
+        .note_stop(true)
+        .unwrap();
+    answer(&mut hold, json!({"ok": true, "held": false, "kept": true})).await;
+
+    let resumed = resuming.await.unwrap();
+    assert_eq!(
+        resumed["held"], true,
+        "the newer Stop is said to hold: {resumed}"
+    );
+    assert!(
+        resumed["warnings"]
+            .to_string()
+            .contains("still holds agents"),
+        "{resumed}"
+    );
+    assert!(person.controller.stop_noted(), "the newer Stop stays");
+    let mut agent = person.clone();
+    agent.actor = Actor::Agent;
+    assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+    drop(dir);
+}
+
+#[tokio::test]
+async fn a_resume_that_finds_the_stop_already_lifted_says_agents_are_free_without_a_warning() {
+    let (dir, client, listener, _session) = native_client();
+    let mut person = client;
+    person.actor = Actor::Viewer;
+    person.controller.note_stop(true).unwrap();
+    let mut resuming = Box::pin(person.hold(false));
+    let mut hello = dispatched(&mut resuming, &listener, "hello").await;
+    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+    let mut hold = dispatched(&mut resuming, &listener, "hold").await;
+
+    // Another Resume lifts the same Stop while this one's reply is late.
+    atlas_control::Controller::at(atlas_core::test_support::UID, &dir.path().join("state"))
+        .note_stop(false)
+        .unwrap();
+    answer(&mut hold, json!({"ok": true, "held": false, "kept": true})).await;
+
+    let resumed = resuming.await.unwrap();
+    assert_eq!(resumed["held"], false, "{resumed}");
+    assert!(
+        !resumed["warnings"]
+            .to_string()
+            .contains("still holds agents"),
+        "{resumed}"
+    );
+    assert!(!person.controller.stop_noted());
+    drop(dir);
+}
+
+#[tokio::test]
+async fn a_resume_without_the_input_service_that_finds_a_newer_stop_says_agents_stay_stopped() {
+    let (dir, client, listener, _session) = native_client();
+    let mut person = client;
+    person.actor = Actor::Viewer;
+    person.controller.note_stop(true).unwrap();
+    let mut resuming = Box::pin(person.hold(false));
+    let hello = dispatched(&mut resuming, &listener, "hello").await;
+
+    // A newer Stop is noted, then the input service goes without answering.
+    atlas_control::Controller::at(atlas_core::test_support::UID, &dir.path().join("state"))
+        .note_stop(true)
+        .unwrap();
+    drop(hello);
+
+    let resumed = resuming.await.unwrap();
+    assert_eq!(resumed["held"], true, "{resumed}");
+    let warnings = resumed["warnings"].to_string();
+    assert!(!warnings.contains("free to go on"), "{warnings}");
+    assert!(warnings.contains("stopped here all the same"), "{warnings}");
+    assert!(warnings.contains("still holds agents"), "{warnings}");
+    assert!(person.controller.stop_noted());
+}

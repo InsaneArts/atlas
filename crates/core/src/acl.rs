@@ -219,6 +219,22 @@ pub fn allows_write(path: &Path) -> io::Result<bool> {
         .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0))
 }
 
+/// Whether the open object `fd` carries any extended ACL entry that allows a
+/// write, read on the descriptor itself; deny entries are harmless. An
+/// invalid ACL is an error.
+///
+/// # Errors
+///
+/// Returns the I/O error of reading the ACL, or one for an invalid ACL.
+pub fn allows_write_fd(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: the descriptor is borrowed live for the duration of the call.
+    let acl = Acl::wrap(unsafe { acl_get_fd(fd.as_raw_fd()) })?;
+    Ok(checked_entries(acl)?
+        .iter()
+        .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0))
+}
+
 /// ACL rights a controller entry may carry: traversal only, no inheritance.
 fn search_only(rights: &str) -> bool {
     rights

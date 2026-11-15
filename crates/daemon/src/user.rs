@@ -3,3 +3,4 @@
 //! serving remains in [`crate::daemon`], with its user-desktop assumptions
 //! kept until another kind is designed.
 pub mod setup;
+pub mod worker;

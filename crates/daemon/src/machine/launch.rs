@@ -157,17 +157,48 @@ pub async fn prove_parent() -> Result<()> {
     proved(std::os::unix::process::parent_id()).await
 }
 
+/// [`prove_parent`] on this thread, for a worker that starts before any
+/// runtime: a machine desktop's supervisor.
+///
+/// # Errors
+///
+/// Refuses as [`prove_parent`] does.
+pub(crate) fn prove_parent_now() -> Result<()> {
+    let pid = std::os::unix::process::parent_id();
+    let uid = nix::unistd::getuid().as_raw();
+    let printed = asked_now("/bin/launchctl", &["print", &format!("gui/{uid}/{LABEL}")])?;
+    let json = asked_now("/usr/bin/plutil", &["-convert", "json", "-o", "-", PLIST])?;
+    judged(pid, &printed, &json)
+}
+
 /// Refuse unless `pid` runs this very program as launchd started the
 /// guest's daemon.
 async fn proved(pid: u32) -> Result<()> {
     let uid = nix::unistd::getuid().as_raw();
     let printed = asked("/bin/launchctl", &["print", &format!("gui/{uid}/{LABEL}")]).await?;
     let json = asked("/usr/bin/plutil", &["-convert", "json", "-o", "-", PLIST]).await?;
+    judged(pid, &printed, &json)
+}
+
+/// Refuse unless `pid` runs this very program as the job launchd `printed`,
+/// loaded from the plist read as `json`, names.
+fn judged(pid: u32, printed: &[u8], json: &[u8]) -> Result<()> {
     let plist: Plist =
-        serde_json::from_slice(&json).map_err(|_| refused("the installed job cannot be read"))?;
+        serde_json::from_slice(json).map_err(|_| refused("the installed job cannot be read"))?;
     let program = std::env::current_exe().map_err(|_| refused("this program cannot be found"))?;
-    let job = Job::parse(&String::from_utf8_lossy(&printed));
+    let job = Job::parse(&String::from_utf8_lossy(printed));
     judge(&job, pid, (Path::new(PLIST), &plist), &program)
+}
+
+/// [`asked`] on this thread.
+fn asked_now(program: &str, arguments: &[&str]) -> Result<Vec<u8>> {
+    let output =
+        atlas_core::bounded::output(std::process::Command::new(program).args(arguments), ASKING)
+            .map_err(|_| refused("launchd could not be asked in time"))?;
+    if !output.status.success() {
+        return Err(refused("launchd knows no such job"));
+    }
+    Ok(output.stdout)
 }
 
 /// What `program` with `arguments` printed, ended if it takes too long.

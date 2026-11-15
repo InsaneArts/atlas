@@ -9,3 +9,4 @@ pub mod machine;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod user;
+pub mod worker;

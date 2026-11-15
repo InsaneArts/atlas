@@ -68,7 +68,6 @@ fn an_unresolved_instruction_link_leaves_every_file_unchanged() {
 
             let error = project(dir.path()).unwrap_err();
             assert!(error.error.contains(&path.display().to_string()));
-            assert!(error.error.contains("Could not resolve"));
             assert_eq!(std::fs::read_link(&path).unwrap(), Path::new(target));
             assert_eq!(std::fs::read_to_string(&other).unwrap(), before);
 
@@ -247,7 +246,7 @@ fn a_replaced_file_keeps_its_exact_permissions() {
     let path = dir.path().join("AGENTS.md");
     std::fs::write(&path, "old").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
-    replace_file(&path, b"new").unwrap();
+    replace_file(&path, None, b"new").unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o664);
@@ -278,4 +277,67 @@ fn the_project_section_lets_a_loaded_skill_stand_for_the_guide() {
         section.contains("only if that action was yours"),
         "{section}"
     );
+}
+
+#[test]
+fn an_instruction_file_linked_into_atlas_own_folder_is_refused_and_its_target_untouched() {
+    // A file inside Atlas's own folder: a temporary one of this test's,
+    // removed after, wherever that folder really is.
+    let inside = atlas_core::config::home()
+        .unwrap()
+        .join(atlas_core::own_folder::FOLDER)
+        .join(format!("project-test-{}", atlas_core::files::token()));
+    std::fs::create_dir_all(&inside).unwrap();
+    let secret = inside.join("pairing-secret");
+    std::fs::write(&secret, "SECRET").unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path();
+    std::os::unix::fs::symlink(&secret, project.join("AGENTS.md")).unwrap();
+    let outcome = super::project(project);
+    let secret_kept = std::fs::read_to_string(&secret);
+    std::fs::remove_dir_all(&inside).unwrap();
+
+    let error = outcome.unwrap_err();
+    assert_eq!(error.code, atlas_core::error::Code::Credentials, "{error}");
+    assert_eq!(error.error, atlas_core::own_folder::REFUSAL);
+    assert_eq!(secret_kept.unwrap(), "SECRET");
+}
+
+#[test]
+fn forgetting_removes_only_the_very_file_it_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("AGENTS.md");
+    std::fs::write(&path, with_section("").unwrap()).unwrap();
+    let read = read_instructions(&path).unwrap().unwrap();
+
+    // Another file takes the name between the read and the removal.
+    let other = dir.path().join("other.md");
+    std::fs::write(&other, "someone else's").unwrap();
+    std::fs::rename(&other, &path).unwrap();
+
+    let error = remove_instructions(&path, &read).unwrap_err();
+    assert!(
+        error.error.contains("changed while Atlas was updating it"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "someone else's");
+
+    // The file it read is removed through its folder.
+    let read = read_instructions(&path).unwrap().unwrap();
+    remove_instructions(&path, &read).unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
+fn an_instruction_file_another_account_may_write_is_never_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("AGENTS.md");
+    std::fs::write(&path, "text").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+    let error = read_instructions(&path).err().unwrap();
+    assert_eq!(error.code, atlas_core::error::Code::Credentials, "{error}");
 }

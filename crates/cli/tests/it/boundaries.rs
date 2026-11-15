@@ -392,7 +392,17 @@ fn config_paths_are_relative_and_unknown_fields_fail() {
         error.code, "config-invalid",
         "an existing file that does not load"
     );
-    assert!(error.error.contains("unexpected"), "{}", error.error);
+    assert!(
+        error
+            .error
+            .ends_with("line 6, column 1: a setting there is not one Atlas knows"),
+        "{}",
+        error.error
+    );
+    assert!(
+        !error.error.contains("unexpected"),
+        "the file is never quoted"
+    );
 
     std::fs::write(&path, "helper_uid = \"502\"\n").unwrap();
     assert!(

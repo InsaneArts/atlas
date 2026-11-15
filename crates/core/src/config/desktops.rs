@@ -567,9 +567,9 @@ pub fn with_user(text: &str, path: &Path, user: &Config) -> Result<String> {
     if !text_lists(text, path)? {
         return user.to_toml();
     }
-    let mut document = text
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|error| invalid(format!("{}: {error}", super::tilde(path))))?;
+    let mut document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
+        super::unparsed(&super::tilde(path), text, error.span(), super::NOT_TOML)
+    })?;
     // The list may be written as tables or inline, and its Second Login's
     // helper fields change in place either way.
     let path_of = |value: &Path| toml_edit::Value::from(value.to_string_lossy().into_owned());

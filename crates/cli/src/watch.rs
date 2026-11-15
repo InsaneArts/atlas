@@ -20,7 +20,6 @@ use atlas_client::{
 use atlas_core::host::{HostSession, Key};
 use atlas_core::{
     error::{Code, Error, Result},
-    files::{Durability, write_private_with},
     screen::png::png_dimensions,
 };
 use serde_json::{Value, json};
@@ -82,12 +81,13 @@ type Mark = Option<(u64, SystemTime)>;
 /// Returns configuration, output, listener or watch-service failures. Streaming
 /// observations do not authorize later input against a changed session.
 pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: bool) -> Result<()> {
-    // Only a folder this watch made is removed at the end.
-    let made = frames.as_ref().is_some_and(|frames| !frames.exists());
+    // The frames folder, made and opened through its proven parent before
+    // anything is written or cleaned there, and written, cleaned and removed
+    // through its own descriptor for this watch's whole life.
+    let frames = frames.as_deref().map(Frames::open).transpose()?;
     if let Some(frames) = &frames {
-        atlas_core::files::private_folder(frames, Code::Usage)?;
         // A screen an earlier watch left behind is not this one's.
-        clear(frames);
+        frames.clear();
     }
 
     let output = client.output_dir()?.to_path_buf();
@@ -122,13 +122,11 @@ pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: boo
         }
     }
 
-    // A screen left behind would outlive what it shows; the folder was
-    // this watch's own.
-    if let Some(frames) = &watch.frames {
-        clear(frames);
-        if made {
-            let _ = fs::remove_dir(frames);
-        }
+    // A screen left behind would outlive what it shows; a folder this watch
+    // made goes with it.
+    if let Some(frames) = watch.frames.take() {
+        frames.clear();
+        frames.remove_if_made();
     }
     Ok(())
 }
@@ -153,16 +151,59 @@ pub(crate) async fn stopped() {
     }
 }
 
-/// Remove every frame file from `frames`.
-fn clear(frames: &Path) {
-    for name in FRAME_FILES {
-        let _ = fs::remove_file(frames.join(name));
+/// A frames folder, held through its own descriptor: every frame is written,
+/// cleaned and the folder removed through it, never by its name again.
+#[derive(Clone)]
+struct Frames {
+    /// Where it is, as the frame lines show it.
+    shown: PathBuf,
+    folder: std::sync::Arc<std::sync::Mutex<Option<atlas_core::checked::Private>>>,
+}
+
+impl Frames {
+    /// The private folder at `path`, made 0700 when it is not there.
+    fn open(path: &Path) -> Result<Self> {
+        let private = atlas_core::checked::private_folder(path)?;
+        Ok(Self {
+            shown: private.folder().path().to_path_buf(),
+            folder: std::sync::Arc::new(std::sync::Mutex::new(Some(private))),
+        })
+    }
+
+    /// Run `with` on the open folder; none once it is removed.
+    fn with<T>(&self, with: impl FnOnce(&atlas_core::checked::Folder) -> T) -> Option<T> {
+        let held = self
+            .folder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.as_ref().map(|private| with(private.folder()))
+    }
+
+    /// Remove every frame file.
+    fn clear(&self) {
+        self.with(|folder| {
+            for name in FRAME_FILES {
+                let _ = folder.remove(std::ffi::OsStr::new(name));
+            }
+        });
+    }
+
+    /// Remove the folder when this watch made it.
+    fn remove_if_made(&self) {
+        let taken = self
+            .folder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(private) = taken {
+            private.remove_if_made();
+        }
     }
 }
 
 /// What the watch has said and kept so far.
 struct Watch {
-    frames: Option<PathBuf>,
+    frames: Option<Frames>,
     log: Mark,
     said: Value,
     state: State,
@@ -183,7 +224,7 @@ struct Watch {
 }
 
 impl Watch {
-    fn new(frames: Option<PathBuf>) -> Self {
+    fn new(frames: Option<Frames>) -> Self {
         Self {
             frames,
             log: None,
@@ -349,12 +390,14 @@ impl Watch {
         let written = tokio::task::spawn_blocking({
             let frames = frames.clone();
             move || {
-                replace(&frames, "frame.png", &png)?;
-                replace(&frames, "frame.json", record.to_string().as_bytes())
+                frames.with(|folder| {
+                    replace(folder, "frame.png", &png)?;
+                    replace(folder, "frame.json", record.to_string().as_bytes())
+                })
             }
         })
         .await
-        .ok()?;
+        .ok()??;
         written.ok()?;
 
         self.kept = Some(digest);
@@ -362,7 +405,7 @@ impl Watch {
         Some(json!({
             "type": "frame",
             "id": id,
-            "path": frames.join("frame.png").to_string_lossy(),
+            "path": frames.shown.join("frame.png").to_string_lossy(),
             "width": width,
             "height": height,
         }))
@@ -371,7 +414,7 @@ impl Watch {
     /// Remove the kept screen, if any.
     fn forget_frame(&mut self) {
         if let (Some(frames), Some(_)) = (&self.frames, self.kept.take()) {
-            clear(frames);
+            frames.clear();
         }
     }
 }
@@ -495,13 +538,10 @@ async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen>
     }
 }
 
-/// Write `name` in `folder` whole: a reader opening it mid-write sees the
-/// last whole one. Kept to the kernel, as a screen need not outlive a
-/// power cut.
-fn replace(folder: &Path, name: &str, bytes: &[u8]) -> Result<()> {
-    let partial = folder.join(format!("{name}.partial"));
-    write_private_with(&partial, bytes, Durability::Kernel)?;
-    fs::rename(&partial, folder.join(name)).map_err(|error| Error::writing(folder, error))
+/// Write `name` in `folder` whole, through its descriptor: a reader opening
+/// it mid-write sees the last whole one.
+fn replace(folder: &atlas_core::checked::Folder, name: &str, bytes: &[u8]) -> Result<()> {
+    folder.replace(std::ffi::OsStr::new(name), bytes, 0o600)
 }
 
 /// `overview` without the host id of any session but `own`: every other

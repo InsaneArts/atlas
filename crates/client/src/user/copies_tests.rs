@@ -76,7 +76,12 @@ fn a_copy_gets_its_own_folder_and_nobody_else_may_write_it() {
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     let source = dir.path().join("note.txt");
     fs::write(&source, "hello").unwrap();
+    // A source another account may change is never handed over.
     fs::set_permissions(&source, fs::Permissions::from_mode(0o666)).unwrap();
+    let error = copy(&source, &root, &Token::new()).unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    // Its own, with execute kept, is copied; the copy nobody else may write.
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
 
     let first = copy(&source, &root, &Token::new()).unwrap();
     let second = copy(&source, &root, &Token::new()).unwrap();
@@ -1040,4 +1045,109 @@ fn a_source_replaced_by_a_link_to_a_store_is_refused_as_it_is_copied_and_leaves_
         !root.join(token.as_str()).exists(),
         "the copy's folder was left"
     );
+}
+
+#[test]
+fn a_source_swapped_for_a_link_before_the_copy_is_refused_and_its_target_never_copied() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // The link stands where the source was when the copy runs: its target,
+    // a secret, is never read.
+    let secret = dir.path().join("pairing-secret");
+    fs::write(&secret, "SECRET").unwrap();
+    let source = dir.path().join("note.txt");
+    std::os::unix::fs::symlink(&secret, &source).unwrap();
+
+    let error = copy(&source, &root, &Token::new()).unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(error.error.contains("a link itself"), "{error}");
+    let leaked = fs::read_dir(&root).unwrap().flatten().any(|entry| {
+        fs::read_to_string(entry.path().join("note.txt"))
+            .ok()
+            .as_deref()
+            == Some("SECRET")
+    });
+    assert!(!leaked, "the link's target was copied");
+}
+
+#[test]
+fn a_source_reached_through_a_persons_own_link_is_checked_where_it_really_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(dir.path()).unwrap();
+    let root = home.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A link of the person's own, to a folder of the person's own: the real
+    // folder is what is checked and copied, not the link.
+    let real = home.join("real");
+    fs::create_dir(&real).unwrap();
+    fs::write(real.join("note.txt"), "hello").unwrap();
+    let via = home.join("via");
+    std::os::unix::fs::symlink(&real, &via).unwrap();
+
+    let made = copy(&via.join("note.txt"), &root, &Token::new()).unwrap();
+    assert_eq!(fs::read_to_string(&made).unwrap(), "hello");
+}
+
+#[test]
+fn a_person_owned_file_in_a_sticky_world_writable_folder_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(dir.path()).unwrap();
+    let root = home.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A folder like /tmp: world-writable but sticky, so only the owner of an
+    // entry may remove it; this account's file in it may be handed over.
+    let sticky = home.join("shared");
+    fs::create_dir(&sticky).unwrap();
+    fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777)).unwrap();
+    let source = sticky.join("note.txt");
+    fs::write(&source, "hello").unwrap();
+
+    let made = copy(&source, &root, &Token::new()).unwrap();
+    assert_eq!(fs::read_to_string(&made).unwrap(), "hello");
+}
+
+#[test]
+fn a_file_under_a_non_sticky_world_writable_folder_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(dir.path()).unwrap();
+    let root = home.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A folder anyone may write that is not sticky: another account could
+    // swap the file for a link, so it is never handed over.
+    let open = home.join("open");
+    fs::create_dir(&open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o0777)).unwrap();
+    let source = open.join("note.txt");
+    fs::write(&source, "hello").unwrap();
+
+    let error = copy(&source, &root, &Token::new()).unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(
+        error.error.contains("can be changed by another account"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_tree_holding_a_file_or_a_sticky_folder_another_account_may_change_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(dir.path()).unwrap();
+    let root = home.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    for (what, mode, folder) in [("file", 0o666, false), ("sticky folder", 0o1777, true)] {
+        let app = home.join(format!("App-{}", what.replace(' ', "-")));
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        let inside = app.join("Contents/inside");
+        if folder {
+            fs::create_dir(&inside).unwrap();
+        } else {
+            fs::write(&inside, "x").unwrap();
+        }
+        fs::set_permissions(&inside, fs::Permissions::from_mode(mode)).unwrap();
+
+        let error = copy(&app, &root, &Token::new()).unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{what}: {error}");
+        assert!(error.error.contains("inside it"), "{what}: {error}");
+    }
 }

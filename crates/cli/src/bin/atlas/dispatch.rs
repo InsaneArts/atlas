@@ -101,6 +101,15 @@ fn elements_info(_: i32) -> Result<Value> {
 
 #[cfg(target_os = "macos")]
 async fn input_service(service: cli::Service) -> Result<Value> {
+    // The account it names is a distinct helper first, for the clearest
+    // word, then: only in a helper's own account, serving as itself for
+    // another, does it start — a copy run by hand in the person's account,
+    // naming the helper as its controller, never serves.
+    atlas_core::session::validate_target_uid(service.uid, service.controller_uid)?;
+    let (uid, controller) = (service.uid, service.controller_uid);
+    tokio::task::spawn_blocking(move || atlas_daemon::user::worker::input_service(uid, controller))
+        .await
+        .map_err(|_| atlas_daemon::worker::refusal())??;
     atlas_native::native::service::serve(service.uid, service.controller_uid, service.socket)
         .await?;
     Ok(Value::Null)
@@ -287,7 +296,13 @@ async fn carry_out(
     allow_disrupt: bool,
 ) -> Result<Value> {
     match command {
-        Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
+        // Only the helper daemon runs it, inside the helper.
+        Command::EnvironmentWorker { packet, apply } => {
+            tokio::task::spawn_blocking(atlas_daemon::user::worker::worker)
+                .await
+                .map_err(|_| atlas_daemon::worker::refusal())??;
+            environment::worker(&packet, apply)
+        }
         Command::AgentGuide(args) => Ok(guide(&args)),
         Command::SessionInfo => atlas_native::native::session_info(),
         Command::SessionProofServe => {
@@ -338,6 +353,9 @@ async fn carry_out(
         Command::Install => client()?.install(),
         Command::StartInput => client()?.start_input().await,
         Command::Watch { port, frames, once } => {
+            if let Some(frames) = &frames {
+                atlas_core::own_folder::refuse(frames)?;
+            }
             atlas_cli::watch::watch(client()?, port, frames, once)
                 .await
                 .map(|()| Value::Null)
@@ -671,13 +689,25 @@ async fn wait_for_element(client: &Client, args: cli::Wait) -> Result<Value> {
 }
 
 async fn input(client: &Client, actions: String, target: cli::AppTarget) -> Result<Value> {
+    // A batch read from a file is parsed and decoded here, so no refusal
+    // ever quotes a file an agent named: only that it was not a valid batch.
+    let from_file = actions.starts_with('@');
     let bytes = actions_batch(actions)?;
-    agent::act(
-        client,
-        target.expected(None, None)?.as_ref(),
-        &serde_json::from_slice(&bytes)?,
-    )
-    .await
+    let unparsable = || {
+        Error::new(
+            Code::InvalidJson,
+            "The actions file is not a valid JSON actions batch",
+        )
+    };
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) if from_file => return Err(unparsable()),
+        Err(error) => return Err(error.into()),
+    };
+    if from_file && atlas_core::actions::Batch::decode(&value).is_err() {
+        return Err(unparsable());
+    }
+    agent::act(client, target.expected(None, None)?.as_ref(), &value).await
 }
 
 async fn restart(client: &Client) -> Result<Value> {
@@ -780,10 +810,14 @@ async fn agents(
             Ok(Value::Null)
         }
         AgentsCommand::Project { dir } => {
-            atlas_agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
+            let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+            atlas_core::own_folder::refuse(&dir)?;
+            atlas_agents::project(&dir)
         }
         AgentsCommand::Forget { dir } => {
-            atlas_agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
+            let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+            atlas_core::own_folder::refuse(&dir)?;
+            atlas_agents::forget(&dir)
         }
         AgentsCommand::Install { picks } => {
             let _spinner = Spinner::new("Connecting…");
@@ -839,7 +873,10 @@ async fn menu_bar(
     let program = menubar::Program::new(config)?;
 
     match args.render {
-        Some(directory) => viewer::render_menubar(client, &program, &directory).await,
+        Some(directory) => {
+            atlas_core::own_folder::refuse(&directory)?;
+            viewer::render_menubar(client, &program, &directory).await
+        }
         None if args.serve || menubar::started_at_login() => {
             // Its own session: closing the terminal that started it does
             // not hang it up.
@@ -901,14 +938,10 @@ fn actions_batch(actions: String) -> Result<Vec<u8>> {
     const LIMIT: u64 = 32 * 1024;
 
     let bytes = match actions.strip_prefix('@') {
-        Some(path) => {
-            let mut bytes = Vec::new();
-            std::fs::File::open(path)
-                .map_err(|error| Error::new(Code::Io, format!("Could not read {path}: {error}")))?
-                .take(LIMIT + 1)
-                .read_to_end(&mut bytes)?;
-            bytes
-        }
+        // A file an agent names is read through the one guarded reader:
+        // never Atlas's own folder, its folders proven unchangeable by any
+        // other account, read through the descriptor it opened.
+        Some(path) => atlas_core::checked::read(Path::new(path))?.read_up_to(LIMIT + 1)?,
         None => actions.into_bytes(),
     };
     if bytes.len() as u64 > LIMIT {

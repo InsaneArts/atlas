@@ -4,6 +4,7 @@
 //! under way hears of it from either side's saved marker.
 use super::{Actor, Client};
 use crate::jobs;
+use atlas_control::Resumed;
 use atlas_core::{
     desktop::Kind,
     error::{Code, Error, Result},
@@ -133,11 +134,18 @@ impl Client {
 
         // The person's side keeps the Stop first, so it holds even when the
         // helper's input service is down or older: agents' commands read it.
-        if on {
+        // A Resume lifts only the Stop it read now: one given while it waits
+        // for the helper stays, whether or not its caller lived to tell it.
+        let lifting = if on {
             self.controller.note_stop(true)?;
-        }
+            None
+        } else {
+            self.controller.stop_revision()?
+        };
+        let lift = || self.controller.lift_stop(lifting.as_ref());
 
         let unreachable = |why: &str| {
+            let mut outcome = Resumed::Cleared;
             if !on {
                 if !matches!(self.service_stop_saved(), Ok(false)) {
                     return Err(Error::new(
@@ -145,14 +153,20 @@ impl Client {
                         format!("{why} Recover input before agents can resume."),
                     ));
                 }
-                self.controller.note_stop(false)?;
+                outcome = lift()?;
             }
-            Ok(json!({
-                "ok": true,
-                "held": on,
-                "kept": true,
-                "warnings": [format!("{why} Agents are {} here all the same.", if on { "stopped" } else { "free to go on" })],
-            }))
+            Ok(resumed(
+                json!({
+                    "ok": true,
+                    "held": on,
+                    "kept": true,
+                    "warnings": [format!(
+                        "{why} Agents are {} here all the same.",
+                        if on || outcome == Resumed::StopHeld { "stopped" } else { "free to go on" }
+                    )],
+                }),
+                outcome,
+            ))
         };
         let Ok(hello) = self.input_transport()?.call(&json!({"op": "hello"})).await else {
             return unreachable("The helper's input service isn't running.");
@@ -179,16 +193,14 @@ impl Client {
             }
             Err(error) => return Err(error),
         };
-        if !on {
-            self.controller.note_stop(false)?;
-        }
+        let outcome = if on { Resumed::Cleared } else { lift()? };
         if reply["kept"] == false {
             reply["warnings"] = json!([
                 "The helper could not save this, so it lasts only until its input restarts"
             ]);
         }
 
-        Ok(reply)
+        Ok(resumed(reply, outcome))
     }
 
     /// Once the person stops agents: either side's saved marker appears.
@@ -241,6 +253,22 @@ impl Client {
             Kind::Vm(_) => Err(std::io::Error::other(self.unreachable().error)),
         }
     }
+}
+
+/// `reply` told of a Resume's `outcome`: a Stop given while it waited still
+/// holds agents, so it says so and that agents are held, over any held the
+/// reply carried. A Stop that was lifted, or was already gone, is left as
+/// the reply has it.
+fn resumed(mut reply: Value, outcome: Resumed) -> Value {
+    if outcome == Resumed::StopHeld {
+        reply["held"] = json!(true);
+        let mut warnings = reply["warnings"].as_array().cloned().unwrap_or_default();
+        warnings.push(json!(
+            "A Stop given while this Resume waited still holds agents."
+        ));
+        reply["warnings"] = json!(warnings);
+    }
+    reply
 }
 
 #[cfg(test)]

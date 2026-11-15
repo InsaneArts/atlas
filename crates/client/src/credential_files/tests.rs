@@ -444,18 +444,71 @@ fn nothing_is_refused_while_the_person_lets_agents_copy_sign_ins_in() {
     let key = home.path().join(".ssh/id_ed25519");
 
     assert_eq!(
-        refuse_at([key.as_path()], Some(home.path()))
-            .unwrap_err()
-            .code,
+        refuse_at(&[key.as_path()], home.path()).unwrap_err().code,
         Code::Credentials
     );
     assert!(crate::sign_in_copies::set_in(home.path(), true, true).unwrap());
-    refuse_at([key.as_path()], Some(home.path())).unwrap();
+    refuse_at(&[key.as_path()], home.path()).unwrap();
     assert!(!crate::sign_in_copies::set_in(home.path(), false, false).unwrap());
     assert_eq!(
-        refuse_at([key.as_path()], Some(home.path()))
-            .unwrap_err()
-            .code,
+        refuse_at(&[key.as_path()], home.path()).unwrap_err().code,
         Code::Credentials
     );
+}
+
+/// A home of its own, by its real path, with Atlas's own folder in it.
+fn atlas_home() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let home = fs::canonicalize(directory.path()).unwrap();
+    fs::create_dir_all(home.join(atlas_core::own_folder::FOLDER)).unwrap();
+    (directory, home)
+}
+
+#[test]
+fn atlas_own_folder_is_refused_whatever_the_person_lets_agents_copy() {
+    let (_directory, home) = atlas_home();
+    let share = home
+        .join(atlas_core::own_folder::FOLDER)
+        .join("VMs/0123456789abcdef01234567/Share");
+    fs::create_dir_all(&share).unwrap();
+    let secret = share.join("pairing-secret");
+    fs::write(&secret, b"secret").unwrap();
+    assert!(crate::sign_in_copies::set_in(&home, true, true).unwrap());
+
+    for path in [secret.clone(), share, home.join("Library")] {
+        let error = refuse_at(&[path.as_path()], &home).unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{}", path.display());
+        assert_eq!(error.error, atlas_core::own_folder::REFUSAL);
+    }
+    let key = home.join(".ssh/id_ed25519");
+    refuse_at(&[key.as_path()], &home).unwrap();
+}
+
+#[test]
+fn a_finder_alias_or_a_link_into_atlas_own_folder_is_refused() {
+    let (_directory, home) = atlas_home();
+    let secret = home
+        .join(atlas_core::own_folder::FOLDER)
+        .join("pairing-secret");
+    fs::write(&secret, b"secret").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let alias = elsewhere.path().join("notes");
+    atlas_native::alias::make(&secret, &alias);
+    let folder_alias = elsewhere.path().join("folder");
+    atlas_native::alias::make(&home.join(atlas_core::own_folder::FOLDER), &folder_alias);
+    let link = elsewhere.path().join("linked");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+    for path in [alias, folder_alias, link] {
+        let error = refuse_own_folder(&[path.as_path()], &home).unwrap_err();
+        assert_eq!(
+            error.error,
+            atlas_core::own_folder::REFUSAL,
+            "{}",
+            path.display()
+        );
+    }
+    let plain = elsewhere.path().join("plain.txt");
+    fs::write(&plain, b"text").unwrap();
+    refuse_own_folder(&[plain.as_path()], &home).unwrap();
 }

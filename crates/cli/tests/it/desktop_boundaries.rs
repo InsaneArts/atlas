@@ -1195,6 +1195,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/dispatch.rs",
+        &["input_service"],
+        "exception: the helper's input service runs inside the helper, for a helper's account alone",
+    ),
+    (
+        "crates/cli/src/bin/atlas/dispatch.rs",
         &["onboarding"],
         "exception: the way in for the user's own setup: the setup window's steps",
     ),
@@ -1217,6 +1222,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/cli/src/bin/atlas/main.rs",
         &["choose_desktop"],
         "exception: the way in for the user's own setup: its setup, update and removal work on it",
+    ),
+    (
+        "crates/cli/src/bin/atlas/main.rs",
+        &["launch_job"],
+        "exception: a job's launcher runs inside the helper, for the helper daemon alone",
     ),
     (
         "crates/cli/src/bin/atlas/main.rs",

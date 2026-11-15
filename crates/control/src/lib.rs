@@ -22,6 +22,7 @@ mod marker;
 mod notes;
 mod privacy;
 mod run_groups;
+mod stop;
 #[cfg(test)]
 mod tests;
 mod turns;
@@ -33,6 +34,7 @@ pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
 pub use privacy::{Adopted, HoldKind, Interrupted, PrivateHold, Visible};
+pub use stop::{Resumed, StopRevision};
 #[cfg(any(test, feature = "test-support"))]
 pub use wait::WaitEvent;
 #[cfg(any(test, feature = "test-support"))]
@@ -203,6 +205,11 @@ pub struct Controller {
     /// Present while the person has stopped agents: kept on the person's
     /// side, so a Stop holds even while the helper's input service is down.
     stopped: PathBuf,
+    /// The lock a Stop and a Resume take to write or lift that marker.
+    stop_lock: PathBuf,
+    /// Witnesses of Stops that could not take that lock, which a Resume
+    /// lifts only when it saw them.
+    stop_pending: PathBuf,
     /// Present while the person signs the helper in to an account, beside
     /// the person's note: the screen is hidden from agents meanwhile.
     private: PathBuf,
@@ -301,6 +308,8 @@ impl Controller {
             marker_lock: directory.join(format!("{name}.state.lock")),
             person: directory.join(format!("{name}.person")),
             stopped: directory.join(format!("{name}.stopped")),
+            stop_lock: directory.join(format!("{name}.stopped.lock")),
+            stop_pending: directory.join(format!("{name}.stopped.pending")),
             private: directory.join(format!("{name}.signing-in")),
             private_generation: directory.join(format!("{name}.private-gen")),
             run_groups: directory.join(format!("{name}.run-groups.json")),
@@ -669,31 +678,6 @@ impl Controller {
     #[cfg(any(test, feature = "test-support"))]
     pub fn marker_lock_path(&self) -> &Path {
         &self.marker_lock
-    }
-
-    /// Whether the person stopped agents, as noted on their side.
-    pub fn stop_noted(&self) -> bool {
-        self.stopped.exists()
-    }
-
-    /// Note that the person stopped agents (`on`), or let them go on.
-    ///
-    /// # Errors
-    ///
-    /// Returns failures reading or updating this controller identity's private stop marker.
-    pub fn note_stop(&self, on: bool) -> Result<()> {
-        self.refuse_linked_directory()?;
-        if on {
-            self.make_directory()?;
-            fs::write(&self.stopped, b"").map_err(|error| Error::writing(&self.directory, error))
-        } else {
-            match fs::remove_file(&self.stopped) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    Err(Error::writing(&self.directory, error))
-                }
-                _ => Ok(()),
-            }
-        }
     }
 
     /// [`Controller::acquire_for_person`], for the tests of crates above.

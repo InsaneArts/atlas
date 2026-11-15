@@ -92,6 +92,13 @@ fn main() -> ExitCode {
 
     ui::set(format);
 
+    // A settings file is never read from Atlas's own folder, whichever
+    // command names it.
+    if let Err(error) = atlas_core::own_folder::refuse(&config) {
+        report_failure(format, &error, !machine);
+        return ExitCode::FAILURE;
+    }
+
     // How long a command that waits for control may wait; other commands
     // never read `ATLAS_WAIT`.
     let wait = if policy.waits(dispatch::actor()) {
@@ -104,8 +111,12 @@ fn main() -> ExitCode {
     };
 
     // A supervisor starts its work before anything else of Atlas starts
-    // in it.
+    // in it, and only for the machine guest's own daemon.
     if let Command::MachineSupervise { words } = &command {
+        if let Err(error) = atlas_daemon::worker::machine_supervisor() {
+            eprintln!("{}", json!(error));
+            return ExitCode::from(atlas_daemon::machine::supervise::UNSTARTED);
+        }
         return ExitCode::from(atlas_daemon::machine::supervise::start(words));
     }
 
@@ -156,6 +167,18 @@ fn main() -> ExitCode {
 
     // The helper daemon keeps this thread for the Core Foundation run loop.
     if let Command::HelperServe(service) = command {
+        // The account it names is a distinct helper first, for the clearest
+        // word, then: only the job launchd runs as the helper serves — a
+        // hand-started copy, which could name another account as its
+        // controller, never reaches any initialization or endpoint.
+        let judged = atlas_core::session::validate_target_uid(service.uid, service.controller_uid)
+            .and_then(|()| {
+                atlas_daemon::user::worker::serving(service.uid, service.controller_uid)
+            });
+        if let Err(error) = judged {
+            eprintln!("{}", json!(error));
+            return ExitCode::FAILURE;
+        }
         let served = atlas_daemon::daemon::serve::serve_blocking(
             service.uid,
             service.controller_uid,
@@ -424,7 +447,8 @@ fn report_failure(format: Format, error: &Error, advised: bool) {
     let _ = writeln!(std::io::stderr().lock(), "{text}");
 }
 
-/// Wait for the daemon's `go` on standard input, become a session and group
+/// Refuse unless the helper daemon started this and made its standard
+/// input, then wait for its `go` there, become a session and group
 /// leader of its own, then replace itself with the job's program, its
 /// output going to `log` and its input nowhere.
 /// Says `setsid` on the status pipe (standard output) first; a failure
@@ -449,6 +473,11 @@ fn launch_job(log: &std::path::Path, argv0: &str, program: &[String]) -> ExitCod
     let mut say = |line: &str| {
         let _ = writeln!(status, "{line}");
     };
+    // Only the helper daemon starts a job, and only its socket says go.
+    if let Err(error) = atlas_daemon::user::worker::job_launcher() {
+        say(&format!("error {}", error.error));
+        return ExitCode::from(127);
+    }
     // The daemon says to go on once its record of this job is written; a
     // daemon that ended before then leaves nothing to run.
     let mut go = String::new();
@@ -654,7 +683,7 @@ fn machine_daemon(desktop_id: &str, enrolment: &str) -> ExitCode {
 }
 
 /// Do what the station asks of a VM desktop, and print what it came to as
-/// one JSON line.
+/// one JSON line: only when an Atlas command asked.
 fn vm(asked: cli::Vm) -> ExitCode {
     use atlas_core::{desktop::DesktopId, files::Token};
     let invalid = || {
@@ -663,7 +692,7 @@ fn vm(asked: cli::Vm) -> ExitCode {
             "That names no valid desktop or change.",
         )
     };
-    let done = match asked {
+    let done = atlas_daemon::worker::started_by_atlas().and_then(|()| match asked {
         cli::Vm::InstallAgent { desktop_id } => DesktopId::parse(&desktop_id)
             .ok_or_else(invalid)
             .and_then(|desktop| atlas_client::vm::install_agent(&desktop)),
@@ -671,7 +700,7 @@ fn vm(asked: cli::Vm) -> ExitCode {
             .zip(Token::parse(&change))
             .ok_or_else(invalid)
             .and_then(|(desktop, change)| atlas_client::vm::remove(&desktop, &change)),
-    };
+    });
     match done {
         Ok(found) => {
             println!("{found}");

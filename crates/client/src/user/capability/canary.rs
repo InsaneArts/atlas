@@ -717,6 +717,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
 /// panel checks and archive/cleanup failures are retained in the returned report. This
 /// actively exercises the fixture; inspect passed and cleanupError before claiming proof.
 pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
+    atlas_core::own_folder::refuse(fixture)?;
     // A development check: its test app is built from a checkout, never shipped.
     if !fixture.is_file() {
         return Err(problem(format!(

@@ -28,10 +28,14 @@ fail() {
 	exit 1
 }
 
-# A build that trusts a local team is for testing only.
-[ -z "${ATLAS_LOCAL_TEAM:-}" ] || fail "unset ATLAS_LOCAL_TEAM: it is for local test builds"
-# So is one that never releases a guest's update, for rollback checks.
-[ -z "${ATLAS_TEST_HOLD_RELEASE:-}" ] || fail "unset ATLAS_TEST_HOLD_RELEASE: it is for local test builds"
+# Each of these changes the released code when it is set, empty or not: a
+# local signing team, a build that never releases a guest's update (for
+# rollback checks), and one whose hidden VM commands a person runs by hand.
+# A release refuses whenever one is even present.
+for variable in ATLAS_LOCAL_TEAM ATLAS_TEST_HOLD_RELEASE ATLAS_TEST_HAND_RUN; do
+	eval "present=\${$variable+set}"
+	[ -z "$present" ] || fail "unset $variable: it is for local test builds"
+done
 
 version=${1:-}
 [ $# -eq 1 ] || fail "usage: scripts/release.sh X.Y.Z"

@@ -23,7 +23,10 @@ use serde_json::{Value, json};
 use std::{
     ffi::OsString,
     fs::OpenOptions,
-    os::unix::fs::OpenOptionsExt,
+    os::{
+        fd::OwnedFd,
+        unix::{fs::OpenOptionsExt, net::UnixStream},
+    },
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::Arc,
@@ -158,10 +161,14 @@ impl Jobs {
     /// Launch a prepared job, and reply.
     pub(super) async fn launch(self: &Arc<Self>, prepared: Prepared, start: &JobStart) -> Value {
         let program = &start.argv[0];
-        let mut command = self.command(start, &prepared);
+        let made = self.command(start, &prepared);
         let (record, lifetime) = (prepared.record, prepared.lifetime);
-        let mut child = match atlas_core::spawn::spawn_async(&mut command) {
-            Ok(child) => child,
+        // Only the launcher keeps its end of the socket once it is started.
+        let spawned = made.and_then(|(mut command, go_on)| {
+            Ok((atlas_core::spawn::spawn_async(&mut command)?, go_on))
+        });
+        let (mut child, go_on) = match spawned {
+            Ok(spawned) => spawned,
             Err(error) => {
                 if let Err(error) = self.forget(&record.id).await {
                     return json!(error);
@@ -189,7 +196,7 @@ impl Jobs {
             return failure(Code::SpawnFailed, "The job's process could not be observed");
         };
 
-        if let Err(Launch { said, setsid }) = go(&mut child).await {
+        if let Err(Launch { said, setsid }) = go(&mut child, go_on).await {
             let said = format!("{program}: {said}");
             return self.fail_launch(record, child, said, setsid).await;
         }
@@ -203,13 +210,20 @@ impl Jobs {
 
     /// The launcher's command: it logs to the job's log, gives the program
     /// its own name as `argv[0]`, and runs the executable with the rest of
-    /// the start's arguments, in the helper's home, waiting on its standard
-    /// input to go on and saying how its launch went on its standard output.
-    fn command(&self, start: &JobStart, prepared: &Prepared) -> Command {
+    /// the start's arguments, in the helper's home, waiting to go on and
+    /// saying how its launch went on its standard output. Its standard input
+    /// is a socket this daemon made, whose other end comes back: the
+    /// launcher takes its word to go on from nothing else.
+    fn command(
+        &self,
+        start: &JobStart,
+        prepared: &Prepared,
+    ) -> std::io::Result<(Command, UnixStream)> {
         let mut argv0 = OsString::from("--argv0=");
         argv0.push(&start.argv[0]);
         let mut log_arg = OsString::from("--log=");
         log_arg.push(&prepared.log);
+        let (go_on, theirs) = atlas_core::spawn::socket_pair()?;
 
         let mut command = Command::new(&self.launcher);
         command
@@ -219,12 +233,16 @@ impl Jobs {
             .arg("--")
             .arg(&prepared.executable)
             .args(&start.argv[1..])
-            .stdin(Stdio::piped())
+            .stdin(Stdio::from(OwnedFd::from(theirs)))
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(false);
         run::in_helper(&mut command, &prepared.path, prepared.home.as_deref());
-        command
+        // A test's daemon is no job of launchd's: it names itself to its
+        // launcher instead.
+        #[cfg(any(test, feature = "test-support"))]
+        command.env(crate::worker::TEST_DAEMON, std::process::id().to_string());
+        Ok((command, go_on))
     }
 
     /// `record` as launched by `child`, its process's identity read and
@@ -565,21 +583,30 @@ fn keep_running(state: &mut State, mut record: Record, said: &str) -> Value {
     unconfirmed(&record, said)
 }
 
-/// Tell `child`'s launcher to go on, and wait for it to say it launched.
-async fn go(child: &mut Child) -> std::result::Result<(), Launch> {
-    let go = match child.stdin.take() {
-        Some(mut go) => tokio::io::AsyncWriteExt::write_all(&mut go, b"go\n")
-            .await
-            .is_ok(),
-        None => false,
+/// Tell `child`'s launcher to go on, on `go_on`, this daemon's end of its
+/// standard input, and wait for it to say it launched. The end stays open
+/// until then: the launcher checks who made its socket, and a socket whose
+/// other end is gone names no one.
+async fn go(child: &mut Child, go_on: UnixStream) -> std::result::Result<(), Launch> {
+    let told = async {
+        go_on.set_nonblocking(true)?;
+        let mut go_on = tokio::net::UnixStream::from_std(go_on)?;
+        tokio::io::AsyncWriteExt::write_all(&mut go_on, b"go\n").await?;
+        Ok::<_, std::io::Error>(go_on)
+    }
+    .await;
+    let unheard = || Launch {
+        said: "the job's launcher could not be told to go on".into(),
+        setsid: false,
     };
-    if go {
-        launched(child).await
-    } else {
-        Err(Launch {
-            said: "the job's launcher could not be told to go on".into(),
-            setsid: false,
-        })
+    match told {
+        Ok(kept) => {
+            let said = launched(child).await;
+            drop(kept);
+            said
+        }
+        // A launcher that refused to go on has already said why.
+        Err(_) => Err(launched(child).await.err().unwrap_or_else(unheard)),
     }
 }
 

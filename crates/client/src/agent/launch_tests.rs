@@ -816,3 +816,35 @@ async fn a_web_page_opens_for_the_person_in_a_new_window_at_once() {
     drop(ownership);
     lease.lock().await.release();
 }
+
+#[tokio::test]
+async fn opening_a_file_in_a_vms_share_is_refused_before_control_is_taken_or_the_helper_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let share = atlas_core::config::home()
+        .unwrap()
+        .join(atlas_core::own_folder::FOLDER)
+        .join("VMs/0123456789abcdef01234567/Share");
+    let secret = share.join("pairing-secret");
+    for target in [
+        secret.display().to_string(),
+        share.display().to_string(),
+        format!("file://{}", secret.display()),
+    ] {
+        let error = open_in(
+            &client,
+            None,
+            std::slice::from_ref(&target),
+            &[],
+            &Copies::in_folder(&directory.path().join("copies")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{target}: {error}");
+        assert_eq!(error.error, atlas_core::own_folder::REFUSAL, "{target}");
+    }
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}

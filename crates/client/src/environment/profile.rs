@@ -39,12 +39,15 @@ pub(crate) struct Reference {
     pub(crate) writable: bool,
 }
 
-/// Read, parse and validate a TOML profile.
+/// Read, parse and validate a TOML profile, through the one guarded reader.
 pub(crate) fn load(path: &Path) -> Result<Profile> {
-    let profile: Profile = atlas_core::config::parse_toml(
-        &super::files::read_limited(path, super::MAX_MANIFEST)?,
-        path,
-    )?;
+    let reading = atlas_core::checked::read(path)?;
+    let resolved = reading.path().to_path_buf();
+    let bytes = reading.read_up_to(super::MAX_MANIFEST + 1)?;
+    if bytes.len() as u64 > super::MAX_MANIFEST {
+        return Err(problem("The profile is too large"));
+    }
+    let profile: Profile = atlas_core::config::parse_toml(&bytes, &resolved)?;
     validate(&profile)?;
     Ok(profile)
 }
@@ -133,6 +136,10 @@ fn refuse_credentials(path: &Path, profile: &Profile) -> Result<()> {
 /// Returns profile parsing, discovery, access-validation or staging failures. Applied
 /// selections can retain incomplete transactions and require recovery.
 pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
+    // Atlas's own folder is refused on the named path before anything reads
+    // it; `load` then reads through the guarded reader, and a profile's own
+    // sources and references are refused as the person's sign-ins and secrets.
+    atlas_core::own_folder::refuse(path)?;
     let path = fs::canonicalize(path)?;
     let profile = load(&path)?;
     refuse_credentials(&path, &profile)?;

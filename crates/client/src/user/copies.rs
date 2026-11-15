@@ -514,14 +514,30 @@ impl Owner<'_> {
 
 /// Copy `path` into a new folder of its own under `root`, named `token`,
 /// read-only for the helper: the copy keeps execute bits but nobody else
-/// may write to it.
+/// may write to it. Before the copy, the source is shown to be one no other
+/// account can change: its folder's real path, found once, has every folder
+/// on it this account's or root's and unrewritable by another account, the
+/// source itself (a link in its place refused) is this account's or root's,
+/// and a folder source holds only this account's or root's entries. Only
+/// then is that real path handed to `ditto`: no name on it can be taken by
+/// anyone else between the check and the copy.
 fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
     let name = path
         .file_name()
         .ok_or_else(|| Error::new(Code::Input, format!("Cannot open {}", path.display())))?;
-    // The last check, as close to the copy as it gets: what `ditto` reads is the real path checked now.
-    let checked = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    crate::credential_files::refuse([path, checked.as_path()])?;
+    // A source that is not there is nothing to copy; the guard and the copy
+    // never run, so nothing can be raced into its place.
+    if fs::symlink_metadata(path).is_err() {
+        return Err(problem(format!(
+            "Could not copy {} for the helper",
+            path.display()
+        )));
+    }
+    // The source's real path, proven to be one no other account can change,
+    // its tree and all; the person's sign-ins and secrets refused on that
+    // same stabilized path.
+    let checked = atlas_core::checked::handover_path(path)?;
+    crate::credential_files::refuse([checked.as_path()])?;
     let folder = root.join(token.as_str());
     fs::DirBuilder::new()
         .mode(0o700)
