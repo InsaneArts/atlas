@@ -31,6 +31,8 @@ use tokio::{
 };
 
 mod batch;
+pub(crate) mod channel;
+mod machine;
 mod operations;
 mod request;
 
@@ -40,6 +42,20 @@ use operations::{
     drain_and_release, finish, on_engine, reset, worker_failed,
 };
 use request::Request;
+
+tokio::task_local! {
+    /// The machine session generation the connection being served was
+    /// opened in; unset on the helper login.
+    static GENERATION: Option<u64>;
+    /// The owner a machine connection acquired control for, so its closing
+    /// can end that control however late the acquiring finished.
+    static ACQUIRED: Arc<std::sync::Mutex<Option<String>>>;
+}
+
+/// The generation of the connection being served, on a machine desktop.
+fn connection_generation() -> Option<u64> {
+    GENERATION.try_with(|generation| *generation).ok().flatten()
+}
 
 /// Twice the controller's 32 KiB action limit, leaving room for the owner,
 /// epoch and JSON re-encoding around any batch the controller accepts.
@@ -370,7 +386,7 @@ impl Service {
         owner: String,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
-        self.gate.cancel(Some(&owner))?;
+        self.gate.cancel_in(Some(&owner), connection_generation())?;
         phase.send_replace(ConnectionPhase::Mutation("release"));
         drain_and_release(&self.operations, &self.engine, &self.gate).await?;
         let mut reply = json!({ "ok": true, "released": true });
@@ -393,7 +409,7 @@ impl Service {
     }
 
     fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
-        self.gate.renew(&owner)?;
+        self.gate.renew_in(&owner, connection_generation())?;
         phase.send_replace(ConnectionPhase::Mutation("renew"));
         Ok(json!({ "ok": true }))
     }
@@ -425,6 +441,13 @@ impl Service {
         }
 
         phase.send_replace(ConnectionPhase::Mutation("reset"));
+        self.rebind_to(current).await?;
+        Ok(json!({ "ok": true, "released": true }))
+    }
+
+    /// Drain the work, then bind the engine to `current`, releasing what it
+    /// held there: what a reset does once it is allowed.
+    async fn rebind_to(&self, current: InputEpoch) -> Result<()> {
         let enforced = self.epoch.clone();
         reset(&self.operations, &self.engine, &self.gate, move |engine| {
             let rebound = engine.rebind(current);
@@ -439,8 +462,7 @@ impl Service {
 
             rebound
         })
-        .await?;
-        Ok(json!({ "ok": true, "released": true }))
+        .await
     }
 
     async fn acquire(
@@ -466,7 +488,12 @@ impl Service {
         phase.send_replace(ConnectionPhase::Mutation("acquire"));
         let (mut engine, released) = self.operations.clean_up(engine, Engine::release).await?;
         released?;
-        engine.grant = Some(self.gate.acquire(&owner, who)?);
+        engine.grant = Some(self.gate.acquire_in(&owner, who, connection_generation())?);
+        let _ = ACQUIRED.try_with(|acquired| {
+            *acquired
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(owner.clone());
+        });
 
         Ok(json!({ "ok": true }))
     }
@@ -508,7 +535,7 @@ impl Service {
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         let epoch = self.check_epoch(expected?)?;
-        let grant = self.gate.grant(&owner)?;
+        let grant = self.gate.grant_in(&owner, connection_generation())?;
         let actions = actions?;
         actions::check(
             &actions,
@@ -546,6 +573,7 @@ impl Service {
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
+            generation: connection_generation(),
         };
         let (performed, noted) = self
             .execute(grant, actions, expect.clone(), typed, asking)
@@ -961,7 +989,6 @@ const SESSION_GONE_CHECKS: u32 = 3;
 /// setup or shutdown failures. Unknown input and cleanup outcomes remain owned until
 /// recovery.
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
-    let (build, executable) = started_from().unzip();
     atlas_core::session::validate_target_uid(uid, controller_uid)?;
 
     if controller_uid == 0 {
@@ -971,9 +998,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         ));
     }
 
-    let mut engine = Engine::new(uid)?;
-    let activity = super::activity::beside(&socket);
-    engine.activity = Some(activity.clone());
+    let engine = Engine::new(uid)?;
     // Until this process has listed the window server's windows, asking
     // Accessibility which app has keyboard focus fails at once, so the first
     // checked keys would be refused. Listing them only reads; nothing is posted.
@@ -986,34 +1011,124 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     )
     .await?;
 
-    // Recovery reads and writes the journal, so it runs off the runtime too.
-    let journal = socket.with_extension("held.json");
-    let engine = tokio::task::spawn_blocking(move || engine.recover(journal).map(|()| engine))
-        .await
-        .map_err(|cause| worker_failed().with_source(cause))??;
-
-    let stop_marker = socket.with_extension("stopped");
-    let gate = Arc::new(Gate::default());
-    if stop_marker.exists() {
-        gate.hold(true)?;
+    let service = Service::ready(engine, &socket, Gate::default()).await?;
+    if service.stop_marker.exists() {
+        service.gate.hold(true)?;
     }
+    service
+        .listen(Source::Socket(&listener, controller_uid), None)
+        .await
+}
 
-    let service = Arc::new(Service {
-        build: build.flatten(),
-        executable,
-        stopping: tokio::sync::Notify::new(),
-        looks: engine.looks.clone(),
-        epoch: Arc::new(RwLock::new(engine.epoch.clone())),
-        engine: Arc::new(Mutex::new(engine)),
-        operations: Operations::default(),
-        gate,
-        stop_marker,
-        activity,
-        seen: Arc::default(),
-        look: Arc::new(LiveLook),
-        outcomes: Arc::default(),
-    });
-    service.listen(&listener, controller_uid).await
+/// Serve a machine desktop's input over `channel`, the socket its daemon
+/// started this process with, until the channel ends or shutdown, keeping
+/// its journal and activity in `folder`. No socket is bound: nothing else
+/// can reach it. No generation gives control until the daemon renews one.
+///
+/// # Errors
+///
+/// Rejects an invalid identity, and returns setup or shutdown failures.
+/// Unknown input and cleanup outcomes remain owned until recovery.
+pub async fn serve_machine(
+    uid: u32,
+    channel: std::os::unix::net::UnixStream,
+    folder: &Path,
+) -> Result<()> {
+    let engine = Engine::new(uid)?;
+    let _ = super::windows::windows();
+    let service = Service::ready(engine, &folder.join("input"), Gate::machine()).await?;
+    channel.set_nonblocking(true)?;
+    let channel = machine::Channel::open(UnixStream::from_std(channel)?, service.clone());
+    let settler = channel.settler();
+    service
+        .listen(Source::Channel(channel), Some(settler))
+        .await
+}
+
+/// Where a service's connections come from.
+enum Source<'a> {
+    /// Its socket on the helper login, answering only the controller.
+    Socket(&'a UnixListener, u32),
+    /// The channel its machine desktop's daemon started it with.
+    Channel(machine::Channel),
+}
+
+/// What came from a [`Source`].
+enum Arrival {
+    /// A connection to serve, in a machine session's generation, ending
+    /// when `closed` completes.
+    Connection {
+        stream: UnixStream,
+        generation: Option<u64>,
+        closed: Option<tokio::sync::oneshot::Receiver<()>>,
+    },
+    /// The source is gone: the service ends.
+    Lost,
+    /// Nothing to serve this time.
+    Nothing,
+}
+
+impl Source<'_> {
+    async fn arrive(&mut self) -> Arrival {
+        match self {
+            Self::Socket(listener, controller_uid) => match listener.accept().await {
+                Ok((stream, _)) if admitted(&stream, *controller_uid) => Arrival::Connection {
+                    stream,
+                    generation: None,
+                    closed: None,
+                },
+                Ok(_) => Arrival::Nothing,
+                // Accept and peer lookup failures (for example descriptor
+                // exhaustion) concern one connection, not the service.
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    Arrival::Nothing
+                }
+            },
+            Self::Channel(channel) => tokio::select! {
+                handed = channel.handed.recv() => match handed {
+                    Some(handed) => Arrival::Connection {
+                        stream: handed.stream,
+                        generation: Some(handed.generation),
+                        closed: Some(handed.closed),
+                    },
+                    None => Arrival::Lost,
+                },
+                () = channel.lost.notified() => Arrival::Lost,
+            },
+        }
+    }
+}
+
+impl Service {
+    /// The service over `engine`, its journal recovered, with its files
+    /// beside `base` and `gate` as its ownership.
+    async fn ready(engine: Engine, base: &Path, gate: Gate) -> Result<Arc<Self>> {
+        let (build, executable) = started_from().unzip();
+        let mut engine = engine;
+        let activity = super::activity::beside(base);
+        engine.activity = Some(activity.clone());
+        // Recovery reads and writes the journal, so it runs off the runtime too.
+        let journal = base.with_extension("held.json");
+        let engine = tokio::task::spawn_blocking(move || engine.recover(journal).map(|()| engine))
+            .await
+            .map_err(|cause| worker_failed().with_source(cause))??;
+        Ok(Arc::new(Self {
+            build: build.flatten(),
+            executable,
+            stopping: tokio::sync::Notify::new(),
+            looks: engine.looks.clone(),
+            epoch: Arc::new(RwLock::new(engine.epoch.clone())),
+            engine: Arc::new(Mutex::new(engine)),
+            operations: Operations::default(),
+            gate: Arc::new(gate),
+            stop_marker: base.with_extension("stopped"),
+            activity,
+            seen: Arc::default(),
+            look: Arc::new(LiveLook),
+            outcomes: Arc::default(),
+        }))
+    }
 }
 
 impl Service {
@@ -1021,7 +1136,11 @@ impl Service {
     /// this loop never waits for the journal. Posting briefly takes the gate;
     /// cancellation takes only the gate. Recovery serializes before draining work
     /// and acquiring the engine, never holding a gate guard across that wait.
-    async fn listen(self: &Arc<Self>, listener: &UnixListener, controller_uid: u32) -> Result<()> {
+    async fn listen(
+        self: &Arc<Self>,
+        mut source: Source<'_>,
+        settler: Option<machine::Settler>,
+    ) -> Result<()> {
         let mut timer = tokio::time::interval(Duration::from_millis(50));
 
         // Once its login ends (a log-out) the service can never act again, yet
@@ -1058,24 +1177,25 @@ impl Service {
                 }
                 _ = timer.tick() => {
                     if let Err(error) = self.expire().await { break Err(error); }
+                    if let Some(settler) = &settler {
+                        settler.settle(self);
+                        settler.follow_display(self);
+                    }
                 }
                 Some(outcome) = tasks.join_next_with_id(), if !tasks.is_empty() => {
                     if let Err(error) = connection_outcome(outcome, &self.operations, false) {
                         eprintln!("{}", error.error);
                     }
                 }
-                accepted = listener.accept() => {
-                    // Accept and peer lookup failures (for example descriptor
-                    // exhaustion) concern one connection, not the service.
-                    let Ok((stream, _)) = accepted else {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        continue;
-                    };
-
-                    if let Err(error) = self.connect(stream, controller_uid, &slots, &mut tasks) {
-                        break Err(error);
+                arrival = source.arrive() => match arrival {
+                    Arrival::Connection { stream, generation, closed } => {
+                        if let Err(error) = self.connect(stream, generation, closed, &slots, &mut tasks) {
+                            break Err(error);
+                        }
                     }
-                }
+                    Arrival::Lost => break Ok(()),
+                    Arrival::Nothing => {}
+                },
             }
         };
 
@@ -1118,13 +1238,11 @@ impl Service {
     fn connect(
         self: &Arc<Self>,
         stream: UnixStream,
-        controller_uid: u32,
+        generation: Option<u64>,
+        closed: Option<tokio::sync::oneshot::Receiver<()>>,
         slots: &Arc<Semaphore>,
         tasks: &mut JoinSet<Result<()>>,
     ) -> Result<()> {
-        if !admitted(&stream, controller_uid) {
-            return Ok(());
-        }
         let Ok(slot) = slots.clone().try_acquire_owned() else {
             // No dispatch: a definitive refusal keeps the caller's outcome known.
             super::endpoint::turn_away(
@@ -1145,7 +1263,32 @@ impl Service {
         let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
         let task = tasks.spawn(async move {
             let _slot = slot;
-            handle(stream, connected, phase).await
+            let acquired = Arc::new(std::sync::Mutex::new(None));
+            let gate = connected.gate.clone();
+            let served = GENERATION.scope(
+                generation,
+                ACQUIRED.scope(acquired.clone(), handle(stream, connected, phase)),
+            );
+            match closed {
+                // Closed by its daemon: its handler ends, as a client
+                // hanging up ends it, its closing first when both are ready;
+                // control it acquired meanwhile ends with it.
+                Some(closed) => tokio::select! {
+                    biased;
+                    _ = closed => {
+                        let owner = acquired
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take();
+                        if let Some(owner) = owner {
+                            let _ = gate.cancel_in(Some(&owner), generation);
+                        }
+                        Ok(())
+                    }
+                    served = served => served,
+                },
+                None => served.await,
+            }
         });
         connections.insert(task.id(), (observed, false));
         Ok(())
@@ -1205,7 +1348,7 @@ async fn handle(
         tokio::select! {
             reply = &mut dispatch => reply,
             _ = stream.read(&mut extra) => {
-                if service.gate.cancel(Some(&owner)).is_ok() {
+                if service.gate.cancel_in(Some(&owner), connection_generation()).is_ok() {
                     phase.send_replace(ConnectionPhase::Mutation("input"));
                 }
                 dispatch.await

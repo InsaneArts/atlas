@@ -208,6 +208,7 @@ impl Policy {
             | Command::JobLaunch { .. }
             | Command::MachineSupervise { .. }
             | Command::InputService(_)
+            | Command::MachineInput { .. }
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::SessionProofServe

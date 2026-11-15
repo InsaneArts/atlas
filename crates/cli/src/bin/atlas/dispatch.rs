@@ -107,6 +107,32 @@ async fn input_service(service: cli::Service) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Serve a machine desktop's input over standard input, the channel its
+/// daemon started this with: only when that daemon is this process's
+/// parent, as launchd started it, so a copy an agent starts never serves.
+#[cfg(target_os = "macos")]
+async fn machine_input(folder: &std::path::Path) -> Result<Value> {
+    use std::os::fd::AsFd;
+    atlas_core::session::Console::Own.keep()?;
+    atlas_daemon::machine::launch::prove_parent().await?;
+    let channel = std::io::stdin().as_fd().try_clone_to_owned()?;
+    atlas_native::native::service::serve_machine(
+        nix::unistd::getuid().as_raw(),
+        std::os::unix::net::UnixStream::from(channel),
+        folder,
+    )
+    .await?;
+    Ok(Value::Null)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn machine_input(_: &std::path::Path) -> Result<Value> {
+    Err(Error::new(
+        Code::Platform,
+        "The input service requires macOS",
+    ))
+}
+
 #[cfg(not(target_os = "macos"))]
 async fn input_service(_: cli::Service) -> Result<Value> {
     Err(Error::new(
@@ -276,6 +302,7 @@ async fn carry_out(
             unreachable!("main runs these before anything else")
         }
         Command::InputService(args) => input_service(args).await,
+        Command::MachineInput { folder } => machine_input(&folder).await,
         Command::SetupHelper(args) => crate::user::setup::setup_helper(&args),
         Command::Update(args) => update::run(config, args, host, allow_disrupt).await,
         Command::UpdateFinish => update::update_finish(config, host, allow_disrupt).await,

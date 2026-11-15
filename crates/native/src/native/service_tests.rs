@@ -3099,6 +3099,7 @@ async fn blocked_while(ending: Ending, actions: Vec<Action>) {
             let mut cancel = super::Cancellation {
                 gate: gate.clone(),
                 owner: Some(owner),
+                generation: None,
             };
             let mut engine = engine.lock_owned().await;
             let outcome = operations
@@ -3223,6 +3224,7 @@ async fn aborting_a_request_after_registration_keeps_its_work_until_cleanup() {
             let _cancel = super::Cancellation {
                 gate: gate.clone(),
                 owner: Some(owner),
+                generation: None,
             };
             let engine = stand.clone().lock_owned().await;
             operations

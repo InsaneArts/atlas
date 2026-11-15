@@ -95,6 +95,13 @@ pub(super) enum Command {
     HelperServe(Service),
     #[command(hide = true)]
     InputService(Service),
+    /// A machine desktop's input service, started by its daemon alone.
+    #[command(hide = true)]
+    MachineInput {
+        /// The guest's private folder its journal is kept in.
+        #[arg(long)]
+        folder: PathBuf,
+    },
     /// Inspect the helper's setup, or finish it (advanced).
     #[command(
         long_about = "Inspect the helper's setup, or finish it (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply finishes or re-checks the first setup atlas init started: Atlas's own signed helper daemon runs as a managed LaunchAgent on a private socket directory, and every step is recorded so an interruption resumes."

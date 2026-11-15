@@ -185,8 +185,10 @@ fn renewal_starts_the_ttl_after_authorization() {
         .unwrap();
     let checked = start + Duration::from_secs(1);
     let assigned = checked + Duration::from_secs(7);
-    gate.renew_at(gate.lock().unwrap(), &owner('a'), checked, || assigned)
-        .unwrap();
+    gate.renew_at(gate.lock().unwrap(), &owner('a'), None, checked, || {
+        assigned
+    })
+    .unwrap();
     assert_eq!(
         gate.lock()
             .unwrap()
@@ -225,9 +227,11 @@ fn refused_acquisitions_and_renewals_do_not_sample_deadline_time() {
         (owner('a'), now + atlas_core::session::GRANT_TTL),
     ] {
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner, checked, || {
-                panic!("refused renewal sampled deadline time")
-            })),
+            code(
+                gate.renew_at(gate.lock().unwrap(), &owner, None, checked, || {
+                    panic!("refused renewal sampled deadline time")
+                })
+            ),
             "lease-lost"
         );
     }
@@ -282,7 +286,7 @@ fn ownership_is_valid_before_expiry_and_lost_at_and_after_expiry() {
         let expected = if valid { "ok" } else { "lease-lost" };
         let (gate, _) = acquired();
         assert_eq!(
-            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, now)),
             expected
         );
 
@@ -294,7 +298,7 @@ fn ownership_is_valid_before_expiry_and_lost_at_and_after_expiry() {
 
         let (gate, _) = acquired();
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now, || now)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), None, now, || now)),
             expected
         );
         assert_eq!(
@@ -330,7 +334,7 @@ fn renewal_moves_only_the_current_owners_deadline() {
         })
         .unwrap();
     let renewed = start + Duration::from_secs(2);
-    gate.renew_at(gate.lock().unwrap(), &owner('a'), renewed, || renewed)
+    gate.renew_at(gate.lock().unwrap(), &owner('a'), None, renewed, || renewed)
         .unwrap();
     let deadline = renewed + Duration::from_secs(6);
     assert_eq!(
@@ -342,7 +346,7 @@ fn renewal_moves_only_the_current_owners_deadline() {
         Some(deadline)
     );
     assert_eq!(
-        code(gate.renew_at(gate.lock().unwrap(), &owner('b'), renewed, || renewed)),
+        code(gate.renew_at(gate.lock().unwrap(), &owner('b'), None, renewed, || renewed)),
         "lease-lost"
     );
     assert_eq!(
@@ -389,7 +393,11 @@ fn renewal_moves_only_the_current_owners_deadline() {
         Some(deadline)
     );
     assert_eq!(
-        code(gate.renew_at(gate.lock().unwrap(), &owner('a'), acquired, || acquired)),
+        code(
+            gate.renew_at(gate.lock().unwrap(), &owner('a'), None, acquired, || {
+                acquired
+            })
+        ),
         "lease-lost"
     );
     assert_eq!(
@@ -401,7 +409,11 @@ fn renewal_moves_only_the_current_owners_deadline() {
         Some(deadline)
     );
     assert_eq!(
-        code(gate.renew_at(gate.lock().unwrap(), &owner('b'), deadline, || deadline)),
+        code(
+            gate.renew_at(gate.lock().unwrap(), &owner('b'), None, deadline, || {
+                deadline
+            })
+        ),
         "lease-lost"
     );
     assert_eq!(
@@ -433,7 +445,7 @@ fn cancellation_is_reported_once_to_an_action_but_not_a_keepalive() {
         }
 
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), expires, || expires)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), None, expires, || expires)),
             "lease-lost"
         );
         assert_eq!(
@@ -445,7 +457,7 @@ fn cancellation_is_reported_once_to_an_action_but_not_a_keepalive() {
             Some(expires)
         );
         assert_eq!(
-            code(gate.grant_at(gate.lock().unwrap(), &owner('b'), expires)),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('b'), None, expires)),
             "lease-lost"
         );
         assert_eq!(
@@ -462,7 +474,7 @@ fn cancellation_is_reported_once_to_an_action_but_not_a_keepalive() {
             "lease-lost"
         );
         assert_eq!(
-            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), expires)),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, expires)),
             "lease-lost"
         );
         assert_eq!(
@@ -554,7 +566,7 @@ fn revocation_closure_and_a_new_owner_suppress_an_old_cancellation() {
             "lease-lost"
         );
         assert_eq!(
-            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, now)),
             "lease-lost"
         );
         assert_eq!(
@@ -729,7 +741,7 @@ fn a_stale_token_cannot_end_a_newer_controller() {
     assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
     assert!(gate.lock().unwrap().holder_at(now).is_some());
 
-    gate.grant_at(gate.lock().unwrap(), &owner('b'), now)
+    gate.grant_at(gate.lock().unwrap(), &owner('b'), None, now)
         .unwrap();
     gate.cancel(Some(&owner('b'))).unwrap();
     assert!(gate.lock().unwrap().holder_at(now).is_none());
@@ -743,18 +755,18 @@ fn nothing_is_granted_after_a_cancel() {
         .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
         .unwrap();
     let grant = gate
-        .grant_at(gate.lock().unwrap(), &owner('a'), now)
+        .grant_at(gate.lock().unwrap(), &owner('a'), None, now)
         .unwrap();
     drop(grant.authorize_at(grant.gate.lock().unwrap(), now).unwrap());
     gate.cancel(None).unwrap();
 
     assert_eq!(
-        code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now, || now)),
+        code(gate.renew_at(gate.lock().unwrap(), &owner('a'), None, now, || now)),
         "lease-lost",
         "a keep-alive is not told"
     );
     assert_eq!(
-        code(gate.grant_at(gate.lock().unwrap(), &owner('b'), now)),
+        code(gate.grant_at(gate.lock().unwrap(), &owner('b'), None, now)),
         "lease-lost",
         "nor a stranger"
     );
@@ -775,7 +787,7 @@ fn nothing_is_granted_after_a_cancel() {
     gate.revoke().unwrap();
 
     assert_eq!(
-        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, now)),
         "lease-lost",
         "nobody stopped it"
     );
@@ -789,7 +801,7 @@ fn a_stop_cancels_an_agents_action_and_refuses_agents_until_resumed() {
         .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
         .unwrap();
     let grant = gate
-        .grant_at(gate.lock().unwrap(), &owner('a'), now)
+        .grant_at(gate.lock().unwrap(), &owner('a'), None, now)
         .unwrap();
 
     gate.hold(true).unwrap();
@@ -833,12 +845,12 @@ fn an_input_asked_for_after_a_stop_hears_why_control_ended() {
         .unwrap();
     gate.hold(true).unwrap();
     assert_eq!(
-        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, now)),
         "stopped",
         "not merely lost"
     );
     assert_eq!(
-        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+        code(gate.grant_at(gate.lock().unwrap(), &owner('a'), None, now)),
         "lease-lost",
         "told once"
     );
@@ -850,7 +862,7 @@ fn an_input_asked_for_after_a_stop_hears_why_control_ended() {
     gate.cancel(None).unwrap();
     gate.hold(true).unwrap();
     assert_eq!(
-        code(gate.grant_at(gate.lock().unwrap(), &owner('b'), now)),
+        code(gate.grant_at(gate.lock().unwrap(), &owner('b'), None, now)),
         "cancelled",
         "the cause is what ended it, not what holds now"
     );
@@ -880,5 +892,159 @@ fn a_closed_gate_stays_closed() {
         code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
         "busy",
         "for good"
+    );
+}
+
+/// A deadline `ahead` from now on the continuous clock.
+fn due(ahead: std::time::Duration) -> u64 {
+    super::continuous().unwrap() + u64::try_from(ahead.as_nanos()).unwrap()
+}
+
+#[test]
+fn a_machine_desktop_gives_no_control_before_its_session_does() {
+    let gate = Arc::new(Gate::machine());
+
+    let refused = gate
+        .acquire_in(&owner('a'), Who::Agent, Some(1))
+        .err()
+        .unwrap();
+
+    assert_eq!(refused.code, Code::LeaseLost);
+}
+
+#[test]
+fn an_owner_of_the_live_generation_acts_until_it_is_revoked() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let grant = gate.acquire_in(&owner('a'), Who::Agent, Some(1)).unwrap();
+    assert!(grant.authorize().is_ok());
+
+    gate.revoke_authority(1).unwrap();
+
+    assert_eq!(grant.authorize().err().unwrap().code, Code::LeaseLost);
+    assert!(!gate.active().unwrap());
+}
+
+#[test]
+fn a_generation_once_revoked_never_gives_control_again() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(2, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    gate.revoke_authority(2).unwrap();
+
+    gate.renew_authority(2, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+
+    assert!(gate.acquire_in(&owner('a'), Who::Agent, Some(2)).is_err());
+    assert!(gate.acquire_in(&owner('b'), Who::Agent, Some(1)).is_err());
+}
+
+#[test]
+fn a_newer_generation_ends_the_control_an_older_one_gave() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let grant = gate.acquire_in(&owner('a'), Who::Agent, Some(1)).unwrap();
+
+    gate.renew_authority(2, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+
+    assert!(grant.authorize().is_err());
+    assert!(gate.acquire_in(&owner('b'), Who::Agent, Some(1)).is_err());
+    assert!(gate.acquire_in(&owner('c'), Who::Agent, Some(2)).is_ok());
+}
+
+#[test]
+fn a_generation_past_its_deadline_is_retired_for_good() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_millis(30)))
+        .unwrap();
+    let grant = gate.acquire_in(&owner('a'), Who::Agent, Some(1)).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    assert!(grant.authorize().is_err());
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    assert!(gate.acquire_in(&owner('b'), Who::Agent, Some(1)).is_err());
+}
+
+#[test]
+fn a_renewal_whose_deadline_has_passed_gives_nothing() {
+    let gate = Arc::new(Gate::machine());
+
+    gate.renew_authority(1, super::continuous().unwrap().saturating_sub(1))
+        .unwrap();
+
+    assert!(gate.acquire_in(&owner('a'), Who::Agent, Some(1)).is_err());
+}
+
+#[test]
+fn the_helper_login_s_gate_takes_no_generation() {
+    let gate = Arc::new(Gate::default());
+
+    gate.revoke_authority(9).unwrap();
+
+    assert!(gate.acquire(&owner('a'), Who::Agent).is_ok());
+}
+
+#[test]
+fn a_generation_past_its_deadline_is_retired_even_when_nothing_looked_in_between() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_millis(30)))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+
+    assert!(gate.acquire_in(&owner('a'), Who::Agent, Some(1)).is_err());
+}
+
+#[test]
+fn a_renewal_of_an_older_generation_than_the_live_one_changes_nothing() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(2, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+
+    assert!(gate.acquire_in(&owner('a'), Who::Agent, Some(1)).is_err());
+    assert!(gate.acquire_in(&owner('b'), Who::Agent, Some(2)).is_ok());
+}
+
+#[test]
+fn an_owner_answers_only_connections_of_its_own_generation() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    gate.renew_authority(2, due(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let _grant = gate.acquire_in(&owner('a'), Who::Agent, Some(2)).unwrap();
+
+    assert!(gate.grant_in(&owner('a'), Some(1)).is_err());
+    assert!(gate.renew_in(&owner('a'), Some(1)).is_err());
+    assert!(gate.cancel_in(Some(&owner('a')), Some(1)).is_err());
+    assert!(gate.active().unwrap(), "released by another generation");
+    assert!(gate.grant_in(&owner('a'), Some(2)).is_ok());
+}
+
+#[test]
+fn control_ends_when_its_generation_runs_out_though_no_event_asks() {
+    let gate = Arc::new(Gate::machine());
+    gate.renew_authority(1, due(std::time::Duration::from_millis(30)))
+        .unwrap();
+    let _grant = gate.acquire_in(&owner('a'), Who::Agent, Some(1)).unwrap();
+    assert!(gate.active().unwrap());
+
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    assert!(
+        !gate.active().unwrap(),
+        "held past its generation's deadline"
     );
 }

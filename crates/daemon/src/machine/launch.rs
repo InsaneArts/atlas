@@ -112,6 +112,23 @@ const ASKING: std::time::Duration = std::time::Duration::from_secs(5);
 ///
 /// Refuses as [`judge`] does, or when launchd or the plist cannot be read.
 pub async fn prove() -> Result<()> {
+    proved(std::process::id()).await
+}
+
+/// Refuse unless this process's parent is the guest's genuine daemon, as
+/// launchd says now: what a machine desktop's input service starts only
+/// for, so a copy an agent started never serves.
+///
+/// # Errors
+///
+/// Refuses as [`judge`] does, or when launchd or the plist cannot be read.
+pub async fn prove_parent() -> Result<()> {
+    proved(std::os::unix::process::parent_id()).await
+}
+
+/// Refuse unless `pid` runs this very program as launchd started the
+/// guest's daemon.
+async fn proved(pid: u32) -> Result<()> {
     let uid = nix::unistd::getuid().as_raw();
     let printed = asked("/bin/launchctl", &["print", &format!("gui/{uid}/{LABEL}")]).await?;
     let json = asked("/usr/bin/plutil", &["-convert", "json", "-o", "-", PLIST]).await?;
@@ -119,12 +136,7 @@ pub async fn prove() -> Result<()> {
         serde_json::from_slice(&json).map_err(|_| refused("the installed job cannot be read"))?;
     let program = std::env::current_exe().map_err(|_| refused("this program cannot be found"))?;
     let job = Job::parse(&String::from_utf8_lossy(&printed));
-    judge(
-        &job,
-        std::process::id(),
-        (Path::new(PLIST), &plist),
-        &program,
-    )
+    judge(&job, pid, (Path::new(PLIST), &plist), &program)
 }
 
 /// What `program` with `arguments` printed, ended if it takes too long.

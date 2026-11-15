@@ -37,6 +37,12 @@ type Work = Option<tokio::task::JoinHandle<()>>;
 pub(super) type Cause = Arc<dyn StdError + Send + Sync>;
 
 impl Operations {
+    /// Whether the last recovery failed, so work stays refused until one
+    /// succeeds.
+    pub(super) fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+
     pub(super) async fn start<T: Send + 'static>(
         &self,
         work: impl std::future::Future<Output = T> + Send + 'static,
@@ -281,6 +287,8 @@ pub(super) fn combine_cleanup(primary: Result<()>, cleanup: Result<()>) -> Resul
 pub(super) struct Cancellation {
     pub(super) gate: Arc<Gate>,
     pub(super) owner: Option<String>,
+    /// The machine session generation of the connection it was asked on.
+    pub(super) generation: Option<u64>,
 }
 
 impl Drop for Cancellation {
@@ -289,7 +297,7 @@ impl Drop for Cancellation {
             // Drop can only try to cancel ownership. It cannot acknowledge
             // release, clear sticky worker failure or settle the controller's
             // pending record, even if cancellation succeeds.
-            let _ = self.gate.cancel(Some(owner));
+            let _ = self.gate.cancel_in(Some(owner), self.generation);
         }
     }
 }
