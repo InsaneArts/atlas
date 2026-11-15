@@ -2396,6 +2396,9 @@ async fn shouting(address: std::net::SocketAddr) -> std::net::SocketAddr {
 /// server's own port.
 struct MirrorStation {
     controlling: Arc<Controlling>,
+    /// Its way to the generation's lanes, shared with its relays: lane IDs
+    /// are given by one counter per generation.
+    desktop: Arc<Desktop>,
     listed: tokio::sync::watch::Sender<Vec<atlas_session::mirror::Endpoint>>,
     relaying: tokio::task::JoinHandle<()>,
 }
@@ -2449,6 +2452,7 @@ fn relaying(
     let listed = tokio::sync::watch::Sender::new(Vec::new());
     let (station, mut current) = (controlling.clone(), listed.subscribe());
     let desktop = Arc::new(desktop);
+    let shared = desktop.clone();
     let lanes = Arc::new(tokio::sync::Semaphore::new(atlas_session::mirror::LANES));
     let relaying = tokio::spawn(async move {
         let mut seen = std::collections::HashSet::new();
@@ -2510,6 +2514,7 @@ fn relaying(
     });
     MirrorStation {
         controlling,
+        desktop: shared,
         listed,
         relaying,
     }
@@ -2855,4 +2860,116 @@ async fn a_port_freed_in_the_guest_is_listened_on_at_the_next_retry() {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     assert!(bound, "never said it listened once the port was free");
+}
+
+#[tokio::test]
+async fn a_link_full_of_stalled_mirrors_still_carries_a_stage_and_a_stop_and_release_at_once() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    // A server that sends without end; its clients never read.
+    let flooding = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let server = flooding.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = flooding.accept().await {
+            tokio::spawn(async move {
+                let flood = vec![b'x'; 1 << 16];
+                while stream.write_all(&flood).await.is_ok() {}
+            });
+        }
+    });
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+    station.mirror(1, vec![endpoint(V4, port)]).await;
+    let mut stalled = Vec::new();
+    for _ in 0..atlas_session::mirror::LANES {
+        stalled.push(
+            tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                .await
+                .unwrap(),
+        );
+    }
+    // Every mirror lane live and stalled, each holding the one chunk it may:
+    // what is left of the bulk credit says so.
+    let credit = &station.controlling.credit;
+    let held = atlas_session::mirror::LANES * atlas_session::mirror::CHUNK;
+    let stalled_all = atlas_session::credit::BULK as usize - held;
+    let mut saturated = false;
+    for _ in 0..250 {
+        if credit.left() == stalled_all {
+            saturated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        saturated,
+        "the mirrors never all stalled: {} left",
+        credit.left()
+    );
+    let (_source, tree) = tree_to_stage();
+    let big: Vec<u8> = (0..4 << 20).map(|at: u32| (at % 251) as u8).collect();
+    std::fs::write(tree.join("Contents/big.bin"), &big).unwrap();
+    let staged = tokio::time::timeout(
+        Duration::from_secs(60),
+        stage(
+            &station.desktop,
+            credit,
+            &Token::new(),
+            &tree,
+            Sending::Whole,
+        ),
+    )
+    .await
+    .expect("the stage never got through beside the stalled mirrors");
+    assert_eq!(staged.last().unwrap()["ok"], true, "{staged:?}");
+    assert_eq!(
+        credit.left(),
+        stalled_all,
+        "the mirrors let go while the stage ran"
+    );
+    // Now a narrow link, with a stage filling what credit is left of it.
+    let rate: u64 = 1 << 20;
+    served.link.set(Conditions {
+        bytes_per_second: Some(rate),
+        ..Conditions::default()
+    });
+    let again = {
+        let (desktop, credit, tree) = (station.desktop.clone(), credit.clone(), tree.clone());
+        tokio::spawn(
+            async move { stage(&desktop, &credit, &Token::new(), &tree, Sending::Whole).await },
+        )
+    };
+    for _ in 0..250 {
+        if credit.left() < stalled_all {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(credit.left() < stalled_all, "the stage never began sending");
+    let said = |what: atlas_session::control::Said| station.controlling.outbox.say(what).unwrap();
+    let begun = std::time::Instant::now();
+    said(atlas_session::control::Said::Stop);
+    said(atlas_session::control::Said::Release);
+    // At worst behind every byte the credit lets be on its way, at the
+    // link's rate, with room for the rest.
+    let bound = Duration::from_secs_f64(f64::from(atlas_session::credit::BULK) / rate as f64 + 1.0);
+    let mut heard = false;
+    while begun.elapsed() < bound {
+        let machine = &served.machine.said;
+        if machine.stops.load(SeqCst) > 0 && machine.releases.load(SeqCst) > 0 {
+            heard = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert!(
+        heard,
+        "Stop and release waited past {bound:?} behind bulk traffic"
+    );
+    again.abort();
+    drop(stalled);
 }
