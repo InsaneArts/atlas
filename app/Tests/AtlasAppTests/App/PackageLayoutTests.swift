@@ -15,6 +15,7 @@ struct PackageLayoutTests {
     "Packages/AsyncSupport": 0,
     "Packages/AtlasUI": 0,
     "Packages/AtlasService": 0,
+    "Packages/AtlasVM": 0,
     "Packages/AtlasCommands": 1,
     "Packages/AtlasControl": 1,
     "Packages/AtlasStatus": 1,
