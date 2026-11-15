@@ -7,15 +7,17 @@ final class Folders {
   let root: URL
 
   init() throws {
-    root = FileManager.default.temporaryDirectory.appending(
-      path: "avm-\(UUID().uuidString.prefix(8))",
-      directoryHint: .isDirectory
-    )
+    root = FileManager.default.temporaryDirectory
+      .appending(
+        path: "avm-\(UUID().uuidString.prefix(8))",
+        directoryHint: .isDirectory
+      )
     try VMFolder.makePrivate(root)
   }
 
   deinit {
-    try? FileManager.default.removeItem(at: root)
+    try? FileManager.default
+      .removeItem(at: root)
   }
 
   /// A new private folder in it.

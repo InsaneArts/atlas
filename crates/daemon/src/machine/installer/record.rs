@@ -18,18 +18,18 @@ const LONGEST: u64 = 256 * 1024;
 
 /// A folder as it was seen: its device and inode, which no rename changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Identity {
-    pub(super) device: u64,
-    pub(super) inode: u64,
+pub(in crate::machine) struct Identity {
+    pub(in crate::machine) device: u64,
+    pub(in crate::machine) inode: u64,
     /// Whether it is a folder.
-    pub(super) folder: bool,
+    pub(in crate::machine) folder: bool,
 }
 
 impl Identity {
     /// Whatever is at `name` in `folder`, never through a link; none when
     /// there is nothing there. A file or a link has an identity too, which
     /// no recorded folder's matches.
-    pub(super) fn of(folder: &File, name: &FileName) -> Result<Option<Self>> {
+    pub(in crate::machine) fn of(folder: &File, name: &FileName) -> Result<Option<Self>> {
         match fstatat(folder, name.as_c_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
             Ok(stat) => Ok(Some(Self {
                 device: u64::try_from(stat.st_dev).unwrap_or_default(),

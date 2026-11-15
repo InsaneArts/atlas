@@ -20,14 +20,16 @@ nonisolated enum AppLock {
   /// - Parameter waiting: How long to wait for another app to leave.
   /// - Returns: Whether this app is the one.
   static func claim(waiting: TimeInterval = 0) -> Bool {
-    try? FileManager.default.createDirectory(
-      at: folder,
-      withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700]
-    )
+    try? FileManager.default
+      .createDirectory(
+        at: folder,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+      )
     let lock = open(folder.appending(path: "app.lock").path, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
     guard lock >= 0 else { return false }
-    let deadline = Date().addingTimeInterval(waiting)
+    let deadline = Date()
+      .addingTimeInterval(waiting)
     while flock(lock, LOCK_EX | LOCK_NB) != 0 {
       guard Date() < deadline else {
         close(lock)
@@ -46,7 +48,8 @@ nonisolated enum AppLock {
     do {
       let data = try JSONSerialization.data(withJSONObject: record)
       try data.write(to: path, options: .atomic)
-      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+      try FileManager.default
+        .setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
     } catch {
       close(lock)
       return false

@@ -14,6 +14,8 @@ pub mod mirror;
 pub mod pairing;
 pub mod processes;
 mod record_file;
+#[cfg(target_os = "macos")]
+pub mod setup;
 pub mod stage;
 pub mod stop;
 pub mod supervise;

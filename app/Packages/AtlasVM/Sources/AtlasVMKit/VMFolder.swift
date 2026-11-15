@@ -12,8 +12,10 @@ public struct VMFolder: Equatable, Sendable {
   /// is a desktop's name, 24 lowercase hexadecimal digits.
   public init?(in parent: URL, desktop: String) {
     let digits = desktop.utf8.allSatisfy { byte in
-      (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
-        || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+      (UInt8(ascii: "0")...UInt8(ascii: "9"))
+        .contains(byte)
+        || (UInt8(ascii: "a")...UInt8(ascii: "f"))
+          .contains(byte)
     }
     guard desktop.utf8.count == 24, digits else { return nil }
     root = parent.appending(path: desktop, directoryHint: .isDirectory)
@@ -57,11 +59,12 @@ public struct VMFolder: Equatable, Sendable {
   /// of this account's that no one else may read or change.
   public static func makePrivate(_ folder: URL) throws {
     do {
-      try FileManager.default.createDirectory(
-        at: folder,
-        withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-      )
+      try FileManager.default
+        .createDirectory(
+          at: folder,
+          withIntermediateDirectories: true,
+          attributes: [.posixPermissions: 0o700]
+        )
     } catch {
       throw VMFolderError.unreadable(folder)
     }

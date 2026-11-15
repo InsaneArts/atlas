@@ -5,7 +5,7 @@ import Testing
 
 @Suite("The change ledger")
 struct ChangeLedgerTests {
-  let change = ChangeID(String(repeating: "c0", count: 24))!
+  let change = ChangeID.repeating("c0")
 
   @Test("a change is kept as intended, by its run, before it is done, and asked again it is answered from its record")
   func keptAhead() throws {
@@ -38,14 +38,16 @@ struct ChangeLedgerTests {
     let folders = try Folders()
     let folder = try folders.folder("changes")
     let ledger = ChangeLedger(folder: folder)
-    try Data("{".utf8).write(to: folder.appending(path: "\(change.text).json"))
+    try Data("{".utf8)
+      .write(to: folder.appending(path: "\(change.text).json"))
     #expect(throws: ChangeLedgerError.self) { try ledger.begin(.start(change), by: "this") }
 
-    let linked = ChangeID(String(repeating: "c1", count: 24))!
-    try FileManager.default.createSymbolicLink(
-      at: folder.appending(path: "\(linked.text).json"),
-      withDestinationURL: folders.root.appending(path: "nowhere")
-    )
+    let linked = ChangeID.repeating("c1")
+    try FileManager.default
+      .createSymbolicLink(
+        at: folder.appending(path: "\(linked.text).json"),
+        withDestinationURL: folders.root.appending(path: "nowhere")
+      )
     #expect(throws: ChangeLedgerError.self) { try ledger.begin(.start(linked), by: "this") }
   }
 }

@@ -34,11 +34,13 @@ enum Preflight {
   /// record names a VM process still running, or cannot be read.
   private static func running(among parent: URL) -> Int {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: parent.path(percentEncoded: false))) ?? []
-    return names.compactMap { VMFolder(in: parent, desktop: $0) }.filter { folder in
-      guard let record = try? RunRecord.read(from: folder.incarnation) else {
-        return FileManager.default.fileExists(atPath: folder.incarnation.path(percentEncoded: false))
-      }
-      return record.machine?.exited() == false
-    }.count
+    return names.compactMap { VMFolder(in: parent, desktop: $0) }
+      .filter { folder in
+        guard let record = try? RunRecord.read(from: folder.incarnation) else {
+          return FileManager.default
+            .fileExists(atPath: folder.incarnation.path(percentEncoded: false))
+        }
+        return record.machine?.exited() == false
+      }.count
   }
 }

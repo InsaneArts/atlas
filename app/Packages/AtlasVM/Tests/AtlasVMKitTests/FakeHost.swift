@@ -67,6 +67,29 @@ actor FakeHost: VMHost {
 
   func earlierGone() async -> Bool { earlierAreGone }
 
+  var installs: [InstallRequest] = []
+  var reports: [String] = []
+
+  func install(_ change: ChangeID, _ request: InstallRequest) async -> ChangeOutcome? {
+    installs.append(request)
+    return nil
+  }
+
+  /// Reports that cannot be kept yet, as a full disk leaves them.
+  var reportsStick = false
+
+  func paired(install: ChangeID) async -> ChangeOutcome? {
+    reports.append("paired")
+    return reportsStick ? nil : .done
+  }
+
+  func closed(install: ChangeID) async -> ChangeOutcome? {
+    reports.append("closed")
+    return reportsStick ? nil : .done
+  }
+
+  func sticking(reports: Bool) { reportsStick = reports }
+
   func sticking() { windowSticks = true }
 
   func failing(_ name: String?, after: String? = nil) {

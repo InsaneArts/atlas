@@ -23,13 +23,15 @@ enum Runner {
       vmGone = unresolved.isEmpty
     case .failure:
       // Kept as an earlier run of its own, so its VM stays unresolved.
-      unresolved = RunRecord(run: .unreadable).unresolved()
+      unresolved = RunRecord(run: .unreadable)
+        .unresolved()
       vmGone = unresolved.isEmpty
     }
     let record = RunRecord(run: incarnation, earlier: unresolved)
     try record.write(to: folder.incarnation)
     let machine = Machine(folder: folder, desktop: desktop, record: record)
-    let host = VirtualMachineHost(machine: machine)
+    let installer = GuestInstaller(folder: folder, desktop: desktop, machine: machine)
+    let host = VirtualMachineHost(machine: machine, installer: installer)
     let service = ControlService(ledger: ChangeLedger(folder: folder.changes), host: host, incarnation: incarnation)
     await service.recover(holding: lock, vmGone: vmGone)
     ControlServer.start(try UnixListener(at: folder.control), service: service)

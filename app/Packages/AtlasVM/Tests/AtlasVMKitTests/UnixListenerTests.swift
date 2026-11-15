@@ -22,7 +22,8 @@ struct UnixListenerTests {
     close(taken)
 
     let file = folders.root.appending(path: "file.sock")
-    try Data().write(to: file)
+    try Data()
+      .write(to: file)
     #expect(throws: UnixListenerError.occupied(file)) { try UnixListener(at: file) }
 
     var status = stat()

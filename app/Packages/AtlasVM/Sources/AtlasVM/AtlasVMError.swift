@@ -19,6 +19,7 @@ enum AtlasVMError: Error, CustomStringConvertible {
   /// No restore image could be had.
   case noRestoreImage
 
+  /// What went wrong, as the person reads it.
   var description: String {
     switch self {
     case .anotherRun: "Another run of Atlas VM serves this VM."

@@ -22,7 +22,10 @@ struct ServiceFollowingTests {
         return state.answers.isEmpty ? nil : state.answers.removeFirst()
       }
       if let next { return next }
-      try? await Task.sleep(for: .seconds(60))
+      // Held until cancelled, as a feed with nothing new is.
+      let (held, keeping) = AsyncStream<Never>.makeStream()
+      for await _ in held {}
+      keeping.finish()
       throw ServiceError("ended")
     }
 

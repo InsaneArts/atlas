@@ -14,7 +14,9 @@ enum RestoreImage {
   /// The newest kept restore image, if any.
   static func kept(in folder: URL) -> URL? {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? []
-    return names.filter { $0.hasSuffix(".ipsw") }.sorted().last.map { folder.appending(path: $0) }
+    return names.filter { $0.hasSuffix(".ipsw") }
+      .sorted().last
+      .map { folder.appending(path: $0) }
   }
 
   /// Which restore image to make from, kept in `folder`: the one the
@@ -30,7 +32,8 @@ enum RestoreImage {
       return RestoreImageChoice(file: kept, source: nil)
     }
     let file = folder.appending(path: "\(latest.buildVersion).ipsw")
-    let present = FileManager.default.fileExists(atPath: file.path(percentEncoded: false))
+    let present = FileManager.default
+      .fileExists(atPath: file.path(percentEncoded: false))
     return RestoreImageChoice(file: file, source: present ? nil : latest.url)
   }
 
@@ -65,9 +68,11 @@ enum RestoreImage {
     let response: URLResponse
     do {
       if let data = try? Data(contentsOf: resuming) {
-        (downloaded, response) = try await URLSession.shared.download(resumeFrom: data)
+        (downloaded, response) = try await URLSession.shared
+          .download(resumeFrom: data)
       } else {
-        (downloaded, response) = try await URLSession.shared.download(from: url)
+        (downloaded, response) = try await URLSession.shared
+          .download(from: url)
       }
     } catch {
       if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
@@ -75,22 +80,28 @@ enum RestoreImage {
       }
       throw error
     }
-    try? FileManager.default.removeItem(at: resuming)
+    try? FileManager.default
+      .removeItem(at: resuming)
     // Whole, or the rest of a resumed one.
     guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200 || status == 206 else {
-      try? FileManager.default.removeItem(at: downloaded)
+      try? FileManager.default
+        .removeItem(at: downloaded)
       throw AtlasVMError.noRestoreImage
     }
     // Checked under a name of this run's, kept only once it loads.
     let checking = file.appendingPathExtension("checking-\(getpid())")
-    try? FileManager.default.removeItem(at: checking)
-    try FileManager.default.moveItem(at: downloaded, to: checking)
+    try? FileManager.default
+      .removeItem(at: checking)
+    try FileManager.default
+      .moveItem(at: downloaded, to: checking)
     do {
       _ = try await VZMacOSRestoreImage.image(from: checking)
     } catch {
-      try? FileManager.default.removeItem(at: checking)
+      try? FileManager.default
+        .removeItem(at: checking)
       throw AtlasVMError.noRestoreImage
     }
-    try FileManager.default.moveItem(at: checking, to: file)
+    try FileManager.default
+      .moveItem(at: checking, to: file)
   }
 }

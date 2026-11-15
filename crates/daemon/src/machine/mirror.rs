@@ -343,8 +343,8 @@ async fn accept(
 /// Listen on `endpoint`'s address alone: IPv6 never also takes IPv4.
 fn bind(endpoint: &Endpoint) -> std::io::Result<TcpListener> {
     let socket = match endpoint.family {
-        Family::V4 => TcpSocket::new_v4()?,
-        Family::V6 => {
+        Family::Ipv4 => TcpSocket::new_v4()?,
+        Family::Ipv6 => {
             let socket = TcpSocket::new_v6()?;
             nix::sys::socket::setsockopt(&socket, nix::sys::socket::sockopt::Ipv6V6Only, &true)?;
             socket

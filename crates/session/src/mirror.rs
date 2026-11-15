@@ -17,12 +17,13 @@ pub const CHUNK: usize = 64 * 1024;
 
 /// An address family on loopback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum Family {
     /// `127.0.0.1`.
-    V4,
+    #[serde(rename = "v4")]
+    Ipv4,
     /// `[::1]`, on IPv6 alone.
-    V6,
+    #[serde(rename = "v6")]
+    Ipv6,
 }
 
 /// One loopback endpoint the station listens on, as listed: `incarnation`
@@ -45,8 +46,8 @@ impl Endpoint {
     /// Its address on loopback.
     pub fn address(&self) -> std::net::SocketAddr {
         match self.family {
-            Family::V4 => (std::net::Ipv4Addr::LOCALHOST, self.port).into(),
-            Family::V6 => (std::net::Ipv6Addr::LOCALHOST, self.port).into(),
+            Family::Ipv4 => (std::net::Ipv4Addr::LOCALHOST, self.port).into(),
+            Family::Ipv6 => (std::net::Ipv6Addr::LOCALHOST, self.port).into(),
         }
     }
 }

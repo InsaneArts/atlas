@@ -147,11 +147,19 @@ fn only_a_daemon_of_the_new_build_releases_its_update_and_then_the_previous_bund
     let program = guest
         .root
         .path()
-        .join("Library/Application Support/Atlas/Installer/atlas");
+        .join("Library/Application Support/Atlas/Installer/Atlas.app/Contents/MacOS/atlas");
     assert_eq!(
         std::fs::read_to_string(program).unwrap(),
         "new",
-        "the installer's own program follows"
+        "the installer's own copy follows"
+    );
+    assert!(
+        !guest
+            .root
+            .path()
+            .join("Library/Application Support/Atlas/Installer/Atlas.app.incoming")
+            .exists(),
+        "the copy it replaced is gone"
     );
     let late = guest
         .installer

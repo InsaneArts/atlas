@@ -41,10 +41,11 @@ nonisolated enum ServiceAttaching {
         pause = firstPause
         // The main queue keeps the lines in order; each is acknowledged once taken up.
         while let line = attachment.nextLine() {
-          DispatchQueue.main.async {
-            MainActor.assumeIsolated { received(line) }
-            attachment.acknowledge()
-          }
+          DispatchQueue.main
+            .async {
+              MainActor.assumeIsolated { received(line) }
+              attachment.acknowledge()
+            }
         }
         connection.detach()
         // Queued after the last line, and finished before the next attachment's first.

@@ -42,6 +42,9 @@ final class Machine {
   private var made: URL { folder.root.appending(path: "Made") }
   /// Kept once its guest's first boot was provisioned.
   private var provisioned: URL { folder.root.appending(path: "Provisioned") }
+  /// Kept while the VM is quarantined: an install refused for good, so it
+  /// is never started with Remote Login reachable.
+  private var quarantined: URL { folder.root.appending(path: "Quarantined") }
 
   /// Whether `marker` is kept; none when that cannot be read, which is
   /// never taken for absent.
@@ -98,7 +101,8 @@ final class Machine {
     // What a making cut short left goes first.
     for leftover in [folder.disk, folder.auxiliaryStorage, folder.hardwareModel, folder.machineIdentifier, provisioned]
     {
-      try? FileManager.default.removeItem(at: leftover)
+      try? FileManager.default
+        .removeItem(at: leftover)
     }
     try PrivateFile.write(requirements.hardwareModel.dataRepresentation, to: folder.hardwareModel)
     try PrivateFile.write(VZMacMachineIdentifier().dataRepresentation, to: folder.machineIdentifier)
@@ -140,6 +144,9 @@ final class Machine {
   /// framework's process that runs it is kept with this run's record.
   func start() async throws {
     guard exists(made) == true else { throw AtlasVMError.notMade }
+    guard exists(quarantined) == false else {
+      throw AtlasVMError.unsupported("The VM is quarantined until Atlas is installed in it again.")
+    }
     if let running, running.state == .running { return }
     guard earlierGone else {
       throw AtlasVMError.unsupported("An earlier run's VM is not yet seen gone.")
@@ -168,7 +175,8 @@ final class Machine {
     let before = MachineProcess.running() ?? []
     running = machine
     try await machine.start(options: options)
-    let started = (MachineProcess.running() ?? []).filter { !before.contains($0) }
+    let started = (MachineProcess.running() ?? [])
+      .filter { !before.contains($0) }
     if started.count == 1 {
       record.machine = started[0]
       try record.write(to: folder.incarnation)
@@ -211,6 +219,31 @@ final class Machine {
 
   /// Whether its window is open now.
   var windowOpen: Bool { window?.isOpen == true }
+
+  /// Quarantine the VM: it starts no more until Atlas is installed again.
+  func quarantine() throws {
+    try PrivateFile.write(Data(), to: quarantined)
+  }
+
+  /// Lift its quarantine, as asking for an install again does. Kept when it
+  /// cannot be lifted, so the VM stays unstarted.
+  func release() {
+    try? PrivateFile.remove(quarantined)
+  }
+
+  /// Its MAC address, as it was made with.
+  var macAddress: String? {
+    (try? PrivateFile.read(MachineConfiguration.macAddress(in: folder), limit: 64))
+      .flatMap { $0 }
+      .map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// Whether its guest daemon answers on its port.
+  func guestAnswers() async -> Bool {
+    guard let connection = try? await guestConnection() else { return false }
+    close(connection)
+    return true
+  }
 
   /// A new connection to its guest's port, its descriptor the caller's.
   func guestConnection() async throws -> Int32 {

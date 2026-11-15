@@ -121,6 +121,12 @@ fn main() -> ExitCode {
         return launch_job(log, argv0, program);
     }
 
+    // A machine desktop's setup phase runs alone, as root, before anything else.
+    #[cfg(target_os = "macos")]
+    if let Command::MachineSetup(phase) = command {
+        return machine_setup(phase);
+    }
+
     // A machine desktop's root installer runs alone, before anything else.
     #[cfg(target_os = "macos")]
     if matches!(command, Command::MachineInstaller) {
@@ -640,6 +646,54 @@ fn machine_daemon(desktop_id: &str, enrolment: &str) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}", json!(error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run one phase of putting Atlas inside a machine desktop's guest, and
+/// print what it found as one JSON line.
+#[cfg(target_os = "macos")]
+fn machine_setup(phase: cli::MachineSetup) -> ExitCode {
+    use atlas_core::{desktop::DesktopId, files::Token};
+    use atlas_daemon::machine::setup::{Step, run};
+    let invalid = || {
+        atlas_core::error::Error::new(
+            atlas_core::error::Code::BadRequest,
+            "A setup phase names no valid desktop, enrolment or change.",
+        )
+    };
+    let step = match phase {
+        cli::MachineSetup::Publish { change, source } => {
+            Token::parse(&change).map(|change| Step::Publish { change, source })
+        }
+        cli::MachineSetup::Jobs {
+            desktop_id,
+            enrolment,
+            account,
+            paired,
+        } => DesktopId::parse(&desktop_id)
+            .zip(Token::parse(&enrolment))
+            .map(|(desktop, enrolment)| Step::Jobs {
+                desktop,
+                enrolment,
+                account,
+                paired,
+            }),
+        cli::MachineSetup::Admin { name } => Some(Step::Admin { name }),
+        cli::MachineSetup::Demote { account } => Some(Step::Demote { account }),
+        cli::MachineSetup::Close => Some(Step::Close),
+    };
+    let done = step
+        .ok_or_else(invalid)
+        .and_then(|step| run(step, &mut std::io::stdin()));
+    match done {
+        Ok(found) => {
+            println!("{found}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{}", json!(error));
             ExitCode::FAILURE
         }
     }

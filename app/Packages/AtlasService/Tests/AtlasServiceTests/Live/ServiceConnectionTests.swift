@@ -39,9 +39,14 @@ struct ServiceConnectionTests {
 
   @Test("nothing listening at the socket reads as Atlas not running")
   func nothingListeningIsNotRunning() throws {
-    let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
+    let folder = FileManager.default.temporaryDirectory
+      .appending(path: UUID().uuidString)
+    try FileManager.default
+      .createDirectory(at: folder, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default
+        .removeItem(at: folder)
+    }
     #expect(throws: ServiceError("Atlas isn't running.", code: "not-running")) {
       try ServiceAttachment(path: folder.appending(path: "attach.sock"), service: folder.appending(path: "atlas"))
     }

@@ -10,7 +10,7 @@ use super::{
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
-    fs_move::{FileName, Moved, Replace, exchange_between, move_between, rename_within},
+    fs_move::{FileName, Moved, exchange_between},
     stage::Snapshot,
 };
 use serde_json::{Value, json};
@@ -28,10 +28,8 @@ pub(super) const DEADLINE_MS: u64 = 10 * 60 * 1000;
 /// The previous bundle's name in its transaction's folder once swapped out,
 /// and the new one's before it is swapped in.
 const HELD: &str = "Atlas.app";
-/// The installer's next program, frozen at verification.
-const NEXT: &str = "atlas.next";
-/// The installer's next program beside its place, about to take it.
-const INCOMING: &str = "atlas.incoming";
+/// The installer's own next copy, frozen at verification.
+const NEXT: &str = "Installer.app";
 
 /// The installer: one mutation at a time, every transaction and request
 /// kept under its layout.
@@ -251,18 +249,12 @@ impl Installer {
             self.abort(&mut kept)?;
             return self.answer(asked, refusal("The new bundle is not Atlas's, signed."));
         };
-        // The installer's own next program, frozen now and written through.
-        // Its signature seals the bundle around it, so it is checked as the
-        // very bytes of the verified bundle's `atlas`, not on its own.
-        let next = folder.join(NEXT);
-        let program = staged.join("Contents/MacOS/atlas");
-        std::fs::copy(&program, &next).map_err(io)?;
-        File::open(&next)
-            .and_then(|file| file.sync_all())
-            .map_err(io)?;
-        into.sync_all().map_err(io)?;
-        let bytes = |path: &Path| std::fs::read(path).ok().map(Sha256::digest);
-        if bytes(&next).is_none() || bytes(&next) != bytes(&program) {
+        // The installer's own next copy, frozen now as this very code.
+        if let Err(error) = copy_in(manifest, source, &into, &name(NEXT), root) {
+            self.abort(&mut kept)?;
+            return self.answer(asked, refusal(&error.error));
+        }
+        if self.system.verified(&folder.join(NEXT)).as_ref() != Some(&cdhash) {
             self.abort(&mut kept)?;
             return self.answer(asked, refusal("The new installer is not the new bundle's."));
         }
@@ -356,37 +348,24 @@ impl Installer {
         self.answer(asked, reply)
     }
 
-    /// Release, from wherever it was cut short: the installer's own program
-    /// replaced from its frozen copy, then the previous bundle removed.
+    /// Release, from wherever it was cut short: the installer's own copy
+    /// replaced by its frozen next one, then the previous bundle removed.
     fn finish_release(&self, kept: &mut Transaction) -> Result<()> {
         let folder = self.folder(&kept.id);
-        let home = File::open(self.layout.home()).map_err(io)?;
-        if folder.join(NEXT).exists() {
-            let into = File::open(&folder).map_err(io)?;
-            let _ = nix::unistd::unlinkat(
-                &home,
-                name(INCOMING).as_c_str(),
-                nix::unistd::UnlinkatFlags::NoRemoveDir,
-            );
-            synced(move_between(&into, &name(NEXT), &home, &name(INCOMING)).map_err(io)?)?;
-        }
-        // Moved beside it, then into its place: cut short at either, finished.
-        if self.layout.home().join(INCOMING).exists() {
-            rename_within(
-                &home,
-                name(INCOMING).as_c_str(),
-                name("atlas").as_c_str(),
-                Replace::Allowed,
-            )
-            .map_err(io)?;
-            home.sync_all().map_err(io)?;
-        }
+        let into = File::open(&folder).map_err(io)?;
+        let next = name(NEXT);
+        let frozen = folder.join(NEXT).exists().then_some((&into, &next));
+        let wanted =
+            |bundle: &Path| self.system.verified(bundle).map(|cdhash| hex(&cdhash)) == kept.cdhash;
+        // Any failure here may pass, a signature check that could not run
+        // looking just like a copy of other code: it stays releasing, and
+        // asking again or recovery finishes it.
+        super::own::take(&self.layout.home(), frozen, &wanted)?;
         // The fallback goes only while what is installed is this update's.
         let applications = File::open(self.layout.applications()).map_err(io)?;
         if Identity::of(&applications, &name(BUNDLE))? != kept.new {
             return self.pend(kept, "The installed Atlas is not this update's.");
         }
-        let into = File::open(&folder).map_err(io)?;
         if let Step::Pended = self.remove_held(kept, &into, Some(kept.installed))? {
             return Ok(());
         }
@@ -452,6 +431,8 @@ impl Installer {
             if let Step::Pended = self.remove_held(kept, &into, new)? {
                 return Ok(());
             }
+            // The installer keeps the copy it runs: the next one goes too.
+            let _ = std::fs::remove_dir_all(self.folder(&kept.id).join(NEXT));
             kept.phase = Phase::Restarting;
             self.keep(kept)?;
         }

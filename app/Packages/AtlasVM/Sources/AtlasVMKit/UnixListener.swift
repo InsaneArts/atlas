@@ -45,6 +45,9 @@ public final class UnixListener: Sendable {
     close(descriptor)
   }
 
+  /// Its descriptor, to wait on with others.
+  var pollable: Int32 { descriptor }
+
   /// Make a write to `connection` once its peer is gone fail, never signal.
   public static func quiet(_ connection: Int32) {
     var on: Int32 = 1

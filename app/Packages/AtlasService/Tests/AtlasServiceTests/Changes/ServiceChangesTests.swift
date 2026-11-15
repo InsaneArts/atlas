@@ -13,17 +13,20 @@ struct ServiceChangesTests {
     return start.duration(to: clock.now)
   }
 
-  @Test("a change told while a reader waits wakes it at once")
+  @Test("a change told while a reader waits wakes it, to read again a moment after it last read")
   func aChangeWakesAWaitingReader() async {
     let changes = ServiceChanges()
+    let clock = HeldClock()
     let seen = changes.count(of: [.status])
-    let waiting = Task { await changes.pause(.seconds(20), on: [.status], since: seen, clock: ContinuousClock()) }
-    try? await Task.sleep(for: .milliseconds(50))
-    let took = await timed {
-      changes.tell([.status])
-      await waiting.value
-    }
-    #expect(took < .seconds(5))
+    let waiting = Task { await changes.pause(.seconds(20), on: [.status], since: seen, clock: clock) }
+    await clock.untilSleeps(1)
+
+    changes.tell([.status])
+    await clock.untilSleeps(2)
+    waiting.cancel()
+    await waiting.value
+
+    #expect(clock.deadlines == [.seconds(20), ServiceChanges.soonest])
   }
 
   @Test("a change that came while the reader read is read again at once")
@@ -52,17 +55,15 @@ struct ServiceChangesTests {
   func aFollowedFeedStretchesThePause() async {
     let changes = ServiceChanges()
     changes.follow(true)
+    let clock = HeldClock()
     let seen = changes.count(of: [.sessions])
-    let took = await timed {
-      let waiting = Task {
-        await changes.pause(.milliseconds(50), on: [.sessions], since: seen, clock: ContinuousClock())
-      }
-      try? await Task.sleep(for: .milliseconds(300))
-      changes.tell([.sessions])
-      await waiting.value
-    }
-    #expect(took >= .milliseconds(300))
-    #expect(took < .seconds(10))
+
+    let waiting = Task { await changes.pause(.milliseconds(50), on: [.sessions], since: seen, clock: clock) }
+    await clock.untilSleeps(1)
+    waiting.cancel()
+    await waiting.value
+
+    #expect(clock.deadlines.first == ServiceChanges.fallback)
   }
 
   @Test("a cancelled wait ends at once")

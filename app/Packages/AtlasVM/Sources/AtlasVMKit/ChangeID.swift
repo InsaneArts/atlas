@@ -8,8 +8,10 @@ public struct ChangeID: Hashable, Codable, Sendable, CustomStringConvertible {
   /// digits.
   public init?(_ text: String) {
     let digits = text.utf8.allSatisfy { byte in
-      (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
-        || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+      (UInt8(ascii: "0")...UInt8(ascii: "9"))
+        .contains(byte)
+        || (UInt8(ascii: "a")...UInt8(ascii: "f"))
+          .contains(byte)
     }
     guard text.utf8.count == 48, digits else { return nil }
     self.text = text
@@ -17,7 +19,8 @@ public struct ChangeID: Hashable, Codable, Sendable, CustomStringConvertible {
 
   /// Read from its digits; anything else is refused.
   public init(from decoder: any Decoder) throws {
-    let text = try decoder.singleValueContainer().decode(String.self)
+    let text = try decoder.singleValueContainer()
+      .decode(String.self)
     guard let id = ChangeID(text) else {
       throw DecodingError.dataCorrupted(
         .init(codingPath: decoder.codingPath, debugDescription: "not a change's ID")

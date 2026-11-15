@@ -65,3 +65,73 @@ fn a_recorder_that_is_not_running_still_reports_its_restarts() {
         json!({"resets": 0, "resetFailures": 1})
     );
 }
+
+#[test]
+fn remote_login_is_off_only_when_disabled_unloaded_and_not_listening() {
+    assert_eq!(
+        remote_login_from(Some(true), Some(false), Some(false)),
+        Some(false)
+    );
+    for on in [
+        (Some(false), Some(false), Some(false)),
+        (Some(true), Some(true), Some(false)),
+        (Some(true), Some(false), Some(true)),
+        (None, None, Some(true)),
+    ] {
+        assert_eq!(remote_login_from(on.0, on.1, on.2), Some(true), "{on:?}");
+    }
+    assert_eq!(remote_login_from(Some(true), None, Some(false)), None);
+}
+
+#[test]
+fn launchd_says_whether_remote_login_is_disabled() {
+    let printed = "disabled services = {\n\t\t\"com.openssh.sshd\" => disabled\n\t\t\"com.apple.other\" => enabled\n}\n";
+    assert_eq!(sshd_disabled(printed), Some(true));
+    assert_eq!(
+        sshd_disabled(&printed.replace("=> disabled", "=> enabled")),
+        Some(false)
+    );
+    assert_eq!(sshd_disabled("disabled services = {\n}\n"), None);
+}
+
+#[test]
+fn agents_are_held_unless_remote_login_is_off_and_the_account_no_administrator() {
+    assert_eq!(Posture::CLOSED.held(), None);
+    for open in [
+        (Some(true), Some(false)),
+        (None, Some(false)),
+        (Some(false), Some(true)),
+        (Some(false), None),
+        (None, None),
+    ] {
+        let posture = Posture {
+            remote_login: open.0,
+            admin: open.1,
+        };
+        assert!(posture.held().is_some(), "{posture:?}");
+    }
+}
+
+#[test]
+fn the_machine_hello_says_why_agents_are_held() {
+    let declared = atlas_session::compatibility::Declared::ours(Vec::new());
+    let open = Posture {
+        remote_login: Some(true),
+        admin: Some(false),
+    };
+
+    let held = machine_hello("Aqua", &declared, open);
+    let admitted = machine_hello("Aqua", &declared, Posture::CLOSED);
+
+    assert_eq!(held["remoteLogin"], "on");
+    assert_eq!(held["agents"]["admitted"], false);
+    assert_eq!(held["agents"]["held"], "Remote Login is on in the guest.");
+    assert_eq!(admitted["agents"], json!({"admitted": true, "held": null}));
+}
+
+#[test]
+fn the_guest_posture_is_read_without_failing() {
+    let posture = Posture::now();
+
+    assert_eq!(posture.held().is_none(), posture == Posture::CLOSED);
+}

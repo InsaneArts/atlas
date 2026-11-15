@@ -26,7 +26,8 @@ final class VMWindow {
     window.contentView = view
     window.center()
     window.makeKeyAndOrderFront(nil)
-    NSApplication.shared.activate()
+    NSApplication.shared
+      .activate()
   }
 
   /// Whether it shows `machine`.

@@ -12,7 +12,7 @@ struct DeferredRecoveryTests {
     let ledger = ChangeLedger(folder: try folders.folder("changes"))
     let service = ControlService(ledger: ledger, host: host, incarnation: try #require(Incarnation.current()))
     let lock = try #require(RunnerLock(at: folders.root.appending(path: "Runner.lock")))
-    let off = ChangeID(String(repeating: "7c", count: 24))!
+    let off = ChangeID.repeating("7c")
     #expect(try ledger.begin(.window(off, input: false), by: "an earlier run") == .new)
     await host.earlier(gone: false)
 

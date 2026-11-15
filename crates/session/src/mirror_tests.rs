@@ -20,7 +20,7 @@ async fn a_relay_dropped_partway_gives_its_credit_back() {
 #[test]
 fn a_list_is_takeable_only_within_its_bound_without_port_zero_or_a_repeat() {
     let at = |port| Endpoint {
-        family: Family::V4,
+        family: Family::Ipv4,
         port,
         incarnation: 1,
     };

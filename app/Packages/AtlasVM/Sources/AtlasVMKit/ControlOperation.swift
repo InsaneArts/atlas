@@ -15,13 +15,23 @@ public enum ControlOperation: Equatable, Sendable {
   case stop(ChangeID)
   /// Open the VM's window with input, or close it.
   case window(ChangeID, input: Bool)
+  /// Put Atlas inside the VM's guest.
+  case install(ChangeID, InstallRequest)
+  /// The station's word that the guest of the install change `install`
+  /// paired for `enrolment`.
+  case paired(ChangeID, install: ChangeID, enrolment: String)
+  /// The station's word that the guest of the install change `install`
+  /// says, over its authenticated session, that Remote Login is off and its
+  /// account no administrator.
+  case closed(ChangeID, install: ChangeID)
 
   /// The change it is; none for a read.
   public var change: ChangeID? {
     switch self {
     case .hello, .state, .outcome:
       nil
-    case .create(let change), .start(let change), .stop(let change), .window(let change, _):
+    case .create(let change), .start(let change), .stop(let change), .window(let change, _),
+      .install(let change, _), .paired(let change, _, _), .closed(let change, _):
       change
     }
   }
@@ -36,6 +46,33 @@ public enum ControlOperation: Equatable, Sendable {
     case .start: "start"
     case .stop: "stop"
     case .window: "window"
+    case .install: "install"
+    case .paired: "paired"
+    case .closed: "closed"
+    }
+  }
+
+  /// It as a record keeps it: an install's secret as its digest alone.
+  public var recorded: ControlOperation {
+    guard case .install(let change, let request) = self else { return self }
+    return .install(change, request.recorded)
+  }
+
+  /// Whether, left pending, it goes on when asked again: an install, whose
+  /// phases are each safe to repeat, and the station's reports on one.
+  var resumes: Bool {
+    switch self {
+    case .install, .paired, .closed: true
+    default: false
+    }
+  }
+
+  /// Whether it is the station's report on an install, which touches only
+  /// that install's record and never the VM.
+  public var isReport: Bool {
+    switch self {
+    case .paired, .closed: true
+    default: false
     }
   }
 }
@@ -45,9 +82,13 @@ extension ControlOperation: Codable {
     case op
     case change
     case input
+    case bundle
+    case enrolment
+    case secret
+    case install
   }
 
-  /// Read from one request: its `op`, and the `change` and `input` it needs.
+  /// Read from one request: its `op`, and the fields it needs.
   public init(from decoder: any Decoder) throws {
     let fields = try decoder.container(keyedBy: Key.self)
     let name = try fields.decode(String.self, forKey: .op)
@@ -68,6 +109,26 @@ extension ControlOperation: Codable {
       self = .window(
         try fields.decode(ChangeID.self, forKey: .change),
         input: try fields.decode(Bool.self, forKey: .input)
+      )
+    case "install":
+      self = .install(
+        try fields.decode(ChangeID.self, forKey: .change),
+        InstallRequest(
+          bundle: try fields.decode(String.self, forKey: .bundle),
+          enrolment: try fields.decode(String.self, forKey: .enrolment),
+          secret: try fields.decode(String.self, forKey: .secret)
+        )
+      )
+    case "paired":
+      self = .paired(
+        try fields.decode(ChangeID.self, forKey: .change),
+        install: try fields.decode(ChangeID.self, forKey: .install),
+        enrolment: try fields.decode(String.self, forKey: .enrolment)
+      )
+    case "closed":
+      self = .closed(
+        try fields.decode(ChangeID.self, forKey: .change),
+        install: try fields.decode(ChangeID.self, forKey: .install)
       )
     default:
       throw DecodingError.dataCorruptedError(
@@ -90,6 +151,18 @@ extension ControlOperation: Codable {
     case .window(let change, let input):
       try fields.encode(change, forKey: .change)
       try fields.encode(input, forKey: .input)
+    case .install(let change, let request):
+      try fields.encode(change, forKey: .change)
+      try fields.encode(request.bundle, forKey: .bundle)
+      try fields.encode(request.enrolment, forKey: .enrolment)
+      try fields.encode(request.secret, forKey: .secret)
+    case .paired(let change, let install, let enrolment):
+      try fields.encode(change, forKey: .change)
+      try fields.encode(install, forKey: .install)
+      try fields.encode(enrolment, forKey: .enrolment)
+    case .closed(let change, let install):
+      try fields.encode(change, forKey: .change)
+      try fields.encode(install, forKey: .install)
     }
   }
 }

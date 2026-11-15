@@ -211,6 +211,7 @@ impl Policy {
             | Command::MachineInput { .. }
             | Command::Daemon { .. }
             | Command::MachineInstaller
+            | Command::MachineSetup(_)
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::SessionProofServe

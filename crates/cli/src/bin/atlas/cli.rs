@@ -105,6 +105,9 @@ pub(super) enum Command {
     /// A machine desktop's root installer, started by its LaunchDaemon alone.
     #[command(hide = true)]
     MachineInstaller,
+    /// One phase of putting Atlas inside a machine desktop's guest, as root.
+    #[command(hide = true, subcommand)]
+    MachineSetup(MachineSetup),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {
@@ -1510,3 +1513,40 @@ impl AppTarget {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+/// A phase of putting Atlas inside a machine desktop's guest, in the order
+/// its host runs them.
+#[derive(Debug, Subcommand)]
+pub(super) enum MachineSetup {
+    /// Publish the Atlas staged at a folder of the guest account's.
+    Publish {
+        #[arg(long)]
+        change: String,
+        #[arg(long)]
+        source: PathBuf,
+    },
+    /// Write and start the guest's jobs, and hand it the pairing secret.
+    Jobs {
+        #[arg(long)]
+        desktop_id: String,
+        #[arg(long)]
+        enrolment: String,
+        #[arg(long)]
+        account: String,
+        /// The station said the pairing is complete: no secret is needed.
+        #[arg(long)]
+        paired: bool,
+    },
+    /// Make the second administrator, its password on standard input.
+    Admin {
+        #[arg(long)]
+        name: String,
+    },
+    /// Take the guest account out of the administrators.
+    Demote {
+        #[arg(long)]
+        account: String,
+    },
+    /// Turn Remote Login off, last.
+    Close,
+}

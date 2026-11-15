@@ -28,7 +28,8 @@ public enum PrivateFile {
   /// power going.
   public static func write(_ data: Data, to file: URL) throws(PrivateFileError) {
     let folder = file.deletingLastPathComponent()
-    let writing = folder.appending(path: ".\(file.lastPathComponent).writing").path(percentEncoded: false)
+    let writing = folder.appending(path: ".\(file.lastPathComponent).writing")
+      .path(percentEncoded: false)
     unlink(writing)
     let descriptor = open(writing, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else { throw .unwritable(file) }
@@ -40,6 +41,13 @@ public enum PrivateFile {
       throw .unwritable(file)
     }
     try sync(folder, for: file)
+  }
+
+  /// Remove `file`, unless it is gone already, and make its going reach
+  /// the disk.
+  public static func remove(_ file: URL) throws(PrivateFileError) {
+    guard unlink(file.path(percentEncoded: false)) == 0 || errno == ENOENT else { throw .unwritable(file) }
+    try sync(file.deletingLastPathComponent(), for: file)
   }
 
   /// Make what changed in `folder` reach the disk, for `file`'s sake.

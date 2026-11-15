@@ -42,7 +42,8 @@ public struct RunRecord: Codable, Equatable, Sendable {
   public static func read(from file: URL) throws -> RunRecord? {
     guard let data = try PrivateFile.read(file, limit: longest) else { return nil }
     do {
-      return try JSONDecoder().decode(RunRecord.self, from: data)
+      return try JSONDecoder()
+        .decode(RunRecord.self, from: data)
     } catch {
       throw PrivateFileError.unreadable(file)
     }
@@ -61,7 +62,8 @@ public struct RunRecord: Codable, Equatable, Sendable {
   /// None left means every VM they ran is gone. None is ever dropped: a
   /// record too long to keep stops the run that would keep it.
   public func unresolved() -> [RunRecord] {
-    (earlier + [RunRecord(run: run, machine: machine)]).filter { !$0.machineGone() }
+    (earlier + [RunRecord(run: run, machine: machine)])
+      .filter { !$0.machineGone() }
   }
 
   /// Whether the VM this run ran is seen gone: the process it kept seen

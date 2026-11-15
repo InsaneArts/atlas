@@ -5,7 +5,7 @@ import Testing
 
 @Suite("The control service")
 struct ControlServiceTests {
-  let change = ChangeID(String(repeating: "d1", count: 24))!
+  let change = ChangeID.repeating("d1")
 
   func service(_ host: FakeHost, in folders: Folders) throws -> (ControlService, ChangeLedger) {
     let ledger = ChangeLedger(folder: try folders.folder("changes"))
@@ -47,7 +47,8 @@ struct ControlServiceTests {
     let nonsense = await service.answer(line: Data(#"{"op":"format"}"#.utf8))
 
     #expect(state.last == UInt8(ascii: "\n"))
-    let reply = try JSONDecoder().decode(ControlReply.self, from: state)
+    let reply = try JSONDecoder()
+      .decode(ControlReply.self, from: state)
     #expect(reply.power == .running && reply.confirmed == true)
     #expect(try JSONDecoder().decode(ControlReply.self, from: nonsense).ok == false)
   }
@@ -60,7 +61,7 @@ struct ControlServiceTests {
     #expect(await service.answer(.window(change, input: true)).outcome == .done)
     await host.sticking()
 
-    let off = ChangeID(String(repeating: "e2", count: 24))!
+    let off = ChangeID.repeating("e2")
     let reply = await service.answer(.window(off, input: false))
 
     #expect(reply.outcome == .refused("It did not take effect."))
@@ -82,12 +83,13 @@ struct ControlServiceTests {
 
     // One that failed after it took effect is done.
     await host.failing(nil, after: "stop")
-    let stopped = await service.answer(.stop(ChangeID(String(repeating: "f4", count: 24))!))
+    let stopped = await service.answer(.stop(ChangeID.repeating("f4")))
     #expect(stopped.outcome == .done)
 
     // One that cannot be kept is never done.
-    try FileManager.default.removeItem(at: ledger.folder)
-    let other = ChangeID(String(repeating: "f3", count: 24))!
+    try FileManager.default
+      .removeItem(at: ledger.folder)
+    let other = ChangeID.repeating("f3")
     let refused = await service.answer(.stop(other))
     #expect(!refused.ok)
     #expect(await host.calls == ["start", "stop"])
@@ -102,11 +104,11 @@ struct ControlServiceTests {
     let (service, ledger) = try service(host, in: folders)
     let lock = try #require(RunnerLock(at: folders.root.appending(path: "Runner.lock")))
     let (create, start, on, off, own) = (
-      ChangeID(String(repeating: "a0", count: 24))!,
-      ChangeID(String(repeating: "a1", count: 24))!,
-      ChangeID(String(repeating: "a2", count: 24))!,
-      ChangeID(String(repeating: "a3", count: 24))!,
-      ChangeID(String(repeating: "a4", count: 24))!
+      ChangeID.repeating("a0"),
+      ChangeID.repeating("a1"),
+      ChangeID.repeating("a2"),
+      ChangeID.repeating("a3"),
+      ChangeID.repeating("a4")
     )
     let asked: [ControlOperation] = [
       .create(create), .start(start), .window(on, input: true), .window(off, input: false),
@@ -153,7 +155,7 @@ struct ControlServiceTests {
     let starting = Task { await service.answer(.start(change)) }
     await host.untilHeld()
 
-    let other = ChangeID(String(repeating: "b5", count: 24))!
+    let other = ChangeID.repeating("b5")
     let refused = await service.answer(.stop(other))
     await host.release()
 

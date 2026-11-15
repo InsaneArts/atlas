@@ -254,7 +254,7 @@ impl Owned {
 
 /// Refuse unless `path` is a file owned by root that nobody else may
 /// write, in a folder the same holds for, all the way up.
-fn root_owned(path: &Path) -> Result<()> {
+pub(in crate::machine) fn root_owned(path: &Path) -> Result<()> {
     let mut at = Some(path);
     while let Some(here) = at {
         let owned = Owned::of(here).ok_or_else(|| refused("an installed file cannot be read"))?;

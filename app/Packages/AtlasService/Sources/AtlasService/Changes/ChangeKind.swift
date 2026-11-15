@@ -18,6 +18,7 @@ public enum ChangeKind: String, CaseIterable, Sendable {
   /// - Parameter name: The kind's name, as the feed gives it.
   /// - Returns: The kinds to read again.
   static func named(_ name: String) -> Set<ChangeKind> {
-    ChangeKind(rawValue: name).map { [$0] } ?? Set(allCases)
+    ChangeKind(rawValue: name)
+      .map { [$0] } ?? Set(allCases)
   }
 }

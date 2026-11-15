@@ -5,7 +5,7 @@ import Testing
 
 @Suite("The control service's own pending changes")
 struct PendingTests {
-  let change = ChangeID(String(repeating: "9e", count: 24))!
+  let change = ChangeID.repeating("9e")
 
   @Test(
     "a change left pending because its effect could not be seen is settled once it can be, without being done again"

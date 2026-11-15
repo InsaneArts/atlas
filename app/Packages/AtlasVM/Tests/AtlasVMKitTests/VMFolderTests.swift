@@ -29,7 +29,8 @@ struct VMFolderTests {
     #expect(throws: VMFolderError.notPrivate(open)) { try VMFolder.checkPrivate(open) }
 
     let link = folders.root.appending(path: "link")
-    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: try folders.folder("real"))
+    try FileManager.default
+      .createSymbolicLink(at: link, withDestinationURL: try folders.folder("real"))
     #expect(throws: VMFolderError.notAFolder(link)) { try VMFolder.checkPrivate(link) }
 
     let shared = try folders.folder("shared")

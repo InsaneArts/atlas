@@ -23,7 +23,7 @@ use std::{
 };
 
 /// The bundle a snapshot must name.
-pub(super) const BUNDLE: &str = "Atlas.app";
+pub(in crate::machine) const BUNDLE: &str = "Atlas.app";
 
 /// The refusal of what cannot be installed.
 fn refused(why: &str) -> Error {
@@ -40,7 +40,7 @@ fn io(error: impl std::error::Error + Send + Sync + 'static) -> Error {
 /// Make `manifest`'s bundle as `name` in `into`, from the staged copy at
 /// `source`. The caller holds `into`, a root-owned folder nothing else
 /// writes; `root` says whether to make every entry root's own.
-pub(super) fn copy_in(
+pub(in crate::machine) fn copy_in(
     manifest: &Snapshot,
     source: &Path,
     into: &File,

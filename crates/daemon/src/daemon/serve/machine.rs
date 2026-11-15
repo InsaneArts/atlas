@@ -33,7 +33,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex as Held, PoisonError,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, Ordering::SeqCst},
+        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
     },
     time::Duration,
 };
@@ -410,11 +410,23 @@ pub struct Machine {
     /// Blocking work begun for connections not yet authenticated, or that
     /// may be cancelled, still running.
     blocking: Arc<Semaphore>,
-    /// Whether agents' lanes are admitted: never until this guest's lease
-    /// clock is shown to count a stall it did not choose.
-    agents: AtomicBool,
+    /// How closed the guest is, as last read, and when: agents' lanes are
+    /// held unless it is closed, and before any reading. (Its lease clock,
+    /// `CLOCK_MONOTONIC`, was seen to count a minute's stall of its VM.)
+    posture: std::sync::Mutex<(super::super::facts::Posture, Option<std::time::Instant>)>,
     pub said: Arc<Said>,
 }
+
+/// How long a reading of how closed the guest is holds before an agent's
+/// lane reads it again.
+const POSTURE_FRESH: Duration = Duration::from_secs(10);
+
+/// How closed the guest is now; in tests, closed, so none reads the Mac it
+/// runs on.
+#[cfg(not(test))]
+const READ_POSTURE: fn() -> super::super::facts::Posture = super::super::facts::Posture::now;
+#[cfg(test)]
+const READ_POSTURE: fn() -> super::super::facts::Posture = || super::super::facts::Posture::CLOSED;
 
 impl Machine {
     pub fn new(
@@ -456,17 +468,42 @@ impl Machine {
             starting: std::sync::Mutex::new(Some(starting)),
             mirrors,
             jobs,
-            agents: AtomicBool::new(false),
+            posture: std::sync::Mutex::default(),
             blocking: Arc::new(Semaphore::new(bounded::BLOCKING)),
             said: Arc::default(),
         })
     }
 
-    /// Admit agents' lanes, as a guest whose lease clock is known to count
-    /// a stall does.
+    /// Take the guest to be as `posture` says, as a hello would.
     #[cfg(test)]
-    pub(crate) fn admit_agents(&self) {
-        self.agents.store(true, Ordering::SeqCst);
+    pub(in crate::daemon) fn seen_as(&self, posture: super::super::facts::Posture) {
+        self.keep_posture(posture);
+    }
+
+    /// Keep `posture` as read now.
+    fn keep_posture(&self, posture: super::super::facts::Posture) {
+        *self
+            .posture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            (posture, Some(std::time::Instant::now()));
+    }
+
+    /// How closed the guest is: as last read while that is fresh, else
+    /// read again; unknown when it cannot be read now.
+    async fn posture_now(&self) -> super::super::facts::Posture {
+        let (posture, at) = *self
+            .posture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if at.is_some_and(|at| at.elapsed() < POSTURE_FRESH) {
+            return posture;
+        }
+        let read = bounded::off_runtime(&self.blocking, READ_POSTURE)
+            .await
+            .unwrap_or_default();
+        self.keep_posture(read);
+        read
     }
 
     /// What this guest declares it serves: what it was made with, so it
@@ -767,13 +804,12 @@ impl Machine {
         // refuses its change and ends its command, a Resume between or not.
         let stops = self.daemon.halted.borrow().stops;
         lanes.admit(&header, Opener::Station)?;
-        // Only the station's reads until this guest's lease clock is shown
-        // to count a stall the guest did not choose.
-        if !matches!(header.kind, LaneKind::Read) && !self.agents.load(Ordering::SeqCst) {
-            return Err(Error::new(
-                Code::Platform,
-                "Agents are not admitted on this desktop yet.",
-            ));
+        // Only the station's reads while the guest is open to more than
+        // Atlas, or not yet seen closed.
+        if !matches!(header.kind, LaneKind::Read)
+            && let Some(why) = self.posture_now().await.held()
+        {
+            return Err(Error::new(Code::Platform, why));
         }
         let (mut reader, writer) = tokio::io::split(secure);
         // A mirror carries bytes both ways from the first: no request line.
@@ -821,12 +857,19 @@ impl Machine {
             // workers the generation's watchdog runs on.
             let (manager, declared) = (self.daemon.manager.clone(), self.declared());
             let saying = bounded::off_runtime(&self.blocking, move || {
-                super::super::facts::machine_hello(&manager, &declared)
+                let posture = READ_POSTURE();
+                let hello = super::super::facts::machine_hello(&manager, &declared, posture);
+                (hello, posture)
             });
             // Ended with its lane, as every request is, however long it waits.
             let hello = tokio::select! {
-                said = saying => said
-                    .unwrap_or_else(|| failure(Code::Busy, "The guest could not say hello now")),
+                said = saying => match said {
+                    Some((hello, posture)) => {
+                        self.keep_posture(posture);
+                        hello
+                    }
+                    None => failure(Code::Busy, "The guest could not say hello now"),
+                },
                 () = ended(&lanes, header.lane) => return Ok(()),
             };
             return write(&mut writer, &hello).await;

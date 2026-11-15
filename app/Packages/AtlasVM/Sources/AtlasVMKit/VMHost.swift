@@ -18,4 +18,13 @@ public protocol VMHost: Sendable {
   func windowOpen() async -> Bool
   /// Whether every VM an earlier run of the runner ran is seen gone now.
   func earlierGone() async -> Bool
+  /// Put Atlas inside the guest for the install change `change`, as far as
+  /// it goes; none while it waits on the station's word that it is closed.
+  func install(_ change: ChangeID, _ request: InstallRequest) async -> ChangeOutcome?
+  /// Take the station's word that the install `install` paired: its secret
+  /// leaves the share. None while that cannot be kept.
+  func paired(install: ChangeID) async -> ChangeOutcome?
+  /// Take the station's word that the install `install` is closed. None
+  /// while that cannot be kept.
+  func closed(install: ChangeID) async -> ChangeOutcome?
 }

@@ -60,7 +60,7 @@ public actor ControlService {
       reply.change = change
       guard let record else { return reply }
       return await answered(record, in: reply)
-    case .create, .start, .stop, .window:
+    case .create, .start, .stop, .window, .install, .paired, .closed:
       return await change(operation)
     }
   }
@@ -89,15 +89,23 @@ public actor ControlService {
     do {
       // Asked again, it is answered from its record even while another runs.
       if let change = operation.change, let kept = try ledger.record(change) {
-        guard kept.operation == operation else {
+        guard kept.operation == operation.recorded else {
           return .refused("Another change was asked with this ID.", by: incarnation)
+        }
+        // An install left pending goes on from where it got when asked
+        // again, by this run or, once recovered, an earlier one's: its
+        // phases are each safe to repeat, and only the asking carries its
+        // secret again.
+        if operation.resumes, kept.outcome == nil, kept.run == incarnation.id || lock != nil, !busy {
+          return await go(on: kept, asked: operation, in: reply)
         }
         return await answered(kept, in: reply)
       }
-      guard !busy else {
+      // A report touches only its install's record, so it never waits.
+      guard !busy || operation.isReport else {
         return .refused("Another change is being done; ask again once it is.", by: incarnation)
       }
-      beginning = try ledger.begin(operation, by: incarnation.id)
+      beginning = try ledger.begin(operation.recorded, by: incarnation.id)
     } catch {
       return .refused("The change could not be kept, so nothing was done.", by: incarnation)
     }
@@ -107,23 +115,45 @@ public actor ControlService {
     case .asked(let record):
       return await answered(record, in: reply)
     case .new:
-      busy = true
-      defer { busy = false }
-      let record = ChangeRecord(operation: operation, run: incarnation.id)
-      guard let outcome = await perform(operation) else {
+      return await go(
+        on: ChangeRecord(operation: operation.recorded, run: incarnation.id),
+        asked: operation,
+        in: reply
+      )
+    }
+  }
+
+  /// Do `operation`, kept as `record`, and keep what it came to. A report
+  /// does not hold the one-at-a-time guard; a `closed` report settles the
+  /// install it answers.
+  private func go(on record: ChangeRecord, asked operation: ControlOperation, in reply: ControlReply) async
+    -> ControlReply
+  {
+    var reply = reply
+    let guarded = !operation.isReport
+    if guarded { busy = true }
+    defer { if guarded { busy = false } }
+    guard let outcome = await perform(operation) else {
+      reply.pending = true
+      return reply
+    }
+    // The install a `closed` report answers is settled first: the report
+    // stays intended until it is, and asked again settles it.
+    if case .closed(_, let install) = operation, outcome == .done, stillPending(install) {
+      guard let installed = try? ledger.record(install), (try? ledger.settle(installed, as: .done)) != nil else {
         reply.pending = true
         return reply
       }
-      do {
-        try ledger.settle(record, as: outcome)
-        reply.outcome = outcome
-        reply.pending = false
-      } catch {
-        // Done or not, it stays intended: an outcome query asks again.
-        reply.pending = true
-      }
-      return reply
     }
+    do {
+      try ledger.settle(record, as: outcome)
+      reply.outcome = outcome
+      reply.pending = false
+    } catch {
+      // Done or not, it stays intended: an outcome query asks again.
+      reply.pending = true
+    }
+    return reply
   }
 
   /// `reply`, answering for `record`: one this run left pending, its
@@ -183,6 +213,19 @@ public actor ControlService {
         try await host.openWindow()
       case .window(_, input: false):
         try await host.closeWindow()
+      case .install(let change, let request):
+        // Told by its own phases, and closed only on the station's word.
+        return await host.install(change, request)
+      case .paired(_, let install, let enrolment):
+        // Only for the enrolment that install was asked for.
+        guard let kept = try? ledger.record(install), case .install(_, let request) = kept.operation,
+          request.enrolment == enrolment
+        else {
+          return .refused("That is not the enrolment of that install.")
+        }
+        return await host.paired(install: install)
+      case .closed(_, let install):
+        return await host.closed(install: install)
       }
     } catch {
       // It may have taken effect before it failed: what is there says.
@@ -205,10 +248,14 @@ public actor ControlService {
     case .create, .start, .stop:
       let power = await host.power()
       guard power.confirmed else { return nil }
-      return effect(of: operation, on: power.value).map { $0 ? .done : refusal }
+      return effect(of: operation, on: power.value)
+        .map { $0 ? .done : refusal }
     case .window(_, let input):
       // Off only once it is seen gone.
       return await host.windowOpen() == input ? .done : refusal
+    case .install, .paired, .closed:
+      // Told only by doing it, or by the station's word.
+      return nil
     }
   }
 
@@ -249,6 +296,9 @@ public actor ControlService {
       guard vmGone else { return nil }
       // No window of that run's is left: off holds, on does not.
       return input ? .refused("Its runner went; its window is closed.") : .done
+    case .install, .paired, .closed:
+      // Asked again by the station, which goes on with it.
+      return nil
     }
   }
 }

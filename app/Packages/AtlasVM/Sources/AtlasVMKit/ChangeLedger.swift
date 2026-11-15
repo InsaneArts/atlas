@@ -64,16 +64,19 @@ public struct ChangeLedger: Sendable {
     try VMFolder.checkPrivate(folder)
     let names: [String]
     do {
-      names = try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))
+      names = try FileManager.default
+        .contentsOfDirectory(atPath: folder.path(percentEncoded: false))
     } catch {
       throw ChangeLedgerError.unreadable(folder)
     }
-    return try names.sorted().compactMap { name in
-      guard name.hasSuffix(".json"), let change = ChangeID(String(name.dropLast(5))) else {
-        return nil
+    return try names.sorted()
+      .compactMap { name in
+        guard name.hasSuffix(".json"), let change = ChangeID(String(name.dropLast(5))) else {
+          return nil
+        }
+        return try record(change)
+          .flatMap { $0.outcome == nil ? $0 : nil }
       }
-      return try record(change).flatMap { $0.outcome == nil ? $0 : nil }
-    }
   }
 
   private static func name(of change: ChangeID) -> String {
