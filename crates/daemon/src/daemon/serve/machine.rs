@@ -90,6 +90,8 @@ pub struct Paired {
     pub changes: Arc<Changes<Arc<dyn Vault>>>,
     /// Whether agents are stopped here, on its disk.
     pub stop: Arc<Stop<Arc<dyn Vault>>>,
+    /// The updates of its own Atlas, on its disk.
+    pub updates: Arc<crate::machine::update::Updates<Arc<dyn Vault>>>,
 }
 
 impl std::fmt::Debug for Paired {
@@ -135,7 +137,11 @@ enum Transition {
 
 impl Halting {
     /// Halting for `daemon`, its Stop kept in `stop`.
-    fn new(daemon: Arc<Daemon>, stop: Arc<Stop<Arc<dyn Vault>>>) -> Arc<Self> {
+    fn new(
+        daemon: Arc<Daemon>,
+        stop: Arc<Stop<Arc<dyn Vault>>>,
+        gate: Arc<crate::machine::update::Gate>,
+    ) -> Arc<Self> {
         let (transitions, mut coming) = tokio::sync::mpsc::unbounded_channel();
         let worker = daemon.clone();
         let received = Arc::new(AtomicU64::new(0));
@@ -173,6 +179,11 @@ impl Halting {
                         if unsaved || !current() {
                             continue;
                         }
+                        // Never while an update is unresolved or being
+                        // admitted, and none admitted while this commits.
+                        let Some(_resuming) = gate.resume() else {
+                            continue;
+                        };
                         // What earlier daemons left, looked at again under
                         // this saved Stop, and never lifted over: work still
                         // being ended, or not known to have ended.
@@ -414,6 +425,12 @@ pub struct Machine {
     /// held unless it is closed, and before any reading. (Its lease clock,
     /// `CLOCK_MONOTONIC`, was seen to count a minute's stall of its VM.)
     posture: std::sync::Mutex<(super::super::facts::Posture, Option<std::time::Instant>)>,
+    /// Where an update's admission and a Resume pass, never crossing.
+    gate: Arc<crate::machine::update::Gate>,
+    /// What carries each update to its end.
+    reconciler: Arc<crate::machine::update::Reconciler<Arc<dyn Vault>>>,
+    /// Set once it serves its station: started, recovered, taking lanes.
+    serving: Arc<std::sync::atomic::AtomicBool>,
     pub said: Arc<Said>,
 }
 
@@ -453,7 +470,30 @@ impl Machine {
         daemon.halted.send_modify(|halt| halt.halted = true);
         daemon.keepers.orphans(true);
         let daemon = Arc::new(daemon);
-        let halting = Halting::new(daemon.clone(), paired.stop.clone());
+        // Taken as unresolved until the record is read: no Resume passes an
+        // update not yet looked at.
+        let gate = Arc::new(crate::machine::update::Gate::new(true));
+        let serving = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reconciler = crate::machine::update::Reconciler::new(
+            paired.updates.clone(),
+            paired.changes.clone(),
+            gate.clone(),
+            Arc::new(crate::machine::update::Guest {
+                input: daemon.input.clone(),
+                serving: serving.clone(),
+            }),
+        );
+        tokio::spawn(reconciler.clone().run());
+        reconciler.wake();
+        if let Some(input) = &daemon.input {
+            let (mut standing, waking) = (input.standing(), reconciler.clone());
+            tokio::spawn(async move {
+                while standing.changed().await.is_ok() {
+                    waking.wake();
+                }
+            });
+        }
+        let halting = Halting::new(daemon.clone(), paired.stop.clone(), gate.clone());
         let starting = tokio::spawn(start(
             daemon.clone(),
             paired.stop.clone(),
@@ -469,6 +509,9 @@ impl Machine {
             mirrors,
             jobs,
             posture: std::sync::Mutex::default(),
+            gate,
+            reconciler,
+            serving,
             blocking: Arc::new(Semaphore::new(bounded::BLOCKING)),
             said: Arc::default(),
         })
@@ -528,6 +571,10 @@ impl Machine {
         if self.jobs.is_some() {
             capabilities.push(atlas_session::compatibility::JOBS.to_owned());
         }
+        // An update's bundle comes as a stage.
+        if self.daemon.stages.is_some() {
+            capabilities.push(atlas_session::compatibility::UPDATES.to_owned());
+        }
         Declared::ours(capabilities)
     }
 
@@ -566,6 +613,10 @@ impl Machine {
             Arc::new(Semaphore::new(PAIRINGS)),
         );
         let mut connections = JoinSet::new();
+        // Serving from here: an update this build was placed for may now be
+        // released.
+        self.serving.store(true, SeqCst);
+        self.reconciler.wake();
         loop {
             while connections.try_join_next().is_some() {}
             let framed = listener.accept().await.map_err(|error| {
@@ -871,6 +922,7 @@ impl Machine {
                         crate::machine::input::Standing::Starting => "starting",
                         crate::machine::input::Standing::Ready => "ready",
                         crate::machine::input::Standing::Gone => "gone",
+                        crate::machine::input::Standing::Stopping => "stopping",
                         crate::machine::input::Standing::CleanupUnknown => "cleanupUnknown",
                     }),
                     failure,
@@ -899,6 +951,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
+                held: true,
             };
             let mut hanging_up = [0; 1];
             let reply = tokio::select! {
@@ -918,6 +971,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
+                held: true,
             };
             let staged = stage::Lane {
                 change: change.clone(),
@@ -929,6 +983,23 @@ impl Machine {
         }
         if let Err(refusal) = bound(&header, &line) {
             return write(&mut writer, &refusal).await;
+        }
+        // An update is kept by its own lane, which answers one asked before
+        // from its record: it outlives the daemon that asked the installer.
+        if let LaneKind::Change { change } = &header.kind
+            && let Ok(protocol::Asked {
+                request: Request::Update { staged },
+                ..
+            }) = protocol::parse(&line)
+            && let Ok(request) = serde_json::from_slice::<Value>(&line)
+        {
+            let holding = update::Holding {
+                authority: authority.clone(),
+                lanes: lanes.clone(),
+                lane: header.lane,
+            };
+            let reply = self.update(change.clone(), staged, request, holding).await;
+            return write(&mut writer, &reply).await;
         }
         // A change is kept as intended before it runs; one asked before is
         // answered from what it came to, never run again.
@@ -951,6 +1022,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
+                held: true,
             };
             return self
                 .remove_copy_lane(change.clone(), copy, node, gate, reader, writer)
@@ -969,6 +1041,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
+                held: true,
             };
             return self.job_lane(&header.kind, job, gate, writer).await;
         }
@@ -983,6 +1056,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
+                held: true,
             }),
         };
         let phase = watch::channel(ConnectionPhase::Refusal).0;
@@ -1215,6 +1289,7 @@ pub mod entry;
 mod jobs;
 mod listen;
 mod stage;
+mod update;
 
 #[cfg(test)]
 #[path = "machine_tests.rs"]

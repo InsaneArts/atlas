@@ -28,6 +28,8 @@ pub const INPUT_LANES: &str = "input-lanes-v1";
 pub const MIRRORS: &str = "mirrors-v1";
 /// Background jobs, run as supervised work.
 pub const JOBS: &str = "jobs-v1";
+/// Updates of the guest's own Atlas, their bundle staged for one.
+pub const UPDATES: &str = "updates-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

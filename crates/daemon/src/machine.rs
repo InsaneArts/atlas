@@ -19,6 +19,7 @@ pub mod setup;
 pub mod stage;
 pub mod stop;
 pub mod supervise;
+pub mod update;
 pub mod vault;
 
 use crate::daemon::serve::machine::Paired;
@@ -58,7 +59,8 @@ pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Resu
             pairing: Arc::new(pairing),
             generations: Arc::new(generations::Kept::new(vault.clone())),
             changes: Arc::new(changes::Changes::new(changes, vault.clone())),
-            stop: Arc::new(stop::Stop::new(records.join("stop.json"), vault)),
+            stop: Arc::new(stop::Stop::new(records.join("stop.json"), vault.clone())),
+            updates: Arc::new(update::Updates::new(records.join("updates.json"), vault)),
         })
     })
     .await

@@ -362,6 +362,15 @@ requests! { request =>
             .ok_or_else(|| bad("remove-copy requires the \"node\" of its copy"))?
             .to_owned(),
     }),
+    /// Update a machine desktop's Atlas to the bundle staged in it at
+    /// `staged`.
+    "update" Update { staged: String } = Ok(Request::Update {
+        staged: request["staged"]
+            .as_str()
+            .filter(|staged| staged.starts_with('/') && staged.len() <= 1024)
+            .ok_or_else(|| bad("update requires the \"staged\" bundle's path"))?
+            .to_owned(),
+    }),
 }
 
 /// One request line: what it asks, and the name it gives the change it
@@ -428,6 +437,7 @@ impl Request {
             Self::Leftovers => (Any, None, Read("leftovers")),
             Self::Copies { .. } => (Any, None, Read("copies")),
             Self::RemoveCopy { .. } => (Any, None, Mutation("remove-copy")),
+            Self::Update { .. } => (Any, None, Mutation("update")),
         };
         Policy {
             console,

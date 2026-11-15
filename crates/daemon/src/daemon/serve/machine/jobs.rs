@@ -184,6 +184,18 @@ impl Jobs {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether no job runs, starts or is being ended, and none ended
+    /// without its end proved.
+    pub(crate) fn idle(&self) -> bool {
+        let state = self.state();
+        state.running.is_empty()
+            && state.launching == 0
+            && !state
+                .done
+                .iter()
+                .any(|done| matches!(done, Done::Unknown(_)))
+    }
+
     /// Open job `id`'s log with `flags`, relative to the folder, never
     /// through a link, and only as a regular file.
     fn open_log(&self, id: &JobId, flags: OFlag) -> std::io::Result<File> {

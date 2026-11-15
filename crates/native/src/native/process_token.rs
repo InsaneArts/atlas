@@ -110,6 +110,12 @@ impl Token {
         Ok(token)
     }
 
+    /// Its eight words, as the kernel gives them.
+    #[must_use]
+    pub fn words(&self) -> [u32; 8] {
+        self.0.val
+    }
+
     /// Its PID.
     pub fn pid(&self) -> i32 {
         // SAFETY: libbsm only decodes the token it is given by value.

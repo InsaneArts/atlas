@@ -130,6 +130,26 @@ pub(super) struct Transaction {
     pub(super) cdhash: Option<String>,
     /// When it was placed, in milliseconds past the epoch.
     pub(super) placed_at: Option<u64>,
+    /// Whether the guest daemon is owed a start on what is placed.
+    #[serde(default)]
+    pub(super) restart: Restart,
+    /// The previous bundle's `atlas`, as its code directory hash in hex,
+    /// so a rollback knows the daemon it starts again.
+    #[serde(default)]
+    pub(super) previous: Option<String>,
+}
+
+/// Whether the guest daemon is owed a start on a placed bundle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum Restart {
+    /// Nothing is owed.
+    #[default]
+    None,
+    /// Owed: kept with the placing itself, in one write.
+    Owed,
+    /// Done: the daemon runs what is placed.
+    Done,
 }
 
 impl Transaction {

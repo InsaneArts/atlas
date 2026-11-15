@@ -20,7 +20,7 @@ use std::sync::{Mutex, PoisonError};
 const VERSION: u32 = 1;
 
 /// The recovery stores a guest keeps.
-pub const STORES: [&str; 3] = ["outcomes", "stop", "processes"];
+pub const STORES: [&str; 4] = ["outcomes", "stop", "processes", "updates"];
 
 /// One change to a commitment at a time in this process, whatever adapter
 /// makes it.

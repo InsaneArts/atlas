@@ -5,7 +5,7 @@
 use super::{
     Layout, System,
     copy::{BUNDLE, copy_in},
-    record::{Asked, Identity, Phase, Transaction},
+    record::{Asked, Identity, Phase, Restart, Transaction},
 };
 use atlas_core::{
     error::{Code, Error, Result},
@@ -46,7 +46,14 @@ fn refusal(why: &str) -> Value {
 
 /// A request's reply, saying where its transaction is.
 fn phase_reply(transaction: &Transaction) -> Value {
-    json!({"ok": true, "transaction": transaction.id, "phase": transaction.phase, "why": transaction.why})
+    json!({
+        "ok": true,
+        "transaction": transaction.id,
+        "phase": transaction.phase,
+        "why": transaction.why,
+        "cdhash": transaction.cdhash,
+        "restart": transaction.restart,
+    })
 }
 
 fn name(text: &str) -> FileName {
@@ -231,6 +238,11 @@ impl Installer {
             new: None,
             cdhash: None,
             placed_at: None,
+            restart: Restart::None,
+            previous: self
+                .system
+                .verified(&self.layout.applications().join(BUNDLE))
+                .map(|cdhash| hex(&cdhash)),
         };
         self.keep(&kept)?;
         let folder = self.folder(transaction);
@@ -300,12 +312,36 @@ impl Installer {
         let installed = self.layout.applications().join(BUNDLE);
         let verified = self.system.verified(&installed).map(|cdhash| hex(&cdhash));
         if verified == kept.cdhash {
+            // Placed, and the daemon owed its start on it, in one write.
             kept.phase = Phase::Placed;
             kept.placed_at = Some(self.system.now());
-            return self.keep(kept);
+            kept.restart = Restart::Owed;
+            self.keep(kept)?;
+            return self.restart_forward(kept);
         }
         kept.why = Some("The placed bundle did not verify where it was placed.".into());
         self.roll_back(kept)
+    }
+
+    /// Start the guest daemon on what is placed, while that is owed: not
+    /// when its job already runs the placed code, as after a start whose
+    /// record was cut short, so a daemon on the new build is never ended
+    /// again. A start that fails stays owed, tried again by the deadline's
+    /// round.
+    fn restart_forward(&self, kept: &mut Transaction) -> Result<()> {
+        if kept.restart != Restart::Owed {
+            return Ok(());
+        }
+        let runs = self.system.job_code(kept.uid).map(|cdhash| hex(&cdhash));
+        if runs.is_some() && runs == kept.cdhash {
+            kept.restart = Restart::Done;
+            return self.keep(kept);
+        }
+        if self.system.restart(kept.uid) {
+            kept.restart = Restart::Done;
+            self.keep(kept)?;
+        }
+        Ok(())
     }
 
     /// Release `transaction`, asked by a daemon running the code `cdhash`.
@@ -438,6 +474,13 @@ impl Installer {
         }
         // The daemon the previous bundle runs, started again, whatever the
         // new one was doing; until it is, a restart is owed and tried again.
+        // One already on the previous code, as after a start whose record
+        // was cut short, is not ended again.
+        let runs = self.system.job_code(kept.uid).map(|cdhash| hex(&cdhash));
+        if runs.is_some() && runs == kept.previous {
+            kept.phase = Phase::RolledBack;
+            return self.keep(kept);
+        }
         if self.system.restart(kept.uid) {
             kept.phase = Phase::RolledBack;
             self.keep(kept)?;
@@ -563,11 +606,8 @@ impl Installer {
             }
             Phase::RollingBack | Phase::Restarting => self.roll_back(kept),
             Phase::Releasing => self.finish_release(kept),
-            Phase::Placed
-            | Phase::Released
-            | Phase::RolledBack
-            | Phase::Aborted
-            | Phase::Pending => Ok(()),
+            Phase::Placed => self.restart_forward(kept),
+            Phase::Released | Phase::RolledBack | Phase::Aborted | Phase::Pending => Ok(()),
         }
     }
 }

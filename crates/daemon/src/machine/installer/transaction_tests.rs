@@ -10,6 +10,8 @@ struct Fake {
     now: AtomicU64,
     restarts: AtomicUsize,
     refusing_restarts: std::sync::atomic::AtomicBool,
+    /// What the machine job runs now, as `job_code` says it.
+    job: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 impl System for Fake {
@@ -21,6 +23,10 @@ impl System for Fake {
     fn restart(&self, _uid: u32) -> bool {
         self.restarts.fetch_add(1, Ordering::SeqCst);
         !self.refusing_restarts.load(Ordering::SeqCst)
+    }
+
+    fn job_code(&self, _uid: u32) -> Option<Vec<u8>> {
+        self.job.lock().unwrap().clone()
     }
 
     fn now(&self) -> u64 {
@@ -191,7 +197,9 @@ fn a_rollback_puts_the_previous_bundle_back_and_starts_its_daemon_again() {
             .join("Atlas.app")
             .exists()
     );
-    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 1);
+    // Started once on the new build as it was placed, and once on the
+    // previous one as it was put back.
+    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -211,7 +219,9 @@ fn a_placed_update_no_daemon_releases_in_time_is_rolled_back_without_being_asked
 
     assert_eq!(guest.record(&transaction).phase, Phase::RolledBack);
     assert_eq!(guest.installed(), "old");
-    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 1);
+    // Started once on the new build as it was placed, and once on the
+    // previous one as it was put back.
+    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -364,7 +374,8 @@ fn a_rollback_whose_daemon_cannot_be_started_again_owes_it_and_tries_again() {
     guest.fake.refusing_restarts.store(false, Ordering::SeqCst);
     guest.installer.deadline().unwrap();
     assert_eq!(guest.record(&transaction).phase, Phase::RolledBack);
-    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 2);
+    // Once as it was placed, then refused, then started.
+    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 3);
 }
 
 #[test]
@@ -502,4 +513,63 @@ fn recovery_never_removes_what_it_does_not_hold() {
 
     assert_eq!(guest.record(&transaction).phase, Phase::Pending);
     assert!(held.exists());
+}
+
+#[test]
+fn placing_owes_the_daemon_its_start_in_the_same_write_and_says_the_placed_code() {
+    let guest = Guest::new("new");
+    let transaction = Token::new();
+
+    let placed = guest.install(&Token::new(), &transaction);
+
+    let kept = guest.record(&transaction);
+    assert_eq!(kept.phase, Phase::Placed);
+    assert_eq!(kept.restart, Restart::Done);
+    assert_eq!(guest.fake.restarts.load(Ordering::SeqCst), 1);
+    assert_eq!(placed["cdhash"], hex(&guest.cdhash("new")), "{placed}");
+    assert_eq!(placed["restart"], "done", "{placed}");
+}
+
+#[test]
+fn a_start_owed_whose_daemon_already_runs_the_placed_code_is_never_made_again() {
+    let guest = Guest::new("new");
+    let transaction = Token::new();
+    // Placed, its start owed, as a start whose record was cut short leaves it.
+    guest.fake.refusing_restarts.store(true, Ordering::SeqCst);
+    guest.install(&Token::new(), &transaction);
+    assert_eq!(guest.record(&transaction).restart, Restart::Owed);
+    guest.fake.refusing_restarts.store(false, Ordering::SeqCst);
+    *guest.fake.job.lock().unwrap() = Some(guest.cdhash("new"));
+
+    guest.installer.recover().unwrap();
+
+    assert_eq!(guest.record(&transaction).restart, Restart::Done);
+    assert_eq!(
+        guest.fake.restarts.load(Ordering::SeqCst),
+        1,
+        "only the refused start at placing"
+    );
+}
+
+#[test]
+fn a_rollback_whose_daemon_already_runs_the_previous_code_is_not_started_again() {
+    let guest = Guest::new("new");
+    let transaction = Token::new();
+    guest.install(&Token::new(), &transaction);
+    guest.fake.refusing_restarts.store(true, Ordering::SeqCst);
+    guest
+        .installer
+        .rollback(&Token::new(), &transaction)
+        .unwrap();
+    assert_eq!(guest.record(&transaction).phase, Phase::Restarting);
+    *guest.fake.job.lock().unwrap() = Some(guest.cdhash("old"));
+
+    guest.installer.deadline().unwrap();
+
+    assert_eq!(guest.record(&transaction).phase, Phase::RolledBack);
+    assert_eq!(
+        guest.fake.restarts.load(Ordering::SeqCst),
+        2,
+        "the start at placing and the refused one, no third"
+    );
 }

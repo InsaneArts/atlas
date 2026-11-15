@@ -30,6 +30,8 @@ fail() {
 
 # A build that trusts a local team is for testing only.
 [ -z "${ATLAS_LOCAL_TEAM:-}" ] || fail "unset ATLAS_LOCAL_TEAM: it is for local test builds"
+# So is one that never releases a guest's update, for rollback checks.
+[ -z "${ATLAS_TEST_HOLD_RELEASE:-}" ] || fail "unset ATLAS_TEST_HOLD_RELEASE: it is for local test builds"
 
 version=${1:-}
 [ $# -eq 1 ] || fail "usage: scripts/release.sh X.Y.Z"

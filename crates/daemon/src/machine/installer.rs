@@ -71,6 +71,9 @@ trait System: Send + Sync {
     /// Start the machine job of the account `uid` again, ending the process
     /// it runs now, whatever that process is doing.
     fn restart(&self, uid: u32) -> bool;
+    /// The code directory hash of what the machine job of the account `uid`
+    /// runs now; none when it runs nothing, or that cannot be told.
+    fn job_code(&self, uid: u32) -> Option<Vec<u8>>;
     /// Now, in milliseconds past the epoch.
     fn now(&self) -> u64;
 }
@@ -112,6 +115,16 @@ impl System for Real {
             CHECKING,
         )
         .is_ok_and(|output| output.status.success())
+    }
+
+    fn job_code(&self, uid: u32) -> Option<Vec<u8>> {
+        let job = atlas_core::launchd::job(&format!("gui/{uid}"), super::launch::LABEL).ok()?;
+        let atlas_core::launchd::Job::Loaded(loaded) = job else {
+            return None;
+        };
+        let pid = i32::try_from(loaded.pid?).ok()?;
+        let token = atlas_native::native::process_token::Token::of(pid).ok()?;
+        atlas_native::peer::running_code(token.words())
     }
 
     fn now(&self) -> u64 {

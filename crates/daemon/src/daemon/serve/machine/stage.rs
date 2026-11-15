@@ -63,6 +63,18 @@ struct Asked {
     size: u64,
     attributes: u64,
     manifest: u64,
+    /// What it is staged for, when that is not an agent's own use.
+    #[serde(default)]
+    purpose: Option<Purpose>,
+}
+
+/// What a stage may be for besides an agent's own use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Purpose {
+    /// The bundle of an update of the guest's Atlas: staged even while
+    /// agents are stopped, which an update asks.
+    Update,
 }
 
 /// Where a transaction stands: cancelling only stops one not yet
@@ -126,7 +138,7 @@ impl Machine {
     /// on `reader` once it is told to go ahead on `writer`.
     pub(super) async fn stage_lane<R>(
         self: &Arc<Self>,
-        lane: Lane,
+        mut lane: Lane,
         line: &[u8],
         reader: R,
         mut writer: Writer,
@@ -152,6 +164,11 @@ impl Machine {
         if asked.op != stage::OPERATION || asked.change != lane.change {
             let refusal = failure(Code::BadRequest, "The stage is not its lane's change");
             return write(&mut writer, &refusal).await;
+        }
+        // Only writes into the daemon's folder, which no agent reaches
+        // while they are stopped: a Stop never holds an update's bundle.
+        if asked.purpose == Some(Purpose::Update) {
+            lane.gate.held = false;
         }
         let admitting = stages.admitting.lock().await;
         if let Some(mut done) = stages.running(&lane.change) {
@@ -390,6 +407,15 @@ fn begin(
 ) -> Result<(tokio::sync::OwnedSemaphorePermit, stage::Reserved), Value> {
     if let Some(refusal) = lane.gate.refused() {
         return Err(refusal);
+    }
+    // An update's stage while agents are stopped: bounded, as nothing
+    // staged then can be removed until they resume.
+    let halt = *lane.gate.halted.borrow();
+    if !lane.gate.held && halt.halted && !stages.take_stopped_update(halt.stops) {
+        return Err(failure(
+            Code::Busy,
+            "Too many update bundles were staged while agents are stopped",
+        ));
     }
     let bounded = asked.manifest <= MOST_MANIFEST as u64
         && asked.entries <= MOST_ENTRIES as u64

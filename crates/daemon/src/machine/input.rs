@@ -96,6 +96,8 @@ pub enum Standing {
     Starting,
     /// Saying it is ready.
     Ready,
+    /// Lost, its end not yet proved, nor its journal judged.
+    Stopping,
     /// Ended, with nothing it held left held.
     Gone,
     /// Ended with input still held as its journal says, or an earlier one
@@ -672,7 +674,7 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
     // Lost: no longer ready from this moment, before anything else.
     {
         let _turning = inner.turning.lock().unwrap_or_else(PoisonError::into_inner);
-        inner.stand(Standing::Gone);
+        inner.stand(Standing::Stopping);
     }
     *inner.link.lock().unwrap_or_else(PoisonError::into_inner) = None;
     // Its channel ends cleanly first, so it ends as it does on its own:
@@ -682,12 +684,18 @@ async fn run_one(inner: &Arc<Inner>, starter: &Starter) -> Result<bool> {
     if tokio::time::timeout(ENDING, child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
-    if !ready
-        && let Some(said) = said
-        && let Ok(Ok(said)) = tokio::time::timeout(ENDING, said).await
-        && let Some(failure) = Failure::of(&said)
-    {
-        *inner.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+    // What this service said is all its failure is told by: none, when it
+    // said nothing Atlas wrote, never an earlier service's.
+    if !ready {
+        let failure = match said {
+            Some(said) => tokio::time::timeout(ENDING, said)
+                .await
+                .ok()
+                .and_then(|joined| joined.ok())
+                .and_then(|said: Vec<u8>| Failure::of(&said)),
+            None => None,
+        };
+        *inner.failure.lock().unwrap_or_else(PoisonError::into_inner) = failure;
     }
     Ok(ready)
 }

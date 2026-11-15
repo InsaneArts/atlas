@@ -40,6 +40,18 @@ fn stopping(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Arc<Stop<Arc
     Arc::new(Stop::new(records.path().join("stop"), vault.clone()))
 }
 
+/// A guest's updates as pairing leaves them, beside its change records.
+fn updating(
+    records: &tempfile::TempDir,
+    vault: &Arc<dyn Vault>,
+) -> Arc<crate::machine::update::Updates<Arc<dyn Vault>>> {
+    crate::machine::commitment::create(vault, crate::machine::update::STORE).unwrap();
+    Arc::new(crate::machine::update::Updates::new(
+        records.path().join("updates.json"),
+        vault.clone(),
+    ))
+}
+
 /// What a guest's commands run under, its supervisors kept in a folder of
 /// their own beside its change records, as pairing leaves them.
 fn supervising(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Supervising {
@@ -143,6 +155,7 @@ impl Served {
             generations: Arc::new(Counted::default()),
             changes: changes.clone(),
             stop: stopping(&records, &vault),
+            updates: updating(&records, &vault),
         };
         let machine = Machine::new(
             daemon,
@@ -407,6 +420,7 @@ async fn a_change_whose_lane_was_cancelled_after_admission_never_runs() {
             lane: LaneId(9),
             halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
             stops: 0,
+            held: true,
         }),
     };
     assert!(asker.refused_now().is_none());
@@ -554,6 +568,7 @@ async fn be_the_guest(spec: &str) {
         )),
         generations: Arc::new(Counted::default()),
         stop: stopping(&_records, &_vault),
+        updates: updating(&_records, &_vault),
         changes,
     };
     let listener = socket_listener(std::path::Path::new(socket));
@@ -1111,7 +1126,9 @@ async fn refused_as_stopped(desktop: &Desktop) -> bool {
         &json!({"op": "run", "argv": ["/usr/bin/true"], "change": change}),
     )
     .await;
-    replies[0]["code"] == "stopped"
+    replies
+        .first()
+        .is_some_and(|reply| reply["code"] == "stopped")
 }
 
 #[tokio::test]
@@ -1345,6 +1362,7 @@ async fn a_command_on_a_machine_lane_with_nothing_to_supervise_it_is_refused() {
             lane: LaneId(9),
             halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
             stops: 0,
+            held: true,
         }),
     };
     let unsupervised = Daemon::new("Aqua".into(), synthetic, || true, own_session);
@@ -1916,10 +1934,22 @@ async fn stage(
     source: &std::path::Path,
     sending: Sending,
 ) -> Vec<Value> {
+    stage_for(desktop, credit, change, source, sending, None).await
+}
+
+/// Stage `source` as [`stage`] does, for `purpose` when one is given.
+async fn stage_for(
+    desktop: &Desktop,
+    credit: &Credit,
+    change: &Token,
+    source: &std::path::Path,
+    sending: Sending,
+    purpose: Option<&str>,
+) -> Vec<Value> {
     use std::io::Read;
     let snapshot = atlas_core::stage::Snapshot::of(source).unwrap();
     let manifest = serde_json::to_vec(&snapshot).unwrap();
-    let request = json!({
+    let mut request = json!({
         "op": "stage",
         "change": change,
         "name": snapshot.name,
@@ -1929,6 +1959,9 @@ async fn stage(
         "attributes": snapshot.attribute_bytes(),
         "manifest": manifest.len(),
     });
+    if let Some(purpose) = purpose {
+        request["purpose"] = json!(purpose);
+    }
     let opened = desktop
         .open(LaneKind::Stage {
             change: change.clone(),
@@ -2023,6 +2056,62 @@ async fn a_tree_staged_is_placed_whole_and_what_it_came_to_is_kept() {
     assert!(
         matches!(served.changes.of(&change).unwrap(), Some(State::Done { reply: ref kept }) if kept == reply)
     );
+}
+
+#[tokio::test]
+async fn while_agents_are_stopped_only_a_few_bundles_for_an_update_are_staged() {
+    use crate::machine::stop::{Kept, Why};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let (_source, tree) = tree_to_stage();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    kept_as(&served, Kept::Stopped { why: Why::Person }).await;
+
+    let agents = stage(
+        &desktop,
+        &controlling.credit,
+        &Token::new(),
+        &tree,
+        Sending::Whole,
+    )
+    .await;
+    let update = stage_for(
+        &desktop,
+        &controlling.credit,
+        &Token::new(),
+        &tree,
+        Sending::Whole,
+        Some("update"),
+    )
+    .await;
+
+    assert_eq!(agents.last().unwrap()["code"], "stopped", "{agents:?}");
+    assert_eq!(update.last().unwrap()["ok"], true, "{update:?}");
+    for _ in 0..2 {
+        let again = stage_for(
+            &desktop,
+            &controlling.credit,
+            &Token::new(),
+            &tree,
+            Sending::Whole,
+            Some("update"),
+        )
+        .await;
+        assert_eq!(again.last().unwrap()["ok"], true, "{again:?}");
+    }
+    let past = stage_for(
+        &desktop,
+        &controlling.credit,
+        &Token::new(),
+        &tree,
+        Sending::Whole,
+        Some("update"),
+    )
+    .await;
+    assert_eq!(past.last().unwrap()["code"], "busy", "{past:?}");
 }
 
 #[tokio::test]
@@ -3534,17 +3623,9 @@ impl atlas_session::keys::KeyStore for KeyFile {
     }
 }
 
-/// Live, against a real guest through Atlas VM: pair over its station
-/// socket with the secret its install handed over, unless paired already,
-/// then go live and hear the guest's own hello over an authenticated lane.
-/// Run by hand, `--ignored --nocapture`, with `ATLAS_LIVE_STATION` (the
-/// station socket), `ATLAS_LIVE_SECRET` (hex), `ATLAS_LIVE_DESKTOP`,
-/// `ATLAS_LIVE_ENROLMENT` and `ATLAS_LIVE_STATE` (a folder for the station's
-/// key and the guest's, kept between runs); `ATLAS_LIVE_RUN` to run an
-/// agent's change there too.
-#[tokio::test]
-#[ignore = "live: needs a real guest through Atlas VM"]
-async fn live_a_station_pairs_with_a_real_guest_and_hears_its_own_hello() {
+/// The live guest named by `ATLAS_LIVE_*`, paired once and controlled:
+/// its control session and its lanes.
+async fn live() -> (Controlling, Desktop) {
     let variable = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set"));
     let socket = std::path::PathBuf::from(variable("ATLAS_LIVE_STATION"));
     let desktop = DesktopId::parse(&variable("ATLAS_LIVE_DESKTOP")).unwrap();
@@ -3595,6 +3676,22 @@ async fn live_a_station_pairs_with_a_real_guest_and_hears_its_own_hello() {
         Box::new(SocketLanes(socket)),
     );
 
+    (controlling, lanes)
+}
+
+/// Live, against a real guest through Atlas VM: pair over its station
+/// socket with the secret its install handed over, unless paired already,
+/// then go live and hear the guest's own hello over an authenticated lane.
+/// Run by hand, `--ignored --nocapture`, with `ATLAS_LIVE_STATION` (the
+/// station socket), `ATLAS_LIVE_SECRET` (hex), `ATLAS_LIVE_DESKTOP`,
+/// `ATLAS_LIVE_ENROLMENT` and `ATLAS_LIVE_STATE` (a folder for the station's
+/// key and the guest's, kept between runs); `ATLAS_LIVE_RUN` to run an
+/// agent's change there too.
+#[tokio::test]
+#[ignore = "live: needs a real guest through Atlas VM"]
+async fn live_a_station_pairs_with_a_real_guest_and_hears_its_own_hello() {
+    let (controlling, lanes) = live().await;
+
     let said = ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await;
 
     let hello = said.last().unwrap();
@@ -3618,4 +3715,160 @@ async fn live_a_station_pairs_with_a_real_guest_and_hears_its_own_hello() {
         println!("ran: {ran:?}");
         assert_eq!(ran.last().unwrap()["ok"], true, "{ran:?}");
     }
+}
+
+#[tokio::test]
+async fn an_update_asked_while_agents_may_act_is_refused_and_kept_refused() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let request = json!({"op": "update", "staged": "/tmp/Atlas.app", "change": change});
+
+    let first = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+    let again = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+
+    assert_eq!(first.last().unwrap()["ok"], false, "{first:?}");
+    assert!(
+        first.last().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("Stop agents first"),
+        "{first:?}"
+    );
+    assert_eq!(again.last(), first.last(), "answered from what it came to");
+}
+
+#[tokio::test]
+async fn an_update_left_unresolved_holds_every_resume() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    for _ in 0..50 {
+        if refused_as_stopped(&desktop).await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let update = crate::machine::update::Update {
+        change: Token::new(),
+        source: "/tmp/Atlas.app".into(),
+        manifest: None,
+        transaction: Token::new(),
+        install: Token::new(),
+        release: Token::new(),
+        input: crate::machine::update::Health::Ready,
+        capture: crate::machine::update::Health::Ready,
+        phase: crate::machine::update::Phase::Asked,
+        why: None,
+        published: false,
+    };
+    served
+        .machine
+        .paired
+        .updates
+        .keep(|_| Some(vec![update]))
+        .unwrap();
+    // As a daemon started on this record would take it.
+    served.machine.gate.end_admission(true);
+
+    assert!(
+        !resumed(&controlling, &desktop).await,
+        "a Resume passed an unresolved update"
+    );
+}
+
+/// Live, against a real guest through Atlas VM, paired as the test above
+/// leaves it: agents stopped, the Atlas.app at `ATLAS_LIVE_BUNDLE` staged
+/// into the guest, and its update asked, then followed across the guest
+/// daemon's own restart until it settles. Run by hand, `--ignored
+/// --nocapture`, with the variables above and `ATLAS_LIVE_BUNDLE`.
+#[tokio::test]
+#[ignore = "live: needs a real guest through Atlas VM"]
+async fn live_a_real_guest_updates_its_atlas_and_settles_the_change() {
+    let bundle = std::path::PathBuf::from(std::env::var("ATLAS_LIVE_BUNDLE").unwrap());
+    let (controlling, lanes) = live().await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    for _ in 0..100 {
+        if refused_as_stopped(&lanes).await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // Staged for the update, which a Stop never holds.
+    let staged = stage_for(
+        &lanes,
+        &controlling.credit,
+        &Token::new(),
+        &bundle,
+        Sending::Whole,
+        Some("update"),
+    )
+    .await;
+    let staged = staged.last().unwrap().clone();
+    println!("staged: {staged}");
+    assert_eq!(staged["ok"], true, "{staged}");
+    let change = Token::new();
+    let asked = ask(
+        &lanes,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "update", "staged": staged["path"], "change": change}),
+    )
+    .await;
+    println!("change: {change}");
+    println!("asked: {asked:?}");
+    assert_eq!(asked.last().unwrap()["ok"], true, "{asked:?}");
+    drop((controlling, lanes));
+    // Followed across the daemon's restart, a new session each time.
+    for _ in 0..90 {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Its own task, so a guest still starting fails only this try.
+        let Ok(Ok((_controlling, lanes))) =
+            tokio::time::timeout(Duration::from_secs(20), tokio::spawn(live())).await
+        else {
+            println!("no session yet");
+            continue;
+        };
+        let outcome = ask(
+            &lanes,
+            LaneKind::Read,
+            &json!({"op": "outcome", "change": change}),
+        )
+        .await;
+        let hello = ask(&lanes, LaneKind::Read, &json!({"op": "hello"})).await;
+        let (outcome, hello) = (outcome.last().cloned(), hello.last().cloned());
+        println!(
+            "outcome: {outcome:?}; daemon: {}",
+            hello.map_or(Value::Null, |hello| hello["daemon"].clone())
+        );
+        if outcome.is_some_and(|outcome| {
+            outcome
+                .get("reply")
+                .is_some_and(|reply| reply.get("update").is_some())
+        }) {
+            return;
+        }
+    }
+    panic!("the update never settled");
 }

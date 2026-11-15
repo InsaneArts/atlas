@@ -63,6 +63,14 @@ pub fn running(socket: BorrowedFd<'_>, requirement: &str) -> Option<Peer> {
     })
 }
 
+/// The code directory hash of what the process named by the audit token
+/// `token` runs now: which build it is, however its file moved since.
+#[must_use]
+pub fn running_code(token: [u32; 8]) -> Option<Vec<u8>> {
+    let code = guest(&token)?;
+    cdhash_of(&code)
+}
+
 /// The code directory hash of the program `path`, as its signature says,
 /// when it is signed.
 pub fn file_cdhash(path: &Path) -> Option<Vec<u8>> {

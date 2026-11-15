@@ -885,6 +885,10 @@ pub(super) struct Gate {
     /// The Stops there had been when the lane was admitted: one since
     /// refuses its change, even resumed.
     pub(super) stops: u64,
+    /// Whether a Stop holds what it admitted: always, but for the stage of
+    /// an update, which only writes into the daemon's own folder and must
+    /// reach a guest whose agents stay stopped.
+    pub(super) held: bool,
 }
 
 impl Gate {
@@ -892,7 +896,7 @@ impl Gate {
     /// generation it came in is over, or agents were stopped since.
     fn refused(&self) -> Option<Value> {
         let halt = *self.halted.borrow();
-        if halt.halted || halt.stops != self.stops {
+        if self.held && (halt.halted || halt.stops != self.stops) {
             return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
         }
         if self.lanes.cancelled(self.lane) {
@@ -908,7 +912,7 @@ impl Gate {
     /// refusal when it may not, or when `then` says no.
     fn authorize(&self, then: impl FnOnce() -> bool) -> Option<Value> {
         let halt = *self.halted.borrow();
-        if halt.halted || halt.stops != self.stops {
+        if self.held && (halt.halted || halt.stops != self.stops) {
             return Some(failure(Code::Stopped, "Agents are stopped on this desktop"));
         }
         if self.lanes.cancelled(self.lane) {
@@ -926,11 +930,11 @@ impl Gate {
     fn over(&self) -> impl Future<Output = ()> + Send + 'static {
         let authority = self.authority.clone();
         let mut halted = self.halted.clone();
-        let stops = self.stops;
+        let (stops, held) = (self.stops, self.held);
         async move {
             tokio::select! {
                 () = authority.ended() => {}
-                _ = halted.wait_for(|halt| halt.stops > stops) => {}
+                _ = halted.wait_for(|halt| held && halt.stops > stops) => {}
             }
         }
     }
@@ -1151,6 +1155,11 @@ pub(super) async fn answer(
         Request::RemoveCopy { .. } => failure(
             Code::Platform,
             "Only a machine desktop removes copies of its own",
+        ),
+        // A machine desktop updates its Atlas on the lane of its change.
+        Request::Update { .. } => failure(
+            Code::Platform,
+            "Only a machine desktop updates its own Atlas this way",
         ),
         Request::Outcome { change } => match &daemon.kept {
             // The disk outlives this process: it says, whatever was asked before.

@@ -197,7 +197,7 @@ pub(super) fn machine_hello(
 /// the last one ended before it was ready, as that service said itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Input {
-    /// `starting`, `ready`, `gone` or `cleanupUnknown`; none when the
+    /// `starting`, `ready`, `stopping`, `gone` or `cleanupUnknown`; none when the
     /// guest has no input service.
     pub(super) standing: Option<&'static str>,
     pub(super) failure: Option<crate::machine::input::Failure>,

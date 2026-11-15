@@ -27,6 +27,9 @@ use std::{
 pub(crate) mod copies;
 pub(crate) mod write;
 
+/// How many update stages one Stop takes, enough to try an update again.
+const STOPPED_UPDATES: usize = 3;
+
 /// The operation a stage is kept under in the change records.
 pub(crate) const OPERATION: &str = "stage";
 
@@ -229,6 +232,9 @@ pub struct Stages {
     permits: Arc<tokio::sync::Semaphore>,
     reserved: Arc<std::sync::Mutex<u64>>,
     committing: Arc<std::sync::atomic::AtomicUsize>,
+    /// The Stop the update stages taken while agents were stopped came in,
+    /// and how many: no copy is removed then, so they are bounded.
+    stopped_updates: std::sync::Mutex<(u64, usize)>,
     /// Where a test holds the next stage right before it is authorized:
     /// told once it is there, and let go when told.
     #[cfg(test)]
@@ -314,9 +320,27 @@ impl Stages {
             permits: Arc::new(tokio::sync::Semaphore::new(AT_ONCE)),
             reserved: Arc::default(),
             committing: Arc::default(),
+            stopped_updates: std::sync::Mutex::default(),
             #[cfg(test)]
             hold: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Take one of the few update stages a Stop numbered `stops` allows:
+    /// whether one was left.
+    pub(crate) fn take_stopped_update(&self, stops: u64) -> bool {
+        let mut taken = self
+            .stopped_updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if taken.0 != stops {
+            *taken = (stops, 0);
+        }
+        if taken.1 >= STOPPED_UPDATES {
+            return false;
+        }
+        taken.1 += 1;
+        true
     }
 
     /// Hold the next stage right before it is authorized: what says it is
