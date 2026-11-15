@@ -8,6 +8,7 @@ pub mod generations;
 pub mod input;
 pub mod key;
 pub mod launch;
+pub mod mirror;
 pub mod pairing;
 pub mod processes;
 mod record_file;

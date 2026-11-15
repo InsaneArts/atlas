@@ -143,6 +143,7 @@ impl Served {
             supervising(&records, &vault),
             input,
             staging.then(|| crate::machine::stage::Stages::new(records.path().join("open"))),
+            Some(crate::machine::mirror::Mirrors::default()),
         );
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
@@ -546,6 +547,7 @@ async fn be_the_guest(spec: &str) {
         Arc::new(atlas_session::clock::Continuous),
         supervising(&_records, &_vault),
         Some(input),
+        None,
         None,
     );
     let _ = machine.serve(&Socket(listener)).await;
@@ -2351,4 +2353,506 @@ async fn a_guest_started_again_without_stages_is_judged_by_what_it_declares_now(
             missing: vec![STAGE.to_owned()]
         }
     );
+}
+
+/// A loopback port free now.
+fn free_port(family: atlas_session::mirror::Family) -> u16 {
+    let endpoint = atlas_session::mirror::Endpoint {
+        family,
+        port: 0,
+        incarnation: 0,
+    };
+    std::net::TcpListener::bind(endpoint.address())
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A server on this Mac that answers each connection with what it read,
+/// upper-cased, once the client has finished sending.
+async fn shouting(address: std::net::SocketAddr) -> std::net::SocketAddr {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+    let bound = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut heard = Vec::new();
+                let _ = stream.read_to_end(&mut heard).await;
+                let _ = stream.write_all(&heard.to_ascii_uppercase()).await;
+            });
+        }
+    });
+    bound
+}
+
+/// The test's station for mirrors, as step 5's will be: it says a list
+/// only to a guest that declares mirrors, says it again until it is
+/// answered, and opens a lane only for a connection on an endpoint of its
+/// current list in that very incarnation, once each, at most twelve at
+/// once, connecting each to the server `targets` names for its port: the
+/// translation a test on one Mac needs, as the guest cannot listen on the
+/// server's own port.
+struct MirrorStation {
+    controlling: Arc<Controlling>,
+    listed: tokio::sync::watch::Sender<Vec<atlas_session::mirror::Endpoint>>,
+    relaying: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for MirrorStation {
+    /// The station goes: every relay it owns ends with it.
+    fn drop(&mut self) {
+        self.relaying.abort();
+    }
+}
+
+impl MirrorStation {
+    /// Say list `list` and wait for its answer, saying it again meanwhile.
+    async fn mirror(
+        &self,
+        list: u64,
+        endpoints: Vec<atlas_session::mirror::Endpoint>,
+    ) -> Vec<atlas_session::mirror::Refused> {
+        let declared = &self.controlling.declared;
+        assert_eq!(
+            atlas_session::compatibility::judge(declared, &[atlas_session::compatibility::MIRRORS]),
+            atlas_session::compatibility::Usable::Usable,
+            "a guest without mirrors is never sent a list"
+        );
+        self.listed.send_replace(endpoints.clone());
+        for _ in 0..10 {
+            self.controlling
+                .outbox
+                .say(atlas_session::control::Said::Mirror {
+                    list,
+                    endpoints: endpoints.clone(),
+                })
+                .unwrap();
+            let answered =
+                tokio::time::timeout(Duration::from_secs(1), self.controlling.heard.taken(list))
+                    .await;
+            if let Ok(refused) = answered {
+                return refused;
+            }
+        }
+        panic!("the guest never answered list {list}");
+    }
+}
+
+fn relaying(
+    controlling: Controlling,
+    desktop: Desktop,
+    targets: std::collections::HashMap<u16, std::net::SocketAddr>,
+) -> MirrorStation {
+    let controlling = Arc::new(controlling);
+    let listed = tokio::sync::watch::Sender::new(Vec::new());
+    let (station, mut current) = (controlling.clone(), listed.subscribe());
+    let desktop = Arc::new(desktop);
+    let lanes = Arc::new(tokio::sync::Semaphore::new(atlas_session::mirror::LANES));
+    let relaying = tokio::spawn(async move {
+        let mut seen = std::collections::HashSet::new();
+        // Every relay it runs, owned here: one for an endpoint no longer
+        // listed ends, and all end when this does.
+        let mut relays = tokio::task::JoinSet::new();
+        let mut by_endpoint = Vec::new();
+        let mut looking = tokio::time::interval(Duration::from_millis(200));
+        loop {
+            let asked = tokio::select! {
+                // Its control connection gone, its generation is over: every
+                // relay ends as this does.
+                _ = looking.tick() => {
+                    if station.reading.is_finished() {
+                        return;
+                    }
+                    continue;
+                }
+                asked = station.heard.connect() => asked,
+                changed = current.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    let still = current.borrow_and_update().clone();
+                    by_endpoint.retain(|(endpoint, relay): &(atlas_session::mirror::Endpoint, tokio::task::AbortHandle)| {
+                        let kept = still.contains(endpoint);
+                        if !kept {
+                            relay.abort();
+                        }
+                        kept
+                    });
+                    continue;
+                }
+                Some(_) = relays.join_next(), if !relays.is_empty() => continue,
+            };
+            let listed = current.borrow().contains(&asked.endpoint);
+            let target = targets.get(&asked.endpoint.port).copied();
+            let (Some(target), true, true) = (target, listed, seen.insert(asked.connection)) else {
+                continue;
+            };
+            let Ok(place) = lanes.clone().try_acquire_owned() else {
+                continue;
+            };
+            let (desktop, station) = (desktop.clone(), station.clone());
+            let relay = relays.spawn(async move {
+                let _place = place;
+                let _ = atlas_session::mirror::relay(
+                    &desktop,
+                    &station.credit,
+                    &station.outbox,
+                    asked.connection,
+                    asked.endpoint,
+                    target,
+                )
+                .await;
+            });
+            by_endpoint.push((asked.endpoint, relay));
+        }
+    });
+    MirrorStation {
+        controlling,
+        listed,
+        relaying,
+    }
+}
+
+/// What a client gets back sending `said` to `address`, its own end of
+/// stream passed on.
+async fn shout_through(address: std::net::SocketAddr, said: &[u8]) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut stream = tokio::net::TcpStream::connect(address).await?;
+    stream.write_all(said).await?;
+    stream.shutdown().await?;
+    let mut heard = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), stream.read_to_end(&mut heard))
+        .await
+        .map_err(|_| std::io::Error::other("no answer"))??;
+    Ok(heard)
+}
+
+fn endpoint(family: atlas_session::mirror::Family, port: u16) -> atlas_session::mirror::Endpoint {
+    atlas_session::mirror::Endpoint {
+        family,
+        port,
+        incarnation: 1,
+    }
+}
+
+#[tokio::test]
+async fn a_client_in_the_guest_reaches_the_station_s_server_through_its_mirror() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+
+    let refused = station.mirror(1, vec![endpoint(V4, port)]).await;
+    let heard = shout_through((std::net::Ipv4Addr::LOCALHOST, port).into(), b"hello").await;
+
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(heard.unwrap(), b"HELLO");
+}
+
+#[tokio::test]
+async fn an_ipv6_mirror_listens_on_ipv6_alone() {
+    use atlas_session::mirror::Family::V6;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv6Addr::LOCALHOST, 0).into()).await;
+    let port = free_port(V6);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+
+    station.mirror(1, vec![endpoint(V6, port)]).await;
+    let on_v6 = shout_through((std::net::Ipv6Addr::LOCALHOST, port).into(), b"six").await;
+    let on_v4 = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await;
+
+    assert_eq!(on_v6.unwrap(), b"SIX");
+    assert!(on_v4.is_err(), "IPv4 was listened on too");
+}
+
+#[tokio::test]
+async fn a_port_held_in_the_guest_is_reported_and_the_others_still_mirrored() {
+    use atlas_session::mirror::{Family::V4, Reason};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let held_port = held.local_addr().unwrap().port();
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+
+    let refused = station
+        .mirror(1, vec![endpoint(V4, held_port), endpoint(V4, port)])
+        .await;
+    let heard = shout_through((std::net::Ipv4Addr::LOCALHOST, port).into(), b"other").await;
+
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].endpoint.port, held_port);
+    assert_eq!(refused[0].reason, Reason::InUse);
+    assert_eq!(heard.unwrap(), b"OTHER");
+}
+
+#[tokio::test]
+async fn an_endpoint_no_longer_listed_is_no_longer_listened_on() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+    station.mirror(1, vec![endpoint(V4, port)]).await;
+
+    station.mirror(2, Vec::new()).await;
+
+    let refused = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await;
+    assert!(refused.is_err(), "still listened on");
+}
+
+#[tokio::test]
+async fn a_list_with_port_zero_or_a_repeat_is_refused_whole() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, std::collections::HashMap::new());
+
+    let refused = station
+        .mirror(1, vec![endpoint(V4, port), endpoint(V4, port)])
+        .await;
+
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    let listened = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await;
+    assert!(listened.is_err());
+}
+
+#[tokio::test]
+async fn a_mirror_lane_naming_no_waiting_connection_is_refused() {
+    use atlas_session::mirror::Family::V4;
+    use tokio::io::AsyncReadExt;
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    let opened = desktop
+        .open(LaneKind::Mirror {
+            connection: 99,
+            endpoint: endpoint(V4, 4000),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let mut heard = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut heard)).await;
+
+    assert!(read.is_ok(), "the lane stayed open");
+    assert!(heard.is_empty());
+}
+
+#[tokio::test]
+async fn a_new_generation_binds_the_ports_its_retired_one_listened_on() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (first, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let port = free_port(V4);
+    let first = relaying(first, desktop, [(port, server)].into());
+    first.mirror(1, vec![endpoint(V4, port)]).await;
+
+    let (second, desktop) = served.control().await;
+    let second = relaying(second, desktop, [(port, server)].into());
+    let refused = second.mirror(1, vec![endpoint(V4, port)]).await;
+    let heard = shout_through((std::net::Ipv4Addr::LOCALHOST, port).into(), b"again").await;
+
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(heard.unwrap(), b"AGAIN");
+}
+
+#[tokio::test]
+async fn a_mirrored_transfer_larger_than_the_bulk_credit_goes_whole_both_ways() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let server = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+    station.mirror(1, vec![endpoint(V4, port)]).await;
+    let big: Vec<u8> = (0..3 << 20).map(|at: u32| b'a' + (at % 26) as u8).collect();
+
+    let heard = shout_through((std::net::Ipv4Addr::LOCALHOST, port).into(), &big).await;
+
+    assert_eq!(heard.unwrap(), big.to_ascii_uppercase());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        station.controlling.credit.left(),
+        atlas_session::credit::BULK as usize
+    );
+}
+
+#[tokio::test]
+async fn a_mirrored_connection_carries_on_through_a_stop() {
+    use atlas_session::mirror::Family::V4;
+    use tokio::io::AsyncReadExt;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    // A server that sends back each read at once.
+    let echoing = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let server = echoing.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = echoing.accept().await {
+            tokio::spawn(async move {
+                let (mut reading, mut writing) = stream.into_split();
+                let _ = tokio::io::copy(&mut reading, &mut writing).await;
+            });
+        }
+    });
+    let port = free_port(V4);
+    let station = relaying(controlling, desktop, [(port, server)].into());
+    station.mirror(1, vec![endpoint(V4, port)]).await;
+    let mut client = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    let mut heard = [0_u8; 6];
+    client.write_all(b"before").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut heard))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&heard, b"before");
+
+    station
+        .controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    // Only once the guest has taken the Stop in.
+    for _ in 0..100 {
+        if served.machine.said.stops.load(SeqCst) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        served.machine.said.stops.load(SeqCst) > 0,
+        "the Stop never came"
+    );
+    let mut after = [0_u8; 5];
+    client.write_all(b"after").await.unwrap();
+    let read = tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut after)).await;
+
+    assert!(matches!(read, Ok(Ok(_))), "{read:?}");
+    assert_eq!(&after, b"after");
+}
+
+#[tokio::test]
+async fn an_endpoint_listed_again_closes_the_connections_of_its_old_incarnation() {
+    use atlas_session::mirror::{Endpoint, Family::V4};
+    use tokio::io::AsyncReadExt;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let port = free_port(V4);
+    // No server: the station never opens a lane, so the connection waits.
+    let station = relaying(controlling, desktop, std::collections::HashMap::new());
+    station.mirror(1, vec![endpoint(V4, port)]).await;
+    let mut waiting = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let again = Endpoint {
+        incarnation: 2,
+        ..endpoint(V4, port)
+    };
+    station.mirror(2, vec![again]).await;
+    let mut heard = Vec::new();
+    let closed =
+        tokio::time::timeout(Duration::from_secs(5), waiting.read_to_end(&mut heard)).await;
+
+    // Closed well before its own wait would have ended it.
+    assert!(
+        closed.is_ok(),
+        "the old incarnation's connection stayed open"
+    );
+}
+
+#[tokio::test]
+async fn a_guest_with_mirrors_declares_them() {
+    let served = Served::start().await;
+
+    let (controlling, _desktop) = served.control().await;
+
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .any(|has| has == atlas_session::compatibility::MIRRORS)
+    );
+}
+
+#[tokio::test]
+async fn one_mirrored_port_calls_another_through_the_guest() {
+    use atlas_session::mirror::Family::V4;
+    use tokio::io::AsyncReadExt;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let inner = shouting((std::net::Ipv4Addr::LOCALHOST, 0).into()).await;
+    let (outer_port, inner_port) = (free_port(V4), free_port(V4));
+    // The outer server answers by asking the inner one, through its mirror.
+    let outer = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let outer_address = outer.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = outer.accept().await {
+            tokio::spawn(async move {
+                let mut heard = Vec::new();
+                let _ = stream.read_to_end(&mut heard).await;
+                let through = (std::net::Ipv4Addr::LOCALHOST, inner_port).into();
+                let answer = shout_through(through, &heard).await.unwrap_or_default();
+                let _ = stream.write_all(&answer).await;
+            });
+        }
+    });
+    let targets = [(outer_port, outer_address), (inner_port, inner)].into();
+    let station = relaying(controlling, desktop, targets);
+    station
+        .mirror(1, vec![endpoint(V4, outer_port), endpoint(V4, inner_port)])
+        .await;
+
+    let heard = shout_through(
+        (std::net::Ipv4Addr::LOCALHOST, outer_port).into(),
+        b"nested",
+    )
+    .await;
+
+    assert_eq!(heard.unwrap(), b"NESTED");
+}
+
+#[tokio::test]
+async fn a_port_freed_in_the_guest_is_listened_on_at_the_next_retry() {
+    use atlas_session::mirror::Family::V4;
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let station = relaying(controlling, desktop, std::collections::HashMap::new());
+    let refused = station.mirror(1, vec![endpoint(V4, port)]).await;
+    assert_eq!(refused.len(), 1);
+
+    drop(held);
+
+    let mut bound = false;
+    for _ in 0..30 {
+        let answers = station.controlling.heard.taken.lock().unwrap().clone();
+        if answers
+            .last()
+            .is_some_and(|(_, refused)| refused.is_empty())
+        {
+            bound = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(bound, "never said it listened once the port was free");
 }

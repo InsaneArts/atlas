@@ -217,6 +217,57 @@ impl Guest for StandIn {
 pub struct Heard {
     pub silent: AtomicUsize,
     pub again: AtomicUsize,
+    /// Every answer to a mirror list, in order.
+    pub taken: std::sync::Mutex<Vec<(u64, Vec<crate::mirror::Refused>)>>,
+    /// Mirrored connections asking for their lanes, not yet taken.
+    pub connects: std::sync::Mutex<std::collections::VecDeque<Connect>>,
+    /// Told whenever a mirror message comes.
+    pub mirrored: tokio::sync::Notify,
+}
+
+/// A guest's request for a mirrored connection's lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Connect {
+    pub connection: u64,
+    pub endpoint: crate::mirror::Endpoint,
+    pub list: u64,
+}
+
+impl Heard {
+    /// The next connection asking for its lane, once one does.
+    pub async fn connect(&self) -> Connect {
+        loop {
+            let mirrored = self.mirrored.notified();
+            if let Some(connect) = self
+                .connects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front()
+            {
+                return connect;
+            }
+            mirrored.await;
+        }
+    }
+
+    /// The answer to list `list`, once it comes.
+    pub async fn taken(&self, list: u64) -> Vec<crate::mirror::Refused> {
+        loop {
+            let mirrored = self.mirrored.notified();
+            let found = self
+                .taken
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .rev()
+                .find(|(answered, _)| *answered == list)
+                .map(|(_, refused)| refused.clone());
+            if let Some(refused) = found {
+                return refused;
+            }
+            mirrored.await;
+        }
+    }
 }
 
 impl Station for Heard {
@@ -226,6 +277,26 @@ impl Station for Heard {
 
     fn heard_again(&self) {
         self.again.fetch_add(1, SeqCst);
+    }
+
+    fn taken(&self, list: u64, refused: Vec<crate::mirror::Refused>) {
+        self.taken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((list, refused));
+        self.mirrored.notify_waiters();
+    }
+
+    fn connect(&self, connection: u64, endpoint: crate::mirror::Endpoint, list: u64) {
+        self.connects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(Connect {
+                connection,
+                endpoint,
+                list,
+            });
+        self.mirrored.notify_waiters();
     }
 }
 

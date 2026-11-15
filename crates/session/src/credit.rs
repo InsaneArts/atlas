@@ -32,6 +32,8 @@ pub struct Credit {
     available: Semaphore,
     /// What each open lane owes.
     owed: Mutex<HashMap<LaneId, u64>>,
+    /// Told whenever credit comes back.
+    repaying: tokio::sync::Notify,
 }
 
 impl Default for Credit {
@@ -39,6 +41,7 @@ impl Default for Credit {
         Self {
             available: Semaphore::new(BULK as usize),
             owed: Mutex::new(HashMap::new()),
+            repaying: tokio::sync::Notify::new(),
         }
     }
 }
@@ -123,6 +126,19 @@ impl Credit {
         };
         self.available
             .add_permits(usize::try_from(given).unwrap_or(0));
+        self.repaying.notify_waiters();
+    }
+
+    /// Completes once `lane` owes nothing: everything it sent was read. A
+    /// wait dropped changes nothing.
+    pub async fn repaid(&self, lane: LaneId) {
+        loop {
+            let repaying = self.repaying.notified();
+            if self.owed().get(&lane).is_none_or(|owing| *owing == 0) {
+                return;
+            }
+            repaying.await;
+        }
     }
 
     /// How much credit is left to spend now.
@@ -136,6 +152,7 @@ impl Credit {
         let given = self.owed().remove(&lane).unwrap_or(0);
         self.available
             .add_permits(usize::try_from(given).unwrap_or(0));
+        self.repaying.notify_waiters();
     }
 }
 

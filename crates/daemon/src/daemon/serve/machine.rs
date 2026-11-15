@@ -266,6 +266,8 @@ struct Hand {
     halting: Arc<Halting>,
     /// The generation its connection is in.
     authority: Authority,
+    /// The generation's mirrors, if the guest serves them.
+    mirror: Option<Arc<crate::machine::mirror::Owner>>,
 }
 
 impl Guest for Hand {
@@ -284,6 +286,12 @@ impl Guest for Hand {
 
     /// The station dials every lane itself: the guest is never asked to.
     fn dial(&self, _: LaneId, _: LaneKind) {}
+
+    fn mirror(&self, list: u64, endpoints: Vec<atlas_session::mirror::Endpoint>) {
+        if let Some(mirror) = &self.mirror {
+            mirror.list(list, endpoints);
+        }
+    }
 
     /// Forgotten off the runtime, without waiting: one not forgotten now
     /// is named again at the next hello.
@@ -362,6 +370,10 @@ struct Live {
     lanes: Arc<Lanes>,
     /// What the guest says on the generation's control connection.
     outbox: Arc<Outbox>,
+    /// What the guest may send on its bulk lanes, given back over control.
+    credit: Arc<Credit>,
+    /// The generation's mirrors, if the guest serves them.
+    mirror: Option<Arc<crate::machine::mirror::Owner>>,
     _tasks: Tasks,
 }
 
@@ -375,6 +387,8 @@ pub struct Machine {
     /// Finding how it started: what Stop says, and what an earlier daemon
     /// left. Serving waits for it.
     starting: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Its mirrors of the station's loopback endpoints, if it serves them.
+    mirrors: Option<crate::machine::mirror::Mirrors>,
     pub said: Arc<Said>,
 }
 
@@ -386,6 +400,7 @@ impl Machine {
         supervising: Supervising,
         input: Option<crate::machine::input::Input>,
         stages: Option<crate::machine::stage::Stages>,
+        mirrors: Option<crate::machine::mirror::Mirrors>,
     ) -> Arc<Self> {
         daemon.kept = Some(paired.changes.clone());
         daemon.supervising = Some(supervising);
@@ -409,6 +424,7 @@ impl Machine {
             live: Mutex::new(None),
             halting,
             starting: std::sync::Mutex::new(Some(starting)),
+            mirrors,
             said: Arc::default(),
         })
     }
@@ -428,6 +444,9 @@ impl Machine {
         }
         if self.daemon.input.is_some() {
             capabilities.push(INPUT_LANES.to_owned());
+        }
+        if self.mirrors.is_some() {
+            capabilities.push(atlas_session::compatibility::MIRRORS.to_owned());
         }
         Declared::ours(capabilities)
     }
@@ -544,7 +563,13 @@ impl Machine {
         tasks
             .0
             .push(tokio::spawn(control::send(writing, outbox)).abort_handle());
+        let mirror = self
+            .mirrors
+            .as_ref()
+            .map(|mirrors| mirrors.generation(authority.clone(), saying.clone()));
+        let sending = credit.clone();
         let guest = Hand {
+            mirror: mirror.clone(),
             said: self.said.clone(),
             changes: paired.changes.clone(),
             halting: self.halting.clone(),
@@ -581,6 +606,8 @@ impl Machine {
             authority,
             lanes,
             outbox: saying,
+            credit: sending,
+            mirror,
             _tasks: tasks,
         });
         if let Some(replaced) = replaced {
@@ -610,7 +637,7 @@ impl Machine {
         let (secure, header) = tokio::time::timeout(OPENING, opening)
             .await
             .map_err(|_| Error::new(Code::Transport, "A lane did not open in time."))??;
-        let (authority, lanes, outbox) = {
+        let (authority, lanes, outbox, credit, mirror) = {
             let live = self.live.lock().await;
             let live = live
                 .as_ref()
@@ -619,6 +646,8 @@ impl Machine {
                 live.authority.clone(),
                 live.lanes.clone(),
                 live.outbox.clone(),
+                live.credit.clone(),
+                live.mirror.clone(),
             )
         };
         // A lane of another generation, or one cancelled, is refused here;
@@ -628,6 +657,32 @@ impl Machine {
         let stops = self.daemon.halted.borrow().stops;
         lanes.admit(&header, Opener::Station)?;
         let (mut reader, writer) = tokio::io::split(secure);
+        // A mirror carries bytes both ways from the first: no request line.
+        if let LaneKind::Mirror {
+            connection,
+            endpoint,
+        } = header.kind
+        {
+            let Some(joined) = mirror.and_then(|mirror| mirror.join(connection, endpoint)) else {
+                return Ok(());
+            };
+            let mut closing = joined.closing.clone();
+            // Ended with its lane or its generation, or its endpoint's
+            // incarnation; never by a Stop.
+            tokio::select! {
+                () = atlas_session::mirror::carry(
+                    joined.stream,
+                    reader,
+                    writer,
+                    header.lane,
+                    &credit,
+                    &outbox,
+                ) => {}
+                () = lanes.ended(header.lane) => {}
+                _ = closing.wait_for(|closed| *closed) => {}
+            }
+            return Ok(());
+        }
         let mut writer: Writer = Box::new(writer);
         let line = atlas_native::native::endpoint::read_line(&mut reader, MAX_REQUEST).await;
         let Ok(mut line) = line else {

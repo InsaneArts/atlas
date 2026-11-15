@@ -24,6 +24,8 @@ pub const STAGE: &str = "stage-v1";
 pub const COPIES: &str = "copies-v1";
 /// Input lanes to the guest's input service.
 pub const INPUT_LANES: &str = "input-lanes-v1";
+/// The station's loopback endpoints mirrored in the guest.
+pub const MIRRORS: &str = "mirrors-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

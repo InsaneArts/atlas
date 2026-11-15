@@ -15,6 +15,7 @@ pub mod credit;
 pub mod generation;
 pub mod keys;
 pub mod lane;
+pub mod mirror;
 pub mod pairing;
 pub mod pairing_file;
 pub mod secure;

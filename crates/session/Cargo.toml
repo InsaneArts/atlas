@@ -17,7 +17,7 @@ nix = { workspace = true, features = ["time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snow = { workspace = true, features = ["std", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
-tokio = { workspace = true, features = ["io-util", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "sync", "time"] }
 
 [dev-dependencies]
 tempfile.workspace = true

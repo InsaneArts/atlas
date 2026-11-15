@@ -77,12 +77,33 @@ pub enum Said {
     /// The station holds no claim on these changes any more: the guest
     /// may forget what they came to.
     Settled { changes: Vec<Token> },
+    /// The station's endpoints to mirror in the desktop now, the whole
+    /// list, numbered: each replaces the one before.
+    Mirror {
+        list: u64,
+        endpoints: Vec<crate::mirror::Endpoint>,
+    },
+    /// From the guest: what of list `list` it could not listen on, and why.
+    Taken {
+        list: u64,
+        refused: Vec<crate::mirror::Refused>,
+    },
+    /// From the guest: a local connection was accepted on `endpoint` while
+    /// list `list` held; the station is asked to open its lane.
+    Connect {
+        connection: u64,
+        endpoint: crate::mirror::Endpoint,
+        list: u64,
+    },
 }
 
 impl Said {
-    /// Whether it goes ahead of dial requests.
+    /// Whether it goes ahead of credit, mirrors and dial requests.
     const fn urgent(&self) -> bool {
-        !matches!(self, Self::Dial { .. })
+        !matches!(
+            self,
+            Self::Dial { .. } | Self::Mirror { .. } | Self::Taken { .. } | Self::Connect { .. }
+        )
     }
 }
 
@@ -100,12 +121,19 @@ struct Queues {
     /// Credit waiting to go back, gathered by lane: however much is read,
     /// one message per lane waits.
     credits: BTreeMap<LaneId, u64>,
+    /// The newest mirror list, or the newest answer to one: a newer one
+    /// replaces it while it waits.
+    mirror: Option<Said>,
+    taken: Option<Said>,
+    /// Connections waiting for their lane, at most [`crate::mirror::PENDING`].
+    connects: VecDeque<Said>,
     dials: VecDeque<Said>,
     closed: bool,
 }
 
 impl Queues {
-    /// The next to go: urgent, then credit, then dial requests.
+    /// The next to go: urgent, then credit, then mirrors, then dial
+    /// requests.
     fn pop(&mut self) -> Option<Said> {
         if let Some(said) = self.urgent.pop_front() {
             return Some(said);
@@ -113,7 +141,11 @@ impl Queues {
         if let Some((lane, bytes)) = self.credits.pop_first() {
             return Some(Said::Credit { lane, bytes });
         }
-        self.dials.pop_front()
+        self.mirror
+            .take()
+            .or_else(|| self.taken.take())
+            .or_else(|| self.connects.pop_front())
+            .or_else(|| self.dials.pop_front())
     }
 }
 
@@ -140,6 +172,18 @@ impl Outbox {
             if let Said::Credit { lane, bytes } = said {
                 let gathered = queues.credits.entry(lane).or_default();
                 *gathered = gathered.saturating_add(bytes);
+            } else if matches!(said, Said::Mirror { .. }) {
+                queues.mirror = Some(said);
+            } else if matches!(said, Said::Taken { .. }) {
+                queues.taken = Some(said);
+            } else if matches!(said, Said::Connect { .. }) {
+                if queues.connects.len() >= crate::mirror::PENDING {
+                    return Err(Error::new(
+                        Code::Busy,
+                        "Too many mirrored connections wait for their lanes.",
+                    ));
+                }
+                queues.connects.push_back(said);
             } else if said.urgent() {
                 queues.urgent.push_back(said);
             } else if queues.dials.len() >= DIALS {
@@ -153,6 +197,14 @@ impl Outbox {
         }
         self.ready.notify_one();
         Ok(())
+    }
+
+    /// Take back the request for connection `connection`'s lane, if it has
+    /// not gone yet.
+    pub fn withdraw(&self, connection: u64) {
+        self.queues().connects.retain(|said| {
+            !matches!(said, Said::Connect { connection: waiting, .. } if *waiting == connection)
+        });
     }
 
     /// The hello, when it is the first thing waiting.
@@ -304,6 +356,8 @@ pub trait Guest: Send + Sync {
     fn release(&self);
     /// The person's Resume came.
     fn resume(&self);
+    /// The station's endpoints to mirror now. It must not wait.
+    fn mirror(&self, _list: u64, _endpoints: Vec<crate::mirror::Endpoint>) {}
     /// The station asks for lane `lane`: open one and send its header.
     fn dial(&self, lane: LaneId, kind: LaneKind);
     /// The station settled `changes`: what they came to may be forgotten.
@@ -348,8 +402,9 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
             }
             Ok(Said::Credit { lane, bytes }) => credit.returned(lane, bytes),
             Ok(Said::Settled { changes }) => guest.settled(changes),
-            // A guest never hears a hello.
-            Ok(Said::Hello { .. }) | Err(_) => return,
+            Ok(Said::Mirror { list, endpoints }) => guest.mirror(list, endpoints),
+            // A guest never hears its own messages.
+            Ok(Said::Hello { .. } | Said::Taken { .. } | Said::Connect { .. }) | Err(_) => return,
         }
     }
 }
@@ -361,6 +416,12 @@ pub trait Station: Send + Sync {
     fn silent(&self);
     /// The guest is heard again in the same generation.
     fn heard_again(&self);
+    /// What of mirror list `list` the guest could not listen on. It must
+    /// not wait.
+    fn taken(&self, _list: u64, _refused: Vec<crate::mirror::Refused>) {}
+    /// The guest accepted a mirrored connection and asks for its lane. It
+    /// must not wait.
+    fn connect(&self, _connection: u64, _endpoint: crate::mirror::Endpoint, _list: u64) {}
 }
 
 /// What the guest's hello says.
@@ -474,6 +535,12 @@ pub async fn station_reads<R: AsyncRead + Unpin>(
         match said {
             Said::Beat => {}
             Said::Credit { lane, bytes } => credit.returned(lane, bytes),
+            Said::Taken { list, refused } => station.taken(list, refused),
+            Said::Connect {
+                connection,
+                endpoint,
+                list,
+            } => station.connect(connection, endpoint, list),
             _ => {
                 return Err(Error::new(
                     Code::Protocol,

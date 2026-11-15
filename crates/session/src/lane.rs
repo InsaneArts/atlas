@@ -33,8 +33,12 @@ pub enum LaneKind {
     Read,
     /// The pictures of the desktop's screen.
     Picture,
-    /// A mirror of files.
-    Mirror,
+    /// One mirrored connection, the guest's `connection` accepted on
+    /// `endpoint`, carried both ways.
+    Mirror {
+        connection: u64,
+        endpoint: crate::mirror::Endpoint,
+    },
     /// A request that changes something.
     Change { change: Token },
     /// A stage committed.
