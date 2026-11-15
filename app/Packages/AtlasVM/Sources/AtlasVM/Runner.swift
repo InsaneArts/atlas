@@ -9,6 +9,15 @@ enum Runner {
   /// Serve `folder`, the VM of the desktop `desktop`; it returns only when
   /// it cannot serve.
   static func serve(_ folder: VMFolder, desktop: String) async throws {
+    // Before its folder is touched: the VM's one lifecycle lock, then no
+    // removal under way, which a marker that cannot be read is taken for.
+    try VMFolder.makePrivate(folder.parent)
+    try VMFolder.makePrivate(folder.lifecycleLock.deletingLastPathComponent())
+    guard let lifecycle = RunnerLock(at: folder.lifecycleLock) else { throw AtlasVMError.anotherRun }
+    var marker = stat()
+    guard lstat(folder.removal.path(percentEncoded: false), &marker) != 0, errno == ENOENT else {
+      throw AtlasVMError.removing
+    }
     try folder.prepare()
     guard let lock = RunnerLock(at: folder.lock) else { throw AtlasVMError.anotherRun }
     guard let incarnation = Incarnation.current() else { throw AtlasVMError.noIncarnation }
@@ -31,7 +40,7 @@ enum Runner {
     try record.write(to: folder.incarnation)
     let machine = Machine(folder: folder, desktop: desktop, record: record)
     let installer = GuestInstaller(folder: folder, desktop: desktop, machine: machine)
-    let host = VirtualMachineHost(machine: machine, installer: installer)
+    let host = VirtualMachineHost(machine: machine, installer: installer, desktop: desktop)
     let service = ControlService(ledger: ChangeLedger(folder: folder.changes), host: host, incarnation: incarnation)
     await service.recover(holding: lock, vmGone: vmGone)
     ControlServer.start(try UnixListener(at: folder.control), service: service)
@@ -39,7 +48,7 @@ enum Runner {
     // The lock is this run's for as long as it lives.
     while true {
       try? await Task.sleep(for: .seconds(3600))
-      withExtendedLifetime(lock) {}
+      withExtendedLifetime((lifecycle, lock)) {}
     }
   }
 }

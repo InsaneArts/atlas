@@ -24,6 +24,9 @@ public enum ControlOperation: Equatable, Sendable {
   /// says, over its authenticated session, that Remote Login is off and its
   /// account no administrator.
   case closed(ChangeID, install: ChangeID)
+  /// The VM removed: from its asking no other change is taken, the VM is
+  /// stopped and its passwords deleted, and then its runner exits.
+  case forget(ChangeID)
 
   /// The change it is; none for a read.
   public var change: ChangeID? {
@@ -31,7 +34,7 @@ public enum ControlOperation: Equatable, Sendable {
     case .hello, .state, .outcome:
       nil
     case .create(let change), .start(let change), .stop(let change), .window(let change, _),
-      .install(let change, _), .paired(let change, _, _), .closed(let change, _):
+      .install(let change, _), .paired(let change, _, _), .closed(let change, _), .forget(let change):
       change
     }
   }
@@ -49,6 +52,7 @@ public enum ControlOperation: Equatable, Sendable {
     case .install: "install"
     case .paired: "paired"
     case .closed: "closed"
+    case .forget: "forget"
     }
   }
 
@@ -62,9 +66,15 @@ public enum ControlOperation: Equatable, Sendable {
   /// phases are each safe to repeat, and the station's reports on one.
   var resumes: Bool {
     switch self {
-    case .install, .paired, .closed: true
+    case .install, .paired, .closed, .forget: true
     default: false
     }
+  }
+
+  /// Whether it is the removal's `forget`.
+  var isForget: Bool {
+    if case .forget = self { return true }
+    return false
   }
 
   /// Whether it is the station's report on an install, which touches only
@@ -105,6 +115,8 @@ extension ControlOperation: Codable {
       self = .start(try fields.decode(ChangeID.self, forKey: .change))
     case "stop":
       self = .stop(try fields.decode(ChangeID.self, forKey: .change))
+    case "forget":
+      self = .forget(try fields.decode(ChangeID.self, forKey: .change))
     case "window":
       self = .window(
         try fields.decode(ChangeID.self, forKey: .change),
@@ -146,7 +158,7 @@ extension ControlOperation: Codable {
     switch self {
     case .hello, .state:
       break
-    case .outcome(let change), .create(let change), .start(let change), .stop(let change):
+    case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change):
       try fields.encode(change, forKey: .change)
     case .window(let change, let input):
       try fields.encode(change, forKey: .change)

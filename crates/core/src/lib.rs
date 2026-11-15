@@ -22,6 +22,7 @@ pub mod frame_pipe;
 #[allow(unsafe_code, reason = "FFI: libc's renameatx_np has no safe binding")]
 pub mod fs_move;
 pub mod host;
+pub mod launchd;
 pub mod lenient;
 pub mod name;
 pub mod outcomes;

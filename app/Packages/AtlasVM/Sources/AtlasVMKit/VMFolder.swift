@@ -7,6 +7,10 @@ import Foundation
 public struct VMFolder: Equatable, Sendable {
   /// The folder itself.
   public let root: URL
+  /// The folder every VM's folder is in.
+  public let parent: URL
+  /// The desktop it is the VM of.
+  private let desktop: String
 
   /// The folder of the desktop `desktop` in `parent`; none unless `desktop`
   /// is a desktop's name, 24 lowercase hexadecimal digits.
@@ -19,6 +23,20 @@ public struct VMFolder: Equatable, Sendable {
     }
     guard desktop.utf8.count == 24, digits else { return nil }
     root = parent.appending(path: desktop, directoryHint: .isDirectory)
+    self.parent = parent
+    self.desktop = desktop
+  }
+
+  /// The lock every run of it holds for its whole life, and its removal
+  /// from its proof to its end: outside the folder a removal deletes.
+  public var lifecycleLock: URL {
+    parent.appending(path: ".locks/\(desktop).lock")
+  }
+
+  /// The record of its removal, kept outside its folder: while it is there,
+  /// no run of it starts.
+  public var removal: URL {
+    parent.appending(path: ".removals/\(desktop).json")
   }
 
   /// Where every VM's folder is, in the home folder `home`.

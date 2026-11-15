@@ -31,34 +31,11 @@ impl Job {
     /// such a job, and names nothing.
     #[must_use]
     pub fn parse(printed: &str) -> Self {
-        let mut job = Self {
-            pid: None,
-            path: None,
-        };
-        let (mut pids, mut paths) = (0, 0);
-        for line in printed.lines() {
-            // A field of the job itself is indented by exactly one tab.
-            let Some(field) = line
-                .strip_prefix('\t')
-                .filter(|rest| !rest.starts_with('\t'))
-            else {
-                continue;
-            };
-            if let Some(pid) = field.strip_prefix("pid = ") {
-                pids += 1;
-                job.pid = pid.trim().parse().ok();
-            } else if let Some(path) = field.strip_prefix("path = ") {
-                paths += 1;
-                job.path = Some(path.trim().to_owned());
-            }
+        let loaded = atlas_core::launchd::Loaded::parse(printed);
+        Self {
+            pid: loaded.pid,
+            path: loaded.path.map(|path| path.to_string_lossy().into_owned()),
         }
-        if pids > 1 {
-            job.pid = None;
-        }
-        if paths > 1 {
-            job.path = None;
-        }
-        job
     }
 }
 

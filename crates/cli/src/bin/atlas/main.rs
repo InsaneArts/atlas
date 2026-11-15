@@ -127,6 +127,11 @@ fn main() -> ExitCode {
         return machine_setup(phase);
     }
 
+    // A VM desktop's agent and removal run alone, before anything else.
+    if let Command::Vm(asked) = command {
+        return vm(asked);
+    }
+
     // A machine desktop's root installer runs alone, before anything else.
     #[cfg(target_os = "macos")]
     if matches!(command, Command::MachineInstaller) {
@@ -646,6 +651,37 @@ fn machine_daemon(desktop_id: &str, enrolment: &str) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}", json!(error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Do what the station asks of a VM desktop, and print what it came to as
+/// one JSON line.
+fn vm(asked: cli::Vm) -> ExitCode {
+    use atlas_core::{desktop::DesktopId, files::Token};
+    let invalid = || {
+        atlas_core::error::Error::new(
+            atlas_core::error::Code::BadRequest,
+            "That names no valid desktop or change.",
+        )
+    };
+    let done = match asked {
+        cli::Vm::InstallAgent { desktop_id } => DesktopId::parse(&desktop_id)
+            .ok_or_else(invalid)
+            .and_then(|desktop| atlas_client::vm::install_agent(&desktop)),
+        cli::Vm::Remove { desktop_id, change } => DesktopId::parse(&desktop_id)
+            .zip(Token::parse(&change))
+            .ok_or_else(invalid)
+            .and_then(|(desktop, change)| atlas_client::vm::remove(&desktop, &change)),
+    };
+    match done {
+        Ok(found) => {
+            println!("{found}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{}", json!(error));
             ExitCode::FAILURE
         }
     }

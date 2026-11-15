@@ -27,4 +27,7 @@ public protocol VMHost: Sendable {
   /// Take the station's word that the install `install` is closed. None
   /// while that cannot be kept.
   func closed(install: ChangeID) async -> ChangeOutcome?
+  /// Stop the VM and delete its passwords, as its removal asks, then end
+  /// this run once its answer is given. None while that cannot be told.
+  func forget() async -> ChangeOutcome?
 }

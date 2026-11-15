@@ -10,6 +10,9 @@ public actor ControlService {
   private let incarnation: Incarnation
   /// Whether a change, or recovery, is being done now.
   private var busy = false
+  /// Whether the VM is being removed: from `forget`'s asking, no other
+  /// change is taken.
+  private var forgetting = false
   /// The lock this run serves under, once it recovered: its proof that
   /// every earlier run has ended.
   private var lock: RunnerLock?
@@ -60,7 +63,7 @@ public actor ControlService {
       reply.change = change
       guard let record else { return reply }
       return await answered(record, in: reply)
-    case .create, .start, .stop, .window, .install, .paired, .closed:
+    case .create, .start, .stop, .window, .install, .paired, .closed, .forget:
       return await change(operation)
     }
   }
@@ -83,6 +86,7 @@ public actor ControlService {
   }
 
   private func change(_ operation: ControlOperation) async -> ControlReply {
+    if case .forget = operation { forgetting = true }
     var reply = ControlReply.served(operation.name, by: incarnation)
     reply.change = operation.change
     let beginning: ChangeBeginning
@@ -96,10 +100,15 @@ public actor ControlService {
         // again, by this run or, once recovered, an earlier one's: its
         // phases are each safe to repeat, and only the asking carries its
         // secret again.
-        if operation.resumes, kept.outcome == nil, kept.run == incarnation.id || lock != nil, !busy {
+        if operation.resumes, kept.outcome == nil, kept.run == incarnation.id || lock != nil, !busy,
+          !forgetting || operation.isForget
+        {
           return await go(on: kept, asked: operation, in: reply)
         }
         return await answered(kept, in: reply)
+      }
+      guard !forgetting || operation.isForget else {
+        return .refused("This VM is being removed.", by: incarnation)
       }
       // A report touches only its install's record, so it never waits.
       guard !busy || operation.isReport else {
@@ -226,6 +235,8 @@ public actor ControlService {
         return await host.paired(install: install)
       case .closed(_, let install):
         return await host.closed(install: install)
+      case .forget:
+        return await host.forget()
       }
     } catch {
       // It may have taken effect before it failed: what is there says.
@@ -253,7 +264,7 @@ public actor ControlService {
     case .window(_, let input):
       // Off only once it is seen gone.
       return await host.windowOpen() == input ? .done : refusal
-    case .install, .paired, .closed:
+    case .install, .paired, .closed, .forget:
       // Told only by doing it, or by the station's word.
       return nil
     }
@@ -296,7 +307,7 @@ public actor ControlService {
       guard vmGone else { return nil }
       // No window of that run's is left: off holds, on does not.
       return input ? .refused("Its runner went; its window is closed.") : .done
-    case .install, .paired, .closed:
+    case .install, .paired, .closed, .forget:
       // Asked again by the station, which goes on with it.
       return nil
     }

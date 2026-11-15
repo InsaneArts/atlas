@@ -303,7 +303,8 @@ async fn carry_out(
         | Command::MachineSupervise { .. }
         | Command::Daemon { .. }
         | Command::MachineInstaller
-        | Command::MachineSetup(_) => {
+        | Command::MachineSetup(_)
+        | Command::Vm(_) => {
             unreachable!("main runs these before anything else")
         }
         Command::InputService(args) => input_service(args).await,

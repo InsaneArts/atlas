@@ -90,6 +90,14 @@ actor FakeHost: VMHost {
 
   func sticking(reports: Bool) { reportsStick = reports }
 
+  /// How many times the VM was forgotten.
+  var forgotten = 0
+
+  func forget() async -> ChangeOutcome? {
+    forgotten += 1
+    return .done
+  }
+
   func sticking() { windowSticks = true }
 
   func failing(_ name: String?, after: String? = nil) {

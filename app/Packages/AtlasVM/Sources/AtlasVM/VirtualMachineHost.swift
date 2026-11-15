@@ -6,11 +6,13 @@ import Foundation
 final class VirtualMachineHost: VMHost {
   private let machine: Machine
   private let installer: GuestInstaller
+  private let desktop: String
 
   /// The VM `machine` is, put Atlas inside by `installer`.
-  init(machine: Machine, installer: GuestInstaller) {
+  init(machine: Machine, installer: GuestInstaller, desktop: String) {
     self.machine = machine
     self.installer = installer
+    self.desktop = desktop
   }
 
   /// Its power now, seen just now.
@@ -50,6 +52,24 @@ final class VirtualMachineHost: VMHost {
   /// Take the station's word that its guest is closed.
   func closed(install: ChangeID) async -> ChangeOutcome? {
     await installer.closed(install: install)
+  }
+
+  /// Stop the VM, delete its passwords, and end this run a moment after
+  /// its answer is given and kept: its lifecycle lock goes with it.
+  func forget() async -> ChangeOutcome? {
+    do {
+      try await machine.stop()
+    } catch {
+      return nil
+    }
+    guard await machine.power().value != .running else { return nil }
+    let left = GuestPassword.forget(desktop)
+    DispatchQueue.main
+      .asyncAfter(deadline: .now() + 1) { exit(0) }
+    guard left.isEmpty else {
+      return .refused("Its passwords could not be deleted without asking: \(left.joined(separator: ", ")).")
+    }
+    return .done
   }
 
   /// A new connection to the guest's port, its descriptor this caller's to close.

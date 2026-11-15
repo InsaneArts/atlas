@@ -48,3 +48,4 @@ pub mod task;
 pub mod test_support;
 pub mod update;
 pub mod user;
+pub mod vm;

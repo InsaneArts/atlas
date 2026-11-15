@@ -108,6 +108,9 @@ pub(super) enum Command {
     /// One phase of putting Atlas inside a machine desktop's guest, as root.
     #[command(hide = true, subcommand)]
     MachineSetup(MachineSetup),
+    /// A VM desktop's agent and removal, as its station asks.
+    #[command(hide = true, subcommand)]
+    Vm(Vm),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {
@@ -1513,6 +1516,23 @@ impl AppTarget {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+/// What the station asks of a VM desktop on this Mac.
+#[derive(Debug, Subcommand)]
+pub(super) enum Vm {
+    /// Write and start the agent that keeps the VM's runner alive.
+    InstallAgent {
+        #[arg(long)]
+        desktop_id: String,
+    },
+    /// Remove the VM, as the removal with this change ID.
+    Remove {
+        #[arg(long)]
+        desktop_id: String,
+        #[arg(long)]
+        change: String,
+    },
+}
 
 /// A phase of putting Atlas inside a machine desktop's guest, in the order
 /// its host runs them.

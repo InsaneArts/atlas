@@ -24,6 +24,33 @@ enum GuestPassword {
     return made
   }
 
+  /// Delete the passwords of the guest of `desktop` and of its second
+  /// administrator, Keychain interaction turned off around each call, so a
+  /// locked Keychain refuses rather than asks; the accounts left.
+  static func forget(_ desktop: String) -> [String] {
+    [desktop, "\(desktop).admin"]
+      .filter { !deleted($0) }
+  }
+
+  /// Whether the password of `account` is gone, or was never kept; never
+  /// tried unless interaction is known to be off, and put back as it was.
+  private static func deleted(_ account: String) -> Bool {
+    var allowed: DarwinBoolean = true
+    guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
+      SecKeychainSetUserInteractionAllowed(false) == errSecSuccess
+    else {
+      return false
+    }
+    defer { SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+    let status = SecItemDelete(query as CFDictionary)
+    return status == errSecSuccess || status == errSecItemNotFound
+  }
+
   private static func read(_ desktop: String) throws -> String? {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
