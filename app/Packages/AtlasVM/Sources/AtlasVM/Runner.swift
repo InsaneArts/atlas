@@ -9,6 +9,9 @@ enum Runner {
   /// Serve `folder`, the VM of the desktop `desktop`; it returns only when
   /// it cannot serve.
   static func serve(_ folder: VMFolder, desktop: String) async throws {
+    // Its own signing, which its peers are judged by, read before it serves
+    // anyone: a run whose file went before it could is no use, and ends.
+    guard CodeIdentity.remember() else { throw AtlasVMError.unsigned }
     // Before its folder is touched: the VM's one lifecycle lock, then no
     // removal under way, which a marker that cannot be read is taken for.
     try VMFolder.makePrivate(folder.parent)
@@ -45,9 +48,17 @@ enum Runner {
     await service.recover(holding: lock, vmGone: vmGone)
     ControlServer.start(try UnixListener(at: folder.control), service: service)
     StationJoint.start(try UnixListener(at: folder.station), host: host)
-    // The lock is this run's for as long as it lives.
+    // The locks are this run's for as long as it lives. Once an update
+    // replaced its program, it gives way as soon as its VM is stopped and
+    // no change is being done: launchd starts the new build in its place.
+    var program = LaunchedProgram()
     while true {
-      try? await Task.sleep(for: .seconds(3600))
+      try? await Task.sleep(for: .seconds(15))
+      // One not yet told is asked again, never taken for replaced.
+      program = program ?? LaunchedProgram()
+      if program?.replaced == true, await service.retire() {
+        exit(0)
+      }
       withExtendedLifetime((lifecycle, lock)) {}
     }
   }

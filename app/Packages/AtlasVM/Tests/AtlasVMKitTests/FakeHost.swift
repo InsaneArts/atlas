@@ -19,7 +19,39 @@ actor FakeHost: VMHost {
     powered = Observed(power, confirmed: confirmed)
   }
 
-  func power() async -> Observed<PowerState> { blind ? Observed(powered.value, confirmed: false) : powered }
+  func power() async -> Observed<PowerState> {
+    if holdsPower {
+      await withCheckedContinuation { continuation in
+        heldPower = continuation
+        for waiter in waitingPower {
+          waiter.resume()
+        }
+        waitingPower = []
+      }
+    }
+    return blind ? Observed(powered.value, confirmed: false) : powered
+  }
+
+  /// Whether each power read is held until let go.
+  var holdsPower = false
+  var heldPower: CheckedContinuation<Void, Never>?
+  var waitingPower: [CheckedContinuation<Void, Never>] = []
+
+  /// Hold the next power read until let go.
+  func holdingPower() { holdsPower = true }
+
+  /// Return once a power read is held.
+  func untilPowerHeld() async {
+    guard heldPower == nil else { return }
+    await withCheckedContinuation { waitingPower.append($0) }
+  }
+
+  /// Let the held power read go on, and read the next ones at once.
+  func releasePower() {
+    holdsPower = false
+    heldPower?.resume()
+    heldPower = nil
+  }
 
   func create() async throws {
     try call("create")

@@ -6,6 +6,8 @@ enum AtlasVMError: Error, CustomStringConvertible {
   case anotherRun
   /// The VM is being removed, or whether it is cannot be told.
   case removing
+  /// This run cannot read its own signing.
+  case unsigned
   /// The kernel did not say when this run started.
   case noIncarnation
   /// This Mac cannot run the VM, for this reason.
@@ -26,6 +28,7 @@ enum AtlasVMError: Error, CustomStringConvertible {
     switch self {
     case .anotherRun: "Another run of Atlas VM serves this VM."
     case .removing: "This VM is being removed."
+    case .unsigned: "This run of Atlas VM cannot read its own signature."
     case .noIncarnation: "This run of Atlas VM cannot tell when it started."
     case .unsupported(let reason): reason
     case .notMade: "The VM is not made."

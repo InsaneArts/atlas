@@ -13,6 +13,13 @@ public actor ControlService {
   /// Whether the VM is being removed: from `forget`'s asking, no other
   /// change is taken.
   private var forgetting = false
+  /// Whether this run is giving way to a newer build, or looking whether
+  /// it may: while it is, no change is taken.
+  private var retiring = false
+  /// Whether it gave way: for good.
+  private var retired = false
+  /// How many changes are being done now, reports among them.
+  private var inFlight = 0
   /// The lock this run serves under, once it recovered: its proof that
   /// every earlier run has ended.
   private var lock: RunnerLock?
@@ -68,6 +75,28 @@ public actor ControlService {
     }
   }
 
+  /// Give way to a newer build of this runner, as its program was replaced:
+  /// only while no change is being done (reports and resumed ones among
+  /// them), no removal is under way, its window is closed and the VM is
+  /// seen stopped, or not made. From then every change is refused, one
+  /// left pending among them, for the next run to answer.
+  /// Whether it may go now.
+  public func retire() async -> Bool {
+    if retired { return true }
+    guard !retiring, !busy, !forgetting, inFlight == 0 else { return false }
+    // Closed before anything is awaited, so no change, report or removal
+    // comes in while it looks; opened again when it may not go.
+    retiring = true
+    let windowed = await host.windowOpen()
+    let power = await host.power()
+    guard !windowed, power.confirmed, power.value == .stopped || power.value == .absent, inFlight == 0 else {
+      retiring = false
+      return false
+    }
+    retired = true
+    return true
+  }
+
   /// Settle each change an earlier run began and left intended, by what is
   /// there now. `lock` proves every earlier run has ended: this run holds
   /// the one lock a run serves under. A window's change is settled only with
@@ -86,6 +115,10 @@ public actor ControlService {
   }
 
   private func change(_ operation: ControlOperation) async -> ControlReply {
+    // Giving way, or looking whether it may: no change of any kind.
+    guard !retiring else {
+      return .refused("Its runner is being replaced; ask again in a moment.", by: incarnation)
+    }
     if case .forget = operation { forgetting = true }
     var reply = ControlReply.served(operation.name, by: incarnation)
     reply.change = operation.change
@@ -100,7 +133,7 @@ public actor ControlService {
         // again, by this run or, once recovered, an earlier one's: its
         // phases are each safe to repeat, and only the asking carries its
         // secret again.
-        if operation.resumes, kept.outcome == nil, kept.run == incarnation.id || lock != nil, !busy,
+        if operation.resumes, kept.outcome == nil, kept.run == incarnation.id || lock != nil, !busy, !retiring,
           !forgetting || operation.isForget
         {
           return await go(on: kept, asked: operation, in: reply)
@@ -109,6 +142,9 @@ public actor ControlService {
       }
       guard !forgetting || operation.isForget else {
         return .refused("This VM is being removed.", by: incarnation)
+      }
+      guard !retiring else {
+        return .refused("Its runner is being replaced; ask again in a moment.", by: incarnation)
       }
       // A report touches only its install's record, so it never waits.
       guard !busy || operation.isReport else {
@@ -141,7 +177,11 @@ public actor ControlService {
     var reply = reply
     let guarded = !operation.isReport
     if guarded { busy = true }
-    defer { if guarded { busy = false } }
+    inFlight += 1
+    defer {
+      if guarded { busy = false }
+      inFlight -= 1
+    }
     guard let outcome = await perform(operation) else {
       reply.pending = true
       return reply
@@ -171,7 +211,7 @@ public actor ControlService {
   private func answered(_ record: ChangeRecord, in reply: ControlReply) async -> ControlReply {
     var reply = reply
     var record = record
-    if record.outcome == nil, record.run == incarnation.id || lock != nil, !busy {
+    if record.outcome == nil, record.run == incarnation.id || lock != nil, !busy, !retiring {
       busy = true
       defer { busy = false }
       // This run's own is told as it is now; an earlier run's, as recovery
