@@ -62,6 +62,10 @@ struct State {
     /// The latest the clock was read: a reading earlier than it means the
     /// clock went back, and nothing measured on it holds.
     seen: Duration,
+    /// A lapse found, or a clock found untrustworthy, where it was not
+    /// retired at once: it holds from then on, and the next check that
+    /// may retire does.
+    lapsed: bool,
     retired: Option<Retired>,
 }
 
@@ -89,6 +93,7 @@ impl Authority {
                     heard: now.unwrap_or_default(),
                     seen: now.unwrap_or_default(),
                     retired: None,
+                    lapsed: false,
                 }),
                 hook,
                 ended: tokio::sync::watch::Sender::new(false),
@@ -118,17 +123,25 @@ impl Authority {
         if let Some(cause) = state.retired {
             return Err((cause, false));
         }
+        self.within_lease(state).ok_or_else(|| {
+            state.retired = Some(Retired::Lapsed);
+            (Retired::Lapsed, true)
+        })
+    }
+
+    /// The time now, if it is within the lease: none once the lease lapsed
+    /// or the clock cannot be trusted, and none for good after that.
+    fn within_lease(&self, state: &mut State) -> Option<Duration> {
+        if state.lapsed {
+            return None;
+        }
         let now = self.shared.clock.now().filter(|now| *now >= state.seen);
         if let Some(now) = now {
             state.seen = now;
         }
-        match now.filter(|now| now.saturating_sub(state.heard) <= LEASE) {
-            Some(now) => Ok(now),
-            None => {
-                state.retired = Some(Retired::Lapsed);
-                Err((Retired::Lapsed, true))
-            }
-        }
+        let within = now.filter(|now| now.saturating_sub(state.heard) <= LEASE);
+        state.lapsed = within.is_none();
+        within
     }
 
     /// Run the hook for `cause` when this call retired the generation.
@@ -205,6 +218,27 @@ impl Authority {
         };
         let (cause, retired_now) = refused_for;
         Err(refused(self.told(cause, retired_now)))
+    }
+
+    /// Run `register` while the generation is live, under the lock that
+    /// retiring takes, as [`Authority::while_live`] does, but never retiring
+    /// it here: a lapse it finds is left for the next check to retire and
+    /// tell. So it may be called under a lock the hook takes. It must be
+    /// short and never wait.
+    ///
+    /// # Errors
+    ///
+    /// Refuses once the generation retired, its lease lapsed, or its clock
+    /// cannot be trusted, or as `register` does.
+    pub fn if_live<T>(&self, register: impl FnOnce() -> Result<T>) -> Result<T> {
+        let mut state = self.state();
+        if let Some(cause) = state.retired {
+            return Err(refused(cause));
+        }
+        match self.within_lease(&mut state) {
+            Some(_) => register(),
+            None => Err(refused(Retired::Lapsed)),
+        }
     }
 
     /// Retire the generation for `cause`: no effect runs for it from now

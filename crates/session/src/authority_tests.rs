@@ -359,3 +359,49 @@ async fn work_waiting_on_a_generation_hears_it_retire_for_any_cause() {
         .await
         .unwrap();
 }
+
+#[test]
+fn a_lapse_found_under_if_live_is_left_for_the_next_check_to_retire_and_tell() {
+    let (authority, clock, heard) = held();
+    clock.advance(LEASE + Duration::from_millis(1));
+
+    let refused = authority.if_live(|| Ok(())).unwrap_err();
+
+    assert_eq!(refused.code, Code::Stopped);
+    assert_eq!(authority.retired(), None, "if_live retired it");
+    assert!(heard.lock().unwrap().is_empty(), "if_live told the hook");
+    assert!(authority.check().is_err());
+    assert_eq!(authority.retired(), Some(Retired::Lapsed));
+    assert_eq!(*heard.lock().unwrap(), [(Generation(7), Retired::Lapsed)]);
+}
+
+#[test]
+fn if_live_runs_its_work_while_the_lease_holds_and_refuses_once_retired() {
+    let (authority, _clock, _) = held();
+
+    assert_eq!(authority.if_live(|| Ok(5)).unwrap(), 5);
+    authority.retire(Retired::Replaced);
+
+    assert_eq!(
+        authority.if_live(|| Ok(5)).unwrap_err().code,
+        Code::SessionChanged
+    );
+}
+
+#[test]
+fn a_clock_if_live_found_unreadable_keeps_refusing_once_it_reads_again() {
+    let (authority, clock, heard) = held();
+    clock.set(None);
+    assert!(authority.if_live(|| Ok(())).is_err());
+    clock.set(Some(Duration::from_secs(1)));
+
+    let again = authority.if_live(|| Ok(()));
+    authority.heard();
+
+    assert!(
+        again.is_err(),
+        "a healthy read after a bad one admitted work"
+    );
+    assert!(authority.check().is_err());
+    assert_eq!(*heard.lock().unwrap(), [(Generation(7), Retired::Lapsed)]);
+}

@@ -190,7 +190,11 @@ impl Halting {
                         // none can come to meanwhile.
                         // Input is looked at again here too, last: a service
                         // that ended meanwhile keeps agents stopped.
-                        if current()
+                        // The generation is looked at without retiring it:
+                        // its hook halts, which takes this turn.
+                        let still_current =
+                            authority.if_live(|| Ok(())).is_ok() && since.load(SeqCst) == at;
+                        if still_current
                             && worker.keepers.settled_then(|| {
                                 let reopen =
                                     || worker.halted.send_modify(|halt| halt.halted = false);
