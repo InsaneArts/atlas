@@ -59,7 +59,33 @@ impl Purpose {
             Self::Lane => "lane",
         }
     }
+
+    /// The byte a connection opens with before its handshake, saying what
+    /// it is for where its transport cannot. Only a hint: the handshake
+    /// binds the purpose, so a wrong byte only fails it.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Control => 0,
+            Self::Lane => 1,
+            Self::Pairing => 2,
+        }
+    }
+
+    /// The purpose `byte` says; none for any other byte.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Control),
+            1 => Some(Self::Lane),
+            2 => Some(Self::Pairing),
+            _ => None,
+        }
+    }
 }
+
+/// The vsock port a guest listens on for its station.
+pub const GUEST_PORT: u32 = 0x4154;
 
 /// The prologue both ends must agree on.
 fn prologue(desktop: &DesktopId, purpose: Purpose) -> Vec<u8> {

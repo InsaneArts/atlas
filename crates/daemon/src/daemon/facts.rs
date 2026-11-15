@@ -161,6 +161,23 @@ pub(super) fn hello(
     hello
 }
 
+/// A machine desktop's hello: who and where it is, and what it declares
+/// (`declared`), never the hidden login's capabilities. Read from this
+/// process alone, so a busy guest answers it at once.
+pub(super) fn machine_hello(
+    manager: &str,
+    declared: &atlas_session::compatibility::Declared,
+) -> Value {
+    json!({
+        "ok": true,
+        "op": "hello",
+        "user": user(),
+        "session": {"managerName": manager, "onConsole": console_state()},
+        "daemon": {"protocol": declared.protocol, "pid": std::process::id(),
+            "version": declared.version, "capabilities": declared.capabilities},
+    })
+}
+
 #[cfg(test)]
 #[path = "facts_tests.rs"]
 mod tests;

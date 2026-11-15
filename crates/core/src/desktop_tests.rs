@@ -76,3 +76,18 @@ fn a_user_desktop_is_asked_about_its_own_account_alone() {
     assert!(child.wait().success());
     assert!(!login(uid).left_may_run(&[], Some(group)), "it ended");
 }
+
+#[test]
+fn a_desktop_name_is_read_back_as_written_and_nothing_else_is_one() {
+    let written = Desktop::from(crate::user::User { uid: 502 }).id();
+
+    assert_eq!(DesktopId::parse(written.as_str()), Some(written.clone()));
+    for not_one in [
+        "",
+        "user",
+        "ABCDEF0123456789abcdef01",
+        "0123456789abcdef012345678",
+    ] {
+        assert_eq!(DesktopId::parse(not_one), None, "{not_one}");
+    }
+}

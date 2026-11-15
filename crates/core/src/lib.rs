@@ -38,6 +38,7 @@ pub mod test_support;
 pub mod time;
 pub mod transport;
 pub mod user;
+pub mod vsock;
 pub mod xattr;
 
 /// This build's version, as released.

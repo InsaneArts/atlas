@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::{
     ffi::{CStr, CString},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -146,6 +147,55 @@ impl Title {
             Self::Unknown | Self::Untitled => None,
         }
     }
+}
+
+/// Whether `name` administers this Mac (a helper must not); None when macOS
+/// cannot say, which never counts as "no".
+pub fn administrator(name: &str) -> Option<bool> {
+    // An agent's sandbox may keep dseditgroup from the directory service;
+    // the account's group list still answers there.
+    directory_member(name).or_else(|| listed_member(name))
+}
+
+fn directory_member(name: &str) -> Option<bool> {
+    let output = crate::bounded::output(
+        Command::new("/usr/sbin/dseditgroup").args(["-o", "checkmember", "-m", name, "admin"]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
+
+    let answer = String::from_utf8_lossy(&output.stdout);
+    if answer.starts_with("yes ") {
+        Some(true)
+    } else if answer.starts_with("no ") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The admin group's ID, the same on every Mac.
+const ADMIN_GID: &str = "80";
+
+/// Whether the admin group is among the group IDs `id` lists for `name`.
+/// IDs, not names: a name `id` cannot resolve is printed as its number.
+fn listed_member(name: &str) -> Option<bool> {
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/id").args(["-G", name]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()
+    .filter(|output| output.status.success())?;
+
+    parse_admin_listed(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Whether `id -G`'s list holds the admin group's ID; None for no list.
+fn parse_admin_listed(groups: &str) -> Option<bool> {
+    let mut groups = groups.split_whitespace().peekable();
+    groups.peek()?;
+
+    Some(groups.any(|group| group == ADMIN_GID))
 }
 
 #[cfg(test)]

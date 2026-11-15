@@ -121,6 +121,17 @@ fn main() -> ExitCode {
         return launch_job(log, argv0, program);
     }
 
+    // A machine desktop's daemon keeps this thread for its run loop too.
+    #[cfg(target_os = "macos")]
+    if let Command::Daemon {
+        desktop_id,
+        enrolment,
+        ..
+    } = &command
+    {
+        return machine_daemon(desktop_id, enrolment);
+    }
+
     // The helper daemon keeps this thread for the Core Foundation run loop.
     if let Command::HelperServe(service) = command {
         let served = atlas_daemon::daemon::serve::serve_blocking(
@@ -595,3 +606,29 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
+
+/// Serve as a machine desktop's daemon, for the desktop `desktop_id` and
+/// the enrolment `enrolment` its installed job names.
+#[cfg(target_os = "macos")]
+fn machine_daemon(desktop_id: &str, enrolment: &str) -> ExitCode {
+    use atlas_core::{desktop::DesktopId, files::Token};
+    use atlas_daemon::daemon::serve::machine::entry::{Named, serve_blocking};
+    let (Some(desktop), Some(enrolment)) = (DesktopId::parse(desktop_id), Token::parse(enrolment))
+    else {
+        eprintln!(
+            "{}",
+            json!(atlas_core::error::Error::new(
+                atlas_core::error::Code::BadRequest,
+                "The machine job names no valid desktop or enrolment."
+            ))
+        );
+        return ExitCode::FAILURE;
+    };
+    match serve_blocking(Named { desktop, enrolment }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}", json!(error));
+            ExitCode::FAILURE
+        }
+    }
+}

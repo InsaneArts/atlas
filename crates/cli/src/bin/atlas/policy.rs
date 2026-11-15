@@ -209,6 +209,7 @@ impl Policy {
             | Command::MachineSupervise { .. }
             | Command::InputService(_)
             | Command::MachineInput { .. }
+            | Command::Daemon { .. }
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::SessionProofServe

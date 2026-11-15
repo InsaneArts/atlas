@@ -102,6 +102,19 @@ pub(super) enum Command {
         #[arg(long)]
         folder: PathBuf,
     },
+    /// A machine desktop's daemon, started by its installed job alone.
+    #[command(hide = true)]
+    Daemon {
+        /// Serve as a machine desktop's daemon.
+        #[arg(long, required = true)]
+        machine: bool,
+        /// The desktop this guest is.
+        #[arg(long)]
+        desktop_id: String,
+        /// The enrolment it pairs for.
+        #[arg(long)]
+        enrolment: String,
+    },
     /// Inspect the helper's setup, or finish it (advanced).
     #[command(
         long_about = "Inspect the helper's setup, or finish it (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply finishes or re-checks the first setup atlas init started: Atlas's own signed helper daemon runs as a managed LaunchAgent on a private socket directory, and every step is recorded so an interruption resumes."

@@ -164,6 +164,15 @@ impl DesktopId {
     /// How many characters of the digest a name keeps.
     const LENGTH: usize = 24;
 
+    /// `text` as a desktop's name, as one is written: [`Self::LENGTH`]
+    /// lowercase hexadecimal digits of its digest.
+    pub fn parse(text: &str) -> Option<Self> {
+        let digits = text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        (text.len() == Self::LENGTH && digits).then(|| Self(text.to_owned()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

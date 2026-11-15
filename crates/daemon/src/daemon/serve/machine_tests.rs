@@ -58,28 +58,31 @@ fn supervising(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Supervisi
 }
 
 /// Connections the station makes, as the guest's listener hands them over.
-struct Channel(Mutex<mpsc::UnboundedReceiver<(Purpose, Raw)>>);
+struct Channel(Mutex<mpsc::UnboundedReceiver<Framing>>);
 
 impl Listener for Channel {
     fn accept(&self) -> Accepting<'_> {
         Box::pin(async {
-            self.0
-                .lock()
-                .await
-                .recv()
-                .await
-                .ok_or_else(|| io::ErrorKind::BrokenPipe.into())
+            let connection = self.0.lock().await.recv().await;
+            let connection = connection.ok_or(io::ErrorKind::BrokenPipe)?;
+            Ok(connection)
         })
     }
 }
 
+/// A connection that says at once what it is for, as the guest's listener
+/// hands it over.
+fn framed(purpose: Purpose, raw: Raw) -> Framing {
+    Box::pin(std::future::ready(Ok((purpose, raw))))
+}
+
 /// The station dialling lanes across the link, each handed to the guest.
-struct Lanes(Arc<Link>, mpsc::UnboundedSender<(Purpose, Raw)>);
+struct Lanes(Arc<Link>, mpsc::UnboundedSender<Framing>);
 
 impl Dial for Lanes {
     fn dial(&self) -> Dialing<'_> {
         let (station, guest, _cut) = self.0.connect();
-        let _ = self.1.send((Purpose::Lane, Box::new(guest)));
+        let _ = self.1.send(framed(Purpose::Lane, Box::new(guest)));
         Box::pin(async move { Ok(Box::new(station) as Raw) })
     }
 }
@@ -92,7 +95,7 @@ struct Served {
     station: Arc<Keypair>,
     guest_key: PeerKey,
     desktop: DesktopId,
-    connections: mpsc::UnboundedSender<(Purpose, Raw)>,
+    connections: mpsc::UnboundedSender<Framing>,
     changes: Arc<Kept>,
     vault: Arc<dyn Vault>,
     records: tempfile::TempDir,
@@ -132,6 +135,11 @@ impl Served {
             keys: guest,
             desktop: desktop.clone(),
             station: station.public(),
+            enrolment: Token::new(),
+            pairing: Arc::new(crate::machine::pairing::Pairing::new(
+                vault.clone(),
+                records.path().join("pairing-secret"),
+            )),
             generations: Arc::new(Counted::default()),
             changes: changes.clone(),
             stop: stopping(&records, &vault),
@@ -145,6 +153,7 @@ impl Served {
             staging.then(|| crate::machine::stage::Stages::new(records.path().join("open"))),
             Some(crate::machine::mirror::Mirrors::default()),
         );
+        machine.admit_agents();
         let (connections, accepted) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let machine = machine.clone();
@@ -170,7 +179,7 @@ impl Served {
     async fn control(&self) -> (Controlling, Desktop) {
         let (station_end, guest_end, _cut) = self.link.connect();
         self.connections
-            .send((Purpose::Control, Box::new(guest_end)))
+            .send(framed(Purpose::Control, Box::new(guest_end)))
             .unwrap();
         let controlling =
             station_control(station_end, &self.station, self.guest_key, &self.desktop)
@@ -451,14 +460,14 @@ async fn lanes_over_the_bound_are_closed_before_any_handshake() {
         let (station, guest, cut) = served.link.connect();
         served
             .connections
-            .send((Purpose::Lane, Box::new(guest)))
+            .send(framed(Purpose::Lane, Box::new(guest)))
             .unwrap();
         held.push((station, cut));
     }
     let (mut over, guest, _cut) = served.link.connect();
     served
         .connections
-        .send((Purpose::Lane, Box::new(guest)))
+        .send(framed(Purpose::Lane, Box::new(guest)))
         .unwrap();
 
     let mut byte = [0; 1];
@@ -473,28 +482,18 @@ async fn lanes_over_the_bound_are_closed_before_any_handshake() {
 /// half, beside the socket, once it listens there.
 const GUEST: &str = "ATLAS_TEST_MACHINE_GUEST";
 
-/// Connections on a Unix socket, each naming what it is for in its first
-/// byte, as a stand-in for the transport a machine's kind gives.
-struct Socket(tokio::net::UnixListener);
-
-impl Listener for Socket {
-    fn accept(&self) -> Accepting<'_> {
-        Box::pin(async {
-            let (mut stream, _) = self.0.accept().await?;
-            let purpose = match stream.read_u8().await? {
-                0 => Purpose::Control,
-                1 => Purpose::Lane,
-                _ => Purpose::Pairing,
-            };
-            Ok((purpose, Box::new(stream) as Raw))
-        })
-    }
+/// The guest's own listener on a Unix socket, as a stand-in for its vsock
+/// port: each connection names what it is for in its first byte.
+fn socket_listener(path: &std::path::Path) -> super::listen::Guest {
+    let listening = std::os::unix::net::UnixListener::bind(path).unwrap();
+    listening.set_nonblocking(true).unwrap();
+    super::listen::Guest::of(std::os::fd::OwnedFd::from(listening)).unwrap()
 }
 
 /// Reach the guest's socket at `path` for `purpose`.
-async fn reach(path: &std::path::Path, purpose: u8) -> tokio::net::UnixStream {
+async fn reach(path: &std::path::Path, purpose: Purpose) -> tokio::net::UnixStream {
     let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
-    stream.write_all(&[purpose]).await.unwrap();
+    stream.write_all(&[purpose.byte()]).await.unwrap();
     stream
 }
 
@@ -505,7 +504,7 @@ impl Dial for SocketLanes {
     fn dial(&self) -> Dialing<'_> {
         Box::pin(async move {
             let mut stream = tokio::net::UnixStream::connect(&self.0).await?;
-            stream.write_all(&[1]).await?;
+            stream.write_all(&[Purpose::Lane.byte()]).await?;
             Ok(Box::new(stream) as Raw)
         })
     }
@@ -530,11 +529,16 @@ async fn be_the_guest(spec: &str) {
         keys,
         desktop: atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id(),
         station: PeerKey::from_hex(station).unwrap(),
+        enrolment: Token::new(),
+        pairing: Arc::new(crate::machine::pairing::Pairing::new(
+            _vault.clone(),
+            _records.path().join("pairing-secret"),
+        )),
         generations: Arc::new(Counted::default()),
         stop: stopping(&_records, &_vault),
         changes,
     };
-    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    let listener = socket_listener(std::path::Path::new(socket));
     // Said once it listens, whole: the parent connects only after.
     let public = std::path::Path::new(socket).with_extension("pub");
     let writing = public.with_extension("pub.new");
@@ -556,7 +560,8 @@ async fn be_the_guest(spec: &str) {
         None,
         None,
     );
-    let _ = machine.serve(&Socket(listener)).await;
+    machine.admit_agents();
+    let _ = machine.serve(&listener).await;
 }
 
 /// A guest in a process of its own, the test binary again, and the
@@ -591,9 +596,14 @@ async fn guest(test: &str) -> Guest {
     let guest =
         PeerKey::from_hex(&std::fs::read_to_string(socket.with_extension("pub")).unwrap()).unwrap();
     let desktop = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id();
-    let controlling = station_control(reach(&socket, 0).await, &station, guest, &desktop)
-        .await
-        .unwrap();
+    let controlling = station_control(
+        reach(&socket, Purpose::Control).await,
+        &station,
+        guest,
+        &desktop,
+    )
+    .await
+    .unwrap();
     let peers = Peers {
         desktop,
         own: station,
@@ -3348,4 +3358,137 @@ async fn more_than_eight_jobs_run_at_once() {
     for (at, job) in started.iter().enumerate() {
         assert_eq!(job["job"]["state"], "running", "job {at}: {job}");
     }
+}
+
+/// A station's pairing record, in memory.
+struct StationKept(std::sync::Mutex<Option<atlas_session::pairing::Enrolment>>);
+
+impl atlas_session::pairing::StationRecords for StationKept {
+    fn read(&self) -> Result<Option<atlas_session::pairing::Enrolment>> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn replace(
+        &self,
+        _expected: Option<&atlas_session::pairing::Enrolment>,
+        record: &atlas_session::pairing::Enrolment,
+    ) -> Result<()> {
+        *self.0.lock().unwrap() = Some(record.clone());
+        Ok(())
+    }
+}
+
+/// The station finishing enrolment `change`, pending with `served`'s guest,
+/// on a pairing connection.
+async fn finishing(
+    served: &Served,
+    change: &Token,
+) -> (
+    Result<atlas_core::session::paired::Paired>,
+    Arc<dyn atlas_session::pairing::StationRecords>,
+) {
+    let pending = atlas_session::pairing::Enrolment::Pending {
+        change: change.clone(),
+        guest: served.guest_key,
+    };
+    let records: Arc<dyn atlas_session::pairing::StationRecords> =
+        Arc::new(StationKept(std::sync::Mutex::new(Some(pending))));
+    let (station_end, guest_end, _cut) = served.link.connect();
+    served
+        .connections
+        .send(framed(Purpose::Pairing, Box::new(guest_end)))
+        .unwrap();
+    let finished = atlas_session::pairing::station_completes(
+        station_end,
+        &served.station,
+        &served.desktop,
+        change,
+        &records,
+    )
+    .await;
+    (finished, records)
+}
+
+#[tokio::test]
+async fn a_station_whose_pairing_ack_was_lost_finishes_the_committed_pairing_and_no_other() {
+    let served = Served::start().await;
+    let enrolment = served.machine.paired.enrolment.clone();
+    served
+        .machine
+        .paired
+        .pairing
+        .commit(served.station.public(), &enrolment)
+        .unwrap();
+
+    let (finished, records) = finishing(&served, &enrolment).await;
+    assert!(finished.is_ok(), "{finished:?}");
+    assert!(matches!(
+        records.read().unwrap(),
+        Some(atlas_session::pairing::Enrolment::Paired(_))
+    ));
+
+    let (other, _) = finishing(&served, &Token::new()).await;
+    assert!(other.is_err(), "another enrolment finished: {other:?}");
+}
+
+#[tokio::test]
+async fn a_guest_not_yet_admitting_agents_answers_the_stations_reads_and_refuses_the_rest() {
+    let served = Served::start().await;
+    served.machine.agents.store(false, Ordering::SeqCst);
+    let (_controlling, desktop) = served.control().await;
+
+    let read = ask(&desktop, LaneKind::Read, &QUICK_READ).await;
+    assert_eq!(read.last().unwrap()["ok"], true, "{read:?}");
+    let change = Token::new();
+    let refused = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/true"], "change": change}),
+    )
+    .await;
+    assert!(refused.is_empty(), "a change ran: {refused:?}");
+}
+
+#[tokio::test]
+async fn a_machine_says_hello_as_itself_never_as_the_hidden_login() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+
+    let said = ask(&desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+
+    let hello = said.last().unwrap();
+    assert_eq!(hello["ok"], true, "{hello}");
+    assert_eq!(hello["daemon"]["pid"], std::process::id(), "{hello}");
+    let capabilities = hello["daemon"]["capabilities"].as_array().unwrap();
+    assert!(
+        capabilities.contains(&json!(atlas_session::compatibility::CHANGES)),
+        "{hello}"
+    );
+    for helper_only in ["read", "rgb-stream", "helper-sound"] {
+        assert!(!capabilities.contains(&json!(helper_only)), "{hello}");
+    }
+    assert!(hello.get("permissions").is_none(), "{hello}");
+}
+
+#[tokio::test]
+async fn a_connection_that_never_says_what_it_is_for_holds_up_no_other_and_one_that_fails_ends_nothing()
+ {
+    let served = Served::start().await;
+    served
+        .connections
+        .send(Box::pin(std::future::pending()))
+        .unwrap();
+    served
+        .connections
+        .send(Box::pin(std::future::ready(Err(
+            io::ErrorKind::InvalidData.into(),
+        ))))
+        .unwrap();
+
+    let (_controlling, desktop) = served.control().await;
+
+    let read = ask(&desktop, LaneKind::Read, &QUICK_READ).await;
+    assert_eq!(read.last().unwrap()["ok"], true, "{read:?}");
 }

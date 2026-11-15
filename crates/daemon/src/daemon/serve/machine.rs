@@ -33,7 +33,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex as Held, PoisonError,
-        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, Ordering::SeqCst},
     },
     time::Duration,
 };
@@ -56,11 +56,21 @@ const LANES: usize = 32;
 /// Control connections being set up at once; more are refused.
 const CONTROLS: usize = 4;
 
-/// What a connection the station made is for.
-pub type Accepting<'a> = Pin<Box<dyn Future<Output = io::Result<(Purpose, Raw)>> + Send + 'a>>;
+/// Connections not yet saying what they are for, at once; more are closed.
+const FRAMING: usize = 16;
 
-/// How the station reaches the guest: each connection it makes, and what
-/// it is for.
+/// Pairing connections tried at once; more are closed.
+const PAIRINGS: usize = 4;
+
+/// A connection the station made, once it says what it is for: before any
+/// authentication, so it is read on its own, bounded and timed.
+pub type Framing = Pin<Box<dyn Future<Output = io::Result<(Purpose, Raw)>> + Send>>;
+
+/// The next connection the station made, as soon as it is made.
+pub type Accepting<'a> = Pin<Box<dyn Future<Output = io::Result<Framing>> + Send + 'a>>;
+
+/// How the station reaches the guest: each connection it makes, then what
+/// it is for. Only the listener's own failure ends serving.
 pub trait Listener: Send + Sync {
     fn accept(&self) -> Accepting<'_>;
 }
@@ -70,6 +80,11 @@ pub struct Paired {
     pub keys: Keypair,
     pub desktop: DesktopId,
     pub station: PeerKey,
+    /// The enrolment its pairing was committed for.
+    pub enrolment: atlas_core::files::Token,
+    /// Its pairing records: what a pairing connection finishes, never
+    /// another station's.
+    pub pairing: Arc<dyn atlas_session::pairing::GuestRecords>,
     pub generations: Arc<dyn Generations + Send + Sync>,
     /// What each change it was asked for came to, on its disk.
     pub changes: Arc<Changes<Arc<dyn Vault>>>,
@@ -392,6 +407,12 @@ pub struct Machine {
     /// Its background jobs, kept beside its supervisors; none when it has
     /// none, or their folder could not be made.
     jobs: Option<Arc<jobs::Jobs>>,
+    /// Blocking work begun for connections not yet authenticated, or that
+    /// may be cancelled, still running.
+    blocking: Arc<Semaphore>,
+    /// Whether agents' lanes are admitted: never until this guest's lease
+    /// clock is shown to count a stall it did not choose.
+    agents: AtomicBool,
     pub said: Arc<Said>,
 }
 
@@ -435,8 +456,17 @@ impl Machine {
             starting: std::sync::Mutex::new(Some(starting)),
             mirrors,
             jobs,
+            agents: AtomicBool::new(false),
+            blocking: Arc::new(Semaphore::new(bounded::BLOCKING)),
             said: Arc::default(),
         })
+    }
+
+    /// Admit agents' lanes, as a guest whose lease clock is known to count
+    /// a stall does.
+    #[cfg(test)]
+    pub(crate) fn admit_agents(&self) {
+        self.agents.store(true, Ordering::SeqCst);
     }
 
     /// What this guest declares it serves: what it was made with, so it
@@ -492,45 +522,100 @@ impl Machine {
             // Their work may still write, unproved ended: their logs stay bounded.
             jobs.bound_kept(swept.unwrap_or_default(), &kept);
         }
-        let (lanes, controls) = (
+        let (framing, lanes, controls, pairings) = (
+            Arc::new(Semaphore::new(FRAMING)),
             Arc::new(Semaphore::new(LANES)),
             Arc::new(Semaphore::new(CONTROLS)),
+            Arc::new(Semaphore::new(PAIRINGS)),
         );
         let mut connections = JoinSet::new();
         loop {
             while connections.try_join_next().is_some() {}
-            let (purpose, raw) = listener.accept().await.map_err(|error| {
+            let framed = listener.accept().await.map_err(|error| {
                 Error::new(Code::Transport, "The guest stopped taking connections.")
                     .with_source(error)
             })?;
-            let machine = self.clone();
-            // Room is taken before anything is spawned, and a connection
-            // over the bound is closed at once, before its handshake.
-            let room = match purpose {
-                Purpose::Control => controls.clone().try_acquire_owned(),
-                Purpose::Lane => lanes.clone().try_acquire_owned(),
-                // Pairing has its own way in, before there is a station.
-                Purpose::Pairing => continue,
-            };
-            let Ok(room) = room else {
+            // One saying nothing yet is held only within the bound and the
+            // opening time; past either it is closed, alone.
+            let Ok(saying) = framing.clone().try_acquire_owned() else {
                 continue;
             };
-            match purpose {
-                Purpose::Control => {
-                    connections.spawn(async move {
-                        let _room = room;
-                        let _ = machine.control(raw).await;
-                    });
+            let (machine, lanes, controls, pairings) = (
+                self.clone(),
+                lanes.clone(),
+                controls.clone(),
+                pairings.clone(),
+            );
+            connections.spawn(async move {
+                let framed = tokio::time::timeout(OPENING, framed).await;
+                drop(saying);
+                let Ok(Ok((purpose, raw))) = framed else {
+                    return;
+                };
+                // Room is taken before anything else, and a connection over
+                // the bound is closed at once, before its handshake.
+                match purpose {
+                    Purpose::Control => {
+                        if let Ok(_room) = controls.try_acquire_owned() {
+                            let _ = machine.control(raw).await;
+                        }
+                    }
+                    Purpose::Lane => {
+                        if let Ok(_room) = lanes.try_acquire_owned() {
+                            let _ = machine.lane(raw).await;
+                        }
+                    }
+                    Purpose::Pairing => {
+                        if let Ok(_room) = pairings.try_acquire_owned() {
+                            let _ = machine.finish_pairing(raw).await;
+                        }
+                    }
                 }
-                Purpose::Lane => {
-                    connections.spawn(async move {
-                        let _room = room;
-                        let _ = machine.lane(raw).await;
-                    });
-                }
-                Purpose::Pairing => {}
-            }
+            });
         }
+    }
+
+    /// Finish, on the pairing connection `raw`, the pairing this guest
+    /// committed, for a station whose acknowledgment was lost: never a new
+    /// one, and never another station's.
+    async fn finish_pairing(&self, raw: Raw) -> Result<()> {
+        // Timed from the first: its records' read included.
+        tokio::time::timeout(OPENING, self.finishing_pairing(raw))
+            .await
+            .map_err(|_| Error::new(Code::Transport, "The pairing did not finish in time."))?
+    }
+
+    async fn finishing_pairing(&self, raw: Raw) -> Result<()> {
+        let paired = &self.paired;
+        // Its records' reads go on past any timeout: bounded while they run.
+        let records: Arc<dyn atlas_session::pairing::GuestRecords> = Arc::new(bounded::Bounded {
+            records: paired.pairing.clone(),
+            permits: self.blocking.clone(),
+        });
+        let reading = records.clone();
+        let committed = tokio::task::spawn_blocking(move || reading.committed())
+            .await
+            .map_err(|_| Error::new(Code::State, "The pairing could not be read."))??;
+        if committed != Some((paired.station, paired.enrolment.clone())) {
+            return Err(Error::new(
+                Code::Identity,
+                "This desktop is paired for another enrolment.",
+            ));
+        }
+        let facts = atlas_session::pairing::GuestFacts {
+            uid: nix::unistd::getuid().as_raw(),
+            boot: atlas_core::process::boot()?,
+        };
+        let finishing = atlas_session::pairing::guest_pairs(
+            raw,
+            &paired.keys,
+            &paired.desktop,
+            &paired.enrolment,
+            &facts,
+            &records,
+        );
+        finishing.await?;
+        Ok(())
     }
 
     /// Go live in a new generation on the control connection `raw`; the
@@ -682,6 +767,14 @@ impl Machine {
         // refuses its change and ends its command, a Resume between or not.
         let stops = self.daemon.halted.borrow().stops;
         lanes.admit(&header, Opener::Station)?;
+        // Only the station's reads until this guest's lease clock is shown
+        // to count a stall the guest did not choose.
+        if !matches!(header.kind, LaneKind::Read) && !self.agents.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                Code::Platform,
+                "Agents are not admitted on this desktop yet.",
+            ));
+        }
         let (mut reader, writer) = tokio::io::split(secure);
         // A mirror carries bytes both ways from the first: no request line.
         if let LaneKind::Mirror {
@@ -714,6 +807,30 @@ impl Machine {
         let Ok(mut line) = line else {
             return Ok(());
         };
+        // Its own hello: never the hidden login's facts or capabilities.
+        if matches!(header.kind, LaneKind::Read)
+            && matches!(
+                protocol::parse(&line),
+                Ok(protocol::Asked {
+                    request: Request::Hello,
+                    ..
+                })
+            )
+        {
+            // Its account's facts may wait on the directory service: off the
+            // workers the generation's watchdog runs on.
+            let (manager, declared) = (self.daemon.manager.clone(), self.declared());
+            let saying = bounded::off_runtime(&self.blocking, move || {
+                super::super::facts::machine_hello(&manager, &declared)
+            });
+            // Ended with its lane, as every request is, however long it waits.
+            let hello = tokio::select! {
+                said = saying => said
+                    .unwrap_or_else(|| failure(Code::Busy, "The guest could not say hello now")),
+                () = ended(&lanes, header.lane) => return Ok(()),
+            };
+            return write(&mut writer, &hello).await;
+        }
         // Passed to the input service as it is, once judged here.
         if let LaneKind::Input { change } = &header.kind {
             let gate = Gate {
@@ -1033,7 +1150,10 @@ fn bound(header: &Header, line: &[u8]) -> std::result::Result<(), Value> {
     }
 }
 
+mod bounded;
+pub mod entry;
 mod jobs;
+mod listen;
 mod stage;
 
 #[cfg(test)]

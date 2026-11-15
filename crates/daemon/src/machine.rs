@@ -39,11 +39,10 @@ pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Resu
     let vault = vault::Keychain::atlas();
     tokio::task::spawn_blocking(move || {
         let keys = own_key(&key::GuestKey::new(vault.clone()))?;
-        let (station, _) = pairing::Pairing::new(vault.clone(), secret)
-            .committed()?
-            .ok_or_else(|| {
-                Error::new(Code::Identity, "This desktop is not paired with a station.")
-            })?;
+        let pairing = pairing::Pairing::new(vault.clone(), secret);
+        let (station, enrolment) = pairing.committed()?.ok_or_else(|| {
+            Error::new(Code::Identity, "This desktop is not paired with a station.")
+        })?;
         let vault: Arc<dyn vault::Vault> = Arc::new(vault);
         let changes = records.join("changes");
         atlas_core::files::private_folder(&changes, Code::State)?;
@@ -51,6 +50,8 @@ pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Resu
             keys,
             desktop,
             station,
+            enrolment,
+            pairing: Arc::new(pairing),
             generations: Arc::new(generations::Kept::new(vault.clone())),
             changes: Arc::new(changes::Changes::new(changes, vault.clone())),
             stop: Arc::new(stop::Stop::new(records.join("stop.json"), vault)),

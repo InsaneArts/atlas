@@ -788,8 +788,10 @@ fn job_and_collect_rows_name_no_arguments_or_files() {
         (&["job", "stop", "7c2e91a04b3f"], "job-stop"),
         (&["collect", "atlas-work/secret-report.pdf"], "collect"),
     ] {
-        let fields = fields(args);
+        let mut fields = fields(args);
         assert_eq!(fields["verb"], verb);
+        // Its command's random ID may hold any digits; only the rest is words.
+        fields["command"].take();
         let text = fields.to_string();
         for word in ["web", "nc", "8790", "secret-report", "7c2e91a04b3f"] {
             assert!(!text.contains(word), "{args:?}: {text}");
