@@ -186,6 +186,40 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
     );
 }
 
+/// Settings that list only VMs finish an update too: each VM's keeper is
+/// handed over (none runs for this one) and the menu bar moved, with no
+/// Second Login to move.
+#[tokio::test]
+async fn finishing_an_update_works_with_settings_that_list_only_vms() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("config.toml");
+    // A VM no keeper serves.
+    let token = atlas_core::files::Token::new();
+    let id = &token.as_str()[..24];
+    std::fs::write(
+        &settings,
+        format!(
+            "output_dir = \"runs\"\ndefault = \"work\"\n\n[[desktops]]\nkind = \"vm\"\n\
+             name = \"work\"\nid = \"{id}\"\n"
+        ),
+    )
+    .unwrap();
+    let output = dir.path().join("runs");
+    std::fs::create_dir(&output).unwrap();
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let finished = update_finish_using(&settings, None, false, temporary_client)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        finished,
+        json!({"ok": true, "completedSteps": [], "menubarRestarted": null})
+    );
+}
+
 /// What a child that exited with `code` wrote.
 fn exited(code: i32, stdout: &str, stderr: &str) -> std::process::Output {
     use std::os::unix::process::ExitStatusExt;
@@ -381,5 +415,43 @@ fn an_update_does_not_take_unloadable_settings_for_no_menu_bar() {
         stop_menubar(&broken).unwrap(),
         None,
         "no other Atlas process runs"
+    );
+}
+
+/// A finish run by hand, with a token that is not the update's, hands no
+/// keeper over: it never looks for one.
+#[tokio::test]
+async fn a_finish_run_by_hand_hands_no_vms_keeper_over() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("config.toml");
+    let token = atlas_core::files::Token::new();
+    std::fs::write(
+        &settings,
+        format!(
+            "output_dir = \"runs\"\ndefault = \"work\"\n\n[[desktops]]\nkind = \"vm\"\n\
+             name = \"work\"\nid = \"{}\"\n",
+            &token.as_str()[..24]
+        ),
+    )
+    .unwrap();
+    let output = dir.path().join("runs");
+    std::fs::create_dir(&output).unwrap();
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let finished = update_finish_with(
+        &settings,
+        None,
+        true,
+        temporary_client,
+        Some(token.as_str()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        finished,
+        json!({"ok": true, "completedSteps": [], "menubarRestarted": null})
     );
 }

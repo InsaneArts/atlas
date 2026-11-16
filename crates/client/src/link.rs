@@ -30,6 +30,7 @@ use tokio::{
 mod keeper;
 
 pub use keeper::Keeper;
+pub(crate) use keeper::Launchd;
 #[cfg(test)]
 pub(crate) use keeper::Trust;
 pub(crate) use keeper::probe;

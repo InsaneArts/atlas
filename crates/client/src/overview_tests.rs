@@ -1737,3 +1737,24 @@ fn a_vms_mode_comes_from_its_guests_own_stop_never_from_proof() {
     assert_eq!(unreached["mode"], "unavailable");
     assert_eq!(unreached["reason"], "work's session keeper is not running");
 }
+
+#[test]
+fn a_vm_an_update_is_still_handing_over_says_so_as_its_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let stopped = json!({"ok": true, "proven": false,
+        "keeper": {"live": true, "report": {"stop": {"state": "stopped"}}},
+        "guest": {"ok": true, "stop": {"state": "stopped"}}});
+    let why = "An Atlas update is still handing work's session to the new build; run atlas \
+               update again.";
+
+    let doctor = crate::capability::Doctor::vm(stopped.clone(), client.unreachable())
+        .handing_over(Some(why.to_owned()));
+    let shown = super::overview(&doctor, false, unresolved(0), &[], NOW).value;
+
+    assert_eq!(shown["mode"], "unavailable");
+    assert_eq!(shown["reason"], why);
+    let doctor = crate::capability::Doctor::vm(stopped, client.unreachable()).handing_over(None);
+    let shown = super::overview(&doctor, false, unresolved(0), &[], NOW).value;
+    assert_eq!(shown["mode"], "stopped", "none under way");
+}

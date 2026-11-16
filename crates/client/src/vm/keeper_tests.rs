@@ -120,13 +120,15 @@ pub(super) struct Guest {
     facts: Mutex<Option<Facts>>,
     /// The Stop the guest's hello reports.
     pub(super) stop: Arc<Mutex<&'static str>>,
+    /// The work the guest's hello reports.
+    pub(super) work: Arc<Mutex<Value>>,
     pairings: AtomicUsize,
     held_lanes: Mutex<Vec<Dialer>>,
     connections: Mutex<Vec<Connection>>,
 }
 
 impl Guest {
-    fn controls(&self) -> Vec<tokio::time::Instant> {
+    pub(super) fn controls(&self) -> Vec<tokio::time::Instant> {
         self.controls
             .lock()
             .unwrap()
@@ -193,12 +195,12 @@ impl Reach for Guest {
                         .as_ref()
                         .map(|live| live.lanes.clone());
                     let lanes = lanes.ok_or_else(Self::failed)?;
-                    let stop = self.stop.clone();
+                    let (stop, work) = (self.stop.clone(), self.work.clone());
                     let answer: Answering = Arc::new(move |_, request| {
                         if request["op"] == "hello" {
                             json!({"ok": true, "op": "hello",
                                 "stop": {"state": *stop.lock().unwrap()},
-                                "work": {"state": "none"}})
+                                "work": work.lock().unwrap().clone()})
                         } else {
                             json!({"ok": true, "echo": request})
                         }
@@ -280,6 +282,7 @@ pub(super) fn fixture() -> Fixture {
         untrusted: Mutex::new(None),
         facts: Mutex::new(None),
         stop: Arc::new(Mutex::new("clear")),
+        work: Arc::new(Mutex::new(json!({"state": "none"}))),
         pairings: AtomicUsize::new(0),
         held_lanes: Mutex::default(),
         connections: Mutex::default(),
@@ -301,8 +304,14 @@ pub(super) fn fixture() -> Fixture {
         turn: tokio::sync::Mutex::new(()),
         applied: Mutex::default(),
         forgotten: std::sync::atomic::AtomicBool::new(false),
+        folder: state.path().join("station"),
+        program: Program::default(),
+        instance: atlas_core::process::Instance::current(),
+        handing: std::sync::atomic::AtomicBool::new(false),
+        ended: tokio::sync::Notify::new(),
         shared: Shared::default(),
     });
+    std::fs::create_dir(&keeper.folder).unwrap();
     Fixture {
         keeper,
         guest,
@@ -310,6 +319,33 @@ pub(super) fn fixture() -> Fixture {
         enrolments,
         _state: state,
     }
+}
+
+/// The keeper launchd starts after `keeper`: of the same VM, over the same
+/// records, guest, Stop and station folder, with nothing of its own yet.
+pub(super) fn next(keeper: &Keeper) -> Arc<Keeper> {
+    next_with(keeper, Program::default())
+}
+
+/// [`next`], its program `program`.
+fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
+    Arc::new(Keeper {
+        vm: keeper.vm.clone(),
+        own: keeper.own.clone(),
+        reach: keeper.reach.clone(),
+        records: keeper.records.clone(),
+        enrolments: keeper.enrolments.clone(),
+        stop: keeper.stop.clone(),
+        turn: tokio::sync::Mutex::new(()),
+        applied: Mutex::default(),
+        forgotten: std::sync::atomic::AtomicBool::new(false),
+        folder: keeper.folder.clone(),
+        program,
+        instance: None,
+        handing: std::sync::atomic::AtomicBool::new(false),
+        ended: tokio::sync::Notify::new(),
+        shared: Shared::default(),
+    })
 }
 
 /// Wait, within a minute, until `holds`.
@@ -664,18 +700,7 @@ async fn a_keeper_started_after_a_pairing_kept_deletes_the_enrolment_left_and_tr
     // enrolment, and its deletion fails twice more.
     *first.enrolments.0.lock().unwrap() = Some(([9; 32], Token::new()));
     first.enrolments.1.store(2, SeqCst);
-    let again = Arc::new(Keeper {
-        vm: first.keeper.vm.clone(),
-        own: first.keeper.own.clone(),
-        reach: first.keeper.reach.clone(),
-        records: first.keeper.records.clone(),
-        enrolments: first.keeper.enrolments.clone(),
-        stop: first.keeper.stop.clone(),
-        turn: tokio::sync::Mutex::new(()),
-        applied: Mutex::default(),
-        forgotten: std::sync::atomic::AtomicBool::new(false),
-        shared: Shared::default(),
-    });
+    let again = next(&first.keeper);
     let running = tokio::spawn({
         let keeper = again.clone();
         async move { keeper.run().await }
@@ -877,4 +902,143 @@ async fn a_generation_left_on_one_way_silence_never_renews_the_guests_lease_whoe
     );
     drop(guest);
     running.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handover_cut_short_before_its_stop_was_kept_is_finished_by_the_next_keeper() {
+    let fixture = fixture();
+    // The update recorded the handover, and its keeper was killed before it
+    // kept the Stop.
+    let from = atlas_core::process::Instance::new(41, [100, 0]);
+    crate::vm::handover::Record::new(Token::new(), from)
+        .keep(&fixture.keeper.folder)
+        .unwrap();
+    assert!(!fixture.keeper.stop.stop_noted());
+
+    fixture.keeper.finish_handover().unwrap();
+    let running = tokio::spawn({
+        let keeper = fixture.keeper.clone();
+        async move { keeper.run().await }
+    });
+    until("the Stop said", || {
+        fixture.guest.standin.stops.load(SeqCst) > 0
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    let kept = fixture.keeper.stop.stop_revision().unwrap().unwrap();
+    assert_eq!(kept.why(), StopWhy::Update);
+    assert_eq!(
+        fixture.guest.standin.resumes.load(SeqCst),
+        0,
+        "nothing resumes agents"
+    );
+    running.abort();
+}
+
+#[tokio::test]
+async fn a_stop_the_person_gave_is_kept_as_it_is_when_a_handover_cut_short_is_finished() {
+    let fixture = fixture();
+    crate::vm::handover::Record::new(
+        Token::new(),
+        atlas_core::process::Instance::new(41, [100, 0]),
+    )
+    .keep(&fixture.keeper.folder)
+    .unwrap();
+    fixture.keeper.stop.note_stop(true).unwrap();
+    let given = fixture.keeper.stop.stop_revision().unwrap();
+
+    fixture.keeper.finish_handover().unwrap();
+
+    assert_eq!(fixture.keeper.stop.stop_revision().unwrap(), given);
+    // With no handover recorded, a keeper's start notes nothing.
+    let other = super::tests::fixture();
+    other.keeper.finish_handover().unwrap();
+    assert!(!other.keeper.stop.stop_noted());
+}
+
+#[tokio::test]
+async fn a_keepers_hello_says_which_keeper_it_is_and_whether_its_program_was_replaced() {
+    let fixture = fixture();
+
+    let hello = fixture.keeper.hello();
+
+    assert_eq!(
+        hello["instance"],
+        json!(atlas_core::process::Instance::current())
+    );
+    assert!(hello["program"].get("replaced").is_some(), "{hello}");
+    assert!(hello["program"].get("code").is_some(), "{hello}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_keeper_whose_program_is_replaced_keeps_serving_and_does_nothing_until_asked() {
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("atlas");
+    std::fs::write(&file, b"A").unwrap();
+    let fixture = fixture();
+    let keeper = next_with(&fixture.keeper, Program::started_from(&file));
+    let running = tokio::spawn({
+        let keeper = keeper.clone();
+        async move { keeper.run().await }
+    });
+    until("live", || generation(&keeper).is_some()).await;
+    let held = generation(&keeper);
+    assert_eq!(keeper.hello()["program"]["replaced"], false);
+
+    // An update puts the new build's file in its place.
+    std::fs::write(folder.path().join("atlas.new"), b"B").unwrap();
+    std::fs::rename(folder.path().join("atlas.new"), &file).unwrap();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    let hello = keeper.hello();
+    assert_eq!(hello["program"]["replaced"], true, "{hello}");
+    assert_eq!(hello["live"], true);
+    assert_eq!(generation(&keeper), held, "the same generation serves");
+    let session = keeper.shared.live().unwrap();
+    let mut lines = Vec::new();
+    read(
+        &session,
+        &json!({"op": "echo"}),
+        Duration::from_secs(10),
+        |line| {
+            lines.push(line);
+            true
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        fixture.guest.standin.stops.load(SeqCst),
+        0,
+        "no Stop of its own"
+    );
+    assert_eq!(fixture.guest.standin.resumes.load(SeqCst), 0);
+    assert!(!keeper.handing.load(SeqCst));
+    assert_eq!(fixture.guest.controls().len(), 1);
+    running.abort();
+}
+
+#[test]
+fn a_keepers_start_failure_is_kept_for_the_next_status_and_forgotten_once_it_starts() {
+    let folder = tempfile::tempdir().unwrap();
+    let failed = Error::new(
+        Code::Identity,
+        "The station's key was made by another program.",
+    );
+    assert_eq!(start_failure(folder.path()), None);
+
+    remember_failure(folder.path(), &failed);
+
+    assert_eq!(
+        start_failure(folder.path()).as_deref(),
+        Some("The station's key was made by another program.")
+    );
+    forget_failure(folder.path());
+    assert_eq!(start_failure(folder.path()), None);
+    // A VM whose station folder is gone, as its removal leaves it, keeps none.
+    let gone = folder.path().join("vm-gone");
+    remember_failure(&gone, &failed);
+    assert!(!gone.exists());
 }

@@ -10,6 +10,15 @@ use atlas_core::{
 };
 use serde_json::{Value, json};
 
+/// `error`, a VM's status that failed, with the handover an update is still
+/// making of it, `unfinished`, when one is: its code and words kept.
+fn handing_over(error: Error, unfinished: Option<String>) -> Error {
+    match unfinished {
+        Some(why) => error.with("station", json!({"handover": why})),
+        None => error,
+    }
+}
+
 impl Client {
     /// The keeper this client reaches, or the reason it reaches none in the
     /// one wording, with why when it is known. A client made while the keeper
@@ -42,16 +51,37 @@ impl Client {
         }
     }
 
+    /// What the person is told while an update is still handing this VM's
+    /// session to the new build; none for any other desktop, and when none
+    /// is under way.
+    #[must_use]
+    pub fn handover_unfinished(&self) -> Option<String> {
+        let Chosen::Vm(config) = &self.selected.desktop else {
+            return None;
+        };
+        crate::vm::handover::unfinished(&self.selected.name, &config.id)
+    }
+
     /// A VM's status: its keeper's hello and its guest's own, read through
     /// the keeper, never proven, so never ready.
     pub(super) async fn vm_status(&self) -> Result<Value> {
-        let keeper = self.keeper().await?;
-        let hello = keeper.one(&json!({"op": "hello"})).await?;
+        // An update still handing it over is said on every path, the
+        // keeper's own failure kept.
+        let handing = |error| handing_over(error, self.handover_unfinished());
+        let keeper = self.keeper().await.map_err(handing)?;
+        let hello = keeper.one(&json!({"op": "hello"})).await.map_err(handing)?;
         let read = json!({"op": "read", "request": {"op": "hello"},
             "deadline_ms": keeper.timeout.as_millis()});
         let guest = match keeper.ask(&read).await {
             Ok(mut lines) => lines.pop().unwrap_or_else(|| json!(late(self))),
             Err(error) => json!(error),
+        };
+        // The station's own Stop, and why: an update's says so.
+        let controller = self.controller.clone();
+        let station = match tokio::task::spawn_blocking(move || controller.stop_revision()).await {
+            Ok(Ok(Some(revision))) => json!({"state": "stopped", "why": revision.why()}),
+            Ok(Ok(None)) => json!({"state": "clear"}),
+            Ok(Err(_)) | Err(_) => json!({"state": "unknown"}),
         };
         Ok(json!({
             "ok": true,
@@ -59,6 +89,7 @@ impl Client {
             "desktop": {"kind": "vm", "name": self.selected.name},
             "keeper": hello,
             "guest": guest,
+            "station": {"stop": station, "handover": self.handover_unfinished()},
         }))
     }
 

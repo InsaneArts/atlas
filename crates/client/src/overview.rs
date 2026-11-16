@@ -72,7 +72,8 @@ pub async fn helper_report(
         .unwrap_or_else(|_| json!(late()));
     let mut doctor = match client.desktop().kind() {
         Kind::User(login) => crate::user::overview::user_report(login, reply, until, idle).await,
-        Kind::Vm(_) => crate::capability::Doctor::vm(reply, client.unreachable()),
+        Kind::Vm(_) => crate::capability::Doctor::vm(reply, client.unreachable())
+            .handing_over(client.handover_unfinished()),
     };
     let status = &mut doctor.diagnosis.value;
 

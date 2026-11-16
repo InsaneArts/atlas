@@ -144,7 +144,7 @@ fn main() -> ExitCode {
 
     // What the station keeps for a VM is kept alone, before anything else.
     if let Command::Station(asked) = command {
-        return station(asked, &config);
+        return station(asked, &config, cli.allow_disrupt);
     }
 
     // A machine desktop's root installer runs alone, before anything else.
@@ -722,8 +722,11 @@ fn vm(asked: cli::Vm) -> ExitCode {
 /// JSON line: an enrolment, its secret read from standard input, and the
 /// keeper's agent only when an Atlas command asked; the keeper itself only
 /// as its own launchd job.
-fn station(asked: cli::Station, settings: &std::path::Path) -> ExitCode {
-    use atlas_client::{station::enrolment, vm::keeper};
+fn station(asked: cli::Station, settings: &std::path::Path, allow_disrupt: bool) -> ExitCode {
+    use atlas_client::{
+        station::enrolment,
+        vm::{handover, keeper},
+    };
     let done = match asked {
         cli::Station::Enrol { key, enrolment } => atlas_daemon::worker::started_by_atlas()
             .and_then(|()| {
@@ -737,6 +740,11 @@ fn station(asked: cli::Station, settings: &std::path::Path) -> ExitCode {
         cli::Station::InstallKeeper { key } => atlas_daemon::worker::started_by_atlas()
             .and_then(|()| enrolment::vm_of(&key))
             .and_then(|vm| keeper::install_keeper(&vm, settings)),
+        cli::Station::Handover {
+            key,
+            settings: pinned,
+        } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| handover::hand_over(&key, &pinned, allow_disrupt)),
         cli::Station::Keep { key, settings } => enrolment::vm_of(&key)
             .and_then(|vm| atlas_daemon::worker::launchd_job(&keeper::label(&vm)))
             .and_then(|()| {

@@ -556,13 +556,32 @@ pub fn stop(output: &Path) -> Result<Option<u16>> {
 /// Returns what [`stop`] returns, or a menu bar error when `output` failed
 /// and this account's processes can't be listed or another runs Atlas.
 pub fn stop_located(output: Result<PathBuf>) -> Result<Option<u16>> {
+    stop_located_beside(output, &[])
+}
+
+/// [`stop_located`], the processes `known` never taken for a menu bar:
+/// Atlas's own long-lived workers, a VM's session keepers.
+///
+/// # Errors
+///
+/// As [`stop_located`].
+pub fn stop_located_beside(output: Result<PathBuf>, known: &[u32]) -> Result<Option<u16>> {
     match output {
         Ok(output) => stop(&output),
         Err(unlocated) => {
             let exe = std::env::current_exe()?;
             let name = exe.file_name().unwrap_or_default();
             let me = i32::try_from(std::process::id()).unwrap_or(-1);
-            elsewhere(unlocated, listed(), me, name)
+            let others = listed().map(|processes| {
+                processes
+                    .into_iter()
+                    .filter(|process| {
+                        u32::try_from(process.instance.pid)
+                            .map_or(true, |pid| !known.contains(&pid))
+                    })
+                    .collect()
+            });
+            elsewhere(unlocated, others, me, name)
         }
     }
 }

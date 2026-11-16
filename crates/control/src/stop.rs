@@ -43,7 +43,37 @@ impl StopRevision {
     fn is_stopped(&self) -> bool {
         self.marker.is_some() || !self.pending.is_empty()
     }
+
+    /// Why this Stop holds agents, as its marker says: the person's, unless
+    /// it says otherwise. A witness alone, or a marker an older build wrote,
+    /// is the person's.
+    #[must_use]
+    pub fn why(&self) -> StopWhy {
+        match self
+            .marker
+            .as_deref()
+            .and_then(|marker| marker.lines().nth(1))
+        {
+            Some(UPDATE) => StopWhy::Update,
+            _ => StopWhy::Person,
+        }
+    }
 }
+
+/// Why the station's Stop holds agents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StopWhy {
+    /// The person stopped agents.
+    Person,
+    /// An update of Atlas handed the desktop's session over to its new
+    /// build; agents stay stopped until the person resumes them.
+    Update,
+}
+
+/// How a marker names the update as its Stop's reason: on its second line,
+/// after its revision.
+const UPDATE: &str = "update";
 
 /// What lifting a Stop came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,33 +101,61 @@ impl Controller {
     ///
     /// Returns failures reading or updating this controller identity's private stop marker.
     pub fn note_stop(&self, on: bool) -> Result<()> {
-        self.refuse_linked_directory()?;
-        if !on {
-            // With no folder yet there is no Stop to lift, and none is made.
-            if fs::symlink_metadata(&self.directory).is_err() {
-                return Ok(());
-            }
-            let _held = self.lock_stop()?;
-            return self.clear_all();
+        if on {
+            return self.note(StopWhy::Person, false).map(|_| ());
         }
+        self.refuse_linked_directory()?;
+        // With no folder yet there is no Stop to lift, and none is made.
+        if fs::symlink_metadata(&self.directory).is_err() {
+            return Ok(());
+        }
+        let _held = self.lock_stop()?;
+        self.clear_all()
+    }
+
+    /// Note a Stop for `why`, with a revision of its own, only when none is
+    /// noted: one noted already holds agents, and its reason and revision
+    /// stay. Judged and written under the marker's lock; a Stop that cannot
+    /// take it keeps a witness, which reads as the person's. Whether this
+    /// Stop was noted, its witness included.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures reading or updating this controller identity's
+    /// private stop marker.
+    pub fn note_stop_unless_noted(&self, why: StopWhy) -> Result<bool> {
+        self.note(why, true)
+    }
+
+    /// Note a Stop for `why`, with a revision of its own, replacing any noted
+    /// unless `unless_noted`; whether it was noted.
+    fn note(&self, why: StopWhy, unless_noted: bool) -> Result<bool> {
+        self.refuse_linked_directory()?;
         self.make_directory()?;
+        let marker = match why {
+            StopWhy::Person => token(),
+            StopWhy::Update => format!("{}\n{UPDATE}\n", token()),
+        };
         // A Stop that cannot take the lock keeps a witness, never losing it
         // and never overwriting the marker a Resume may be clearing.
         match self.lock_stop() {
             Ok(_held) => {
+                if unless_noted && self.read_stop()?.is_stopped() {
+                    return Ok(false);
+                }
                 // The witnesses this Stop is folding in, captured before its
                 // own marker goes down: its marker is published first and the
                 // captured witnesses removed only after, so a Stop that dies
                 // between leaves them, never an unstopped moment.
                 let folded: Vec<_> = self.pending_names().collect();
-                fs::write(&self.stopped, token())
+                fs::write(&self.stopped, marker)
                     .map_err(|error| Error::writing(&self.directory, error))?;
                 for name in folded {
                     let _ = fs::remove_file(self.stop_pending.join(name));
                 }
-                Ok(())
+                Ok(true)
             }
-            Err(_busy) => self.keep_witness(),
+            Err(_busy) => self.keep_witness().map(|()| true),
         }
     }
 

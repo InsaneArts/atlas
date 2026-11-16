@@ -7,11 +7,16 @@
 //! keeper made at its start and keeps in its station folder, which the
 //! person's own surface reads there. What a client says of itself, that it
 //! is the viewer included, counts for nothing.
+//!
+//! An update asks `handover`, with its change: the keeper keeps the station's
+//! Stop for the update, says it, leaves its generation, answers and ends,
+//! all under its turn, so no Resume comes between.
 use super::{Keeper, read};
-use atlas_control::{Resumed, StopRevision};
+use atlas_control::{Resumed, StopRevision, StopWhy};
 use atlas_core::{
     app_bundle::signature::{APP_IDENTIFIER, requirement_for},
     error::{Code, Error, Result},
+    files::Token,
 };
 use atlas_session::{control::Outcome, keys::PairingSecret, station::control::Answer};
 use serde_json::{Value, json};
@@ -33,7 +38,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 3] = ["read-v1", "stop-v1", "resume-v1"];
+pub(super) const CAPABILITIES: [&str; 4] = ["read-v1", "stop-v1", "resume-v1", "handover-v1"];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
 /// The longest request.
@@ -226,6 +231,21 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
         Some("read") if request["request"].is_object() => {
             carried(keeper, &request["request"], deadline, &mut writing).await;
         }
+        Some("handover")
+            if request["change"]
+                .as_str()
+                .is_some_and(|change| Token::parse(change).is_some()) =>
+        {
+            // Held to the end: no Resume comes between the Stop kept for
+            // the update and this keeper's exit.
+            let _turn = keeper.turn.lock().await;
+            let handed = handed_over(keeper, &request["change"], deadline).await;
+            let _ = say(&mut writing, &handed).await;
+            if handed["ok"] == true {
+                drop(writing);
+                keeper.ended.notify_one();
+            }
+        }
         _ => {
             let mut refused = refusal(Code::BadRequest, "The keeper does not serve that.");
             refused["capabilities"] = json!(CAPABILITIES);
@@ -290,6 +310,28 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
         };
     }
     told
+}
+
+/// Hand the session over for the update `change`, the caller holding the
+/// keeper's turn: the station's Stop kept with the update as its reason,
+/// unless a Stop is noted already, which holds agents and stays as it is;
+/// said to the guest and answered within `deadline` (unconfirmed otherwise),
+/// and the generation left for good. Any work whose outcome is uncertain
+/// stays as it is, for the next keeper. A Stop that cannot be kept refuses
+/// it, and nothing else is done.
+async fn handed_over(keeper: &Keeper, change: &Value, deadline: Duration) -> Value {
+    let stop = keeper.stop.clone();
+    let noted = match super::blocking(move || stop.note_stop_unless_noted(StopWhy::Update)).await {
+        Ok(noted) => noted,
+        Err(error) => return serde_json::to_value(&error).unwrap_or_default(),
+    };
+    let mut handed = told(keeper, Telling::Stop, deadline).await;
+    handed["noted"] = json!(noted);
+    keeper.hand_over();
+    handed["op"] = json!("handover");
+    handed["change"] = change.clone();
+    handed["instance"] = json!(keeper.instance);
+    handed
 }
 
 /// Carry `request` on a read lane, passing each reply line on to the client

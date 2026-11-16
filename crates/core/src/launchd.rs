@@ -148,6 +148,68 @@ pub fn job(domain: &str, label: &str) -> Result<Job> {
     }
 }
 
+/// The labels of every job in `domain` whose label starts with `prefix`, as
+/// launchd lists them now.
+///
+/// # Errors
+///
+/// Fails when launchctl cannot be asked, does not answer in time, fails
+/// otherwise than by naming no such domain, or lists its jobs in a shape
+/// not understood: a list that cannot be read is never taken for empty.
+pub fn labels(domain: &str, prefix: &str) -> Result<Vec<String>> {
+    let output = crate::bounded::output(
+        Command::new("/bin/launchctl").args(["print", domain]),
+        crate::bounded::FILE,
+    )?;
+    match output.status.code() {
+        Some(0) => services(&String::from_utf8_lossy(&output.stdout))
+            .map(|listed| {
+                listed
+                    .into_iter()
+                    .filter(|label| label.starts_with(prefix))
+                    .collect()
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    Code::Platform,
+                    format!("launchctl listed the jobs of {domain} in a shape not understood"),
+                )
+            }),
+        Some(NO_SUCH_DOMAIN | NO_SUCH_USER_DOMAIN) => Ok(Vec::new()),
+        _ => Err(Error::new(
+            Code::Platform,
+            format!(
+                "launchctl could not list the jobs of {domain}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )),
+    }
+}
+
+/// The label of every job `printed`, a domain as `launchctl print` writes
+/// it, lists in its own `services` block: one job a line, indented by two
+/// tabs, its PID and last status before its label. None unless there is
+/// exactly one such block and every line in it is one job.
+fn services(printed: &str) -> Option<Vec<String>> {
+    let opening = "\tservices = {";
+    if printed.lines().filter(|line| *line == opening).count() != 1 {
+        return None;
+    }
+    let mut labels = Vec::new();
+    for line in printed.lines().skip_while(|line| *line != opening).skip(1) {
+        if line == "\t}" {
+            return Some(labels);
+        }
+        let mut fields = line.strip_prefix("\t\t")?.split_whitespace();
+        let (_pid, _status, label) = (fields.next()?, fields.next()?, fields.next()?);
+        if fields.next().is_some() {
+            return None;
+        }
+        labels.push(label.to_owned());
+    }
+    None
+}
+
 /// Run `launchctl` with `arguments`, bounded: whether it succeeded.
 ///
 /// # Errors

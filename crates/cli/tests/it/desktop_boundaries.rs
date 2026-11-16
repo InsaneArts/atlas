@@ -1240,7 +1240,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/bin/atlas/update.rs",
-        &["preflight", "update_finish_using"],
+        &["preflight", "update_finish_with"],
         "owner: what moving the desktop onto a new build takes",
     ),
     (

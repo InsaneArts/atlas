@@ -92,6 +92,16 @@ impl Doctor {
         doctor.vm = Some(mode);
         doctor
     }
+
+    /// This VM report, its mode the handover `unfinished` says is still under
+    /// way, when one is: that is its reason, whatever else it says.
+    #[must_use]
+    pub(crate) fn handing_over(mut self, unfinished: Option<String>) -> Self {
+        if let Some(why) = unfinished {
+            self.vm = Some(VmMode::Unavailable(why));
+        }
+        self
+    }
 }
 
 /// `report` with what is known of native dialogs (`native`, in `state`) and

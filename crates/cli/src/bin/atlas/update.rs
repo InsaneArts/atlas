@@ -3,7 +3,10 @@ use atlas_cli::ui::progress::Spinner;
 use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
-    config::{Config, desktops::Selected},
+    config::{
+        Config,
+        desktops::{Selected, Settings},
+    },
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
@@ -16,6 +19,33 @@ fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
         Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+/// The settings, of every desktop, or None when Atlas is not set up here
+/// yet, as [`set_up`] judges it.
+fn settings_in(config: &std::path::Path) -> Result<Option<Settings>> {
+    match Settings::load(config) {
+        Ok(loaded) => Ok(Some(loaded)),
+        Err(error) if error.code == Code::Config => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Where the menu bar of `settings` keeps its records: the folder the whole
+/// Mac keeps its runs in, whichever desktops they list.
+fn menubar_records(settings: &Settings) -> Result<std::path::PathBuf> {
+    let records = settings.default_desktop().desktop.output_dir();
+    atlas_core::files::private_folder(records, Code::Config)?;
+    Ok(records.to_owned())
+}
+
+/// `work`, which waits on keepers and launchd, off the runtime.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| Error::new(Code::Update, "The update's check of its VMs stopped."))?
 }
 
 /// A client of the Second Login `config` names: an update moves it alone.
@@ -77,6 +107,12 @@ async fn update_using(
         Some(client) => Some(client.service_change(false).await?),
         None => None,
     };
+    // So is the VM of every session keeper launchd runs, whatever settings
+    // this update was given, the update refused while work runs there; each
+    // keeper is handed over once the new build is in place.
+    let keepers = std::sync::Arc::new(
+        blocking(move || atlas_client::vm::handover::hold_for_update(allow_disrupt)).await?,
+    );
 
     // One update at a time, from the download to the handover.
     let exclusive = atlas_client::update::exclusive()?;
@@ -87,11 +123,16 @@ async fn update_using(
         allow_unnotarized,
         force,
         &exclusive,
-        async |program| preflight(config, program, client.as_ref()).await,
+        async |program| {
+            preflight(config, program, client.as_ref()).await?;
+            let held = keepers.clone();
+            blocking(move || held.idle(allow_disrupt)).await
+        },
     )
     .await?;
 
     drop(exclusion);
+    drop(keepers);
 
     if report["updated"] != true {
         return Ok(report);
@@ -110,7 +151,11 @@ async fn update_using(
     if allow_disrupt {
         finish.arg("--allow-disrupt");
     }
-    let output = atlas_core::spawn::output(finish.arg("--config").arg(config))?;
+    // The VMs' keepers are handed over only with a token this attempt made
+    // and gives on standard input alone: never by a finish run by hand, nor
+    // with a token another attempt made.
+    let token = atlas_client::update::grant_handover()?;
+    let output = authorized(finish.arg("--config").arg(config), token.as_deref())?;
     let (moved, finished) = helper_moved(&output);
     report["ok"] = json!(moved);
     report["helper"] = finished;
@@ -174,10 +219,27 @@ fn restart_menubar(executable: &std::path::Path, config: &std::path::Path, port:
 /// where its records are leave it known not to run only when no other
 /// Atlas process runs.
 fn stop_menubar(config: &std::path::Path) -> Result<Option<u16>> {
-    let output = Config::load_user(config)
-        .and_then(helper_client)
-        .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf));
-    atlas_cli::menubar::stop_located(output)
+    let output = match Config::load_user(config) {
+        // Settings that list no Second Login still say where its records are.
+        Err(error) if error.code == Code::Config => {
+            settings_in(config).and_then(|settings| menubar_records(&settings.ok_or(error)?))
+        }
+        loaded => loaded
+            .and_then(helper_client)
+            .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf)),
+    };
+    stop_menubar_at(output)
+}
+
+/// Stop the menu bar whose records `output` holds; when where they are cannot
+/// be told, the session keepers launchd runs are never taken for one.
+fn stop_menubar_at(output: Result<std::path::PathBuf>) -> Result<Option<u16>> {
+    let known = if output.is_err() {
+        atlas_client::vm::handover::keeper_pids()
+    } else {
+        Vec::new()
+    };
+    atlas_cli::menubar::stop_located_beside(output, &known)
 }
 
 /// Stop a running menu bar with `stop`, then drop the previous app with
@@ -248,29 +310,120 @@ async fn preflight(
     Ok(())
 }
 
-/// Move the helper onto this (just installed) executable: the shared
+/// Move the desktops onto this (just installed) executable: each VM's
+/// session keeper, handed over to this build, then the helper: the shared
 /// executable, the daemon, the input service, and (when a setup is
 /// recorded) setup's verification of the new signed build. Stops at the
 /// first failure and names it. With no helper job yet (setup stopped before
 /// installing it), there is nothing to move: atlas init finishes setup.
-/// Then a running menu bar moves onto this executable too.
+/// Settings that list no Second Login move their VMs alone. Then a running
+/// menu bar moves onto this executable too.
 pub(super) async fn update_finish(
     config: &std::path::Path,
     host: Option<&HostSession>,
     allow_disrupt: bool,
 ) -> Result<Value> {
     super::dispatch::as_yourself("update")?;
-    update_finish_using(config, host, allow_disrupt, helper_client).await
+    let given = given_token();
+    update_finish_with(config, host, allow_disrupt, helper_client, given.as_deref()).await
 }
 
+/// [`update_finish`] given no update's token: no VM's keeper is handed over.
+#[cfg(test)]
 async fn update_finish_using(
     config: &std::path::Path,
     host: Option<&HostSession>,
     allow_disrupt: bool,
     make_client: impl FnOnce(Config) -> Result<Client>,
 ) -> Result<Value> {
-    let Some(loaded) = set_up(config)? else {
-        return Ok(json!({"ok": true, "next": "atlas init"}));
+    update_finish_with(config, host, allow_disrupt, make_client, None).await
+}
+
+/// [`update_finish`], given `token` on its standard input: the VMs' keepers
+/// are handed over only when it is the token this attempt at the update
+/// granted, which taking it uses up; the settings given, even missing,
+/// never keep a keeper from it.
+async fn update_finish_with(
+    config: &std::path::Path,
+    host: Option<&HostSession>,
+    allow_disrupt: bool,
+    make_client: impl FnOnce(Config) -> Result<Client>,
+    token: Option<&str>,
+) -> Result<Value> {
+    let executable = std::env::current_exe()?;
+    let mut run = |step: &[&str]| {
+        let mut command = std::process::Command::new(&executable);
+        command.args(step);
+        if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
+            command.env(variable, key);
+        }
+        if allow_disrupt {
+            command.arg("--allow-disrupt");
+        }
+        atlas_core::spawn::output(command.arg("--json").arg("--config").arg(config))
+    };
+    // Each session keeper launchd runs is handed over to this build first, a
+    // step each, by the settings its agent pins, whatever settings this
+    // finish was given: only for the attempt whose own token it was given,
+    // which is used up, so a finish run by hand never disrupts their work.
+    let authorized = match token {
+        Some(token) => atlas_client::update::take_handover(token)?,
+        None => false,
+    };
+    let found = if authorized {
+        match atlas_client::vm::handover::discover() {
+            Ok(found) => found,
+            Err(error) => {
+                return Ok(json!({"ok": false, "failedStep": "station handover",
+                    "failure": error, "completedSteps": []}));
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let handovers: Vec<[String; 6]> = found
+        .iter()
+        .map(|keeper| {
+            [
+                "station".into(),
+                "handover".into(),
+                "--key".into(),
+                keeper.key(),
+                "--settings".into(),
+                keeper.settings().display().to_string(),
+            ]
+        })
+        .collect();
+    let handovers: Vec<[&str; 6]> = handovers
+        .iter()
+        .map(|step| step.each_ref().map(String::as_str))
+        .collect();
+    let handovers: Vec<&[&str]> = handovers.iter().map(<[&str; 6]>::as_slice).collect();
+    let handed = match run_steps(&handovers, &mut run)? {
+        Ok(handed) => handed,
+        Err(failed) => return Ok(failed),
+    };
+
+    // The settings given move the helper and the menu bar alone.
+    let Some(settings) = settings_in(config)? else {
+        return Ok(if handed.is_empty() {
+            json!({"ok": true, "next": "atlas init"})
+        } else {
+            json!({"ok": true, "completedSteps": handed, "agents": atlas_agents::refresh(),
+                "next": "atlas init"})
+        });
+    };
+    let Ok(loaded) = settings.user() else {
+        let finished = if handed.is_empty() {
+            json!({"ok": true, "completedSteps": []})
+        } else {
+            json!({"ok": true, "completedSteps": handed, "agents": atlas_agents::refresh()})
+        };
+        return Ok(move_menubar(
+            finished,
+            || stop_menubar_at(menubar_records(&settings)),
+            |port| restart_menubar(&executable, config, port),
+        ));
     };
 
     let mut client = make_client(loaded.clone())?;
@@ -278,37 +431,75 @@ async fn update_finish_using(
     client.allow_disrupt = allow_disrupt;
     client.require_service_idle().await?;
     let daemon = client.status().await["daemon"]["pid"].is_number();
-    let executable = std::env::current_exe()?;
+    let mut done = handed;
     let steps = crate::user::update::helper_steps_in(&loaded.user(), daemon);
     let finished = if let Some(steps) = steps {
-        let done = match run_steps(&steps, |step| {
-            let mut command = std::process::Command::new(&executable);
-            command.args(step);
-            if let Some((variable, key)) = atlas_core::config::desktops::for_children() {
-                command.env(variable, key);
+        match run_steps(&steps, &mut run)? {
+            Ok(moved) => done.extend(moved),
+            Err(mut failed) => {
+                if let Some(moved) = failed["completedSteps"].as_array_mut() {
+                    moved.splice(0..0, done.into_iter().map(Value::from));
+                }
+                return Ok(failed);
             }
-            if allow_disrupt {
-                command.arg("--allow-disrupt");
-            }
-            atlas_core::spawn::output(command.arg("--json").arg("--config").arg(config))
-        })? {
-            Ok(done) => done,
-            Err(failed) => return Ok(failed),
-        };
+        }
 
         let agents = atlas_agents::refresh();
         json!({"ok": true, "completedSteps": done, "agents": agents})
     } else {
-        json!({"ok": true, "completedSteps": [], "next": "atlas init"})
+        json!({"ok": true, "completedSteps": done, "next": "atlas init"})
     };
 
     // The menu bar moves here, by this version's rules, even when an older
     // version started the update.
     Ok(move_menubar(
         finished,
-        || atlas_cli::menubar::stop_located(client.output_dir().map(std::path::Path::to_path_buf)),
+        || stop_menubar_at(client.output_dir().map(std::path::Path::to_path_buf)),
         |port| restart_menubar(&executable, config, port),
     ))
+}
+
+/// The token the update that started this finish gave it on its standard
+/// input; none from a terminal, from nothing, or when none comes at once.
+fn given_token() -> Option<String> {
+    use std::io::{BufRead, IsTerminal, Read};
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let read = std::io::stdin()
+            .lock()
+            .take(128)
+            .read_line(&mut line)
+            .map(|_| line);
+        let _ = said.send(read);
+    });
+    let line = heard
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .ok()?
+        .ok()?;
+    atlas_core::files::Token::parse(line.trim()).map(|token| token.as_str().to_owned())
+}
+
+/// Run `command`, an Atlas command run here, giving it `token` on its
+/// standard input: what it wrote.
+fn authorized(
+    command: &mut std::process::Command,
+    token: Option<&str>,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Write;
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = atlas_core::spawn::spawn(command)?;
+    if let Some(mut input) = child.stdin.take() {
+        // A child that reads none of it is no failure.
+        let _ = writeln!(input, "{}", token.unwrap_or_default());
+    }
+    child.wait_with_output()
 }
 
 /// Run `steps` in order through `run`, stopping at the first that fails:

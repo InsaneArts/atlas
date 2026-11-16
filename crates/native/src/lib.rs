@@ -6,3 +6,4 @@ pub mod approval;
 pub mod keychain;
 pub mod native;
 pub mod peer;
+pub mod program;

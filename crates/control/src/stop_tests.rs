@@ -189,3 +189,64 @@ fn folding_a_witness_keeps_it_when_the_new_marker_cannot_be_published() {
     );
     assert!(controller.stop_noted());
 }
+
+#[test]
+fn a_stop_for_an_update_says_so_with_a_revision_of_its_own_and_a_resume_lifts_it_as_any() {
+    let (_directory, controller) = controller();
+    controller.note_stop(true).unwrap();
+    let person = controller.stop_revision().unwrap().unwrap();
+    assert_eq!(person.why(), StopWhy::Person);
+
+    controller.note(StopWhy::Update, false).unwrap();
+    let update = controller.stop_revision().unwrap().unwrap();
+
+    assert_eq!(update.why(), StopWhy::Update);
+    assert_ne!(update, person);
+    // A Resume that read the person's Stop before the update's lifts nothing.
+    assert_eq!(
+        controller.lift_stop(Some(&person)).unwrap(),
+        Resumed::StopHeld
+    );
+    // A Stop the person gives after it is the person's again.
+    controller.note_stop(true).unwrap();
+    let after = controller.stop_revision().unwrap().unwrap();
+    assert_eq!(after.why(), StopWhy::Person);
+    assert_eq!(
+        controller.lift_stop(Some(&after)).unwrap(),
+        Resumed::Cleared
+    );
+    assert!(!controller.stop_noted());
+}
+
+#[test]
+fn a_marker_an_older_build_wrote_is_the_persons_stop() {
+    let (directory, controller) = controller();
+    controller.note_stop(true).unwrap();
+    let marker = directory
+        .path()
+        .join(format!("{}.stopped", atlas_core::test_support::UID));
+    for older in ["", "revision", "revision\nsomething else\n"] {
+        std::fs::write(&marker, older).unwrap();
+
+        let read = controller.stop_revision().unwrap().unwrap();
+
+        assert_eq!(read.why(), StopWhy::Person, "{older:?}");
+    }
+}
+
+#[test]
+fn a_stop_noted_only_when_none_is_leaves_one_noted_with_its_reason_and_revision() {
+    let (_directory, controller) = controller();
+    assert!(controller.note_stop_unless_noted(StopWhy::Update).unwrap());
+    assert_eq!(
+        controller.stop_revision().unwrap().unwrap().why(),
+        StopWhy::Update
+    );
+
+    controller.note_stop(true).unwrap();
+    let person = controller.stop_revision().unwrap();
+    assert!(!controller.note_stop_unless_noted(StopWhy::Update).unwrap());
+
+    assert_eq!(controller.stop_revision().unwrap(), person);
+    assert_eq!(person.unwrap().why(), StopWhy::Person);
+}

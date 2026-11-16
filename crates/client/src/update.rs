@@ -404,7 +404,8 @@ struct Handover {
     installed: Option<PathBuf>,
     /// The new executable's hash.
     executable: Option<String>,
-    /// The record as written, for the report.
+    /// The record's public fields, as written, for the report: never the
+    /// token its finish is given.
     written: Value,
 }
 
@@ -415,7 +416,11 @@ impl From<Value> for Handover {
             previous: text("previous").map(PathBuf::from),
             installed: text("installed").map(PathBuf::from),
             executable: text("executable"),
-            written,
+            written: PUBLIC
+                .iter()
+                .filter_map(|key| Some(((*key).to_owned(), written.get(*key)?.clone())))
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
         }
     }
 }
@@ -423,6 +428,11 @@ impl From<Value> for Handover {
 /// The record at `path`, if any. One that cannot be read is an error that
 /// asks to inspect it, never a reason to skip the handover it describes.
 fn read_record(path: &Path) -> Result<Option<Handover>> {
+    Ok(read_written(path)?.map(Handover::from))
+}
+
+/// The record at `path` as written, if any; as [`read_record`].
+fn read_written(path: &Path) -> Result<Option<Value>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -443,7 +453,58 @@ fn read_record(path: &Path) -> Result<Option<Handover>> {
         return Err(unreadable());
     }
 
-    Ok(Some(written.into()))
+    Ok(Some(written))
+}
+
+/// The fields of a record a report may show.
+const PUBLIC: [&str; 4] = ["previous", "installed", "to", "executable"];
+/// Where a record keeps the token its finish is given.
+const HANDOVER: &str = "handover";
+
+/// A new one-time token for this attempt at the unfinished update, kept in
+/// its record in place of any earlier one, for the updater to give its own
+/// finish: only that finish hands VMs' keepers over. None when no update is
+/// unfinished.
+///
+/// # Errors
+///
+/// Fails when the record cannot be read or kept.
+pub fn grant_handover() -> Result<Option<String>> {
+    grant_in(&record_path()?)
+}
+
+fn grant_in(path: &Path) -> Result<Option<String>> {
+    let Some(mut written) = read_written(path)? else {
+        return Ok(None);
+    };
+    let token = atlas_core::files::token();
+    written[HANDOVER] = json!(token);
+    atlas_core::files::save_private(path, &serde_json::to_vec_pretty(&written)?)?;
+    Ok(Some(token))
+}
+
+/// Whether `given` is the token this attempt at the unfinished update
+/// granted, which is then used up: no token is accepted twice.
+///
+/// # Errors
+///
+/// Fails when the record cannot be read or kept.
+pub fn take_handover(given: &str) -> Result<bool> {
+    take_in(&record_path()?, given)
+}
+
+fn take_in(path: &Path, given: &str) -> Result<bool> {
+    let Some(mut written) = read_written(path)? else {
+        return Ok(false);
+    };
+    if written[HANDOVER].as_str() != Some(given) {
+        return Ok(false);
+    }
+    if let Some(fields) = written.as_object_mut() {
+        fields.remove(HANDOVER);
+    }
+    atlas_core::files::save_private(path, &serde_json::to_vec_pretty(&written)?)?;
+    Ok(true)
 }
 
 /// The helper is on the new app: drop the previous bundle and the record.
@@ -463,13 +524,36 @@ fn finish_record(path: &Path) -> Result<Value> {
     };
 
     let installed = record.installed.as_deref();
-    // Only a staging copy beside the installed app is ever removed.
-    let removed = record.previous.as_ref().is_some_and(|previous| {
-        beside(previous, installed, update_copy) && fs::remove_dir_all(previous).is_ok()
-    });
+    // Only a staging copy beside the installed app is ever removed, and
+    // never while a VM's session keeper still runs from it: the next update
+    // removes it once none does.
+    let staged = record
+        .previous
+        .as_deref()
+        .filter(|previous| beside(previous, installed, update_copy));
+    let kept = staged.and_then(in_use);
+    let removed =
+        kept.is_none() && staged.is_some_and(|previous| fs::remove_dir_all(previous).is_ok());
 
     fs::remove_file(path)?;
-    Ok(json!({"previous": record.previous, "removed": removed}))
+    let mut finished = json!({"previous": record.previous, "removed": removed});
+    if let Some(why) = kept {
+        finished["kept"] = json!(why);
+    }
+    Ok(finished)
+}
+
+/// Why the bundle `bundle` must stay: a VM's session keeper still runs from
+/// it, or which run cannot be told. None when it may go.
+fn in_use(bundle: &Path) -> Option<String> {
+    #[cfg(test)]
+    {
+        tests::in_use(bundle)
+    }
+    #[cfg(not(test))]
+    {
+        crate::vm::handover::running_from(bundle)
+    }
 }
 
 /// What every staging copy beside the installed app is named from.
@@ -564,9 +648,12 @@ async fn swap_using(
         .ok_or_else(|| problem("The new app's executable could not be read"))?;
 
     // A staging copy an earlier update left when it was stopped (no record
-    // names it, or this update would be finishing it) goes first.
+    // names it, or this update would be finishing it) goes first, unless a
+    // VM's session keeper still runs from it.
     for path in copies(installed, update_copy) {
-        let _ = fs::remove_dir_all(&path);
+        if in_use(&path).is_none() {
+            let _ = fs::remove_dir_all(&path);
+        }
     }
 
     let staged = parent.join(format!("{STAGED}{UPDATE}{}", atlas_core::files::token()));

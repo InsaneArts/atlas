@@ -9,11 +9,19 @@
 //! reads the guest's own Stop report, and while the station holds the
 //! person's Stop it says Stop until the guest answers it applied. It never
 //! resumes by itself.
+//!
+//! An update of Atlas replaces its program while it runs; it does nothing
+//! on its own then. The update hands it over ([`super::handover`]): asked,
+//! it keeps the station's Stop for the update, says it, leaves its
+//! generation and ends, and launchd starts the new build's keeper in its
+//! place, which finishes a handover cut short.
 mod agent;
 mod clients;
+mod program;
 
 pub use agent::install_keeper;
 pub(crate) use clients::{PROTOCOL, RESUME_KEY};
+use program::Program;
 
 use super::{
     Vms,
@@ -25,7 +33,7 @@ use crate::station::{
     enrolment::{Enrolments, vm_of},
     pairing::{Pairing, pair},
 };
-use atlas_control::{Controller, StopRevision};
+use atlas_control::{Controller, StopRevision, StopWhy};
 use atlas_core::{
     config::desktops::{Chosen, Selection, Settings},
     desktop::DesktopId,
@@ -145,40 +153,39 @@ pub fn listed(key: &str, settings: &Path) -> Result<DesktopId> {
 
 /// Serve as the keeper of the VM keyed `key` in the settings at `settings`,
 /// until it is ended. The caller proves first that launchd started it as
-/// its own job.
+/// its own job. A start that fails is kept in the VM's station folder, when
+/// there is one, for the next status to say why ([`start_failure`]); one
+/// refused by another keeper's lock or the VM's removal is not, and a start
+/// that succeeds forgets it.
 ///
 /// # Errors
 ///
 /// Refuses anything but a VM the settings list, a second keeper, and a VM
-/// being removed; fails when its folder, key, capability or socket cannot
-/// be made.
+/// being removed; fails when its own signing cannot be read, or its folder,
+/// key, capability or socket cannot be made.
 pub async fn keep(key: &str, settings: &Path) -> Result<()> {
-    let vm = listed(key, settings)?;
+    // First, before an update may have touched its file.
+    let program = Program::own();
+    let failures = vm_of(key)
+        .ok()
+        .and_then(|vm| Some(Station::own().ok()?.path_of(&vm)));
+    let remember = |error: Error| {
+        if let Some(folder) = &failures {
+            remember_failure(folder, &error);
+        }
+        error
+    };
+    if !program.signed() {
+        return Err(remember(Error::new(
+            Code::Identity,
+            "The keeper's own signing cannot be read; it does not start.",
+        )));
+    }
+    let vm = listed(key, settings).map_err(remember)?;
     let vms = Vms::own()?;
     let _held = hold(&vms, &vm)?;
-    let station = Station::own()?;
-    let folder = station.folder(&vm)?;
-    let own = {
-        let station = station.clone();
-        blocking(move || station.key()).await?
-    };
-    let capability = clients::capability(&folder)?;
-    atlas_core::files::private_folder(&sockets()?, Code::State)?;
-    let listener = clients::bind(&socket_of(&vm)?)?;
-    let keeper = Arc::new(Keeper {
-        records: Arc::new(station.pairing(&vm)?),
-        enrolments: Arc::new(crate::station::enrolment::Keychain),
-        reach: Arc::new(Socket { vm: vm.clone() }),
-        stop: Controller::new(&atlas_core::desktop::Desktop::from(atlas_core::vm::Vm {
-            id: vm.clone(),
-        }))?,
-        own: Arc::new(own),
-        vm,
-        turn: tokio::sync::Mutex::new(()),
-        applied: Mutex::default(),
-        forgotten: std::sync::atomic::AtomicBool::new(false),
-        shared: Shared::default(),
-    });
+    let (keeper, listener, capability) = started(vm, program).await.map_err(remember)?;
+    forget_failure(&keeper.folder);
     let serving = clients::serve(
         listener,
         keeper.clone(),
@@ -188,7 +195,74 @@ pub async fn keep(key: &str, settings: &Path) -> Result<()> {
     tokio::select! {
         () = keeper.run() => Ok(()),
         () = serving => Ok(()),
+        () = keeper.ended.notified() => Ok(()),
     }
+}
+
+/// The keeper of `vm`, whose program is `program`, made under its lock: its
+/// folder, key and Resume capability, a handover cut short finished, and its
+/// socket bound.
+async fn started(
+    vm: DesktopId,
+    program: Program,
+) -> Result<(Arc<Keeper>, tokio::net::UnixListener, String)> {
+    let station = Station::own()?;
+    let folder = station.folder(&vm)?;
+    let own = {
+        let station = station.clone();
+        blocking(move || station.key()).await?
+    };
+    let capability = clients::capability(&folder)?;
+    atlas_core::files::private_folder(&sockets()?, Code::State)?;
+    let keeper = Arc::new(Keeper {
+        records: Arc::new(station.pairing(&vm)?),
+        enrolments: Arc::new(crate::station::enrolment::Keychain),
+        reach: Arc::new(Socket { vm: vm.clone() }),
+        stop: Controller::new(&atlas_core::desktop::Desktop::from(atlas_core::vm::Vm {
+            id: vm.clone(),
+        }))?,
+        own: Arc::new(own),
+        folder,
+        program,
+        instance: atlas_core::process::Instance::current(),
+        vm,
+        turn: tokio::sync::Mutex::new(()),
+        applied: Mutex::default(),
+        forgotten: std::sync::atomic::AtomicBool::new(false),
+        handing: std::sync::atomic::AtomicBool::new(false),
+        ended: tokio::sync::Notify::new(),
+        shared: Shared::default(),
+    });
+    keeper.finish_handover()?;
+    let listener = clients::bind(&socket_of(&keeper.vm)?)?;
+    Ok((keeper, listener, capability))
+}
+
+/// Where a keeper's last start failure is kept, in its station folder.
+const START_FAILURE: &str = "start-failure.json";
+
+/// Keep `error`, why a keeper did not start, in its station `folder`, when
+/// the folder is there: it is never made for this, so a VM being removed
+/// keeps none.
+fn remember_failure(folder: &Path, error: &Error) {
+    if std::fs::symlink_metadata(folder).is_ok_and(|folder| folder.is_dir())
+        && let Ok(said) = serde_json::to_vec(&json!({"code": error.code, "error": error.error}))
+    {
+        let _ = atlas_core::files::write_atomic(&folder.join(START_FAILURE), &said, 0o600);
+    }
+}
+
+fn forget_failure(folder: &Path) {
+    let _ = std::fs::remove_file(folder.join(START_FAILURE));
+}
+
+/// Why the keeper whose station folder is `folder` last failed to start;
+/// none since it last started, or when it never failed.
+pub(crate) fn start_failure(folder: &Path) -> Option<String> {
+    let kept = atlas_core::files::read_own(&folder.join(START_FAILURE), 4096)?;
+    serde_json::from_slice::<Value>(&kept).ok()?["error"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// The keeper's lock for `vm`, held for its life, taken only while the VM
@@ -303,6 +377,17 @@ struct Keeper {
     applied: Mutex<Applied>,
     /// Whether the enrolment is known to be gone from the Keychain.
     forgotten: std::sync::atomic::AtomicBool,
+    /// The VM's private station folder.
+    folder: PathBuf,
+    /// Its own program, as it started.
+    program: Program,
+    /// This very process, told apart from any later keeper given its PID.
+    instance: Option<atlas_core::process::Instance>,
+    /// Whether it handed its session over to the next keeper: it dials no
+    /// more.
+    handing: std::sync::atomic::AtomicBool,
+    /// Told once it handed over, so it ends.
+    ended: tokio::sync::Notify,
     shared: Shared,
 }
 
@@ -373,6 +458,9 @@ impl Keeper {
     async fn sessions(&self) {
         let mut backoff = FIRST;
         loop {
+            if self.handing.load(std::sync::atomic::Ordering::SeqCst) {
+                return std::future::pending().await;
+            }
             let wait = match self.generation().await {
                 Ended::Lost(why) => {
                     self.unlive(why);
@@ -535,7 +623,37 @@ impl Keeper {
             "live": state.session.is_some(),
             "why": state.why,
             "report": state.report,
+            "instance": self.instance,
+            "program": self.program.said(),
         })
+    }
+
+    /// Finish a handover an update recorded whose keeper did not live to
+    /// keep its Stop: kept now, when none is. This keeper holds the VM's
+    /// lock, so the one handing over is gone; the update that recorded it
+    /// forgets the record once it sees this one serve.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the Stop cannot be kept.
+    fn finish_handover(&self) -> Result<()> {
+        // A record that cannot be read holds as one that is there.
+        let recorded = !matches!(super::handover::Record::kept(&self.folder), Ok(None));
+        if recorded {
+            self.stop.note_stop_unless_noted(StopWhy::Update)?;
+        }
+        Ok(())
+    }
+
+    /// Leave the live generation for good and dial no more: the session is
+    /// the next keeper's.
+    fn hand_over(&self) {
+        self.handing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(session) = self.shared.live() {
+            session.control.retire();
+        }
+        self.unlive("This keeper handed the session over to the next.".to_owned());
     }
 }
 

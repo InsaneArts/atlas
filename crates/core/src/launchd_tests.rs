@@ -62,3 +62,31 @@ fn a_field_smuggled_into_the_arguments_counts_and_leaves_them_unread() {
     assert_eq!(job.path, None);
     assert_eq!(job.arguments, None);
 }
+
+#[test]
+fn a_domains_jobs_are_read_from_its_own_services_block_and_nothing_else() {
+    let printed = "gui/501 = {\n\
+\ttype = gui\n\
+\tservices = {\n\
+\t\t     812      - \tcom.insanearts.atlas.station.0123\n\
+\t\t       0      0 \tcom.apple.mlhostd\n\
+\t}\n\
+\tdisabled services = {\n\
+\t\t\"com.insanearts.atlas.station.9999\" => disabled\n\
+\t}\n\
+}\n";
+
+    assert_eq!(
+        services(printed),
+        Some(vec![
+            "com.insanearts.atlas.station.0123".to_owned(),
+            "com.apple.mlhostd".to_owned()
+        ])
+    );
+    let unclosed = "\tservices = {\n\t\t1 - \tcom.example\n";
+    let twice = format!("{printed}\tservices = {{\n\t}}\n");
+    let odd = "\tservices = {\n\t\t1 - \tcom.example and more\n\t}\n";
+    for unread in ["gui/501 = {\n}\n", unclosed, &twice, odd] {
+        assert_eq!(services(unread), None, "{unread}");
+    }
+}

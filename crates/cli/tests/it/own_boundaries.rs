@@ -227,3 +227,21 @@ fn a_vms_keeper_agent_installed_by_hand_is_refused() {
     assert_eq!(said["code"], "denied", "{said}");
     assert_eq!(said["error"], atlas_daemon::worker::REFUSAL);
 }
+
+#[test]
+fn a_vms_keeper_handed_over_by_hand_is_refused_before_anything_is_handed() {
+    let key = format!("vm-{}", "0".repeat(24));
+
+    let (succeeded, said) = atlas(&[
+        "station",
+        "handover",
+        "--key",
+        &key,
+        "--settings",
+        "/tmp/none.toml",
+    ]);
+
+    assert!(!succeeded, "{said}");
+    assert_eq!(said["code"], "denied", "{said}");
+    assert_eq!(said["error"], atlas_daemon::worker::REFUSAL);
+}

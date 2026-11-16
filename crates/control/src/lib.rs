@@ -34,7 +34,7 @@ pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
 pub use privacy::{Adopted, HoldKind, Interrupted, PrivateHold, Visible};
-pub use stop::{Resumed, StopRevision};
+pub use stop::{Resumed, StopRevision, StopWhy};
 #[cfg(any(test, feature = "test-support"))]
 pub use wait::WaitEvent;
 #[cfg(any(test, feature = "test-support"))]

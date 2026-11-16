@@ -56,8 +56,15 @@ pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error:
         restarts,
     } = match client.desktop().kind() {
         Kind::User(login) => crate::user::doctor::user_report(client, login).await,
-        // Refused as every command on it is, in the failure's own words.
-        Kind::Vm(_) => return Err(client.unreachable()),
+        // Refused as every command on it is, in the failure's own words,
+        // and an update still handing it over said plainly.
+        Kind::Vm(_) => {
+            let refused = client.unreachable();
+            return Err(match client.handover_unfinished() {
+                Some(why) => refused.with("why", json!(why)).with("next", json!(why)),
+                None => refused,
+            });
+        }
     };
 
     // Every command keeps a lock and screenshots in the person's Library;

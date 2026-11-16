@@ -61,3 +61,11 @@ fn a_signed_programs_cdhash_is_the_one_it_runs_with() {
     );
     assert!(file_cdhash(Path::new("/nonexistent")).is_none());
 }
+
+#[test]
+fn this_programs_own_code_is_the_build_its_file_is_signed_as() {
+    let me = std::env::current_exe().unwrap();
+
+    assert_eq!(own_code(), file_cdhash(&me));
+    assert_eq!(own_code().map(|code| code.len()), Some(20));
+}

@@ -1,5 +1,23 @@
 use super::*;
 use atlas_core::app_bundle::app_of;
+use std::cell::RefCell;
+
+thread_local! {
+    /// The bundles a VM's session keeper runs from on this thread, as a test
+    /// says: none unless it does.
+    static IN_USE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Why `bundle` must stay, as this thread's test says.
+pub(super) fn in_use(bundle: &Path) -> Option<String> {
+    IN_USE.with(|in_use| {
+        in_use
+            .borrow()
+            .iter()
+            .any(|kept| kept == bundle)
+            .then(|| "A VM's session keeper still runs from it.".to_owned())
+    })
+}
 
 async fn swap(
     new: &Path,
@@ -990,4 +1008,72 @@ fn only_paths_others_can_reach_are_runnable_by_the_helper() {
         "a private home blocks the helper"
     );
     assert!(reachable_by_others(Path::new("/bin/ls")));
+}
+
+#[tokio::test]
+async fn the_previous_bundle_is_kept_while_a_vms_keeper_runs_from_it_and_removed_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let installed = root.join("Applications/Atlas.app");
+    fs::create_dir_all(installed.join("Contents/MacOS")).unwrap();
+    let record = root.join("update.json");
+    let previous = root.join(format!(
+        "Applications/.Atlas.app.update-{}",
+        atlas_core::files::token()
+    ));
+    fs::create_dir_all(previous.join("Contents/MacOS")).unwrap();
+    let plan = json!({"previous": previous, "installed": installed, "to": "x"});
+    fs::write(&record, plan.to_string()).unwrap();
+    IN_USE.with(|in_use| in_use.borrow_mut().push(previous.clone()));
+
+    let finished = finish_record(&record).unwrap();
+
+    assert_eq!(finished["removed"], false, "{finished}");
+    assert_eq!(
+        finished["kept"],
+        "A VM's session keeper still runs from it."
+    );
+    assert!(previous.exists());
+    assert!(!record.exists());
+
+    // The next update's swap leaves it while the keeper runs from it.
+    let new = root.join("unpacked/Atlas.app");
+    fs::create_dir_all(new.join("Contents/MacOS")).unwrap();
+    fs::write(new.join(EXECUTABLE), "new").unwrap();
+    swap(&new, &installed, "x", &record, async |_| {
+        Err(problem("not now"))
+    })
+    .await
+    .unwrap_err();
+    assert!(previous.exists(), "kept while its keeper runs");
+
+    // Handed over, no keeper runs from it: it goes.
+    IN_USE.with(|in_use| in_use.borrow_mut().clear());
+    swap(&new, &installed, "x", &record, async |_| {
+        Err(problem("not now"))
+    })
+    .await
+    .unwrap_err();
+    assert!(!previous.exists());
+}
+
+#[test]
+fn each_attempt_grants_a_token_of_its_own_that_is_taken_once_and_never_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = dir.path().join("update.json");
+    assert_eq!(grant_in(&record).unwrap(), None, "no update unfinished");
+    let plan = json!({"previous": "/Applications/.Atlas.app.update-x",
+        "installed": "/Applications/Atlas.app", "to": "x", "executable": "e"});
+    fs::write(&record, plan.to_string()).unwrap();
+
+    let first = grant_in(&record).unwrap().unwrap();
+    let second = grant_in(&record).unwrap().unwrap();
+
+    assert_ne!(first, second);
+    assert!(!take_in(&record, &first).unwrap(), "an earlier attempt's");
+    // The report of the unfinished update shows its public fields only.
+    assert_eq!(read_record(&record).unwrap().unwrap().written, plan);
+    assert!(take_in(&record, &second).unwrap());
+    assert!(!take_in(&record, &second).unwrap(), "used up");
+    assert_eq!(read_record(&record).unwrap().unwrap().written, plan);
 }

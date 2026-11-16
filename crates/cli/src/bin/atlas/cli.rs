@@ -1549,6 +1549,16 @@ pub(super) enum Station {
         #[arg(long)]
         key: String,
     },
+    /// Hand the VM's session keeper over to the build now installed, as an
+    /// update does: agents there stay stopped until the person resumes them.
+    Handover {
+        /// The VM's record key, vm- and its identifier.
+        #[arg(long)]
+        key: String,
+        /// The settings file the keeper's agent names.
+        #[arg(long)]
+        settings: PathBuf,
+    },
 }
 
 /// What the station asks of a VM desktop on this Mac.

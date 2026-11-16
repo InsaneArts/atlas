@@ -1555,3 +1555,28 @@ async fn the_app_is_given_its_secret_on_stdin_after_the_url_and_nowhere_else() {
     .await
     .unwrap();
 }
+
+#[test]
+fn a_vms_session_keeper_is_never_taken_for_a_menu_bar_whose_record_is_lost() {
+    let mut keeper = atlas_core::process::info(i32::try_from(std::process::id()).unwrap())
+        .unwrap()
+        .unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    keeper.name = name.get(..16).unwrap_or(name).to_owned();
+    keeper.instance.pid = 99_999;
+    keeper.ppid = 1;
+    let unlocated = || Err(Error::new(Code::Config, "The settings list no records."));
+
+    LISTED.with(|listing| *listing.borrow_mut() = Some(vec![keeper]));
+    let unknown = stop_located(unlocated());
+    let beside = stop_located_beside(unlocated(), &[99_999]);
+    LISTED.with(|listing| listing.borrow_mut().take());
+
+    assert_eq!(
+        unknown.unwrap_err().code,
+        Code::Menubar,
+        "another Atlas runs"
+    );
+    assert_eq!(beside.unwrap(), None, "only the keeper runs");
+}

@@ -71,6 +71,20 @@ pub fn running_code(token: [u32; 8]) -> Option<Vec<u8>> {
     cdhash_of(&code)
 }
 
+/// The code directory hash of this program's own code: which build it is.
+/// It is read from the program's file, so a long-lived program reads it at
+/// its start, before an update may move or delete that file.
+#[must_use]
+pub fn own_code() -> Option<Vec<u8>> {
+    let mut code: *mut SecCode = null_mut();
+    // SAFETY: `code` is a valid place for the call's result.
+    let status = unsafe { SecCode::copy_self(SecCSFlags::empty(), NonNull::from(&mut code)) };
+    let code = (status == 0).then_some(NonNull::new(code)).flatten()?;
+    // SAFETY: on success the call returned a retained code object.
+    let code = unsafe { CFRetained::from_raw(code) };
+    cdhash_of(&code)
+}
+
 /// The code directory hash of the program `path`, as its signature says,
 /// when it is signed.
 pub fn file_cdhash(path: &Path) -> Option<Vec<u8>> {

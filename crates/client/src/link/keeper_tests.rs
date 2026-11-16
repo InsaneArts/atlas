@@ -195,3 +195,22 @@ fn polled_reads_at_once_make_one_look_and_reuse_it_while_it_is_fresh() {
     );
     LOOKED.join_workers();
 }
+
+#[test]
+fn a_keeper_that_could_not_start_is_said_to_with_why() {
+    let folder = tempfile::tempdir().unwrap();
+    assert_eq!(
+        not_running("work", folder.path()),
+        "work's session keeper is not running"
+    );
+    std::fs::write(
+        folder.path().join("start-failure.json"),
+        br#"{"code": "identity", "error": "The station's key was made by another program."}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        not_running("work", folder.path()),
+        "work's session keeper could not start: The station's key was made by another program."
+    );
+}

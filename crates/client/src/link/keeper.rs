@@ -170,7 +170,7 @@ impl Keeper {
     ///
     /// Fails when the keeper cannot be reached, is not trusted, or does not
     /// answer whole in time.
-    fn exchange(&self, request: &Value, deadline: Duration) -> Result<Vec<Value>> {
+    pub(crate) fn exchange(&self, request: &Value, deadline: Duration) -> Result<Vec<Value>> {
         let until = Instant::now() + deadline;
         let unreached = |error: std::io::Error| {
             Error::new(
@@ -335,6 +335,15 @@ fn shared_look(
         )
 }
 
+/// Why the keeper of `name`, whose station folder is `folder`, does not
+/// answer: the failure its last start kept there, when it kept one.
+fn not_running(name: &str, folder: &Path) -> String {
+    crate::vm::keeper::start_failure(folder).map_or_else(
+        || format!("{name}'s session keeper is not running"),
+        |failed| format!("{name}'s session keeper could not start: {failed}"),
+    )
+}
+
 /// One look at `selected`'s VM `vm`'s keeper. It waits on the keeper and
 /// launchd briefly.
 fn looked(selected: &Selected, vm: &DesktopId, timeout: Duration) -> Link {
@@ -346,11 +355,11 @@ fn looked(selected: &Selected, vm: &DesktopId, timeout: Duration) -> Link {
             why: Some(why),
         })
     };
-    let not_running = format!("{}'s session keeper is not running", selected.name);
     let Ok(station) = Station::own() else {
-        return unreachable(not_running);
+        return unreachable(format!("{}'s session keeper is not running", selected.name));
     };
     let folder = station.path_of(vm);
+    let not_running = not_running(&selected.name, &folder);
     let Ok(socket) = crate::vm::keeper::socket_of(vm) else {
         return unreachable(not_running);
     };

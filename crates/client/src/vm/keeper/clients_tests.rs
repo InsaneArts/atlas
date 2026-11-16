@@ -1,5 +1,5 @@
 use super::*;
-use crate::vm::keeper::tests::{Fixture, fixture, until};
+use crate::vm::keeper::tests::{Fixture, fixture, next, until};
 use std::sync::atomic::Ordering::SeqCst;
 
 /// A client admitted or not, whoever it is.
@@ -384,6 +384,7 @@ async fn a_vms_status_through_its_keeper_says_both_hellos_and_is_never_proven() 
     assert_eq!(status["proven"], false);
     assert_eq!(status["keeper"]["live"], true);
     assert_eq!(status["guest"]["stop"]["state"], "stopped");
+    assert_eq!(status["station"]["stop"]["state"], "clear");
     let doctor = crate::capability::Doctor::vm(status, client.unreachable());
     assert!(!doctor.diagnosis.ready);
     let shown =
@@ -506,4 +507,138 @@ async fn a_guest_that_never_acknowledges_is_stopped_again_after_a_resume_it_cann
     })
     .await;
     assert!(keeper.stop.stop_noted());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handover_keeps_a_stop_for_the_update_says_it_and_ends_the_generation_and_the_keeper() {
+    let serving = serving(true).await;
+    let keeper = serving.fixture.keeper.clone();
+    let change = Token::new();
+    // Work whose outcome is uncertain, as the station keeps it.
+    let uncertain = br#"{"uncertain": true}"#;
+    std::fs::write(keeper.stop.marker_path(), uncertain).unwrap();
+
+    let handed = asked(
+        &serving.socket,
+        &json!({"op": "handover", "change": change}),
+    )
+    .await;
+
+    let handed = &handed[0];
+    assert_eq!(handed["ok"], true, "{handed}");
+    assert_eq!(handed["op"], "handover");
+    assert_eq!(handed["change"], json!(change));
+    assert_eq!(handed["said"], true);
+    assert_eq!(handed["seq"], 1);
+    assert_eq!(handed["outcome"], "stopped");
+    assert_eq!(handed["noted"], true);
+    assert_eq!(handed["instance"], json!(keeper.instance));
+    let kept = keeper.stop.stop_revision().unwrap().unwrap();
+    assert_eq!(kept.why(), StopWhy::Update);
+    tokio::time::timeout(Duration::from_secs(5), keeper.ended.notified())
+        .await
+        .expect("the keeper ends");
+    assert!(keeper.shared.live().is_none());
+    assert_eq!(keeper.hello()["live"], false);
+    // It dials no more: the session is the next keeper's.
+    let dials = serving.fixture.guest.controls().len();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(serving.fixture.guest.controls().len(), dials);
+    assert_eq!(
+        std::fs::read(keeper.stop.marker_path()).unwrap(),
+        uncertain,
+        "kept uncertain"
+    );
+    assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handover_naming_no_change_is_refused_and_nothing_is_kept_or_said() {
+    let serving = serving(true).await;
+
+    for request in [
+        json!({"op": "handover"}),
+        json!({"op": "handover", "change": "not-a-change"}),
+    ] {
+        let refused = asked(&serving.socket, &request).await;
+
+        assert_eq!(refused[0]["code"], "bad-request", "{request}");
+    }
+    assert!(!serving.fixture.keeper.stop.stop_noted());
+    assert_eq!(serving.fixture.guest.standin.stops.load(SeqCst), 0);
+    assert!(serving.fixture.keeper.shared.live().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_given_during_a_handover_holds_after_it_and_nothing_resumes_agents() {
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let keeper = serving.fixture.keeper.clone();
+    asked(
+        &serving.socket,
+        &json!({"op": "handover", "change": Token::new()}),
+    )
+    .await;
+
+    // The person stops agents before the next keeper serves.
+    let stopped = client.hold(true).await.unwrap();
+    assert_eq!(stopped["kept"], true, "{stopped}");
+    assert_eq!(stopped["delivered"], false);
+    let given = keeper.stop.stop_revision().unwrap().unwrap();
+    assert_eq!(given.why(), StopWhy::Person);
+    let next = next(&keeper);
+    let running = tokio::spawn({
+        let next = next.clone();
+        async move { next.run().await }
+    });
+    until("the next keeper says it", || {
+        serving.fixture.guest.standin.stops.load(SeqCst) >= 2
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    assert_eq!(keeper.stop.stop_revision().unwrap(), Some(given));
+    assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 0);
+    assert!(next.shared.live().is_some());
+    running.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_status_says_its_agents_were_stopped_for_an_update() {
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    serving
+        .fixture
+        .keeper
+        .stop
+        .note_stop_unless_noted(StopWhy::Update)
+        .unwrap();
+
+    let status = client.status().await;
+
+    assert_eq!(status["station"]["stop"]["state"], "stopped", "{status}");
+    assert_eq!(status["station"]["stop"]["why"], "update");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_persons_stop_before_the_update_keeps_its_reason_and_revision_through_the_handover() {
+    let serving = serving(true).await;
+    let keeper = serving.fixture.keeper.clone();
+    keeper.stop.note_stop(true).unwrap();
+    let given = keeper.stop.stop_revision().unwrap();
+
+    let handed = asked(
+        &serving.socket,
+        &json!({"op": "handover", "change": Token::new()}),
+    )
+    .await;
+
+    assert_eq!(handed[0]["ok"], true, "{}", handed[0]);
+    assert_eq!(handed[0]["noted"], false);
+    assert_eq!(handed[0]["said"], true, "the Stop is said all the same");
+    let kept = keeper.stop.stop_revision().unwrap();
+    assert_eq!(kept, given);
+    assert_eq!(kept.unwrap().why(), StopWhy::Person);
 }
