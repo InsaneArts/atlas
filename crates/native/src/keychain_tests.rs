@@ -123,3 +123,19 @@ fn an_item_another_program_made_for_this_one_alone_is_refused() {
     assert!(removed.success());
     assert_eq!(read.unwrap_err().code, Code::Identity);
 }
+
+#[test]
+#[ignore = "writes to the account's own Keychain; run by hand on a Mac"]
+fn a_secret_added_once_is_never_replaced_by_another_add() {
+    let (service, account) = scratch("add-once");
+    let item = Item {
+        service: &service,
+        account: &account,
+    };
+
+    assert!(add(item, b"first").unwrap());
+    assert!(!add(item, b"second").unwrap());
+
+    assert_eq!(read(item).unwrap().as_deref(), Some(&b"first"[..]));
+    assert!(delete(item).unwrap());
+}

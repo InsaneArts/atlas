@@ -1443,6 +1443,7 @@ fn overview(report: &Value, lease: bool, pending: Pending, activity: &[Row], now
         diagnosis,
         native: crate::capability::NativeState::Failed,
         absence,
+        vm: None,
     };
     super::overview(&doctor, lease, pending, activity, now).value
 }
@@ -1456,6 +1457,7 @@ fn overview_decisions_survive_a_tampered_doctor_projection() {
         diagnosis,
         native: crate::capability::NativeState::Failed,
         absence: None,
+        vm: None,
     };
     doctor.diagnosis.value["ready"] = json!(true);
     doctor.diagnosis.value["nextSteps"] = json!(["invented guidance"]);
@@ -1500,6 +1502,7 @@ fn externally_supplied_recovery_words_keep_the_existing_recovery_decision() {
         diagnosis,
         native: crate::capability::NativeState::Unknown,
         absence: None,
+        vm: None,
     };
     doctor.diagnosis.value["nextSteps"] = json!(["different words"]);
     assert_eq!(
@@ -1685,4 +1688,52 @@ fn a_vm_desktops_overview_gives_its_one_refusal_never_the_helpers_troubleshootin
 
     assert_eq!(shown["mode"], "unavailable");
     assert_eq!(shown["reason"], json!(refused.error));
+}
+
+#[test]
+fn a_vms_mode_comes_from_its_guests_own_stop_never_from_proof() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let live = |stop: &str| {
+        json!({"ok": true, "proven": false,
+            "keeper": {"live": true, "report": {"stop": {"state": "unknown"}}},
+            "guest": {"ok": true, "stop": {"state": stop}}})
+    };
+    let shown = |status: Value| {
+        let doctor = crate::capability::Doctor::vm(status, client.unreachable());
+        assert!(!doctor.diagnosis.ready);
+        super::overview(&doctor, false, unresolved(0), &[], NOW).value
+    };
+
+    let stopped = shown(live("stopped"));
+    assert_eq!(stopped["mode"], "stopped");
+    assert_eq!(stopped["state"], "stopped");
+
+    let clear = shown(live("clear"));
+    assert_eq!(clear["mode"], "unavailable");
+    assert_eq!(clear["reason"], json!(client.unreachable().error));
+
+    let from_keeper = shown(json!({"ok": true, "proven": false,
+        "keeper": {"live": false, "why": "The guest fell silent.",
+            "report": {"stop": {"state": "stopped"}}},
+        "guest": {"ok": false, "code": "transport"}}));
+    assert_eq!(
+        from_keeper["mode"], "stopped",
+        "the last report the keeper read"
+    );
+
+    let silent = shown(json!({"ok": true, "proven": false,
+        "keeper": {"live": false, "why": "The guest fell silent.",
+            "report": {"stop": {"state": "unknown"}}},
+        "guest": {"ok": false}}));
+    assert_eq!(silent["mode"], "unavailable");
+    assert_eq!(silent["reason"], "The guest fell silent.");
+
+    let unreached = shown(json!(
+        client
+            .unreachable()
+            .with("why", json!("work's session keeper is not running"))
+    ));
+    assert_eq!(unreached["mode"], "unavailable");
+    assert_eq!(unreached["reason"], "work's session keeper is not running");
 }

@@ -26,8 +26,14 @@ impl Client {
     /// Returns input-service, transport or local stop-marker failures. A partial result may
     /// have changed one stop marker; follow its uncertainty and recovery information.
     pub async fn hold(&self, on: bool) -> Result<Value> {
+        // A VM's Resume is the viewer's alone, with the keeper's capability:
+        // never through here.
         if let Kind::Vm(_) = self.desktop().kind() {
-            return self.hold_unreached(on);
+            return if on {
+                self.hold_vm().await
+            } else {
+                Err(self.unreachable())
+            };
         }
         let held = self.hold_input(on).await;
         if !on {
@@ -49,27 +55,6 @@ impl Client {
             }
         }
         Ok(reply)
-    }
-
-    /// [`Client::hold`] on a desktop this build cannot reach: a Stop is kept
-    /// on the person's side first, as on any desktop, and its delivery to
-    /// the desktop is said to be unconfirmed, never done; a Resume is
-    /// refused, as the desktop's own Stop is not known.
-    fn hold_unreached(&self, on: bool) -> Result<Value> {
-        if !on {
-            return Err(self.unreachable());
-        }
-        self.controller.note_stop(true)?;
-        Ok(json!({
-            "ok": true,
-            "held": true,
-            "kept": true,
-            "delivered": false,
-            "warnings": [format!(
-                "{} Agents are stopped here all the same.",
-                self.unreachable().error
-            )],
-        }))
     }
 
     /// Ask the helper daemon to end every background job for the person's

@@ -115,6 +115,46 @@ pub fn own_key(store: &impl KeyStore) -> Result<Keypair> {
     Ok(made)
 }
 
+/// Where an end keeps a key that, once made, is never replaced.
+pub trait KeptOnce {
+    /// The key kept here, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store cannot be read; a store with no key is `None`.
+    fn load(&self) -> Result<Option<SecretKey>>;
+
+    /// Keep `secret` here only when no key is kept yet: whether it was.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store cannot be written.
+    fn add(&self, secret: &SecretKey) -> Result<bool>;
+}
+
+/// This end's key: the one kept in `store`, or a new one kept there only
+/// where none is. One kept there meanwhile is the key, never replaced.
+///
+/// # Errors
+///
+/// Fails when the store cannot be read or written, or no key can be made.
+pub fn kept_once(store: &impl KeptOnce) -> Result<Keypair> {
+    if let Some(secret) = store.load()? {
+        return Keypair::from_secret(secret);
+    }
+    let made = Keypair::generate()?;
+    if store.add(&made.secret)? {
+        return Ok(made);
+    }
+    let kept = store.load()?.ok_or_else(|| {
+        Error::new(
+            Code::Identity,
+            "A session key was kept and then went; it is not made again.",
+        )
+    })?;
+    Keypair::from_secret(kept)
+}
+
 /// The one-time secret a pairing proves: the guest shows it holds the one
 /// the station made.
 pub struct PairingSecret([u8; KEY_LEN]);

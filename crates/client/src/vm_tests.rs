@@ -6,6 +6,13 @@ use std::sync::Mutex;
 pub(super) struct Fake {
     /// The job launchd has, as `job` answers it.
     pub(super) job: Mutex<Option<atlas_core::launchd::Loaded>>,
+    /// The VM's keeper's job, as `job` answers it for the keeper's label.
+    pub(super) keeper_job: Mutex<Option<atlas_core::launchd::Loaded>>,
+    /// A keeper's job that comes at launchd's lookup of the keeper of this
+    /// number, counting from one, as a late bootstrap brings one.
+    pub(super) keeper_late: Mutex<Option<(usize, atlas_core::launchd::Loaded)>>,
+    /// How many times launchd was looked up for the keeper.
+    pub(super) keeper_lookups: Mutex<usize>,
     /// Every `launchctl` asked, its arguments joined.
     pub(super) launched: Mutex<Vec<String>>,
     /// What the runner answers; none when nothing listens.
@@ -14,6 +21,8 @@ pub(super) struct Fake {
     pub(super) asked: Mutex<Vec<Value>>,
     /// The passwords deleted.
     pub(super) deleted: Mutex<Vec<String>>,
+    /// The enrolments deleted, by VM.
+    pub(super) enrolments: Mutex<Vec<String>>,
     /// The processes still running, by PID.
     pub(super) running: Mutex<Vec<i32>>,
     /// The framework's VM processes; none when they cannot be told.
@@ -34,7 +43,17 @@ impl Fake {
 }
 
 impl System for Fake {
-    fn job(&self, _domain: &str, _label: &str) -> Result<Job> {
+    fn job(&self, _domain: &str, label: &str) -> Result<Job> {
+        if label.starts_with("com.insanearts.atlas.station.") {
+            let mut lookups = self.keeper_lookups.lock().unwrap();
+            *lookups += 1;
+            let mut late = self.keeper_late.lock().unwrap();
+            if late.as_ref().is_some_and(|(at, _)| *at == *lookups) {
+                *self.keeper_job.lock().unwrap() = late.take().map(|(_, loaded)| loaded);
+            }
+            let loaded = self.keeper_job.lock().unwrap().clone();
+            return Ok(loaded.map_or(Job::Absent, Job::Loaded));
+        }
         let mut lookups = self.lookups.lock().unwrap();
         *lookups += 1;
         let mut late = self.late.lock().unwrap();
@@ -48,7 +67,14 @@ impl System for Fake {
     fn launchctl(&self, arguments: &[&str]) -> Result<bool> {
         self.launched.lock().unwrap().push(arguments.join(" "));
         if arguments.first() == Some(&"bootout") {
-            *self.job.lock().unwrap() = None;
+            if arguments
+                .get(1)
+                .is_some_and(|job| job.contains(".station."))
+            {
+                *self.keeper_job.lock().unwrap() = None;
+            } else {
+                *self.job.lock().unwrap() = None;
+            }
         }
         Ok(true)
     }
@@ -64,6 +90,14 @@ impl System for Fake {
 
     fn delete_password(&self, account: &str) -> Result<bool> {
         self.deleted.lock().unwrap().push(account.to_owned());
+        Ok(true)
+    }
+
+    fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool> {
+        self.enrolments
+            .lock()
+            .unwrap()
+            .push(desktop.as_str().to_owned());
         Ok(true)
     }
 

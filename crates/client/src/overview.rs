@@ -72,7 +72,7 @@ pub async fn helper_report(
         .unwrap_or_else(|_| json!(late()));
     let mut doctor = match client.desktop().kind() {
         Kind::User(login) => crate::user::overview::user_report(login, reply, until, idle).await,
-        Kind::Vm(_) => crate::capability::Doctor::unreached(reply, client.unreachable()),
+        Kind::Vm(_) => crate::capability::Doctor::vm(reply, client.unreachable()),
     };
     let status = &mut doctor.diagnosis.value;
 
@@ -393,6 +393,19 @@ fn mode(
     pending: Pending,
     recent: bool,
 ) -> (Mode, String) {
+    // A VM before its proof: only its guest's own Stop decides it.
+    match &report.vm {
+        Some(crate::capability::VmMode::Stopped) => {
+            return (
+                Mode::Stopped,
+                "You stopped the agent. It waits until you resume it.".to_owned(),
+            );
+        }
+        Some(crate::capability::VmMode::Unavailable(why)) => {
+            return (Mode::Unavailable, why.clone());
+        }
+        None => {}
+    }
     let diagnosis = &report.diagnosis;
     let observation = &diagnosis.observation;
     let reachable = observation.ok;

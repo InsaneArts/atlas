@@ -25,6 +25,19 @@ pub struct Doctor {
     pub diagnosis: atlas_core::session::Diagnosis,
     pub(crate) native: NativeState,
     pub(crate) absence: Option<atlas_core::session::Absence>,
+    /// A VM desktop's mode before its proof, as its guest says: none for
+    /// any other desktop.
+    pub(crate) vm: Option<VmMode>,
+}
+
+/// What a VM desktop is, as the overview shows it before its proof: only
+/// what its guest said of its Stop decides it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum VmMode {
+    /// The guest says agents are stopped there: Resume is offered.
+    Stopped,
+    /// Anything else, and why.
+    Unavailable(String),
 }
 
 impl Doctor {
@@ -40,7 +53,44 @@ impl Doctor {
             },
             native: NativeState::Unknown,
             absence: Some(atlas_core::session::Absence::Unreachable(refusal.error)),
+            vm: None,
         }
+    }
+
+    /// The report of a VM desktop from its `status` before its proof: never
+    /// ready, stopped when its guest says so, through its keeper, otherwise
+    /// unavailable with why; `refusal` is the one wording for what it cannot
+    /// do yet.
+    pub(crate) fn vm(status: Value, refusal: atlas_core::error::Error) -> Self {
+        let guest = &status["guest"];
+        let stop = if guest["ok"] == true {
+            &guest["stop"]["state"]
+        } else {
+            &status["keeper"]["report"]["stop"]["state"]
+        };
+        let mode = if status["ok"] == true && stop == "stopped" {
+            VmMode::Stopped
+        } else if status["ok"] != true {
+            VmMode::Unavailable(
+                status["why"]
+                    .as_str()
+                    .or_else(|| status["error"].as_str())
+                    .unwrap_or(&refusal.error)
+                    .to_owned(),
+            )
+        } else if status["keeper"]["live"] != true {
+            VmMode::Unavailable(
+                status["keeper"]["why"]
+                    .as_str()
+                    .unwrap_or(&refusal.error)
+                    .to_owned(),
+            )
+        } else {
+            VmMode::Unavailable(refusal.error.clone())
+        };
+        let mut doctor = Self::unreached(status, refusal);
+        doctor.vm = Some(mode);
+        doctor
     }
 }
 

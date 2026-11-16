@@ -42,6 +42,7 @@ pub mod setup;
 pub mod sign_in_copies;
 pub mod sign_ins;
 pub mod sound;
+pub mod station;
 pub mod station_key;
 pub mod task;
 #[cfg(any(test, feature = "test-support"))]

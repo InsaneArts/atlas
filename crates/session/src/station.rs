@@ -23,6 +23,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+pub mod control;
+
 /// A connection's bytes, before or after its handshake.
 pub trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
 

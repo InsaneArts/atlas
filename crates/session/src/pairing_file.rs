@@ -18,10 +18,11 @@ const LIMIT: u64 = 16 * 1024;
 /// record.
 const PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// A desktop's pairing record, `<desktops>/<desktop>/pairing.json`.
+/// A desktop's pairing record, `pairing.json` in the station's own folder
+/// for the desktop.
 #[derive(Clone, Debug)]
 pub struct PairingFile {
-    /// The station's desktops folder: the one ancestor trusted, made and
+    /// The folder holding the desktop's: the one ancestor trusted, made and
     /// checked private like the desktop's own.
     desktops: PathBuf,
     folder: PathBuf,
@@ -29,10 +30,13 @@ pub struct PairingFile {
 }
 
 impl PairingFile {
-    /// The record of `desktop` in the station's `desktops` folder.
-    pub fn of(desktops: impl Into<PathBuf>, desktop: &atlas_core::desktop::DesktopId) -> Self {
-        let desktops = desktops.into();
-        let folder = desktops.join(desktop.as_str());
+    /// The record in the desktop's own station folder `folder`; the folder
+    /// holding it is kept private too.
+    pub fn at(folder: impl Into<PathBuf>) -> Self {
+        let folder = folder.into();
+        let desktops = folder
+            .parent()
+            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
         let path = folder.join("pairing.json");
         Self {
             desktops,

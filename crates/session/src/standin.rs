@@ -10,12 +10,13 @@ use link::Tasks;
 use crate::{
     authority::{Authority, Hook, Retired},
     clock::Clock,
-    control::{self, Guest, Outbox, Outcome, Said, Station},
+    control::{self, Guest, Outbox, Outcome, Said},
     credit::Credit,
     generation::{Counted, Generation, Generations},
     keys::Keypair,
     lane::{LaneId, LaneKind, Lanes},
-    secure::{Purpose, connect_as_guest, connect_as_station},
+    secure::{Purpose, connect_as_guest},
+    station::control::{Control, Event},
 };
 use atlas_core::{desktop::DesktopId, error::Result, session::key::PeerKey};
 use std::{
@@ -25,7 +26,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A clock that runs with the runtime's, `skew` ahead of the station's.
 #[derive(Debug)]
@@ -49,6 +50,29 @@ impl Clock for Skewed {
     }
 }
 
+/// What a test runs as the stand-in carries out a numbered Resume.
+#[derive(Default)]
+pub struct OnLift(Mutex<Option<Box<dyn Fn() + Send + Sync>>>);
+
+impl OnLift {
+    /// Run `hook` as each numbered Resume to come is carried out.
+    pub fn set(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    fn run(&self) {
+        if let Some(hook) = &*self.0.lock().unwrap_or_else(PoisonError::into_inner) {
+            hook();
+        }
+    }
+}
+
+impl std::fmt::Debug for OnLift {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OnLift(..)")
+    }
+}
+
 /// The stand-in desktop.
 #[derive(Debug)]
 pub struct StandIn {
@@ -60,6 +84,12 @@ pub struct StandIn {
     pub stops: AtomicUsize,
     pub releases: AtomicUsize,
     pub resumes: AtomicUsize,
+    /// How many numbered Stops to come it answers as not kept.
+    pub unkept: AtomicUsize,
+    /// Run as each numbered Resume is carried out, before it is answered.
+    pub on_lift: OnLift,
+    /// Whether it is an older guest, declaring no numbered Stops and Resumes.
+    pub plain: std::sync::atomic::AtomicBool,
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
     pub settled: Mutex<Vec<atlas_core::files::Token>>,
@@ -84,7 +114,24 @@ pub struct Live {
     pub lanes: Arc<Lanes>,
     pub outbox: Arc<Outbox>,
     pub credit: Arc<Credit>,
+    /// Its sending, which a test ends to make it fall silent one way.
+    sending: Mutex<Option<tokio::task::AbortHandle>>,
     tasks: Tasks,
+}
+
+impl Live {
+    /// Say nothing more to the station, its heartbeats included, while still
+    /// hearing it: a link silent one way.
+    pub fn fall_silent(&self) {
+        if let Some(sending) = self
+            .sending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            sending.abort();
+        }
+    }
 }
 
 impl StandIn {
@@ -103,6 +150,9 @@ impl StandIn {
             stops: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
             resumes: AtomicUsize::new(0),
+            unkept: AtomicUsize::new(0),
+            on_lift: OnLift::default(),
+            plain: std::sync::atomic::AtomicBool::new(false),
             dials: Mutex::new(Vec::new()),
             settled: Mutex::new(Vec::new()),
             retired: Arc::new(Mutex::new(Vec::new())),
@@ -154,16 +204,24 @@ impl StandIn {
             outbox: Arc::new(Outbox::hello(
                 generation,
                 Vec::new(),
-                crate::compatibility::Declared::ours(vec![
-                    crate::compatibility::ACKNOWLEDGED.to_owned(),
-                ]),
+                // Its Stop report is a test's own lanes' to give.
+                crate::compatibility::Declared::ours(if self.plain.load(SeqCst) {
+                    vec![crate::compatibility::STOP_REPORT.to_owned()]
+                } else {
+                    vec![
+                        crate::compatibility::ACKNOWLEDGED.to_owned(),
+                        crate::compatibility::STOP_REPORT.to_owned(),
+                    ]
+                }),
             )),
             credit: Arc::new(Credit::default()),
+            sending: Mutex::new(None),
             tasks: Tasks::default(),
         };
         let (reading, writing) = tokio::io::split(secure);
-        live.tasks
-            .hold(tokio::spawn(control::send(writing, live.outbox.clone())).abort_handle());
+        let sending = tokio::spawn(control::send(writing, live.outbox.clone())).abort_handle();
+        *live.sending.lock().unwrap_or_else(PoisonError::into_inner) = Some(sending.clone());
+        live.tasks.hold(sending);
         let guest = Handler {
             standin: self.clone(),
             authority: live.authority.clone(),
@@ -218,11 +276,26 @@ impl Guest for Handler {
 
     fn halt(&self, seq: u64) {
         self.standin.stops.fetch_add(1, SeqCst);
-        self.answer(seq, Outcome::Stopped);
+        let unkept = self
+            .standin
+            .unkept
+            .fetch_update(SeqCst, SeqCst, |left| left.checked_sub(1))
+            .is_ok();
+        self.answer(
+            seq,
+            if unkept {
+                Outcome::Refused {
+                    why: crate::control::Refusal::Unkept,
+                }
+            } else {
+                Outcome::Stopped
+            },
+        );
     }
 
     fn lift(&self, seq: u64) {
         self.standin.resumes.fetch_add(1, SeqCst);
+        self.standin.on_lift.run();
         self.answer(seq, Outcome::Resumed);
     }
 
@@ -330,46 +403,54 @@ impl Heard {
     }
 }
 
-impl Station for Heard {
-    fn silent(&self) {
-        self.silent.fetch_add(1, SeqCst);
-    }
-
-    fn heard_again(&self) {
-        self.again.fetch_add(1, SeqCst);
-    }
-
-    fn taken(&self, list: u64, refused: Vec<crate::mirror::Refused>) {
-        self.taken
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((list, refused));
-        self.mirrored.notify_waiters();
-    }
-
-    fn connect(&self, connection: u64, endpoint: crate::mirror::Endpoint, list: u64) {
-        self.connects
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(Connect {
+impl Heard {
+    /// Keep what the station heard as `event`; a connection lost is not
+    /// kept here, but ends the reading.
+    fn hear(&self, event: Event) {
+        match event {
+            Event::Silent => {
+                self.silent.fetch_add(1, SeqCst);
+            }
+            Event::HeardAgain => {
+                self.again.fetch_add(1, SeqCst);
+            }
+            Event::Taken { list, refused } => {
+                self.taken
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((list, refused));
+                self.mirrored.notify_waiters();
+            }
+            Event::Connect {
                 connection,
                 endpoint,
                 list,
-            });
-        self.mirrored.notify_waiters();
-    }
-
-    fn applied(&self, seq: u64, outcome: Outcome) {
-        self.applied
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((seq, outcome));
-        self.answered.notify_waiters();
+            } => {
+                self.connects
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push_back(Connect {
+                        connection,
+                        endpoint,
+                        list,
+                    });
+                self.mirrored.notify_waiters();
+            }
+            Event::Applied { seq, outcome } => {
+                self.applied
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((seq, outcome));
+                self.answered.notify_waiters();
+            }
+            Event::Lost(_) => {}
+        }
     }
 }
 
-/// The station's end of a control connection. Dropping it ends the
-/// connection's tasks, as the station going would.
+/// The station's end of a control connection, as the station's own code
+/// holds it, with what it heard kept for tests to read. Dropping it ends
+/// the connection's tasks, as the station going would.
 #[derive(Debug)]
 pub struct Controlling {
     pub generation: Generation,
@@ -380,13 +461,18 @@ pub struct Controlling {
     pub outbox: Arc<Outbox>,
     pub credit: Arc<Credit>,
     pub heard: Arc<Heard>,
+    /// Ends with why the connection was lost.
     pub reading: tokio::task::JoinHandle<Result<()>>,
+    /// The station's own end, for its numbered Stops and Resumes.
+    pub control: Control,
     /// Held only to end the connection's tasks when it goes.
     _tasks: Tasks,
 }
 
 /// Answer, as the station with key pair `own`, a control connection from
-/// the desktop whose key is `desktop_key` on `stream`.
+/// the desktop whose key is `desktop_key` on `stream`, through the
+/// station's own code. Nothing the hello names is settled: a test settles
+/// what it means to.
 ///
 /// # Errors
 ///
@@ -400,33 +486,32 @@ pub async fn station_control<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let secure = connect_as_station(stream, own, desktop_key, desktop, Purpose::Control).await?;
-    let (reading, writing) = tokio::io::split(secure);
-    let mut reading = BufReader::new(reading);
-    // A guest of another protocol is refused here, before anything is said
-    // to it: no generation of it is ever live for the station.
-    let control::Hello {
-        generation,
-        unsettled,
-        declared,
-    } = control::hello(&mut reading).await?;
-    let outbox = Arc::new(Outbox::default());
-    let tasks = Tasks::default();
-    tasks.hold(tokio::spawn(control::send(writing, outbox.clone())).abort_handle());
-    let (credit, heard) = (Arc::new(Credit::default()), Arc::new(Heard::default()));
+    let (control, mut events) =
+        crate::station::control::open(stream, own, desktop_key, desktop, |_| true).await?;
+    let heard = Arc::new(Heard::default());
     let reading = {
-        let (credit, heard) = (credit.clone(), heard.clone());
-        tokio::spawn(async move { control::station_reads(reading, &credit, &*heard).await })
+        let heard = heard.clone();
+        tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                if let Event::Lost(why) = event {
+                    return Err(why);
+                }
+                heard.hear(event);
+            }
+            Ok(())
+        })
     };
+    let tasks = Tasks::default();
     tasks.hold(reading.abort_handle());
     Ok(Controlling {
-        generation,
-        unsettled,
-        declared,
-        outbox,
-        credit,
+        generation: control.generation(),
+        unsettled: control.unsettled().to_vec(),
+        declared: control.declared().clone(),
+        outbox: control.outbox().clone(),
+        credit: control.credit().clone(),
         heard,
         reading,
+        control,
         _tasks: tasks,
     })
 }
@@ -437,7 +522,7 @@ where
 ///
 /// When the outbox is closed.
 pub fn say(controlling: &Controlling, said: Said) {
-    controlling.outbox.say(said).expect("the outbox is open");
+    controlling.control.say(said).expect("the outbox is open");
 }
 
 #[cfg(test)]

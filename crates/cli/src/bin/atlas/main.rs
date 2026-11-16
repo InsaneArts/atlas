@@ -142,6 +142,11 @@ fn main() -> ExitCode {
         return vm(asked);
     }
 
+    // What the station keeps for a VM is kept alone, before anything else.
+    if let Command::Station(asked) = command {
+        return station(asked, &config);
+    }
+
     // A machine desktop's root installer runs alone, before anything else.
     #[cfg(target_os = "macos")]
     if matches!(command, Command::MachineInstaller) {
@@ -701,6 +706,54 @@ fn vm(asked: cli::Vm) -> ExitCode {
             .ok_or_else(invalid)
             .and_then(|(desktop, change)| atlas_client::vm::remove(&desktop, &change)),
     });
+    match done {
+        Ok(found) => {
+            println!("{found}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{}", json!(error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What the station keeps for a VM desktop, and print what it came to as one
+/// JSON line: an enrolment, its secret read from standard input, and the
+/// keeper's agent only when an Atlas command asked; the keeper itself only
+/// as its own launchd job.
+fn station(asked: cli::Station, settings: &std::path::Path) -> ExitCode {
+    use atlas_client::{station::enrolment, vm::keeper};
+    let done = match asked {
+        cli::Station::Enrol { key, enrolment } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| {
+                enrolment::enrol(
+                    &enrolment::Keychain,
+                    &key,
+                    &enrolment,
+                    &mut std::io::stdin().lock(),
+                )
+            }),
+        cli::Station::InstallKeeper { key } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| enrolment::vm_of(&key))
+            .and_then(|vm| keeper::install_keeper(&vm, settings)),
+        cli::Station::Keep { key, settings } => enrolment::vm_of(&key)
+            .and_then(|vm| atlas_daemon::worker::launchd_job(&keeper::label(&vm)))
+            .and_then(|()| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| {
+                        atlas_core::error::Error::new(
+                            atlas_core::error::Code::Startup,
+                            "The keeper could not start its runtime.",
+                        )
+                        .with_source(error)
+                    })
+            })
+            .and_then(|runtime| runtime.block_on(keeper::keep(&key, &settings)))
+            .map(|()| json!({"ok": true})),
+    };
     match done {
         Ok(found) => {
             println!("{found}");

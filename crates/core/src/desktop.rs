@@ -54,6 +54,11 @@ impl RecordKey {
         Self(format!("vm-{}", id.as_str()))
     }
 
+    /// The VM this key names, when it is a VM's.
+    pub fn vm_id(&self) -> Option<DesktopId> {
+        self.0.strip_prefix("vm-").and_then(DesktopId::parse)
+    }
+
     /// `text` as a record key: 1 to 64 lowercase letters, digits and dashes.
     pub fn parse(text: &str) -> Option<Self> {
         let plain = text

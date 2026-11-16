@@ -1,13 +1,17 @@
 //! A VM desktop as the station keeps it on this Mac: its folder, served by
 //! Atlas VM under a launchd agent of this account's own, and its removal.
-//! The station's own code, which outlives Atlas VM.
+//! The station's own code, which outlives Atlas VM, and its trust in the
+//! socket Atlas VM serves the VM's guest on.
 mod agent;
 mod control;
 mod evidence;
+pub mod keeper;
 mod removal;
+mod station;
 
 pub use agent::install_agent;
 pub use removal::remove;
+pub use station::{Facts, Refused, StationSocket, Untrusted, facts, trusted};
 
 use atlas_core::{
     desktop::DesktopId,
@@ -120,6 +124,12 @@ impl Vms {
         self.locks().join(format!("{}.lock", desktop.as_str()))
     }
 
+    /// The lock the VM's session keeper holds for its life.
+    fn keeper_lock(&self, desktop: &DesktopId) -> PathBuf {
+        self.locks()
+            .join(format!("{}.keeper.lock", desktop.as_str()))
+    }
+
     /// The station's own exclusion of the desktop, until step 5's VM kind
     /// moves it to the controller.
     fn station_lock(&self, desktop: &DesktopId) -> PathBuf {
@@ -139,6 +149,11 @@ impl Vms {
 
     fn label(desktop: &DesktopId) -> String {
         format!("com.insanearts.atlas.vm.{}", desktop.as_str())
+    }
+
+    /// The label of the VM's session keeper's own agent.
+    fn keeper_label(desktop: &DesktopId) -> String {
+        format!("com.insanearts.atlas.station.{}", desktop.as_str())
     }
 
     fn agents(&self) -> PathBuf {
@@ -167,6 +182,8 @@ trait System {
     /// Delete the Keychain password of `account`, never asking: whether
     /// there was one.
     fn delete_password(&self, account: &str) -> Result<bool>;
+    /// Delete the VM's enrolment, never asking: whether there was one.
+    fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool>;
     /// Whether `instance` has ended; none when that cannot be told.
     fn ended(&self, instance: &Instance) -> Option<bool>;
     /// Every process of the framework's that runs a VM now, of this
@@ -223,6 +240,11 @@ impl System for Real {
             service: PASSWORDS,
             account,
         })
+    }
+
+    fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool> {
+        use crate::station::enrolment::Enrolments;
+        crate::station::enrolment::Keychain.forget(desktop)
     }
 
     fn ended(&self, instance: &atlas_core::process::Instance) -> Option<bool> {

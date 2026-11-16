@@ -75,6 +75,41 @@ pub fn started_by_atlas() -> Result<()> {
     allowed(matches!((parent, own), (Some(parent), Some(own)) if same_atlas(&parent, &own)))
 }
 
+/// Refuse unless this process is the very one launchd runs now as the job
+/// `label` in this account's own session: what a long-lived worker of the
+/// station's, started by its own agent and by nothing else, requires.
+///
+/// # Errors
+///
+/// Returns the one refusal.
+pub fn launchd_job(label: &str) -> Result<()> {
+    if HAND_RUN {
+        return Ok(());
+    }
+    judge_job(std::process::id(), job_pid(label))
+}
+
+/// [`launchd_job`]'s decision: `own` this process's PID, `launchd` the one
+/// launchd runs as the job.
+fn judge_job(own: u32, launchd: Option<u32>) -> Result<()> {
+    allowed(launchd == Some(own))
+}
+
+/// The process launchd runs as the job `label` in this account's session;
+/// none when it runs none, has no such job or cannot be asked in time. In a
+/// test's Atlas, the one the test named stands for it.
+fn job_pid(label: &str) -> Option<u32> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(pid) = test_daemon() {
+        return Some(pid);
+    }
+    let domain = format!("gui/{}", nix::unistd::getuid().as_raw());
+    match atlas_core::launchd::job(&domain, label).ok()? {
+        atlas_core::launchd::Job::Loaded(loaded) => loaded.pid,
+        atlas_core::launchd::Job::Absent => None,
+    }
+}
+
 /// Set when this build was made for live checks, whose hidden VM commands a
 /// person runs by hand; `scripts/release.sh` refuses to release one.
 const HAND_RUN: bool = option_env!("ATLAS_TEST_HAND_RUN").is_some();

@@ -109,6 +109,13 @@ fn a_vm_desktop_is_named_by_its_own_identifier() {
 }
 
 #[test]
+fn a_vms_record_key_names_it_and_no_other_key_names_a_vm() {
+    assert_eq!(machine().record_key().vm_id(), Some(machine().id()));
+    assert_eq!(RecordKey::user().vm_id(), None);
+    assert_eq!(RecordKey::parse("vm-0123").unwrap().vm_id(), None);
+}
+
+#[test]
 fn every_answer_of_a_vm_desktop_holds_work_back() {
     let desktop = machine();
     assert_eq!(desktop.user(), None);

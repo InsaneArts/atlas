@@ -124,6 +124,26 @@ pub fn write(item: Item<'_>, secret: &[u8]) -> Result<()> {
     checked(status, "write")
 }
 
+/// Keep `secret` as `item` only when there is no such item yet: whether it
+/// was kept. One there already, whoever made it, is left as it is.
+///
+/// # Errors
+///
+/// Fails when the Keychain cannot be written or refuses this program.
+pub fn add(item: Item<'_>, secret: &[u8]) -> Result<bool> {
+    // SAFETY: the key is the framework's own constant.
+    let value = unsafe { kSecValueData };
+    let data = CFData::from_bytes(secret);
+    let added = query(item, &[(value, data.as_ref())]);
+    // SAFETY: the attributes map the framework's keys to values of the types
+    // they take; no result is asked for.
+    let status = quietly(|| unsafe { SecItemAdd(added.as_opaque(), std::ptr::null_mut()) })?;
+    if status == errSecDuplicateItem {
+        return Ok(false);
+    }
+    checked(status, "write").map(|()| true)
+}
+
 /// Remove `item`; whether there was one.
 ///
 /// # Errors

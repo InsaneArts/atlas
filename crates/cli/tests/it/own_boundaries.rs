@@ -177,3 +177,53 @@ fn a_hand_started_input_service_is_refused_before_it_serves() {
     assert_eq!(said["code"], "denied", "{said}");
     assert!(!std::path::Path::new("/tmp/atlas-input-service-test.sock").exists());
 }
+
+#[test]
+fn a_vms_enrolment_kept_by_hand_is_refused_before_anything_is_kept() {
+    let key = format!("vm-{}", "0".repeat(24));
+    let enrolment = atlas_core::files::Token::new();
+
+    let (succeeded, said) = atlas(&[
+        "station",
+        "enrol",
+        "--key",
+        &key,
+        "--enrolment",
+        enrolment.as_str(),
+    ]);
+
+    assert!(!succeeded, "{said}");
+    assert_eq!(said["code"], "denied", "{said}");
+    assert_eq!(said["error"], atlas_daemon::worker::REFUSAL);
+}
+
+#[test]
+fn a_vms_keeper_run_by_hand_is_refused_before_it_reads_its_settings() {
+    let key = format!("vm-{}", "0".repeat(24));
+    let folder = tempfile::tempdir().unwrap();
+    let settings = folder.path().join("config.toml");
+
+    let (succeeded, said) = atlas(&[
+        "station",
+        "keep",
+        "--key",
+        &key,
+        "--settings",
+        settings.to_str().unwrap(),
+    ]);
+
+    assert!(!succeeded, "{said}");
+    assert_eq!(said["code"], "denied", "{said}");
+    assert_eq!(said["error"], atlas_daemon::worker::REFUSAL);
+}
+
+#[test]
+fn a_vms_keeper_agent_installed_by_hand_is_refused() {
+    let key = format!("vm-{}", "0".repeat(24));
+
+    let (succeeded, said) = atlas(&["station", "install-keeper", "--key", &key]);
+
+    assert!(!succeeded, "{said}");
+    assert_eq!(said["code"], "denied", "{said}");
+    assert_eq!(said["error"], atlas_daemon::worker::REFUSAL);
+}

@@ -302,3 +302,103 @@ fn a_removal_record_that_cannot_be_read_may_hold_a_vm() {
 
     assert!(vms.kept().is_err());
 }
+
+#[test]
+fn a_removal_retires_the_keeper_first_and_deletes_the_station_folder_and_enrolment() {
+    let (home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    let label = Vms::keeper_label(&desktop());
+    let plist = vms.agents().join(format!("{label}.plist"));
+    std::fs::create_dir_all(vms.agents()).unwrap();
+    std::fs::write(&plist, "plist").unwrap();
+    *fake.keeper_job.lock().unwrap() = Some(atlas_core::launchd::Loaded {
+        pid: Some(77),
+        ..atlas_core::launchd::Loaded::default()
+    });
+    let station = crate::station::Station::under(home.path())
+        .folder(&desktop())
+        .unwrap();
+    std::fs::write(station.join("resume.key"), "capability").unwrap();
+
+    let removed = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(removed["removal"], "done", "{removed}");
+    assert_eq!(
+        fake.launched.lock().unwrap()[0],
+        format!("bootout {}/{label}", vms.domain()),
+        "the keeper went first"
+    );
+    assert!(!plist.exists());
+    assert!(!station.exists());
+    assert_eq!(removed["enrolment"], "deleted");
+    assert_eq!(
+        *fake.enrolments.lock().unwrap(),
+        [desktop().as_str().to_owned()]
+    );
+}
+
+#[test]
+fn a_keeper_launchd_still_runs_or_one_holding_its_lock_keeps_the_removal_pending() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    let keeper = try_lock(&vms.keeper_lock(&desktop())).unwrap().unwrap();
+
+    let held = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(held["removal"], "pending", "{held}");
+    assert!(held["why"].as_str().unwrap().contains("keeper"), "{held}");
+    assert!(vms.folder(&desktop()).exists());
+    assert!(fake.asked.lock().unwrap().is_empty(), "nothing went on");
+
+    drop(keeper);
+    let removed = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    assert_eq!(removed["removal"], "done", "{removed}");
+}
+
+#[test]
+fn a_keeper_starting_while_its_vm_is_removed_is_refused_end_to_end() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    // The runner is busy: the removal is recorded and stays under way.
+    let runner = try_lock(&vms.lifecycle(&desktop())).unwrap().unwrap();
+
+    let held = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    let starting = super::super::keeper::hold(&vms, &desktop());
+
+    assert_eq!(held["removal"], "pending", "{held}");
+    assert_eq!(starting.unwrap_err().code, atlas_core::error::Code::State);
+    drop(runner);
+}
+
+#[test]
+fn a_keeper_job_a_late_bootstrap_brings_keeps_the_removal_from_done() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    // Absent when the keeper is retired first; there before done.
+    *fake.keeper_late.lock().unwrap() = Some((2, atlas_core::launchd::Loaded::default()));
+
+    let first = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    let second = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(first["removal"], "pending", "{first}");
+    assert_eq!(first["step"], "passwords", "{first}");
+    assert!(first["why"].as_str().unwrap().contains("keeper"), "{first}");
+    assert_eq!(second["removal"], "done", "{second}");
+    let keeper = format!("bootout {}/{}", vms.domain(), Vms::keeper_label(&desktop()));
+    assert!(
+        fake.launched
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|asked| **asked == keeper)
+            .count()
+            >= 2
+    );
+}

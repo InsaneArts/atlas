@@ -2,6 +2,7 @@ use super::{
     link::{BUFFERED, Conditions, Connection, Link},
     *,
 };
+use crate::secure::connect_as_station;
 use crate::{
     keys::PairingSecret,
     pairing::{

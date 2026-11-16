@@ -120,3 +120,24 @@ fn a_path_outside_atlas_own_folder_is_let_through() {
         assert!(!refused(&allowed, &home), "{}", allowed.display());
     }
 }
+
+#[test]
+fn atlas_sockets_folder_outside_the_home_and_anything_in_it_or_holding_it_are_refused() {
+    let (_home, home) = home();
+    let sockets = sockets().unwrap();
+
+    assert!(sockets.as_os_str().len() < 64, "{}", sockets.display());
+    for path in [
+        sockets.clone(),
+        sockets.join("0123456789abcdef01234567.keeper"),
+        sockets.join("frames/new"),
+        sockets.parent().unwrap().to_path_buf(),
+    ] {
+        assert!(refused(&path, &home), "{}", path.display());
+    }
+    let elsewhere = tempfile::tempdir().unwrap();
+    let link = elsewhere.path().join("user");
+    std::os::unix::fs::symlink(sockets.parent().unwrap(), &link).unwrap();
+    assert!(refused(&link.join("atlas/frames"), &home));
+    assert!(!refused(&elsewhere.path().join("frames"), &home));
+}

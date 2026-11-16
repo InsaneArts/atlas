@@ -255,6 +255,7 @@ pub fn doctor_report(status: Value, login: &atlas_core::user::User) -> Doctor {
         diagnosis,
         native,
         absence: None,
+        vm: None,
     }
 }
 

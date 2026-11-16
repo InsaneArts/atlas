@@ -213,6 +213,7 @@ impl Policy {
             | Command::MachineInstaller
             | Command::MachineSetup(_)
             | Command::Vm(_)
+            | Command::Station(_)
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::SessionProofServe

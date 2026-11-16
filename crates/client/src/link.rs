@@ -27,10 +27,20 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+mod keeper;
+
+pub use keeper::Keeper;
+#[cfg(test)]
+pub(crate) use keeper::Trust;
+pub(crate) use keeper::probe;
+
 #[derive(Clone, Debug)]
 pub enum Link {
     Unix(Transport),
     Session(Session),
+    /// A VM desktop's session keeper: only what a VM does before its proof
+    /// goes through it, by its own calls; every other request is refused.
+    Keeper(Keeper),
     Unreachable(Unreachable),
 }
 
@@ -47,6 +57,9 @@ pub struct Session {
 pub struct Unreachable {
     pub selected: Arc<Selected>,
     pub timeout: Duration,
+    /// Why it cannot be reached now, when that is known: its keeper is not
+    /// running, say, or it is not paired yet.
+    pub why: Option<String>,
 }
 
 impl Link {
@@ -55,6 +68,7 @@ impl Link {
         match self {
             Self::Unix(transport) => transport.timeout,
             Self::Session(session) => session.timeout,
+            Self::Keeper(keeper) => keeper.timeout,
             Self::Unreachable(unreachable) => unreachable.timeout,
         }
     }
@@ -65,6 +79,7 @@ impl Link {
         match &mut self {
             Self::Unix(transport) => transport.timeout = timeout,
             Self::Session(session) => session.timeout = timeout,
+            Self::Keeper(keeper) => keeper.timeout = timeout,
             Self::Unreachable(unreachable) => unreachable.timeout = timeout,
         }
         self
@@ -85,6 +100,7 @@ impl Link {
                     session.desktop.id().as_str()
                 ),
             )),
+            Self::Keeper(keeper) => Err(keeper.selected.unreachable()),
             Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
         }
     }
@@ -98,7 +114,9 @@ impl Link {
     pub fn socket_mut(&mut self) -> &mut Transport {
         match self {
             Self::Unix(transport) => transport,
-            Self::Session(_) | Self::Unreachable(_) => panic!("a machine desktop has no socket"),
+            Self::Session(_) | Self::Keeper(_) | Self::Unreachable(_) => {
+                panic!("a machine desktop has no socket")
+            }
         }
     }
 
@@ -139,6 +157,7 @@ impl Link {
                 );
                 Ok((pending, unanswered))
             }
+            Self::Keeper(keeper) => Err(keeper.selected.unreachable()),
             Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
         }
     }
@@ -156,6 +175,7 @@ impl Link {
         let kind = match self {
             Self::Unix(_) => LaneKind::Read,
             Self::Session(session) => lane_for(session, request)?,
+            Self::Keeper(keeper) => return Err(keeper.selected.unreachable()),
             Self::Unreachable(unreachable) => return Err(unreachable.selected.unreachable()),
         };
         let (pending, unanswered) = self.connect(kind).await?;

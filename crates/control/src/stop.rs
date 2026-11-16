@@ -30,7 +30,8 @@ const PATIENCE: Duration = Duration::from_secs(2);
 
 /// What a Resume read of the Stop noted now: the marker, and the witnesses
 /// of Stops that could not take the lock. A Resume lifts exactly this.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StopRevision {
     /// The marker's contents, when it is there.
     marker: Option<String>,

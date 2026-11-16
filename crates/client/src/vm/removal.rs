@@ -85,6 +85,9 @@ struct Record {
     passwords: BTreeMap<String, String>,
     /// What was found in the folder's places and left, being another.
     kept: Vec<String>,
+    /// What became of the VM's enrolment, kept until it paired.
+    #[serde(default)]
+    enrolment: Option<String>,
 }
 
 /// Remove the VM desktop `desktop`, as the removal `change`, or go on with
@@ -109,6 +112,7 @@ fn answer(record: &Record) -> Value {
         "removal": "done",
         "change": record.change,
         "passwords": record.passwords,
+        "enrolment": record.enrolment,
         "kept": record.kept,
     })
 }
@@ -148,6 +152,7 @@ fn remove_with(
                 proved: None,
                 passwords: BTreeMap::new(),
                 kept: Vec::new(),
+                enrolment: None,
             };
             keep(vms, &marker, &record)?;
             record
@@ -155,6 +160,18 @@ fn remove_with(
     };
     let folder = vms.folder(desktop);
     let (domain, label) = (vms.domain(), Vms::label(desktop));
+    // Its session keeper first: its agent retired, then its lock held to
+    // the end, so none serves the VM while it goes and none starts again.
+    retire_keeper(vms, system, desktop)?;
+    if system.job(&domain, &Vms::keeper_label(desktop))? != Job::Absent {
+        return Ok(pending(
+            record.step,
+            "launchd has not let the VM's session keeper go yet.",
+        ));
+    }
+    let Some(_keeper) = try_lock(&vms.keeper_lock(desktop))? else {
+        return Ok(pending(record.step, "The VM's session keeper still runs."));
+    };
 
     if record.step == Step::Marked {
         record.step = Step::Forgetting;
@@ -239,6 +256,7 @@ fn remove_with(
     }
     if record.step == Step::Deleting {
         delete(vms, desktop, &mut record)?;
+        delete_station(vms, desktop)?;
         record.step = Step::Passwords;
         keep(vms, &marker, &record)?;
     }
@@ -265,6 +283,14 @@ fn remove_with(
             };
             record.passwords.insert(account, became.to_owned());
         }
+        if record.enrolment.is_none() {
+            let became = match system.delete_enrolment(desktop) {
+                Ok(true) => "deleted",
+                Ok(false) => "absent",
+                Err(_) => "left",
+            };
+            record.enrolment = Some(became.to_owned());
+        }
         // A bootstrap still on its way from a crashed install may have
         // come since: not done while the job is there.
         if system.job(&domain, &label)? != Job::Absent {
@@ -273,6 +299,15 @@ fn remove_with(
             return Ok(pending(
                 Step::Passwords,
                 "launchd has not let the VM's job go yet.",
+            ));
+        }
+        // The keeper's too, from an install of its agent cut short.
+        if system.job(&domain, &Vms::keeper_label(desktop))? != Job::Absent {
+            retire_keeper(vms, system, desktop)?;
+            keep(vms, &marker, &record)?;
+            return Ok(pending(
+                Step::Passwords,
+                "launchd has not let the VM's session keeper go yet.",
             ));
         }
         record.step = Step::Done;
@@ -298,6 +333,41 @@ fn retire(vms: &Vms, system: &impl System, desktop: &DesktopId) -> Result<()> {
     let job = format!("{}/{}", vms.domain(), Vms::label(desktop));
     let _ = system.launchctl(&["bootout", &job])?;
     Ok(())
+}
+
+/// The keeper's agent retired as the runner's is: its plist first, then its
+/// job booted out, whether it went read back by the caller.
+fn retire_keeper(vms: &Vms, system: &impl System, desktop: &DesktopId) -> Result<()> {
+    let label = Vms::keeper_label(desktop);
+    let plist = vms.agents().join(format!("{label}.plist"));
+    match std::fs::remove_file(&plist) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(Error::writing(&plist, error));
+        }
+        _ => {}
+    }
+    if vms.agents().exists() {
+        sync(&vms.agents())?;
+    }
+    let _ = system.launchctl(&["bootout", &format!("{}/{label}", vms.domain())])?;
+    Ok(())
+}
+
+/// The station's own folder for `desktop` deleted: its pairing record and
+/// what its keeper kept. A link in its place is removed, never followed.
+fn delete_station(vms: &Vms, desktop: &DesktopId) -> Result<()> {
+    let folder = crate::station::Station::under(&vms.home).path_of(desktop);
+    let removed = match std::fs::symlink_metadata(&folder) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&folder),
+        Ok(_) => std::fs::remove_file(&folder),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => Err(error),
+    };
+    removed.map_err(|error| Error::writing(&folder, error))?;
+    match folder.parent() {
+        Some(parent) => sync(parent),
+        None => Ok(()),
+    }
 }
 
 /// Where the folder of `desktop` is moved aside by the removal `change`.

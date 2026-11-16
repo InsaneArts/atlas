@@ -28,6 +28,11 @@ fn private() -> tempfile::TempDir {
     folder
 }
 
+/// The record of the desktop in the station folder `desktops` holds for it.
+fn file_in(desktops: &Path) -> PairingFile {
+    PairingFile::at(desktops.join(desktop().as_str()))
+}
+
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
 }
@@ -36,7 +41,7 @@ fn mode(path: &Path) -> u32 {
 fn no_record_is_none_and_a_kept_one_reads_back_in_folders_made_private() {
     let folder = private();
     let desktops = folder.path().join("desktops");
-    let file = PairingFile::of(&desktops, &desktop());
+    let file = file_in(&desktops);
 
     assert_eq!(file.read().unwrap(), None);
     let record = paired();
@@ -52,7 +57,7 @@ fn no_record_is_none_and_a_kept_one_reads_back_in_folders_made_private() {
 #[test]
 fn a_record_that_changed_since_it_was_read_is_never_overwritten() {
     let folder = private();
-    let file = PairingFile::of(folder.path().join("desktops"), &desktop());
+    let file = file_in(&folder.path().join("desktops"));
     let first = paired();
     file.replace(None, &first).unwrap();
     let revoked = Enrolment::Revoked {
@@ -70,7 +75,7 @@ fn a_record_that_changed_since_it_was_read_is_never_overwritten() {
 #[test]
 fn a_damaged_record_or_one_from_a_later_version_is_refused_not_absent() {
     let folder = private();
-    let file = PairingFile::of(folder.path().join("desktops"), &desktop());
+    let file = file_in(&folder.path().join("desktops"));
     file.replace(None, &paired()).unwrap();
     let path = folder
         .path()
@@ -100,7 +105,7 @@ fn a_damaged_record_or_one_from_a_later_version_is_refused_not_absent() {
 fn a_record_others_may_change_or_one_in_a_shared_folder_is_refused() {
     let folder = private();
     let desktops = folder.path().join("desktops");
-    let file = PairingFile::of(&desktops, &desktop());
+    let file = file_in(&desktops);
     file.replace(None, &paired()).unwrap();
     let own = desktops.join(desktop().as_str());
 
@@ -123,18 +128,14 @@ fn a_link_in_place_of_either_folder_is_refused() {
     // The desktops folder a link.
     let linked = folder.path().join("desktops");
     std::os::unix::fs::symlink(real.path(), &linked).unwrap();
-    assert!(
-        PairingFile::of(&linked, &desktop())
-            .replace(None, &paired())
-            .is_err()
-    );
+    assert!(file_in(&linked).replace(None, &paired()).is_err());
 
     // The desktop's own folder a link.
     let desktops = folder.path().join("others");
     fs::create_dir(&desktops).unwrap();
     fs::set_permissions(&desktops, fs::Permissions::from_mode(0o700)).unwrap();
     std::os::unix::fs::symlink(real.path(), desktops.join(desktop().as_str())).unwrap();
-    let file = PairingFile::of(&desktops, &desktop());
+    let file = file_in(&desktops);
     assert!(file.replace(None, &paired()).is_err());
     assert!(file.read().is_err());
 }
@@ -142,13 +143,12 @@ fn a_link_in_place_of_either_folder_is_refused() {
 #[test]
 fn a_change_another_station_process_holds_waits_and_then_says_busy() {
     let folder = private();
-    let file = PairingFile::of(folder.path().join("desktops"), &desktop());
+    let file = file_in(&folder.path().join("desktops"));
     file.replace(None, &paired()).unwrap();
     let _held = file.lock().unwrap();
 
     let started = std::time::Instant::now();
-    let waited =
-        PairingFile::of(folder.path().join("desktops"), &desktop()).replace(None, &paired());
+    let waited = file_in(&folder.path().join("desktops")).replace(None, &paired());
 
     assert_eq!(waited.unwrap_err().code, Code::Busy);
     assert!(started.elapsed() >= PATIENCE);

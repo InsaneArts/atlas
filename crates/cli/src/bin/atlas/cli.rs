@@ -111,6 +111,9 @@ pub(super) enum Command {
     /// A VM desktop's agent and removal, as its station asks.
     #[command(hide = true, subcommand)]
     Vm(Vm),
+    /// The station's own state for a VM desktop, as Atlas keeps it.
+    #[command(hide = true, subcommand)]
+    Station(Station),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {
@@ -1516,6 +1519,37 @@ impl AppTarget {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+/// What the station keeps for a VM desktop on this Mac.
+#[derive(Debug, Subcommand)]
+pub(super) enum Station {
+    /// Keep a VM's enrolment until it is paired; its secret is read from
+    /// standard input, never from the command line.
+    Enrol {
+        /// The VM's record key, vm- and its identifier.
+        #[arg(long)]
+        key: String,
+        /// The enrolment's token.
+        #[arg(long)]
+        enrolment: String,
+    },
+    /// Hold the VM's session for every Atlas process, as its own launchd
+    /// agent alone runs it.
+    Keep {
+        /// The VM's record key, vm- and its identifier.
+        #[arg(long)]
+        key: String,
+        /// The settings file that lists the VM.
+        #[arg(long)]
+        settings: PathBuf,
+    },
+    /// Write and start the agent that keeps the VM's session keeper alive.
+    InstallKeeper {
+        /// The VM's record key, vm- and its identifier.
+        #[arg(long)]
+        key: String,
+    },
+}
 
 /// What the station asks of a VM desktop on this Mac.
 #[derive(Debug, Subcommand)]

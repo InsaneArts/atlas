@@ -664,7 +664,18 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
         // Control a viewer holds is left alone either way.
         Change::Hold => match body["on"].as_bool() {
             Some(on) => {
-                let held = viewer.client().hold(on).await;
+                let client = viewer.client();
+                // A VM's Resume carries its keeper's capability, which only
+                // this service reads.
+                let held = match client.desktop().kind() {
+                    atlas_core::desktop::Kind::Vm(vm) if !on => {
+                        match atlas_client::vm::keeper::resume_capability(&vm.id) {
+                            Ok(capability) => client.resume_vm(&capability).await,
+                            Err(error) => Err(error),
+                        }
+                    }
+                    _ => client.hold(on).await,
+                };
                 // The shared look says how the helper stood before.
                 viewer.forget_look();
                 held

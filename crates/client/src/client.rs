@@ -7,6 +7,7 @@ mod apps;
 mod capture;
 mod input;
 mod install;
+mod keeper;
 pub mod live;
 mod mutate;
 mod picture;
@@ -32,12 +33,7 @@ pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::{Seen, WINDOW_LOOKUP};
 
-use crate::{
-    doing::Doing,
-    host_session::HostSession,
-    link::{Link, Unreachable},
-    task::Task,
-};
+use crate::{doing::Doing, host_session::HostSession, link::Link, task::Task};
 use atlas_control::Controller;
 use atlas_core::{
     config::{
@@ -199,11 +195,8 @@ impl Client {
                 });
                 (link, None)
             }
-            Chosen::Vm(_) => {
-                let link = Link::Unreachable(Unreachable {
-                    selected: Arc::new(selected.clone()),
-                    timeout,
-                });
+            Chosen::Vm(config) => {
+                let link = crate::link::probe(&selected, &config.id, timeout);
                 (link, Some(selected.desktop.records()))
             }
         };
@@ -404,6 +397,9 @@ impl Client {
     }
 
     async fn verified_status(&self) -> Result<Value> {
+        if let Kind::Vm(_) = self.desktop().kind() {
+            return self.vm_status().await;
+        }
         self.reachable()?;
         let mut hello = self.link.call(&json!({"op": "hello"})).await?;
 

@@ -38,3 +38,17 @@ fn only_a_program_of_the_same_atlas_counts_as_atlas_starting_a_worker() {
 fn a_worker_started_by_this_test_is_not_started_by_atlas() {
     assert!(refused(started_by_atlas()));
 }
+
+#[test]
+fn only_the_process_launchd_runs_as_its_job_counts_as_started_by_it() {
+    assert!(judge_job(80, Some(80)).is_ok());
+    assert!(refused(judge_job(80, Some(81))));
+    assert!(refused(judge_job(80, None)));
+}
+
+#[test]
+fn a_worker_this_test_started_is_not_the_job_launchd_runs() {
+    assert!(refused(launchd_job(
+        "com.insanearts.atlas.tests.no-such-job"
+    )));
+}
