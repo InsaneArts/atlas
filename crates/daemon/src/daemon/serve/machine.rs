@@ -635,6 +635,38 @@ fn committing(daemon: &Daemon) -> bool {
         .is_some_and(|stages| stages.committing())
 }
 
+/// Keep as ended each change in `changes` whose outcome is unknown and
+/// whose work is proven gone by evidence of its own kind: `only` that one
+/// when it is named. Anything that cannot be read or kept stays as it is.
+/// Blocking.
+fn end_proven(
+    daemon: &Daemon,
+    changes: &Changes<Arc<dyn Vault>>,
+    only: Option<&atlas_core::files::Token>,
+) {
+    let Some(supervising) = daemon.supervising.as_ref() else {
+        return;
+    };
+    let Ok(unresolved) = changes.unresolved() else {
+        return;
+    };
+    let unresolved = unresolved
+        .into_iter()
+        .filter(|intended| only.is_none_or(|only| intended.change == *only))
+        .collect();
+    let keepers = &daemon.keepers;
+    let evidence = crate::machine::ended::Evidence {
+        kept: &*supervising.kept,
+        proofs: &supervising.proofs,
+        carried: &|change| keepers.carries(change),
+        owned: &|supervisor| keepers.owns(supervisor),
+        running: &|supervisor| !supervisor.ended(),
+    };
+    for change in evidence.proven_gone(unresolved) {
+        let _ = changes.ended(&change);
+    }
+}
+
 /// The generation live now, and the tasks that keep it.
 struct Live {
     authority: Authority,
@@ -822,8 +854,8 @@ impl Machine {
     /// never declares a service it does not have.
     fn declared(&self) -> atlas_session::compatibility::Declared {
         use atlas_session::compatibility::{
-            ACKNOWLEDGED, CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, MACHINE_PROOF, STAGE,
-            STOP_REPORT,
+            ACKNOWLEDGED, CHANGES, COPIES, Declared, ENDED, INPUT_LANES, LEFTOVERS, MACHINE_PROOF,
+            STAGE, STOP_REPORT,
         };
         let mut capabilities = vec![
             CHANGES.to_owned(),
@@ -831,8 +863,10 @@ impl Machine {
             ACKNOWLEDGED.to_owned(),
             MACHINE_PROOF.to_owned(),
         ];
+        // What a change whose outcome is unknown came to is proven by its
+        // supervisors.
         if self.daemon.supervising.is_some() {
-            capabilities.push(LEFTOVERS.to_owned());
+            capabilities.extend([LEFTOVERS.to_owned(), ENDED.to_owned()]);
         }
         if self.daemon.stages.is_some() {
             capabilities.extend([STAGE.to_owned(), COPIES.to_owned()]);
@@ -1019,14 +1053,18 @@ impl Machine {
             .await
             .map_err(|_| Error::new(Code::State, "The generation could not be given."))??;
         // Changes done and unsettled are named again at every hello, so a
-        // settlement lost on the way is caught up. Read before the lease
+        // settlement lost on the way is caught up; those whose work is
+        // proven gone are named as ended first. Read before the lease
         // starts: slow storage never spends it.
-        let records = paired.changes.clone();
-        let unsettled = tokio::task::spawn_blocking(move || records.unsettled())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
+        let (records, daemon) = (paired.changes.clone(), self.daemon.clone());
+        let unsettled = tokio::task::spawn_blocking(move || {
+            end_proven(&daemon, &records, None);
+            records.unsettled()
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
         let authority = Authority::new(generation, self.clock.clone(), hook);
         let lanes = Arc::new(Lanes::new(authority.clone()));
         let outbox = Arc::new(Outbox::hello(generation, unsettled, self.declared()));
@@ -1131,6 +1169,16 @@ impl Machine {
         // refuses its change and ends its command, a Resume between or not.
         let stops = self.daemon.halted.borrow().stops;
         lanes.admit(&header, Opener::Station)?;
+        // Carried out here from before its intent is kept until its lane is
+        // done: nothing proves its work gone meanwhile.
+        let _carrying = match &header.kind {
+            LaneKind::Change { change }
+            | LaneKind::Stage { change }
+            | LaneKind::Input {
+                change: Some(change),
+            } => Some(self.daemon.keepers.carry(change)),
+            _ => None,
+        };
         // Only the station's reads while the guest is open to more than
         // Atlas, or not yet seen closed.
         if !matches!(header.kind, LaneKind::Read)
@@ -1232,6 +1280,24 @@ impl Machine {
                 () = ended(&lanes, header.lane) => return Ok(()),
             };
             return write(&mut writer, &hello).await;
+        }
+        // What a change came to is asked once the station lost its answer:
+        // one whose outcome is unknown is answered as ended when its work is
+        // proven gone by now.
+        if matches!(header.kind, LaneKind::Read)
+            && let Ok(protocol::Asked {
+                request: Request::Outcome { change },
+                ..
+            }) = protocol::parse(&line)
+        {
+            let (daemon, changes) = (self.daemon.clone(), paired.changes.clone());
+            let judging = bounded::off_runtime(&self.blocking, move || {
+                end_proven(&daemon, &changes, Some(&change));
+            });
+            tokio::select! {
+                _ = judging => {}
+                () = ended(&lanes, header.lane) => return Ok(()),
+            }
         }
         // Passed to the input service as it is, once judged here.
         if let LaneKind::Input { change } = &header.kind {

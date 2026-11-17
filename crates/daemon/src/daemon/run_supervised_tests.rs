@@ -87,6 +87,7 @@ fn kept_in(
         judged: None,
         job: None,
         change: None,
+        carrying: None,
         printed: None,
     }
 }

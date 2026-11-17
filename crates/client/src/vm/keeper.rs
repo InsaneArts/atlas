@@ -13,7 +13,9 @@
 //! It carries each command's changes on lanes of the generation that
 //! command proved ([`change`]), and tells the guest to forget what a change
 //! came to only once the station holds no claim on it: at each hello, and
-//! every [`WATCH`] for the changes it carried.
+//! every [`WATCH`] for the changes it carried. A change whose command ended
+//! without its answer is recovered from what the guest says it came to
+//! ([`recover`]).
 //!
 //! An update of Atlas replaces its program while it runs; it does nothing
 //! on its own then. The update hands it over ([`super::handover`]): asked,
@@ -25,6 +27,7 @@ mod change;
 mod clients;
 mod observe;
 mod program;
+mod recover;
 
 pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{PROTOCOL, READS, RESUME_KEY};
@@ -239,6 +242,7 @@ async fn started(
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
+        recovering: tokio::sync::Mutex::new(()),
         shared: Shared::default(),
     });
     keeper.finish_handover()?;
@@ -413,6 +417,8 @@ struct Keeper {
     ended: tokio::sync::Notify,
     /// Room for the observations that run at once.
     observing: tokio::sync::Semaphore,
+    /// Held through each recovery of the changes no command holds.
+    recovering: tokio::sync::Mutex<()>,
     shared: Shared,
 }
 
@@ -587,7 +593,7 @@ impl Keeper {
         let work = async {
             let report = report(&session).await;
             self.shared.state().report = Some(report);
-            self.reconciled(&session).await;
+            tokio::join!(self.reconciled(&session), self.recovering(&session));
         };
         tokio::pin!(work);
         let ended = loop {

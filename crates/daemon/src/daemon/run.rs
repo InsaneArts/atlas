@@ -467,6 +467,9 @@ pub(in crate::daemon) struct Lease {
     pub(super) job: Option<crate::machine::processes::JobRecord>,
     /// The change it is started for, kept beside its supervisor.
     pub(super) change: Option<atlas_core::files::Token>,
+    /// That change counted as carried out here until its keeper has judged
+    /// its work: no record of it is kept after.
+    pub(super) carrying: Option<keeper::Carrying>,
     /// Where what a command prints is kept with what it comes to; none
     /// for a job, whose output goes to its log.
     pub(super) printed: Option<Arc<std::sync::Mutex<Printed>>>,

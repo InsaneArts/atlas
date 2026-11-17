@@ -123,6 +123,9 @@ pub struct StandIn {
     /// Whether it is an older guest, declaring no numbered Stops and
     /// Resumes, no input lanes and no machine proof.
     pub plain: std::sync::atomic::AtomicBool,
+    /// Whether it is an older guest that keeps changes but never proves
+    /// one ended, declaring no `ended-v1`.
+    pub unended: AtomicBool,
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
     pub settled: Mutex<Vec<atlas_core::files::Token>>,
@@ -195,6 +198,7 @@ impl StandIn {
             unkept: AtomicUsize::new(0),
             on_lift: OnLift::default(),
             plain: std::sync::atomic::AtomicBool::new(false),
+            unended: AtomicBool::new(false),
             dials: Mutex::new(Vec::new()),
             settled: Mutex::new(Vec::new()),
             on_settled: OnSettled::default(),
@@ -255,13 +259,17 @@ impl StandIn {
                 crate::compatibility::Declared::ours(if self.plain.load(SeqCst) {
                     vec![crate::compatibility::STOP_REPORT.to_owned()]
                 } else {
-                    vec![
+                    let mut declared = vec![
                         crate::compatibility::CHANGES.to_owned(),
                         crate::compatibility::ACKNOWLEDGED.to_owned(),
                         crate::compatibility::STOP_REPORT.to_owned(),
                         crate::compatibility::INPUT_LANES.to_owned(),
                         crate::compatibility::MACHINE_PROOF.to_owned(),
-                    ]
+                    ];
+                    if !self.unended.load(SeqCst) {
+                        declared.push(crate::compatibility::ENDED.to_owned());
+                    }
+                    declared
                 }),
             )),
             credit: Arc::new(Credit::default()),

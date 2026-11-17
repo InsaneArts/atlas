@@ -175,8 +175,10 @@ async fn carried_out(
     };
     while stand_in.holding.load(SeqCst) {
         if lanes.cancelled(header.lane) {
+            // Cut short with nothing proving what it left ended, as a
+            // cancelled command is.
             let cancelled = serde_json::json!({"ok": false, "code": "cancelled",
-                "error": "The change was cancelled"});
+                "error": "The change was cancelled", "uncertain": true});
             stand_in.done(change, &cancelled);
             return None;
         }

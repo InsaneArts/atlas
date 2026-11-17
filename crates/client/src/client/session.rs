@@ -60,12 +60,16 @@ fn settled(outcome: &Result<Value>) -> bool {
 impl Client {
     /// Recover the helper: the verified restart when an outcome is unknown,
     /// otherwise starting, resetting or upgrading input. It never takes
-    /// control or resumes input.
+    /// control or resumes input. A VM's changes are recovered from what its
+    /// guest says they came to instead.
     ///
     /// # Errors
     ///
     /// Returns the refusal or failure of the recovery it chose.
     pub async fn recover_helper(&self) -> Result<Value> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            return self.recover_vm().await;
+        }
         if self.controller.pending()?.is_empty() {
             self.start_input().await
         } else {

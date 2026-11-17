@@ -4,6 +4,7 @@
 //! file of the account's could be rewritten under it.
 pub mod changes;
 pub mod commitment;
+pub(crate) mod ended;
 pub mod generations;
 pub mod input;
 #[cfg(target_os = "macos")]

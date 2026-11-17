@@ -38,6 +38,10 @@ pub const ACKNOWLEDGED: &str = "acknowledged-v1";
 /// The guest's read hello says what the station proves it by: its display,
 /// permissions, machine and build, beside its challenged session proof.
 pub const MACHINE_PROOF: &str = "machine-proof-v1";
+/// A change whose outcome is unknown is answered as ended once the guest
+/// proves its work gone by evidence of its own kind: `ended: true` beside
+/// `uncertain: true` in what it came to.
+pub const ENDED: &str = "ended-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

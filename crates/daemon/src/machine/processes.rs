@@ -331,7 +331,7 @@ pub(crate) fn unresolved(
 
 /// Whether `supervised` is done with: from another boot than `boot`, or
 /// gone with its proof of `DONE` or `ENDED` left in `proofs`.
-fn done_with(
+pub(crate) fn done_with(
     supervised: &Supervised,
     boot: &str,
     proofs: &Path,

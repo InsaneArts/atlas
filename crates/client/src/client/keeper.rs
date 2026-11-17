@@ -1,8 +1,8 @@
 //! What a client asks of a VM desktop through its session keeper: its status
 //! with a fresh proof of it, never ready yet; the proof a command acts in,
-//! and its guest's own Stop; and the person's Stop and Resume. Everything
-//! else stays refused in the one wording for what this build cannot do on
-//! a VM.
+//! and its guest's own Stop; the person's Stop and Resume; and the recovery
+//! of changes whose command ended without an answer. Everything else stays
+//! refused in the one wording for what this build cannot do on a VM.
 use super::{Actor, Client, Pinned, Verified};
 use crate::{
     link::{Keeper, Link},
@@ -18,6 +18,11 @@ use serde_json::{Value, json};
 
 /// How long a status waits for the station's pending changes to be read.
 const PENDING_READ: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long the person's recovery of a VM waits for its keeper, and the
+/// moment of it left for the keeper's own answer.
+const RECOVERY: std::time::Duration = std::time::Duration::from_secs(60);
+const RECOVERY_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A VM's proof as one command took it: what its keeper observed, and the
 /// session that proves or why it does not.
@@ -190,6 +195,52 @@ impl Client {
                 .one(&json!({"op": "settle", "changes": changes}))
                 .await;
         }
+    }
+
+    /// Recover a VM, as the person's Recover does: the VM proved afresh,
+    /// then every change its guest carries out whose command ended without
+    /// its answer asked of the guest through its keeper, in the generation
+    /// the proof was taken in. Only a certain answer, or one the guest
+    /// proves ended, clears a claim; every other change stays pending, and
+    /// is said as kept. A Stop does not hold it: it changes nothing on the
+    /// guest, and a claim Atlas VM or the station carries out is never
+    /// looked at.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM still being added, or handed over by an update; fails
+    /// when it does not prove, or its keeper cannot read the station's
+    /// pending changes or refuses.
+    pub(super) async fn recover_vm(&self) -> Result<Value> {
+        if self.admission() != Admission::Open {
+            return Err(self.selected.unreachable());
+        }
+        if let Some(why) = self.handover_unfinished() {
+            return Err(Error::new(Code::Busy, why));
+        }
+        let mut keeper = self.keeper().await?;
+        let proved = self.verify_machine(&keeper).await?;
+        proved.session?;
+        keeper.timeout = RECOVERY;
+        let asked = json!({"op": "recover", "generation": proved.observed.generation,
+            "deadline_ms": (RECOVERY - RECOVERY_MARGIN).as_millis()});
+        let answer = keeper.one(&asked).await?;
+        if answer["ok"] != true {
+            return Err(atlas_core::transport::refusal(&answer));
+        }
+        let controller = self.controller.clone();
+        let kept = tokio::task::spawn_blocking(move || controller.pending_within(PENDING_READ))
+            .await
+            .map_or(json!("unknown"), |pending| {
+                pending.map_or(json!("unknown"), |pending| json!(pending))
+            });
+        Ok(json!({
+            "ok": true,
+            "op": "recover",
+            "desktop": {"kind": "vm", "name": self.selected.name},
+            "cleared": answer["cleared"],
+            "kept": kept,
+        }))
     }
 
     /// A VM's status: its keeper's hello, its guest's own and a fresh proof

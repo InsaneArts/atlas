@@ -431,6 +431,7 @@ pub(super) fn fixture() -> Fixture {
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
+        recovering: tokio::sync::Mutex::new(()),
         shared: Shared::default(),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
@@ -467,6 +468,7 @@ fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
+        recovering: tokio::sync::Mutex::new(()),
         shared: Shared::default(),
     })
 }

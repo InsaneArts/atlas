@@ -4770,3 +4770,135 @@ async fn a_numbered_resume_whose_guest_opens_before_it_reopens_puts_the_stop_bac
         );
     }
 }
+
+/// A guest's records with `change`, a command, kept as intended by a
+/// daemon that died, and the supervisor it started for it if `supervised`,
+/// its PID one no process can have.
+fn left_intended(
+    change: &Token,
+    supervised: bool,
+) -> (Records, Option<crate::machine::processes::Supervised>) {
+    let records = records();
+    let request = json!({"op": "run", "argv": ["/usr/bin/true"], "change": change});
+    records.2.ask(change, "run", &request).unwrap();
+    let supervising = supervising(&records.0, &records.1);
+    let supervisor = supervised.then(|| crate::machine::processes::Supervised {
+        boot: atlas_core::process::boot().unwrap(),
+        generation: atlas_session::generation::Generation(1),
+        supervisor: atlas_core::process::Instance::new(100_501, [1, 0]),
+        change: Some(change.clone()),
+        job: None,
+    });
+    if let Some(supervisor) = &supervisor {
+        supervising.kept.add(supervisor.clone()).unwrap();
+    }
+    (records, supervisor)
+}
+
+/// What the guest answers of `change` when asked what it came to.
+async fn outcome_of(desktop: &Desktop, change: &Token) -> Value {
+    let asked = ask(
+        desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+    )
+    .await;
+    asked[0].clone()
+}
+
+#[tokio::test]
+async fn a_command_cut_before_its_supervisor_is_named_ended_at_the_hello_and_when_asked() {
+    let change = Token::new();
+    let (records, _) = left_intended(&change, false);
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+    let answered = outcome_of(&desktop, &change).await;
+
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .any(|declared| declared == atlas_session::compatibility::ENDED),
+        "{:?}",
+        controlling.declared
+    );
+    assert_eq!(controlling.unsettled, std::slice::from_ref(&change));
+    assert_eq!(answered["outcome"], "done", "{answered}");
+    assert_eq!(answered["reply"]["ended"], true, "{answered}");
+    assert_eq!(answered["reply"]["uncertain"], true);
+}
+
+#[tokio::test]
+async fn a_command_whose_supervisor_left_no_proof_stays_unknown_until_its_work_is_proven_ended() {
+    let change = Token::new();
+    let (records, supervisor) = left_intended(&change, true);
+    let supervisor = supervisor.unwrap();
+    let proofs = records.0.path().join("supervisors/proofs");
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+    let before = outcome_of(&desktop, &change).await;
+    crate::machine::supervise::proof::leave(
+        &proofs,
+        &supervisor.supervisor,
+        crate::machine::supervise::ENDED,
+    )
+    .unwrap();
+    let after = outcome_of(&desktop, &change).await;
+
+    assert!(
+        controlling.unsettled.is_empty(),
+        "never named while unknown"
+    );
+    assert_eq!(before["outcome"], "unknown", "{before}");
+    assert_eq!(after["outcome"], "done", "{after}");
+    assert_eq!(after["reply"]["ended"], true, "{after}");
+}
+
+#[tokio::test]
+async fn a_command_still_running_is_never_answered_as_ended() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let mut line =
+        serde_json::to_vec(&json!({"op": "run", "argv": ["/bin/sleep", "2"], "change": change}))
+            .unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    stream.flush().await.unwrap();
+    let running = tokio::spawn(async move {
+        let mut lines = BufReader::new(stream).lines();
+        let mut replies: Vec<Value> = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            replies.push(serde_json::from_str(&line).unwrap());
+        }
+        replies
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.changes.of(&change).unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("kept as intended");
+
+    let asked = outcome_of(&desktop, &change).await;
+    let replies = running.await.unwrap();
+
+    assert_eq!(asked["outcome"], "unknown", "{asked}");
+    assert_eq!(replies.last().unwrap()["exitCode"], 0, "{replies:?}");
+    let Some(crate::machine::changes::State::Done { reply }) = served.changes.of(&change).unwrap()
+    else {
+        panic!("kept as done");
+    };
+    assert!(reply.get("ended").is_none(), "{reply}");
+}

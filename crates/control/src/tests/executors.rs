@@ -272,3 +272,74 @@ fn a_clearing_whose_folder_was_not_synced_is_never_read_as_settled_until_it_is()
         "once synced"
     );
 }
+
+#[test]
+fn an_executors_changes_no_live_process_holds_are_read_apart_from_held_ones_and_others() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::ZERO;
+    let (left, held, vms, own) = (token(), token(), token(), token());
+    drop(controller.quarantine_by(&left, Executor::Guest).unwrap());
+    let holding = controller
+        .quarantine_command_by(&held, Executor::Guest)
+        .unwrap();
+    drop(controller.quarantine_by(&vms, Executor::Vm).unwrap());
+    drop(controller.quarantine_as(&own).unwrap());
+
+    assert_eq!(
+        controller.unheld_by(Executor::Guest, wait).unwrap(),
+        std::slice::from_ref(&left)
+    );
+    drop(holding);
+    let mut unheld = controller.unheld_by(Executor::Guest, wait).unwrap();
+    unheld.sort();
+    let mut expected = vec![left, held];
+    expected.sort();
+    assert_eq!(unheld, expected);
+    assert_eq!(
+        controller.unheld_by(Executor::Vm, wait).unwrap(),
+        std::slice::from_ref(&vms)
+    );
+
+    let busy = controller.lock_marker().unwrap();
+    assert_eq!(
+        controller
+            .unheld_by(Executor::Guest, wait)
+            .unwrap_err()
+            .code,
+        "busy"
+    );
+    drop(busy);
+    std::fs::write(&controller.executors, b"{").unwrap();
+    assert!(controller.unheld_by(Executor::Guest, wait).is_err());
+    std::fs::write(&controller.marker, b"[").unwrap();
+    assert!(controller.unheld_by(Executor::Guest, wait).is_err());
+}
+
+#[test]
+fn a_clearing_that_must_not_wait_is_refused_busy_while_the_marker_is_held_and_settles_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let generation = token();
+    drop(
+        controller
+            .quarantine_by(&generation, Executor::Guest)
+            .unwrap(),
+    );
+    let held = controller.lock_marker().unwrap();
+
+    let busy = controller
+        .clear_if_within(&generation, std::time::Duration::ZERO)
+        .unwrap_err();
+    drop(held);
+
+    assert_eq!(busy.code, "busy");
+    assert_eq!(
+        controller.pending().unwrap(),
+        std::slice::from_ref(&generation)
+    );
+    controller
+        .clear_if_within(&generation, std::time::Duration::ZERO)
+        .unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+}

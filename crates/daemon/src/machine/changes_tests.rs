@@ -376,3 +376,58 @@ fn what_commands_printed_is_kept_within_one_bound_across_every_record_and_a_sett
     );
     assert_eq!(kept(&commands[3]), printed, "the settled one's share freed");
 }
+
+#[test]
+fn only_an_intent_or_an_uncertain_reply_is_unresolved_and_kept_as_ended_once_its_work_is_proven_gone()
+ {
+    let (folder, vault, changes) = paired();
+    let (intended, uncertain, certain, unkept) =
+        (Token::new(), Token::new(), Token::new(), Token::new());
+    for change in [&intended, &uncertain, &certain] {
+        changes.ask(change, "run", &run("true")).unwrap();
+    }
+    let cut = json!({"ok": false, "code": "stopped", "error": "Stopped", "uncertain": true});
+    changes.done(&uncertain, &cut).unwrap();
+    changes
+        .done(&certain, &json!({"ok": true, "exitCode": 0}))
+        .unwrap();
+    let unresolved = |changes: &Changes<Arc<Memory>>| -> Vec<Token> {
+        changes
+            .unresolved()
+            .unwrap()
+            .into_iter()
+            .map(|intended| intended.change)
+            .collect()
+    };
+    let mut expected = vec![intended.clone(), uncertain.clone()];
+    expected.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    assert_eq!(unresolved(&changes), expected);
+
+    assert!(changes.ended(&intended).unwrap());
+    assert!(changes.ended(&uncertain).unwrap());
+    assert!(!changes.ended(&certain).unwrap(), "a certain reply stays");
+    assert!(!changes.ended(&intended).unwrap(), "ended once");
+    assert!(!changes.ended(&unkept).unwrap());
+
+    let restarted = Changes::new(folder.path(), vault);
+    for change in [&intended, &uncertain] {
+        let Some(State::Done { reply }) = restarted.of(change).unwrap() else {
+            panic!("kept as done");
+        };
+        assert_eq!(reply["ended"], true, "{reply}");
+        assert_eq!(reply["uncertain"], true);
+        assert_eq!(reply["ok"], false);
+    }
+    assert_eq!(
+        restarted.of(&certain).unwrap(),
+        Some(State::Done {
+            reply: json!({"ok": true, "exitCode": 0})
+        })
+    );
+    assert!(unresolved(&restarted).is_empty());
+    assert_eq!(
+        restarted.unsettled().unwrap().len(),
+        3,
+        "each named at a hello"
+    );
+}

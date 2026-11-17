@@ -1378,7 +1378,15 @@ async fn serve_run(
         let reply = keep(&daemon, remembering, &reply).await;
         return write(&mut writer, &reply).await;
     }
+    // Carried out here for as long as the command's task runs, which may
+    // outlive the lane that asked for it.
+    let carrying = connection
+        .2
+        .as_ref()
+        .and_then(Remembering::change)
+        .map(|change| daemon.keepers.carry(change));
     runs.spawn(async move {
+        let _carrying = carrying;
         if registered.await.is_err() {
             return Ok(());
         }
@@ -1591,6 +1599,7 @@ async fn run_registered(
                 stops: None,
                 judged: None,
                 job: None,
+                carrying: change.as_ref().map(|change| daemon.keepers.carry(change)),
                 change,
                 printed: printed.clone(),
             }

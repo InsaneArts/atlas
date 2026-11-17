@@ -69,7 +69,7 @@ impl Carried {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn keep(&self, change: Token) {
+    pub(super) fn keep(&self, change: Token) {
         self.lock().insert(change);
     }
 
@@ -228,7 +228,7 @@ pub(super) async fn changed(keeper: &Keeper, request: &Value, stream: UnixStream
 }
 
 /// The live generation, when it is `generation`; else why nothing is said.
-fn live_in(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc<Session>> {
+pub(super) fn live_in(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc<Session>> {
     let Some(session) = keeper.shared.live() else {
         let why = keeper.shared.state().why.clone();
         return Err(Error::new(

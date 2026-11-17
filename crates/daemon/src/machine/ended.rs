@@ -1,0 +1,89 @@
+//! Whether the work of a change whose outcome is unknown is proven gone,
+//! by evidence of the change's own kind. A command and a job's start leave
+//! a durable link before any effect: the change's intent, then the record
+//! of the supervisor started for it, and only then its program. So one
+//! this daemon no longer carries out, whose every supervisor is done with,
+//! has nothing of it running, whether it ran or not. A kind with no such
+//! evidence here is never judged: what it came to stays unknown.
+use super::{
+    changes::Intended,
+    processes::{Remembered, Supervised, done_with},
+};
+use atlas_core::{files::Token, process::Instance};
+use std::path::Path;
+
+/// A command's operation.
+const RUN: &str = "run";
+/// A job's start or stop: only a start leaves a supervisor naming it.
+const JOB: &str = "job";
+
+/// What a change's work is judged by.
+pub(crate) struct Evidence<'a> {
+    /// The supervisors kept on the guest's disk.
+    pub(crate) kept: &'a dyn Remembered,
+    /// Where supervisors leave their proof.
+    pub(crate) proofs: &'a Path,
+    /// Whether this daemon still carries a change out.
+    pub(crate) carried: &'a dyn Fn(&Token) -> bool,
+    /// Whether a keeper of this daemon owns a supervisor.
+    pub(crate) owned: &'a dyn Fn(&Instance) -> bool,
+    /// Whether a supervisor's process still runs.
+    pub(crate) running: &'a dyn Fn(&Instance) -> bool,
+}
+
+impl Evidence<'_> {
+    /// Those of `unresolved` whose work is proven gone. Blocking.
+    ///
+    /// Each is looked at as carried out here before the supervisors' record
+    /// is read: one no longer carried never gains a supervisor after, so a
+    /// record read later names every supervisor it ever had, unless
+    /// retired, which only one proven done with is.
+    pub(crate) fn proven_gone(&self, unresolved: Vec<Intended>) -> Vec<Token> {
+        let judged: Vec<Intended> = unresolved
+            .into_iter()
+            .filter(|intended| !(self.carried)(&intended.change))
+            .filter(|intended| [RUN, JOB].contains(&intended.operation.as_str()))
+            .collect();
+        if judged.is_empty() {
+            return Vec::new();
+        }
+        let (Ok(work), Ok(boot)) = (self.kept.kept(), atlas_core::process::boot()) else {
+            return Vec::new();
+        };
+        judged
+            .into_iter()
+            .filter(|intended| self.gone(intended, &work, &boot))
+            .map(|intended| intended.change)
+            .collect()
+    }
+
+    /// Whether the work of `intended` is gone, `work` being every
+    /// supervisor kept and `boot` this boot.
+    fn gone(&self, intended: &Intended, work: &[Supervised], boot: &str) -> bool {
+        let done = |supervised: &&Supervised| {
+            !(self.owned)(&supervised.supervisor)
+                && done_with(supervised, boot, self.proofs, self.running)
+        };
+        let named: Vec<&Supervised> = work
+            .iter()
+            .filter(|supervised| supervised.change.as_ref() == Some(&intended.change))
+            .collect();
+        // One kept by an earlier build names no change: it may be this one's.
+        let unnamed_done = work
+            .iter()
+            .filter(|supervised| supervised.change.is_none())
+            .all(|supervised| done(&supervised));
+        let named_done = named.iter().all(done);
+        match intended.operation.as_str() {
+            RUN => unnamed_done && named_done,
+            // A stop names no supervisor, nor does a start whose one was
+            // retired: with none, which it was is not told.
+            JOB => !named.is_empty() && unnamed_done && named_done,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "ended_tests.rs"]
+mod tests;

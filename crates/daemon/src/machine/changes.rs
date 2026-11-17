@@ -102,8 +102,9 @@ struct Manifest {
     records: BTreeMap<String, String>,
 }
 
-/// A change kept as intended: what it is, and the digest of the request it
-/// was asked with ([`request_digest`]).
+/// A change kept as intended, or whose outcome is otherwise unknown: what
+/// it is, and the digest of the request it was asked with
+/// ([`request_digest`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Intended {
     pub change: Token,
@@ -499,6 +500,53 @@ impl<V: Vault> Changes<V> {
             .collect())
     }
 
+    /// Every change whose outcome is unknown: kept as intended, or done
+    /// with an uncertain reply not yet proven ended. What [`Changes::ended`]
+    /// may answer once its work is proven gone.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store is unknown.
+    pub fn unresolved(&self) -> Result<Vec<Intended>> {
+        let mut last = self.verified();
+        let (_, records) = self.trusted(&mut last)?;
+        Ok(records
+            .values()
+            .filter(|record| unresolved(&record.state))
+            .map(|record| Intended {
+                change: record.change.clone(),
+                operation: record.operation.clone(),
+                request: record.request.clone(),
+            })
+            .collect())
+    }
+
+    /// The work of `change` is proven gone: kept as ended, uncertain still,
+    /// in place of an intent or an uncertain reply. A change kept with a
+    /// certain reply, already ended, or not kept is left as it is. Whether
+    /// it was kept as ended now.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store is unknown or cannot be written.
+    pub fn ended(&self, change: &Token) -> Result<bool> {
+        let mut last = self.verified();
+        let (manifest, mut records) = self.trusted(&mut last)?;
+        let Some(record) = records
+            .get(change.as_str())
+            .filter(|record| unresolved(&record.state))
+        else {
+            return Ok(false);
+        };
+        let mut record = Record::clone(record);
+        record.state = State::Done {
+            reply: ended_reply(),
+        };
+        records.insert(change.as_str().to_owned(), Arc::new(record));
+        self.keep(&mut last, &manifest, records, &[change.as_str()])?;
+        Ok(true)
+    }
+
     /// The station settled `changes`: their records go, in one write.
     /// Settling one that is not kept, or not done, changes nothing.
     ///
@@ -525,6 +573,27 @@ impl<V: Vault> Changes<V> {
         }
         self.keep(&mut last, &manifest, records, &done)
     }
+}
+
+/// Whether a change standing at `state` has an outcome nobody knows: an
+/// intent, or an uncertain reply not proven ended.
+fn unresolved(state: &State) -> bool {
+    match state {
+        State::Intended => true,
+        State::Done { reply } => reply["uncertain"] == true && reply["ended"] != true,
+    }
+}
+
+/// What a change whose work is proven gone came to: still not known to
+/// have happened or not, and nothing of it runs any more.
+fn ended_reply() -> Value {
+    serde_json::json!({
+        "ok": false,
+        "code": "uncertain",
+        "error": "What this change came to is not known, but its work is proven ended.",
+        "uncertain": true,
+        "ended": true,
+    })
 }
 
 /// `reply`, whole when it is small enough, else what it came to, its texts

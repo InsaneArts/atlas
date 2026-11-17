@@ -40,13 +40,14 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 6] = [
+pub(super) const CAPABILITIES: [&str; 7] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
     "handover-v1",
     super::observe::CAPABILITY,
     super::change::CAPABILITY,
+    super::recover::CAPABILITY,
 ];
 /// The reads a client may have carried to the guest, by their operation:
 /// what the commands this build runs on a VM need, and nothing more.
@@ -273,6 +274,11 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
         Some("settle") => {
             let settled = super::change::settled(keeper, &request).await;
             let _ = say(&mut writing, &settled).await;
+        }
+        Some("recover") if request["generation"].is_u64() => {
+            let generation = request["generation"].as_u64().unwrap_or_default();
+            let recovered = super::recover::asked(keeper, generation, deadline).await;
+            let _ = say(&mut writing, &recovered).await;
         }
         Some("observe") => {
             let challenge = request["challenge"].as_str();

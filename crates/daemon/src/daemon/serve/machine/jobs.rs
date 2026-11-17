@@ -430,6 +430,7 @@ impl Jobs {
             stops: Some(stopping_rx),
             judged: Some(judged),
             change: Some(record.change.clone()),
+            carrying: Some(daemon.keepers.carry(&record.change)),
             job: Some(record.clone()),
             printed: None,
         };
@@ -995,7 +996,11 @@ impl super::Machine {
                     return self.answer_job(change, refused, &mut writer).await;
                 }
                 let (machine, daemon) = (self.clone(), self.daemon.clone());
+                // Carried out here until its outcome is kept, whatever
+                // happens to its lane.
+                let carrying = daemon.keepers.carry(&started_as);
                 tokio::spawn(async move {
+                    let _carrying = carrying;
                     let reply = jobs
                         .start(&daemon, gate, started_as.clone(), start, policy)
                         .await;
@@ -1009,7 +1014,9 @@ impl super::Machine {
                     return super::write(&mut writer, &refused).await;
                 };
                 let machine = self.clone();
+                let carrying = self.daemon.keepers.carry(&stopped_as);
                 tokio::spawn(async move {
+                    let _carrying = carrying;
                     let reply = jobs.stop(&gate, &id, &expect, grace).await;
                     machine.came_to(stopped_as, reply).await
                 })

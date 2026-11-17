@@ -9,7 +9,7 @@ use crate::machine::{
     processes::{Remembered, Supervised},
     supervise::{DONE, ENDED, RENEW, STOP, proof},
 };
-use atlas_core::{error::Code, process::Instance, protocol::failure};
+use atlas_core::{error::Code, files::Token, process::Instance, protocol::failure};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -40,9 +40,52 @@ pub(crate) struct Keepers {
     /// Held through each recovery and each handing of a keeper's record to
     /// it, so what one finds is never written over by another's older word.
     pub(crate) recovering: tokio::sync::Mutex<()>,
+    /// The changes this daemon is carrying out, each counted once for every
+    /// [`Carrying`] of it: from before its intent is kept until nothing of
+    /// this daemon can start its work or keep a record of it any more.
+    carried: Mutex<HashMap<Token, usize>>,
+}
+
+/// A change this daemon is carrying out: its lane being served, its work
+/// being started, or its supervisor kept. Until every one of it is dropped,
+/// nothing proves its work gone.
+#[must_use = "dropping it at once stops counting the change as carried out"]
+pub(crate) struct Carrying {
+    keepers: Arc<Keepers>,
+    change: Token,
+}
+
+impl Drop for Carrying {
+    fn drop(&mut self) {
+        let mut carried = self.keepers.carried();
+        if let Some(count) = carried.get_mut(&self.change) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                carried.remove(&self.change);
+            }
+        }
+    }
 }
 
 impl Keepers {
+    fn carried(&self) -> std::sync::MutexGuard<'_, HashMap<Token, usize>> {
+        self.carried.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Count `change` as carried out here until what this gives is dropped.
+    pub(crate) fn carry(self: &Arc<Self>, change: &Token) -> Carrying {
+        *self.carried().entry(change.clone()).or_default() += 1;
+        Carrying {
+            keepers: self.clone(),
+            change: change.clone(),
+        }
+    }
+
+    /// Whether this daemon is carrying `change` out.
+    pub(crate) fn carries(&self, change: &Token) -> bool {
+        self.carried().contains_key(change)
+    }
+
     fn set(&self, supervisor: Instance, keeping: Keeping) {
         self.owned
             .lock()
@@ -187,6 +230,7 @@ pub(super) async fn keep(
         judged,
         job,
         change,
+        carrying,
         ..
     } = lease;
     keepers.set(supervisor, Keeping::Active);
@@ -257,6 +301,8 @@ pub(super) async fn keep(
     if let Some(judged) = judged {
         let _ = judged.send(proven);
     }
+    // Carried until here: its record is retired, or left to recovery.
+    drop(carrying);
 }
 
 /// Renew over `lifeline` until the lease is `over` or the supervisor is

@@ -365,6 +365,33 @@ impl Controller {
         Ok(pending)
     }
 
+    /// Every pending change `executor` carries out whose claim no live
+    /// process holds: those whose holder ended without settling them, which
+    /// only that executor's answer settles. From one read of the marker and
+    /// its executors under the marker lock, waiting at most `wait` for it,
+    /// as [`Controller::pending_within`] reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`Controller::pending_within`], and when who carries out the
+    /// pending changes cannot be read.
+    pub fn unheld_by(&self, executor: Executor, wait: Duration) -> Result<Vec<String>> {
+        let _lock = self.lock_marker_within(wait)?;
+        let pending = pending(&self.marker)?;
+        if pending.iter().any(|entry| entry == UNREADABLE) {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read.",
+            ));
+        }
+        let executors = executors::read(&self.executors)?;
+        Ok(pending
+            .into_iter()
+            .filter(|generation| executors.get(generation) == Some(&executor))
+            .filter(|generation| !self.in_progress(generation))
+            .collect())
+    }
+
     /// [`Controller::quarantine_as`], recorded as `mark` says, its executor
     /// named when it is not the desktop's own services.
     fn quarantine_marked(
@@ -471,7 +498,24 @@ impl Controller {
     /// generation. Other pending generations remain.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
         let _lock = self.lock_marker()?;
+        self.clear_locked(generation)
+    }
 
+    /// [`Controller::clear_if`], waiting at most `wait` for the marker
+    /// lock: for a settler that must never queue behind control, and tries
+    /// again later instead.
+    ///
+    /// # Errors
+    ///
+    /// Busy when the lock is held past `wait`, with nothing settled; else
+    /// as [`Controller::clear_if`].
+    pub fn clear_if_within(&self, generation: &str, wait: Duration) -> Result<()> {
+        let _lock = self.lock_marker_within(wait)?;
+        self.clear_locked(generation)
+    }
+
+    /// Settle `generation` while the caller holds the marker lock.
+    fn clear_locked(&self, generation: &str) -> Result<()> {
         if let Some(live) = self.live(generation)
             && !self.in_progress(generation)
         {
