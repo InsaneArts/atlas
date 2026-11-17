@@ -122,8 +122,21 @@ pub(super) struct Guest {
     pub(super) stop: Arc<Mutex<&'static str>>,
     /// The work the guest's hello reports.
     pub(super) work: Arc<Mutex<Value>>,
+    /// How its lanes are answered in place of the stand-in's own hello and
+    /// echo, when a test says.
+    pub(super) answering: Arc<Mutex<Option<Answering>>>,
+    /// What Atlas VM says of the VM's state.
+    pub(super) runner: Mutex<Value>,
+    /// While set, Atlas VM's state is said only once this is told, the
+    /// control connection cut first when it says so.
+    pub(super) runner_held: Mutex<Option<(Arc<tokio::sync::Notify>, bool)>>,
+    /// How many times Atlas VM's state was asked.
+    pub(super) runner_asked: AtomicUsize,
+    /// While set, Atlas VM's state is asked on this socket, as the station
+    /// asks it.
+    pub(super) runner_socket: Mutex<Option<std::path::PathBuf>>,
     pairings: AtomicUsize,
-    held_lanes: Mutex<Vec<Dialer>>,
+    pub(super) held_lanes: Mutex<Vec<Dialer>>,
     connections: Mutex<Vec<Connection>>,
 }
 
@@ -196,7 +209,12 @@ impl Reach for Guest {
                         .map(|live| live.lanes.clone());
                     let lanes = lanes.ok_or_else(Self::failed)?;
                     let (stop, work) = (self.stop.clone(), self.work.clone());
-                    let answer: Answering = Arc::new(move |_, request| {
+                    let answering = self.answering.clone();
+                    let answer: Answering = Arc::new(move |header, request| {
+                        let told = answering.lock().unwrap().clone();
+                        if let Some(told) = told {
+                            return told(header, request);
+                        }
                         if request["op"] == "hello" {
                             json!({"ok": true, "op": "hello",
                                 "stop": {"state": *stop.lock().unwrap()},
@@ -246,6 +264,117 @@ impl Reach for Guest {
     fn facts(&self) -> Pin<Box<dyn Future<Output = Option<Facts>> + Send + '_>> {
         Box::pin(async move { self.facts.lock().unwrap().clone() })
     }
+
+    fn runner(
+        &self,
+        within: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::vm::runner::Reply>> + Send + '_>> {
+        Box::pin(async move {
+            self.runner_asked.fetch_add(1, SeqCst);
+            let socket = self.runner_socket.lock().unwrap().clone();
+            if let Some(socket) = socket {
+                return runner_state(move || Ok(crate::vm::runner::Runner::at(socket)), within)
+                    .await;
+            }
+            let held = self.runner_held.lock().unwrap().clone();
+            if let Some((held, cut)) = held {
+                let told = held.notified();
+                if cut {
+                    self.cut();
+                }
+                told.await;
+            }
+            let said = self.runner.lock().unwrap().clone();
+            serde_json::from_value(said)
+                .map_err(|_| Error::new(Code::Transport, "Not a runner's reply."))
+        })
+    }
+}
+
+/// What a machine guest says on its lanes, as a test makes it say.
+#[derive(Default)]
+pub(super) struct Saying {
+    /// Every challenge its proof was asked for, in order.
+    pub(super) challenges: Mutex<Vec<String>>,
+    /// The challenge its proof answers in place of the one asked.
+    pub(super) replaying: Mutex<Option<String>>,
+    /// Its input service's hello in place of a ready one's.
+    pub(super) input: Mutex<Option<Value>>,
+    /// Changes made to its hello.
+    pub(super) hello: Mutex<Option<fn(&mut Value)>>,
+    /// Whether its input lanes stall: open, and silent.
+    pub(super) input_stalls: std::sync::atomic::AtomicBool,
+}
+
+/// The facts of a machine guest's own screen: account 502's, its daemon,
+/// process 123, the proof's parent.
+pub(super) fn screen() -> Value {
+    json!({"ok": true, "uid": 502, "hasGraphicAccess": true, "parentPID": 123,
+        "onConsole": true, "securitySessionID": 42, "displayID": 7, "width": 1440.0,
+        "height": 900.0, "scale": 2.0})
+}
+
+/// The hello of a machine guest that proves itself: account 502, in
+/// machine mode, in a virtual machine, closed to anyone but Atlas, its Stop
+/// `stop`.
+pub(super) fn machine_hello(stop: &str) -> Value {
+    json!({"ok": true, "op": "hello", "user": {"uid": 502},
+        "session": {"managerName": "Aqua", "onConsole": true},
+        "display": {"width": 1440.0, "height": 900.0, "scale": 2.0},
+        "permissions": {"accessibility": true, "postEvents": true, "screenCapture": true},
+        "machine": {"mode": "machine", "boot": "boot-1", "virtual": true},
+        "daemon": {"protocol": 1, "pid": 123, "version": "1.0.0", "build": "b1",
+            "capabilities": ["machine-proof-v1"]},
+        "remoteLogin": "off", "account": {"admin": false},
+        "agents": {"admitted": true, "held": null, "stopped": false},
+        "input": {"standing": "ready", "failure": null, "held": null},
+        "stop": {"state": stop}, "work": {"state": "none"}})
+}
+
+/// The hello of a machine guest's input service, ready, of its daemon's
+/// build.
+pub(super) fn input_hello() -> Value {
+    json!({"ok": true, "protocolVersion": 1, "pid": 456, "version": "1.0.0", "build": "b1",
+        "ready": true, "accessibility": true, "session": screen()})
+}
+
+impl Guest {
+    /// Answer its lanes as a machine guest that proves itself, as the
+    /// `Saying` it gives says.
+    pub(super) fn proving(&self) -> Arc<Saying> {
+        let saying = Arc::new(Saying::default());
+        let (said, stop) = (saying.clone(), self.stop.clone());
+        let answer: Answering =
+            Arc::new(
+                move |header, request| match (&header.kind, request["op"].as_str()) {
+                    (LaneKind::Input { .. }, Some("hello")) if said.input_stalls.load(SeqCst) => {
+                        Value::Null
+                    }
+                    (LaneKind::Input { .. }, Some("hello")) => said
+                        .input
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(input_hello),
+                    (LaneKind::Read, Some("hello")) => {
+                        let mut hello = machine_hello(*stop.lock().unwrap());
+                        if let Some(change) = *said.hello.lock().unwrap() {
+                            change(&mut hello);
+                        }
+                        hello
+                    }
+                    (LaneKind::Read, Some("session-proof")) => {
+                        let asked = request["challenge"].as_str().unwrap_or_default().to_owned();
+                        said.challenges.lock().unwrap().push(asked.clone());
+                        let answered = said.replaying.lock().unwrap().clone().unwrap_or(asked);
+                        json!({"ok": true, "challenge": answered, "proof": screen()})
+                    }
+                    _ => json!({"ok": true, "echo": request}),
+                },
+            );
+        *self.answering.lock().unwrap() = Some(answer);
+        saying
+    }
 }
 
 /// A keeper of a VM not paired yet, its enrolment kept, and its guest.
@@ -283,6 +412,12 @@ pub(super) fn fixture() -> Fixture {
         facts: Mutex::new(None),
         stop: Arc::new(Mutex::new("clear")),
         work: Arc::new(Mutex::new(json!({"state": "none"}))),
+        answering: Arc::default(),
+        runner: Mutex::new(json!({"ok": true, "op": "state", "power": "running",
+            "confirmed": true, "window": "closed"})),
+        runner_held: Mutex::new(None),
+        runner_asked: AtomicUsize::new(0),
+        runner_socket: Mutex::new(None),
         pairings: AtomicUsize::new(0),
         held_lanes: Mutex::default(),
         connections: Mutex::default(),
@@ -309,6 +444,7 @@ pub(super) fn fixture() -> Fixture {
         instance: atlas_core::process::Instance::current(),
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
+        observing: observe::room(),
         shared: Shared::default(),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
@@ -344,6 +480,7 @@ fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         instance: None,
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
+        observing: observe::room(),
         shared: Shared::default(),
     })
 }
@@ -393,6 +530,7 @@ async fn a_keeper_pairs_once_and_holds_one_generation_for_many_clients() {
                 let mut lines = Vec::new();
                 read(
                     &session,
+                    LaneKind::Read,
                     &json!({"op": "echo", "asked": asked}),
                     Duration::from_secs(10),
                     |line| {
@@ -999,6 +1137,7 @@ async fn a_keeper_whose_program_is_replaced_keeps_serving_and_does_nothing_until
     let mut lines = Vec::new();
     read(
         &session,
+        LaneKind::Read,
         &json!({"op": "echo"}),
         Duration::from_secs(10),
         |line| {

@@ -209,6 +209,70 @@ async fn a_read_is_carried_on_a_lane_of_the_live_generation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_pinned_to_a_generation_is_carried_only_in_that_generation() {
+    let serving = serving(true).await;
+    let live = serving.fixture.keeper.shared.state().generation.unwrap().0;
+    let read = |generation: Value| {
+        json!({"op": "read", "request": {"op": "elements"}, "generation": generation,
+            "deadline_ms": 5000})
+    };
+
+    let carried = asked(&serving.socket, &read(json!(live))).await;
+    let stale = asked(&serving.socket, &read(json!(live + 1))).await;
+    let earlier = asked(&serving.socket, &read(json!(live - 1))).await;
+    let malformed = asked(&serving.socket, &read(json!("live"))).await;
+
+    assert_eq!(carried, [json!({"ok": true, "echo": {"op": "elements"}})]);
+    for refused in [&stale, &earlier] {
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0]["code"], "session-changed", "{refused:?}");
+    }
+    assert_eq!(malformed[0]["code"], "bad-request", "{malformed:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_pinned_to_a_generation_that_ended_is_refused_in_the_next() {
+    let serving = serving(true).await;
+    let keeper = &serving.fixture.keeper;
+    let first = keeper.shared.state().generation.unwrap().0;
+    serving.fixture.guest.cut();
+    until("a new generation", || {
+        keeper
+            .shared
+            .live()
+            .is_some_and(|session| session.control.generation().0 != first)
+    })
+    .await;
+
+    let refused = asked(
+        &serving.socket,
+        &json!({"op": "read", "request": {"op": "elements"}, "generation": first}),
+    )
+    .await;
+
+    assert_eq!(refused[0]["code"], "session-changed", "{refused:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_observation_is_asked_on_the_keepers_socket() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+
+    let observed = asked(
+        &serving.socket,
+        &json!({"op": "observe", "challenge": "on-the-socket", "deadline_ms": 5000}),
+    )
+    .await;
+
+    assert_eq!(observed.len(), 1, "{observed:?}");
+    assert_eq!(observed[0]["op"], "observe", "{observed:?}");
+    assert_eq!(
+        observed[0]["status"]["sessionProof"]["challenge"],
+        "on-the-socket"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn anything_else_is_refused_with_what_the_keeper_serves() {
     let serving = serving(true).await;
 
@@ -359,15 +423,23 @@ impl crate::link::Trust for Trusting {
 /// A client of the VM `serving` keeps, reaching it through its socket, its
 /// Stop the keeper's own.
 fn client_of(serving: &Serving, directory: &Path) -> crate::client::Client {
+    client_within(serving, directory, Duration::from_secs(10))
+}
+
+/// [`client_of`], each exchange with the keeper within `timeout`.
+fn client_within(serving: &Serving, directory: &Path, timeout: Duration) -> crate::client::Client {
     let mut client = crate::test_support::vm_client(directory, None);
     client.controller = serving.fixture.keeper.stop.clone();
-    client.link = crate::link::Link::Keeper(crate::link::Keeper::at(
-        Arc::new(client.selected.clone()),
-        serving.fixture.keeper.vm.clone(),
-        serving.socket.clone(),
-        Duration::from_secs(10),
-        Arc::new(Trusting),
-    ));
+    client.link = crate::link::Link::Keeper(
+        crate::link::Keeper::at(
+            Arc::new(client.selected.clone()),
+            serving.fixture.keeper.vm.clone(),
+            serving.socket.clone(),
+            timeout,
+            Arc::new(Trusting),
+        )
+        .with_pairing(serving.fixture.kept.clone()),
+    );
     client
 }
 
@@ -397,6 +469,281 @@ async fn a_vms_status_through_its_keeper_says_both_hellos_and_is_never_proven() 
     ] {
         assert_eq!(refused.error, client.unreachable().error);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let generation = serving.fixture.keeper.shared.state().generation.unwrap();
+
+    let status = client.status().await;
+
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(status["ready"], false);
+    assert!(
+        status["notReady"]
+            .as_str()
+            .unwrap()
+            .contains("cannot act on a VM yet"),
+        "{status}"
+    );
+    let proof = &status["proof"];
+    assert_eq!(proof["generation"], json!(generation));
+    assert_eq!(proof["capture"], true);
+    assert_eq!(proof["input"], true, "{status}");
+    assert_eq!(proof["epoch"]["capturePid"], 123);
+    assert_eq!(proof["epoch"]["inputPid"], 456);
+    assert_eq!(proof["epoch"]["scale"], 2.0);
+    assert_eq!(status["guest"]["stop"]["state"], "clear");
+    assert_eq!(status["runner"]["window"], "closed");
+    let doctor = crate::capability::Doctor::vm(status.clone(), client.unreachable());
+    assert!(!doctor.diagnosis.ready);
+    assert!(crate::capability::vm_first_step(&status).is_none());
+    assert_eq!(
+        client.identity().await.unwrap_err().error,
+        client.unreachable().error,
+        "nothing but status and doctor proves it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_input_lane_leaves_a_vm_proven_with_input_unavailable_in_time() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    saying.input_stalls.store(true, SeqCst);
+    let directory = tempfile::tempdir().unwrap();
+    let timeout = Duration::from_secs(3);
+    let client = client_within(&serving, directory.path(), timeout);
+    let started = std::time::Instant::now();
+
+    let status = client.status().await;
+
+    assert!(
+        started.elapsed() < timeout,
+        "{:?} for the hello and the observation",
+        started.elapsed()
+    );
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(status["proof"]["input"], false);
+    assert_eq!(
+        status["guest"]["inputService"]["available"], false,
+        "{status}"
+    );
+    assert_eq!(
+        status["runner"]["window"], "closed",
+        "the runner still asked"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_overview_of_a_vm_says_its_proofs_first_step_after_its_stop_and_handover() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let reason = |status: Value, handover: Option<String>| {
+        let doctor =
+            crate::capability::Doctor::vm(status, client.unreachable()).handing_over(handover);
+        crate::overview::overview(&doctor, false, crate::overview::Pending::default(), &[], 0).value
+    };
+    let window = |said: Value| {
+        *serving.fixture.guest.runner.lock().unwrap() = json!({"ok": true, "op": "state", "power": "running", "confirmed": true,
+                "window": said});
+    };
+
+    window(json!("open"));
+    let open = reason(client.status().await, None);
+    window(json!(null));
+    let unknown = client.status().await;
+    let handing = reason(
+        unknown.clone(),
+        Some("Atlas is handing the VM over.".to_owned()),
+    );
+    let unknown = reason(unknown, None);
+    window(json!("closed"));
+    *serving.fixture.guest.stop.lock().unwrap() = "stopped";
+    let stopped = reason(client.status().await, None);
+
+    assert_eq!(open["mode"], "unavailable");
+    assert!(
+        open["reason"].as_str().unwrap().contains("Close it"),
+        "{open}"
+    );
+    assert!(
+        unknown["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Restart the VM"),
+        "{unknown}"
+    );
+    assert_eq!(handing["reason"], "Atlas is handing the VM over.");
+    assert_eq!(stopped["mode"], "stopped", "{stopped}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_statuses_in_a_row_prove_one_epoch_each_with_a_challenge_of_its_own() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let first = client.status().await;
+    let second = client.status().await;
+
+    assert_eq!(first["proven"], true, "{first}");
+    assert_eq!(second["proven"], true, "{second}");
+    assert_eq!(first["proof"]["epoch"], second["proof"]["epoch"]);
+    let challenges = saying.challenges.lock().unwrap().clone();
+    assert_eq!(challenges.len(), 2, "{challenges:?}");
+    assert_ne!(challenges[0], challenges[1]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_proof_that_answers_another_challenge_is_refused_and_doctor_says_so_first() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let earlier = client.status().await;
+    assert_eq!(earlier["proven"], true, "{earlier}");
+    let replayed = saying.challenges.lock().unwrap()[0].clone();
+    *saying.replaying.lock().unwrap() = Some(replayed);
+
+    let status = client.status().await;
+
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["ready"], false);
+    assert_eq!(status["proof"]["code"], "identity", "{status}");
+    let refused = status["proof"]["error"].as_str().unwrap().to_owned();
+    assert!(refused.contains("did not match its challenge"), "{refused}");
+    assert_eq!(status["guest"]["stop"]["state"], "clear", "still said");
+    let first = crate::capability::vm_first_step(&status).unwrap();
+    assert_eq!(first.error, refused);
+    let doctor = crate::capability::Doctor::vm(status, client.unreachable());
+    assert!(matches!(
+        doctor.diagnosis.first_step,
+        atlas_core::session::Guidance::Advice(ref step) if *step == refused
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_with_no_input_hello_is_proven_with_input_false_and_its_advice_first() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    *saying.input.lock().unwrap() =
+        Some(json!({"ok": false, "code": "transport", "error": "The lane ended."}));
+    *saying.hello.lock().unwrap() = Some(|hello| {
+        hello["permissions"]["accessibility"] = json!(false);
+        hello["input"] = json!({"standing": "gone",
+            "failure": {"code": "permission", "error": "No Accessibility."},
+            "held": "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents wait for it."});
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(status["proof"]["capture"], true);
+    assert_eq!(status["proof"]["input"], false);
+    assert_eq!(status["proof"]["epoch"]["inputPid"], 0);
+    assert_eq!(status["guest"]["inputService"]["available"], false);
+    let first = crate::capability::vm_first_step(&status).unwrap();
+    assert!(
+        first
+            .error
+            .starts_with("Allow Atlas in Privacy & Security, Accessibility"),
+        "{}",
+        first.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_whose_input_runs_another_build_of_the_same_version_is_said_to_be_mid_update() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    *saying.hello.lock().unwrap() = Some(|hello| hello["daemon"]["build"] = json!("b2"));
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(
+        status["guest"]["daemon"]["version"],
+        status["guest"]["inputService"]["version"]
+    );
+    assert_eq!(status["proof"]["input"], false, "{status}");
+    assert_eq!(status["proof"]["inputWhy"], crate::vm::proof::MID_UPDATE);
+    assert_eq!(status["notReady"], crate::vm::proof::MID_UPDATE);
+    let first = crate::capability::vm_first_step(&status).unwrap();
+    assert_eq!(first.code, Code::Update);
+    assert!(first.error.contains("Restart the VM"), "{}", first.error);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_open_to_more_than_atlas_is_refused_in_its_guests_words() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    *saying.hello.lock().unwrap() = Some(|hello| {
+        hello["remoteLogin"] = json!("on");
+        hello["agents"]["held"] = json!("Remote Login is on in the guest.");
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["proof"]["code"], "platform", "{status}");
+    assert!(
+        status["proof"]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Remote Login is on in the guest.")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_whose_runner_says_nothing_of_its_window_is_refused_with_a_restart_advised() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    *serving.fixture.guest.runner.lock().unwrap() =
+        json!({"ok": true, "op": "state", "power": "running", "confirmed": true});
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["proof"]["code"], "on-console", "{status}");
+    assert!(
+        status["proof"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Restart the VM")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_whose_keeper_cannot_observe_it_says_why_beside_its_guests_hello() {
+    let serving = serving_with(true, true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["proven"], false);
+    assert_eq!(status["proof"]["code"], "update", "{status}");
+    assert_eq!(status["guest"]["stop"]["state"], "clear", "{status}");
+    assert!(status["runner"].is_null());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

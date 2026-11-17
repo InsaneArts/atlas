@@ -3,9 +3,7 @@
 use super::recorder;
 use atlas_core::{protocol::Census, session::Console};
 use atlas_native::native::{accessibility_trusted as accessibility, capture, cf, resources};
-use objc2_core_graphics::{
-    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
-};
+use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGMainDisplayID};
 use serde_json::{Value, json};
 
 /// This process's permissions now (`atlas permissions-info`).
@@ -81,20 +79,12 @@ pub(super) fn display_bounds() -> (f64, f64, f64, f64) {
     )
 }
 
-/// The main display in points, and its backing pixels per point.
+/// The main display in points, and its backing pixels per point, as the
+/// session proof reads them.
 fn display() -> Value {
     let display = CGMainDisplayID();
     let bounds = CGDisplayBounds(display);
-    let mode = CGDisplayCopyDisplayMode(display);
-    let (pixels, points) = (
-        CGDisplayMode::pixel_width(mode.as_deref()),
-        CGDisplayMode::width(mode.as_deref()),
-    );
-    let scale = if points > 0 {
-        pixels as f64 / points as f64
-    } else {
-        1.0
-    };
+    let scale = atlas_native::native::backing_scale(display);
 
     json!({"width": bounds.size.width, "height": bounds.size.height, "scale": scale})
 }
@@ -161,14 +151,15 @@ pub(super) fn hello(
     hello
 }
 
-/// A machine desktop's hello: who and where it is, and what it declares
+/// A machine desktop's hello: who and where it is, on which display, with
+/// which permissions, in which boot of which machine, and what it declares
 /// (`declared`), never the hidden login's capabilities; whether agents are
 /// admitted now, apart from the Stop its disk keeps; and what work may still
-/// run there. Read from this process and its own records alone, so a busy
-/// guest answers it at once.
+/// run there. What the station proves it by is all here, beside its proof.
 pub(super) fn machine_hello(
     manager: &str,
     declared: &atlas_session::compatibility::Declared,
+    itself: &Itself,
     posture: Posture,
     input: Input,
     stop: &Stop,
@@ -180,8 +171,16 @@ pub(super) fn machine_hello(
         "op": "hello",
         "user": user(),
         "session": {"managerName": manager, "onConsole": console_state()},
+        "display": display(),
+        "permissions": {
+            "accessibility": accessibility(),
+            "postEvents": objc2_core_graphics::CGPreflightPostEventAccess(),
+            "screenCapture": capture::permitted(),
+        },
+        "machine": {"mode": "machine", "boot": itself.boot, "virtual": itself.virtual_machine},
         "daemon": {"protocol": declared.protocol, "pid": std::process::id(),
-            "version": declared.version, "capabilities": declared.capabilities},
+            "version": declared.version, "capabilities": declared.capabilities,
+            "build": itself.build},
         "remoteLogin": match posture.remote_login {
             Some(true) => "on",
             Some(false) => "off",
@@ -208,6 +207,27 @@ pub(super) fn machine_hello(
             "supervisors": told(work.supervisors),
         },
     })
+}
+
+/// What a machine desktop's daemon says of the machine it runs on and of
+/// itself: the boot, whether the machine is a virtual one, each none when
+/// it cannot be told, and the digest of the executable it started from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Itself {
+    pub(super) boot: Option<String>,
+    pub(super) virtual_machine: Option<bool>,
+    pub(super) build: Option<String>,
+}
+
+impl Itself {
+    /// As this daemon, started from `build`, finds itself now.
+    pub(super) fn now(build: Option<String>) -> Self {
+        Self {
+            boot: atlas_core::process::boot().ok(),
+            virtual_machine: atlas_core::process::in_virtual_machine(),
+            build,
+        }
+    }
 }
 
 /// Whether agents are stopped on a machine desktop: as its disk keeps it,

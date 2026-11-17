@@ -45,6 +45,9 @@ pub struct Keeper {
     socket: PathBuf,
     pub timeout: Duration,
     trust: Arc<dyn Trust>,
+    /// Where the VM's pairing is kept, when a test says; else its station
+    /// folder's.
+    pairing: Option<Arc<dyn StationRecords>>,
 }
 
 impl fmt::Debug for Keeper {
@@ -159,6 +162,36 @@ impl Keeper {
             socket,
             timeout,
             trust,
+            pairing: None,
+        }
+    }
+
+    /// This keeper, its VM's pairing kept in `records`.
+    #[cfg(test)]
+    pub(crate) fn with_pairing(mut self, records: Arc<dyn StationRecords>) -> Self {
+        self.pairing = Some(records);
+        self
+    }
+
+    /// What the VM's pairing fixed, read afresh from where it is kept. It
+    /// waits on the disk, so it runs off any runtime.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM not paired, or whose pairing was revoked; fails when
+    /// its record cannot be read.
+    pub(crate) fn paired(&self) -> Result<atlas_core::session::paired::Paired> {
+        let kept = match &self.pairing {
+            Some(records) => records.read()?,
+            None => atlas_session::pairing_file::PairingFile::at(Station::own()?.path_of(&self.vm))
+                .read()?,
+        };
+        match kept {
+            Some(Enrolment::Paired(paired)) => Ok(paired),
+            _ => Err(Error::new(
+                Code::Identity,
+                format!("{} is not paired.", self.selected.name),
+            )),
         }
     }
 

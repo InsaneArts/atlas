@@ -1,14 +1,25 @@
-//! What a client asks of a VM desktop through its session keeper, before the
-//! VM's proof: its status, never ready, and the person's Stop and Resume.
-//! Everything else stays refused in the one wording for what this build
-//! cannot do on a VM.
+//! What a client asks of a VM desktop through its session keeper: its status
+//! with a fresh proof of it, never ready yet, and the person's Stop and
+//! Resume. Everything else stays refused in the one wording for what this
+//! build cannot do on a VM.
 use super::{Actor, Client};
-use crate::link::{Keeper, Link};
+use crate::{
+    link::{Keeper, Link},
+    vm::proof::Observed,
+};
 use atlas_core::{
     config::desktops::{Admission, Chosen},
     error::{Code, Error, Result},
+    session::MachineSession,
 };
 use serde_json::{Value, json};
+
+/// A VM's proof as one command took it: what its keeper observed, and the
+/// session that proves or why it does not.
+struct Proved {
+    observed: Observed,
+    session: Result<MachineSession>,
+}
 
 /// `error`, a VM's status that failed, with the handover an update is still
 /// making of it, `unfinished`, when one is: its code and words kept.
@@ -62,8 +73,33 @@ impl Client {
         crate::vm::handover::unfinished(&self.selected.name, &config.id)
     }
 
-    /// A VM's status: its keeper's hello and its guest's own, read through
-    /// the keeper, never proven, so never ready.
+    /// A VM proved now, in one generation of its session: a challenge of
+    /// this command's own, what `keeper` observed for it, and the VM's
+    /// pairing read afresh. Nothing of it is kept.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the keeper gives no observation of one generation that
+    /// answers this command's challenge; a refused proof is [`Proved`]'s.
+    async fn verify_machine(&self, keeper: &Keeper) -> Result<Proved> {
+        let challenge = atlas_core::files::token();
+        let asked = json!({"op": "observe", "challenge": challenge,
+            "deadline_ms": keeper.timeout.as_millis()});
+        let answer = keeper.one(&asked).await?;
+        if answer["ok"] != true {
+            return Err(observe_refused(&answer, &self.selected.name));
+        }
+        let observed = Observed::decode(&answer, &challenge)?;
+        let reading = keeper.clone();
+        let paired = tokio::task::spawn_blocking(move || reading.paired())
+            .await
+            .unwrap_or_else(|_| Err(Error::new(Code::State, "The pairing could not be read.")));
+        let session = paired.and_then(|paired| observed.prove(&self.desktop(), &paired));
+        Ok(Proved { observed, session })
+    }
+
+    /// A VM's status: its keeper's hello, its guest's own and a fresh proof
+    /// of it, read through the keeper. It is never ready yet, proven or not.
     pub(super) async fn vm_status(&self) -> Result<Value> {
         // A VM still being added answers nothing but the person's Stop.
         if self.admission() != Admission::Open {
@@ -74,11 +110,20 @@ impl Client {
         let handing = |error| handing_over(error, self.handover_unfinished());
         let keeper = self.keeper().await.map_err(handing)?;
         let hello = keeper.one(&json!({"op": "hello"})).await.map_err(handing)?;
-        let read = json!({"op": "read", "request": {"op": "hello"},
-            "deadline_ms": keeper.timeout.as_millis()});
-        let guest = match keeper.ask(&read).await {
-            Ok(mut lines) => lines.pop().unwrap_or_else(|| json!(late(self))),
-            Err(error) => json!(error),
+        let (observed, session) = match self.verify_machine(&keeper).await {
+            Ok(proved) => (Some(proved.observed), proved.session),
+            Err(refused) => (None, Err(refused)),
+        };
+        let guest = match &observed {
+            Some(observed) => observed.status.clone(),
+            None => {
+                let read = json!({"op": "read", "request": {"op": "hello"},
+                    "deadline_ms": keeper.timeout.as_millis()});
+                match keeper.ask(&read).await {
+                    Ok(mut lines) => lines.pop().unwrap_or_else(|| json!(late(self))),
+                    Err(error) => json!(error),
+                }
+            }
         };
         // The station's own Stop, and why: an update's says so.
         let controller = self.controller.clone();
@@ -87,12 +132,39 @@ impl Client {
             Ok(Ok(None)) => json!({"state": "clear"}),
             Ok(Err(_)) | Err(_) => json!({"state": "unknown"}),
         };
+        let generation = observed.as_ref().map(|observed| observed.generation);
+        let mid_update = !session.as_ref().is_ok_and(|session| session.input)
+            && crate::vm::proof::mid_update(&guest);
+        let (proof, not_ready) = match &session {
+            Ok(session) if mid_update => (
+                json!({"epoch": session.epoch, "capture": session.capture,
+                    "input": session.input, "generation": generation,
+                    "inputWhy": crate::vm::proof::MID_UPDATE}),
+                crate::vm::proof::MID_UPDATE.to_owned(),
+            ),
+            Ok(session) => (
+                json!({"epoch": session.epoch, "capture": session.capture,
+                    "input": session.input, "generation": generation}),
+                format!(
+                    "{} is proven, but this build of Atlas cannot act on a VM yet.",
+                    self.selected.name
+                ),
+            ),
+            Err(refused) => (
+                json!({"code": refused.code, "error": refused.error}),
+                refused.error.clone(),
+            ),
+        };
         Ok(json!({
             "ok": true,
-            "proven": false,
+            "proven": session.is_ok(),
+            "proof": proof,
+            "ready": false,
+            "notReady": not_ready,
             "desktop": {"kind": "vm", "name": self.selected.name},
             "keeper": hello,
             "guest": guest,
+            "runner": observed.as_ref().map(|observed| json!(observed.runner)),
             "station": {"stop": station, "handover": self.handover_unfinished()},
         }))
     }
@@ -185,6 +257,27 @@ fn resumption(told: &Value) -> Value {
         reply["warnings"] = json!([why]);
     }
     reply
+}
+
+/// The keeper's refusal `refused` of an observation of the VM `name`, its
+/// code kept; one from a keeper that does not observe says to update.
+fn observe_refused(refused: &Value, name: &str) -> Error {
+    let code = refused["code"].as_str().and_then(Code::parse);
+    if code == Some(Code::BadRequest) && refused["capabilities"].is_array() {
+        return Error::new(
+            Code::Update,
+            format!("{name}'s session keeper is from an older Atlas and cannot prove it."),
+        )
+        .with(
+            "next",
+            json!("Update Atlas so the keeper and this command are one build."),
+        );
+    }
+    Error::refused(
+        code.unwrap_or(Code::Transport),
+        refused,
+        "The VM's session keeper did not observe it.",
+    )
 }
 
 fn late(client: &Client) -> Error {

@@ -35,6 +35,9 @@ pub const STOP_REPORT: &str = "stop-report-v1";
 /// Stops and Resumes numbered by the station, each answered once carried
 /// out ([`crate::control::Said::Applied`]).
 pub const ACKNOWLEDGED: &str = "acknowledged-v1";
+/// The guest's read hello says what the station proves it by: its display,
+/// permissions, machine and build, beside its challenged session proof.
+pub const MACHINE_PROOF: &str = "machine-proof-v1";
 
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

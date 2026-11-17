@@ -18,7 +18,9 @@ use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
 };
-use atlas_session::{control::Outcome, keys::PairingSecret, station::control::Answer};
+use atlas_session::{
+    control::Outcome, keys::PairingSecret, lane::LaneKind, station::control::Answer,
+};
 use serde_json::{Value, json};
 use std::{
     os::{
@@ -38,7 +40,13 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 4] = ["read-v1", "stop-v1", "resume-v1", "handover-v1"];
+pub(super) const CAPABILITIES: [&str; 5] = [
+    "read-v1",
+    "stop-v1",
+    "resume-v1",
+    "handover-v1",
+    super::observe::CAPABILITY,
+];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
 /// The longest request.
@@ -228,8 +236,17 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             let telling = Telling::Resume(revision.flatten());
             let _ = say(&mut writing, &told(keeper, telling, deadline).await).await;
         }
-        Some("read") if request["request"].is_object() => {
-            carried(keeper, &request["request"], deadline, &mut writing).await;
+        Some("read")
+            if request["request"].is_object()
+                && (request["generation"].is_null() || request["generation"].is_u64()) =>
+        {
+            let pinned = request["generation"].as_u64();
+            carried(keeper, &request["request"], pinned, deadline, &mut writing).await;
+        }
+        Some("observe") => {
+            let challenge = request["challenge"].as_str();
+            let observed = super::observe::observed(keeper, challenge, deadline).await;
+            let _ = say(&mut writing, &observed).await;
         }
         Some("handover")
             if request["change"]
@@ -335,8 +352,15 @@ async fn handed_over(keeper: &Keeper, change: &Value, deadline: Duration) -> Val
 }
 
 /// Carry `request` on a read lane, passing each reply line on to the client
-/// as it comes, and a refusal line when it could not be carried.
-async fn carried(keeper: &Keeper, request: &Value, deadline: Duration, writing: &mut UnixStream) {
+/// as it comes, and a refusal line when it could not be carried. A read
+/// `pinned` to a generation is carried only in that generation.
+async fn carried(
+    keeper: &Keeper,
+    request: &Value,
+    pinned: Option<u64>,
+    deadline: Duration,
+    writing: &mut UnixStream,
+) {
     let Some(session) = keeper.shared.live() else {
         let why = keeper.shared.state().why.clone();
         let refused = Error::new(
@@ -346,8 +370,16 @@ async fn carried(keeper: &Keeper, request: &Value, deadline: Duration, writing: 
         let _ = say(writing, &serde_json::to_value(&refused).unwrap_or_default()).await;
         return;
     };
+    if pinned.is_some_and(|pinned| pinned != session.control.generation().0) {
+        let refused = Error::new(
+            Code::SessionChanged,
+            "The VM's session this read was meant for has ended; nothing was read.",
+        );
+        let _ = say(writing, &serde_json::to_value(&refused).unwrap_or_default()).await;
+        return;
+    }
     let (lines, mut replies) = mpsc::unbounded_channel();
-    let reading = read(&session, request, deadline, move |line| {
+    let reading = read(&session, LaneKind::Read, request, deadline, move |line| {
         lines.send(line).is_ok()
     });
     let passing = async {

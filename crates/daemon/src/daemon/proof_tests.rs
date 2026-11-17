@@ -86,7 +86,7 @@ read -r end
     );
     let pid = worker.child.id().unwrap();
     let state = Mutex::new(Some(worker));
-    assert!(query(&state, "fresh").await.is_err());
+    assert!(query(&state, &Starter::Own, "fresh").await.is_err());
     assert!(state.lock().await.is_none());
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_err());
 }
@@ -97,10 +97,13 @@ async fn a_worker_that_never_answers_is_timed_out_and_reaped() {
     let pid = worker.child.id().unwrap();
     let state = Mutex::new(Some(worker));
     assert!(
-        tokio::time::timeout(Duration::from_secs(5), query(&state, "fresh"))
-            .await
-            .unwrap()
-            .is_err()
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            query(&state, &Starter::Own, "fresh")
+        )
+        .await
+        .unwrap()
+        .is_err()
     );
     assert!(state.lock().await.is_none());
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_err());
@@ -112,9 +115,12 @@ async fn cancelling_a_query_cannot_leave_an_old_reply_in_the_cached_worker() {
     let pid = worker.child.id().unwrap();
     let state = Mutex::new(Some(worker));
     assert!(
-        tokio::time::timeout(Duration::from_millis(30), query(&state, "fresh"))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            Duration::from_millis(30),
+            query(&state, &Starter::Own, "fresh")
+        )
+        .await
+        .is_err()
     );
     assert!(state.lock().await.is_none());
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -124,4 +130,51 @@ async fn cancelling_a_query_cannot_leave_an_old_reply_in_the_cached_worker() {
     })
     .await
     .expect("the dropped synthetic child is killed and reaped");
+}
+
+/// The word after `--` that makes this test binary serve as a proof worker.
+pub(super) const SERVING: &str = "session-proof";
+
+/// Serve as the proof worker when this test binary was started as one, its
+/// replies on descriptor 3 as [`Starter::TheseTests`] gives it: the session
+/// facts are this process's own, its parent whoever started it.
+#[test]
+fn a_proof_worker_serves_when_started_for_these_tests() {
+    if std::env::args_os().skip_while(|word| word != "--").nth(1) != Some(SERVING.into()) {
+        return;
+    }
+    let replies = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/fd/3")
+        .unwrap();
+    let served = serve(
+        std::io::stdin().lock(),
+        replies,
+        atlas_native::native::session_info,
+    );
+    std::process::exit(i32::from(served.is_err()));
+}
+
+#[tokio::test]
+async fn a_worker_started_for_these_tests_proves_this_session_with_this_process_its_parent() {
+    // Taken as the tests of real input services take it: many of those at
+    // once starve the window server the proof asks.
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let state = Mutex::new(None);
+
+    let first = query(&state, &Starter::TheseTests, "first").await.unwrap();
+    let second = query(&state, &Starter::TheseTests, "second").await.unwrap();
+
+    assert_eq!(first["challenge"], "first");
+    assert_eq!(second["challenge"], "second");
+    for reply in [&first, &second] {
+        assert_eq!(
+            reply["proof"]["parentPID"].as_u64(),
+            Some(u64::from(std::process::id())),
+            "{reply}"
+        );
+        assert!(reply["proof"]["scale"].as_f64().is_some(), "{reply}");
+    }
+    let worker = state.lock().await.take().unwrap();
+    worker.stop().await;
 }

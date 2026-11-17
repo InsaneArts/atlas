@@ -34,6 +34,43 @@ fn a_user_desktop_is_proved_by_the_hidden_session_check() {
 }
 
 #[test]
+fn only_a_vm_is_proved_over_its_session_and_only_a_second_login_by_its_own_status() {
+    use crate::session::{MachineExpect, key::PeerKey, paired::Paired};
+    let vm = Desktop::from(crate::vm::Vm {
+        id: DesktopId::parse("0123456789abcdef01234567").unwrap(),
+    });
+    let station = PeerKey::from_bytes([2; 32]);
+    let paired = Paired {
+        station: station.fingerprint(),
+        guest: PeerKey::from_bytes([1; 32]),
+        uid: 501,
+        boot: "boot-0".to_owned(),
+        change: crate::files::Token::new(),
+    };
+    let expect = MachineExpect {
+        paired: &paired,
+        peer: paired.guest,
+        station,
+        eligible: true,
+        hands_off: Some(true),
+    };
+    let another = Observation::decode(&json!({"ok": true, "user": {"uid": 502}}));
+
+    let machine = vm.prove_machine(&another, &expect).unwrap_err();
+    let expected = another.require_machine(&expect).unwrap_err();
+    assert_eq!(
+        (machine.code, machine.error),
+        (expected.code, expected.error)
+    );
+    assert!(
+        vm.prove(&another).is_err(),
+        "a VM's own status proves nothing"
+    );
+    let user = login(502).prove_machine(&another, &expect).unwrap_err();
+    assert_eq!(user.code, crate::error::Code::Platform);
+}
+
+#[test]
 fn a_process_has_exited_only_once_its_instance_is_gone() {
     let desktop = login(nix::unistd::getuid().as_raw());
     let mut child =

@@ -154,6 +154,22 @@ fn a_reply_is_read_as_atlas_vm_writes_it() {
 }
 
 #[test]
+fn a_state_says_its_window_and_one_this_build_does_not_know_is_unknown() {
+    let window = |said: Value| {
+        serde_json::from_value::<Reply>(json!({"ok": true, "op": "state", "window": said}))
+            .unwrap()
+            .window
+    };
+
+    assert_eq!(window(json!("open")), Some(Window::Open));
+    assert_eq!(window(json!("closed")), Some(Window::Closed));
+    assert_eq!(window(json!("minimized")), Some(Window::Unknown));
+    assert_eq!(window(json!(null)), None);
+    let older: Reply = serde_json::from_value(json!({"ok": true, "op": "state"})).unwrap();
+    assert_eq!(older.window, None, "a runner from before it said so");
+}
+
+#[test]
 fn a_change_is_kept_in_the_record_before_it_is_sent() {
     let (home_folder, vms) = home();
     let fake = Fake::new();

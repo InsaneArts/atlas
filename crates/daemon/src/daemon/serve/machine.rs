@@ -674,6 +674,9 @@ pub struct Machine {
     reconciler: Arc<crate::machine::update::Reconciler<Arc<dyn Vault>>>,
     /// Set once it serves its station: started, recovered, taking lanes.
     serving: Arc<std::sync::atomic::AtomicBool>,
+    /// The digest of the executable it started from, read once at its start,
+    /// so a file replaced while it runs never changes what it says.
+    build: Option<String>,
     pub said: Arc<Said>,
 }
 
@@ -804,6 +807,7 @@ impl Machine {
             reconciler,
             serving,
             blocking,
+            build: atlas_native::native::service::own_build(),
             said: Arc::default(),
         })
     }
@@ -818,12 +822,14 @@ impl Machine {
     /// never declares a service it does not have.
     fn declared(&self) -> atlas_session::compatibility::Declared {
         use atlas_session::compatibility::{
-            ACKNOWLEDGED, CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, STAGE, STOP_REPORT,
+            ACKNOWLEDGED, CHANGES, COPIES, Declared, INPUT_LANES, LEFTOVERS, MACHINE_PROOF, STAGE,
+            STOP_REPORT,
         };
         let mut capabilities = vec![
             CHANGES.to_owned(),
             STOP_REPORT.to_owned(),
             ACKNOWLEDGED.to_owned(),
+            MACHINE_PROOF.to_owned(),
         ];
         if self.daemon.supervising.is_some() {
             capabilities.push(LEFTOVERS.to_owned());
@@ -1178,6 +1184,7 @@ impl Machine {
             // workers the generation's watchdog runs on.
             let (manager, declared) = (self.daemon.manager.clone(), self.declared());
             let service = self.daemon.input.clone();
+            let build = self.build.clone();
             let (daemon, jobs, kept) = (
                 self.daemon.clone(),
                 self.jobs.clone(),
@@ -1207,8 +1214,9 @@ impl Machine {
                     }),
                     failure,
                 };
+                let itself = super::super::facts::Itself::now(build);
                 let hello = super::super::facts::machine_hello(
-                    &manager, &declared, posture, input, &stop, work,
+                    &manager, &declared, &itself, posture, input, &stop, work,
                 );
                 (hello, posture)
             });

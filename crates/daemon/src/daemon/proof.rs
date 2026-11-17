@@ -79,6 +79,57 @@ fn serve(
     }
 }
 
+/// How the daemon starts its proof child.
+pub(super) enum Starter {
+    /// This very program, as its hidden worker command.
+    Own,
+    /// This test binary, running only the test that serves as the worker,
+    /// its replies on a descriptor of their own so the harness's words
+    /// never reach them.
+    #[cfg(test)]
+    TheseTests,
+}
+
+impl Starter {
+    /// How long one exchange with a worker it starts may take. A test
+    /// binary is far larger than the program and, on a busy Mac, takes
+    /// seconds to start where the program takes milliseconds.
+    const fn deadline(&self) -> Duration {
+        match self {
+            Self::Own => DEADLINE,
+            #[cfg(test)]
+            Self::TheseTests => Duration::from_secs(20),
+        }
+    }
+
+    fn command(&self) -> Result<Command> {
+        let program = std::env::current_exe()?;
+        Ok(match self {
+            Self::Own => {
+                let mut command = Command::new(program);
+                command.arg("session-proof-serve");
+                command
+            }
+            #[cfg(test)]
+            Self::TheseTests => {
+                let mut command = Command::new("/bin/sh");
+                command
+                    .args(["-c", "exec \"$0\" \"$@\" 3>&1 >/dev/null"])
+                    .arg(program)
+                    .args([
+                        "--exact",
+                        "daemon::proof::tests::a_proof_worker_serves_when_started_for_these_tests",
+                        "--test-threads=1",
+                        "-q",
+                        "--",
+                        tests::SERVING,
+                    ]);
+                command
+            }
+        })
+    }
+}
+
 /// The daemon's one proof child and its pipes.
 pub(super) struct Worker {
     child: Child,
@@ -138,8 +189,13 @@ impl Worker {
 }
 
 /// A fresh proof for `challenge` from the worker kept in `state`, started
-/// when there is none. A failed or late exchange ends that worker.
-pub(super) async fn query(state: &Mutex<Option<Worker>>, challenge: &str) -> Result<Value> {
+/// by `starter` when there is none. A failed or late exchange ends that
+/// worker.
+pub(super) async fn query(
+    state: &Mutex<Option<Worker>>,
+    starter: &Starter,
+    challenge: &str,
+) -> Result<Value> {
     let mut state = tokio::time::timeout(DEADLINE, state.lock())
         .await
         .map_err(|_| invalid())?;
@@ -147,9 +203,9 @@ pub(super) async fn query(state: &Mutex<Option<Worker>>, challenge: &str) -> Res
     // instead of leaving an old nonce's reply queued for the next request.
     let mut worker = match state.take() {
         Some(worker) => worker,
-        None => Worker::spawn(Command::new(std::env::current_exe()?).arg("session-proof-serve"))?,
+        None => Worker::spawn(&mut starter.command()?)?,
     };
-    match tokio::time::timeout(DEADLINE, worker.exchange(challenge)).await {
+    match tokio::time::timeout(starter.deadline(), worker.exchange(challenge)).await {
         Ok(Ok(reply)) => {
             *state = Some(worker);
             Ok(reply)

@@ -557,6 +557,7 @@ async fn be_the_guest(spec: &str) {
     let said = hex(keys.public().as_bytes());
     let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
     daemon.screen.console = Console::Own;
+    daemon.proof_starter = crate::daemon::proof::Starter::TheseTests;
     let paired = Paired {
         keys,
         desktop: atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id(),
@@ -602,18 +603,37 @@ async fn be_the_guest(spec: &str) {
 struct Guest {
     child: tokio::process::Child,
     desktop: Desktop,
+    /// The key it said it made, which the station pinned.
+    key: PeerKey,
     _controlling: Controlling,
-    _folder: tempfile::TempDir,
+    _folder: Option<tempfile::TempDir>,
 }
 
 /// Start the guest as the test named `test`, which must serve as the guest
 /// when [`GUEST`] is set, and take control of it.
 async fn guest(test: &str) -> Guest {
     let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let socket = folder.path().join("guest.sock");
     let station = Arc::new(Keypair::generate().unwrap());
+    let program = std::env::current_exe().unwrap();
+    let mut guest = guest_at(test, folder.path(), &program, station).await;
+    guest._folder = Some(folder);
+    guest
+}
+
+/// Start the guest as the test named `test` from `program`, listening in
+/// `folder`, paired with the station `station`, and take control of it.
+async fn guest_at(
+    test: &str,
+    folder: &std::path::Path,
+    program: &std::path::Path,
+    station: Arc<Keypair>,
+) -> Guest {
+    let socket = folder.join("guest.sock");
+    // What a guest that ended left there.
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(socket.with_extension("pub"));
     let spec = format!("{} {}", socket.display(), hex(station.public().as_bytes()));
-    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    let mut command = tokio::process::Command::new(program);
     command
         .args(["--exact", test, "--test-threads=1"])
         .env(GUEST, spec)
@@ -651,8 +671,9 @@ async fn guest(test: &str) -> Guest {
     Guest {
         child,
         desktop: lanes,
+        key: guest,
         _controlling: controlling,
-        _folder: folder,
+        _folder: None,
     }
 }
 
@@ -691,6 +712,197 @@ async fn a_guest_in_a_process_of_its_own_serves_its_station_and_is_not_the_hidde
     answered["user"]["uid"] = json!(502);
     let hidden = atlas_core::session::require_hidden(&answered, 502).unwrap_err();
     assert_eq!(hidden.code, Code::OnConsole, "{}", hidden.error);
+}
+
+/// The last reply to `request` on a lane of `kind`, asked again while the
+/// guest says nothing whole or `taken` refuses what it says: a guest and its
+/// input service still starting under load take a while to answer.
+async fn answered_by(
+    desktop: &Desktop,
+    kind: LaneKind,
+    request: &Value,
+    taken: impl Fn(&Value) -> bool,
+) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..100 {
+        if let Some(reply) = ask(desktop, kind.clone(), request).await.pop() {
+            if taken(&reply) {
+                return reply;
+            }
+            last = reply;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("never answered {request}: {last}");
+}
+
+/// What the guest says of itself, its input service's own hello and its
+/// proof for `challenge`, as one status, each read on a lane of its own.
+async fn status_of(guest: &Guest, challenge: &str) -> Value {
+    let mut hello = answered_by(
+        &guest.desktop,
+        LaneKind::Read,
+        &json!({"op": "hello"}),
+        |hello| hello["ok"] == true,
+    )
+    .await;
+    let input = answered_by(
+        &guest.desktop,
+        LaneKind::Input { change: None },
+        &json!({"op": "hello"}),
+        |hello| hello["ready"] == true,
+    )
+    .await;
+    let proof = answered_by(
+        &guest.desktop,
+        LaneKind::Read,
+        &json!({"op": "session-proof", "challenge": challenge}),
+        |proof| proof["ok"] == true,
+    )
+    .await;
+    assert_eq!(proof["challenge"], challenge, "{proof}");
+    hello["inputService"] = input;
+    hello["sessionProof"] = proof["proof"].clone();
+    hello
+}
+
+/// The session `status` proves of the guest `key` paired with `station`
+/// as this account, nothing else held against it.
+fn proved_as(
+    status: &Value,
+    key: PeerKey,
+    station: &Keypair,
+) -> atlas_core::session::MachineSession {
+    let paired = atlas_core::session::paired::Paired {
+        station: station.public().fingerprint(),
+        guest: key,
+        uid: nix::unistd::getuid().as_raw(),
+        boot: "the boot it paired in".to_owned(),
+        change: Token::new(),
+    };
+    let expect = atlas_core::session::MachineExpect {
+        paired: &paired,
+        peer: key,
+        station: station.public(),
+        eligible: true,
+        hands_off: Some(true),
+    };
+    atlas_core::session::Observation::decode(status)
+        .require_machine(&expect)
+        .unwrap_or_else(|refused| panic!("{}: {status}", refused.error))
+}
+
+/// Whether a read on `desktop`, a generation's way to its lanes, is refused
+/// before anything is answered.
+async fn refused_read(desktop: &Desktop) -> bool {
+    let Ok(opened) = desktop.open(LaneKind::Read).await else {
+        return true;
+    };
+    let mut stream = opened.stream;
+    let mut line = serde_json::to_vec(&json!({"op": "hello"})).unwrap();
+    line.push(b'\n');
+    if stream.write_all(&line).await.is_err() || stream.flush().await.is_err() {
+        return true;
+    }
+    let mut lines = BufReader::new(stream).lines();
+    !matches!(
+        tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await,
+        Ok(Ok(Some(_)))
+    )
+}
+
+#[tokio::test]
+async fn a_guest_in_a_process_of_its_own_is_proved_as_paired_and_afresh_once_started_again() {
+    if let Ok(spec) = std::env::var(GUEST) {
+        return be_the_guest(&spec).await;
+    }
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let test = "daemon::serve::machine::tests::a_guest_in_a_process_of_its_own_is_proved_as_paired_and_afresh_once_started_again";
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let station = Arc::new(Keypair::generate().unwrap());
+    let program = std::env::current_exe().unwrap();
+    let mut first = guest_at(test, folder.path(), &program, station.clone()).await;
+    let child = first.child.id().unwrap();
+
+    let status = status_of(&first, "first-proof").await;
+    let session = proved_as(&status, first.key, &station);
+
+    assert_eq!(
+        session.epoch.capture_pid, child,
+        "the capture is the child's"
+    );
+    assert_eq!(
+        status["sessionProof"]["parentPID"].as_u64(),
+        Some(u64::from(child)),
+        "the proof's parent is the child"
+    );
+    assert_eq!(
+        status["inputService"]["pid"].as_u64(),
+        Some(u64::from(session.epoch.input_pid)),
+        "the input epoch is the service's own"
+    );
+    assert_ne!(session.epoch.input_pid, child);
+    assert!(
+        session.input,
+        "its input is the very build it started: {status}"
+    );
+    assert_eq!(
+        status["daemon"]["build"], status["inputService"]["build"],
+        "{status}"
+    );
+    let again = status_of(&first, "second-proof").await;
+    assert_eq!(proved_as(&again, first.key, &station).epoch, session.epoch);
+
+    first.child.kill().await.unwrap();
+    let second = guest_at(test, folder.path(), &program, station.clone()).await;
+    let restarted = status_of(&second, "third-proof").await;
+    let renewed = proved_as(&restarted, second.key, &station);
+
+    assert_ne!(
+        renewed.epoch, session.epoch,
+        "another process, another epoch"
+    );
+    assert_ne!(renewed.epoch.capture_pid, child);
+    assert!(
+        refused_read(&first.desktop).await,
+        "a read of the generation before is refused"
+    );
+    drop(second);
+}
+
+#[tokio::test]
+async fn a_guests_build_is_the_executable_it_started_from_whatever_replaces_that_file() {
+    if let Ok(spec) = std::env::var(GUEST) {
+        return be_the_guest(&spec).await;
+    }
+    let test = "daemon::serve::machine::tests::a_guests_build_is_the_executable_it_started_from_whatever_replaces_that_file";
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let program = folder.path().join("atlas");
+    std::fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    let started = atlas_core::digest::sha256(&std::fs::File::open(&program).unwrap());
+    let station = Arc::new(Keypair::generate().unwrap());
+    let mut guest = guest_at(test, folder.path(), &program, station).await;
+    let asking = json!({"op": "hello"});
+    let hello = || {
+        answered_by(&guest.desktop, LaneKind::Read, &asking, |hello| {
+            hello["ok"] == true
+        })
+    };
+    let before = hello().await;
+
+    let replacement = folder.path().join("atlas.new");
+    std::fs::write(&replacement, b"another build").unwrap();
+    std::fs::rename(&replacement, &program).unwrap();
+    let after = hello().await;
+    guest.child.kill().await.unwrap();
+
+    assert!(started.is_some());
+    assert_eq!(before["daemon"]["build"].as_str(), started.as_deref());
+    assert_eq!(after["daemon"]["build"], before["daemon"]["build"]);
+    assert_ne!(
+        after["daemon"]["build"].as_str(),
+        atlas_core::digest::sha256(&std::fs::File::open(&program).unwrap()).as_deref()
+    );
 }
 
 /// A command that adds a line to `file` each time it runs.
@@ -2420,8 +2632,8 @@ async fn a_staged_copy_is_listed_then_removed_as_a_change_answered_again_from_it
 #[tokio::test]
 async fn a_guest_declares_only_what_it_was_made_to_serve() {
     use atlas_session::compatibility::{
-        ACKNOWLEDGED, CHANGES, COPIES, INPUT_LANES, LEFTOVERS, PROTOCOL, STAGE, STOP_REPORT,
-        Usable, judge,
+        ACKNOWLEDGED, CHANGES, COPIES, INPUT_LANES, LEFTOVERS, MACHINE_PROOF, PROTOCOL, STAGE,
+        STOP_REPORT, Usable, judge,
     };
     let served = Served::start().await;
 
@@ -2430,7 +2642,15 @@ async fn a_guest_declares_only_what_it_was_made_to_serve() {
     let declared = &controlling.declared;
     assert_eq!(declared.protocol, PROTOCOL);
     assert_eq!(declared.version, env!("CARGO_PKG_VERSION"));
-    for served in [CHANGES, LEFTOVERS, STAGE, COPIES, STOP_REPORT, ACKNOWLEDGED] {
+    for served in [
+        CHANGES,
+        LEFTOVERS,
+        STAGE,
+        COPIES,
+        STOP_REPORT,
+        ACKNOWLEDGED,
+        MACHINE_PROOF,
+    ] {
         assert!(
             declared.capabilities.iter().any(|has| has == served),
             "{declared:?}"
@@ -3582,7 +3802,15 @@ async fn a_machine_says_hello_as_itself_never_as_the_hidden_login() {
     for helper_only in ["read", "rgb-stream", "helper-sound"] {
         assert!(!capabilities.contains(&json!(helper_only)), "{hello}");
     }
-    assert!(hello.get("permissions").is_none(), "{hello}");
+    for helper_only in ["captureStats", "pictureStats", "jobs"] {
+        assert!(hello["daemon"].get(helper_only).is_none(), "{hello}");
+    }
+    assert_eq!(hello["machine"]["mode"], "machine", "{hello}");
+    assert_eq!(
+        hello["daemon"]["build"].as_str(),
+        atlas_native::native::service::own_build().as_deref(),
+        "{hello}"
+    );
 }
 
 #[tokio::test]

@@ -35,7 +35,16 @@ fn left(deadline: Instant) -> Result<Duration> {
 /// Fails when nothing listens there, or the runner does not answer whole
 /// in time: which says nothing of whether it took effect.
 pub(super) fn ask(socket: &Path, request: &Value) -> Result<Value> {
-    let deadline = Instant::now() + ANSWERING;
+    ask_within(socket, request, ANSWERING)
+}
+
+/// [`ask`], the whole exchange within `within`.
+///
+/// # Errors
+///
+/// As [`ask`].
+pub(super) fn ask_within(socket: &Path, request: &Value, within: Duration) -> Result<Value> {
+    let deadline = Instant::now() + within;
     let failed = |error: std::io::Error| {
         if matches!(
             error.kind(),

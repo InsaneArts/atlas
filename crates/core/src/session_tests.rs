@@ -344,18 +344,21 @@ fn a_legacy_null_report_keeps_its_existing_absence_fields() {
 fn machine_status() -> serde_json::Value {
     let proof = json!({"ok": true, "uid": 501, "hasGraphicAccess": true, "parentPID": 123,
         "onConsole": true, "securitySessionID": 42, "displayID": 7, "width": 1440,
-        "height": 900});
+        "height": 900, "scale": 2});
     json!({
         "ok": true,
         "user": {"uid": 501},
-        "daemon": {"pid": 123},
-        "machine": {"mode": "machine", "boot": "boot-1"},
+        "daemon": {"pid": 123, "version": "1.0.0", "build": "b1"},
+        "machine": {"mode": "machine", "boot": "boot-1", "virtual": true},
         "session": {"managerName": "Aqua", "onConsole": true},
         "display": {"width": 1440, "height": 900, "scale": 2},
         "permissions": {"screenCapture": true, "accessibility": true},
+        "remoteLogin": "off",
+        "account": {"admin": false},
+        "agents": {"admitted": true, "held": null},
         "sessionProof": proof,
         "inputService": {"ok": true, "protocolVersion": 1, "pid": 456, "ready": true,
-            "accessibility": true, "session": proof},
+            "accessibility": true, "version": "1.0.0", "build": "b1", "session": proof},
     })
 }
 
@@ -523,7 +526,11 @@ fn a_change_of_any_fact_of_a_machines_epoch_is_another_epoch() {
     let first = epoch_of(&machine_status());
     let changes: [(&str, StatusChange); 7] = [
         ("boot", |status| status["machine"]["boot"] = json!("boot-2")),
-        ("scale", |status| status["display"]["scale"] = json!(1)),
+        ("scale", |status| {
+            status["display"]["scale"] = json!(1);
+            status["sessionProof"]["scale"] = json!(1);
+            status["inputService"]["session"]["scale"] = json!(1);
+        }),
         ("capture process", |status| {
             status["daemon"]["pid"] = json!(124);
             status["sessionProof"]["parentPID"] = json!(124);
@@ -569,7 +576,7 @@ fn a_second_logins_proof_never_takes_a_machine_on_its_own_screen() {
 #[test]
 fn a_machines_input_is_not_ready_when_its_input_service_proves_another_screen_or_epoch() {
     let paired = paired();
-    let changes: [(&str, StatusChange); 4] = [
+    let changes: [(&str, StatusChange); 13] = [
         ("off its screen", |status| {
             status["inputService"]["session"]["onConsole"] = json!(false);
         }),
@@ -582,6 +589,34 @@ fn a_machines_input_is_not_ready_when_its_input_service_proves_another_screen_or
         ("another size", |status| {
             status["inputService"]["session"]["width"] = json!(800)
         }),
+        ("another scale alone", |status| {
+            status["inputService"]["session"]["scale"] = json!(1)
+        }),
+        ("no scale", |status| {
+            status["inputService"]["session"]["scale"] = json!(null)
+        }),
+        ("another process", |status| {
+            status["inputService"]["pid"] = json!(0)
+        }),
+        ("Accessibility not allowed", |status| {
+            status["inputService"]["accessibility"] = json!(false)
+        }),
+        ("not ready", |status| {
+            status["inputService"]["ready"] = json!(false)
+        }),
+        ("another build of the same version", |status| {
+            status["inputService"]["build"] = json!("b2")
+        }),
+        ("no build of its own", |status| {
+            status["inputService"]["build"] = json!(null)
+        }),
+        ("no build of the daemon's", |status| {
+            status["daemon"]["build"] = json!(null)
+        }),
+        ("neither says its build", |status| {
+            status["inputService"]["build"] = json!(null);
+            status["daemon"]["build"] = json!(null);
+        }),
     ];
     for (what, change) in changes {
         let mut status = machine_status();
@@ -593,6 +628,132 @@ fn a_machines_input_is_not_ready_when_its_input_service_proves_another_screen_or
 
         assert!(!session.input, "{what}");
     }
+}
+
+#[test]
+fn a_machine_with_no_input_hello_at_all_is_proven_with_input_false_and_its_advice_kept() {
+    let paired = paired();
+    let advice = "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents \
+                  wait for it.";
+    for unavailable in [
+        json!({"available": false, "error": "The read's lane ended before its final reply."}),
+        json!({"ok": false, "code": "platform", "error": "This desktop has no input service"}),
+    ] {
+        let mut status = machine_status();
+        status["inputService"] = unavailable.clone();
+        status["permissions"]["accessibility"] = json!(false);
+        status["input"]["held"] = json!(advice);
+
+        let observation = Observation::decode(&status);
+        let session = observation.require_machine(&expect(&paired)).unwrap();
+
+        assert!(!session.input, "{unavailable}");
+        assert_eq!(session.epoch.input_pid, 0, "no process of its own");
+        assert_eq!(observation.accessibility, Some(false));
+    }
+}
+
+#[test]
+fn a_scale_the_proof_does_not_show_refuses_the_machine() {
+    let paired = paired();
+    let changes: [(&str, StatusChange); 3] = [
+        ("another scale", |status| {
+            status["sessionProof"]["scale"] = json!(1)
+        }),
+        ("no scale", |status| {
+            status["sessionProof"]["scale"] = json!(null)
+        }),
+        ("the hello's scale alone", |status| {
+            status["display"]["scale"] = json!(1)
+        }),
+    ];
+    for (what, change) in changes {
+        let mut status = machine_status();
+        change(&mut status);
+
+        let refused = Observation::decode(&status)
+            .require_machine(&expect(&paired))
+            .unwrap_err();
+
+        assert_eq!(refused.code, Code::Identity, "{what}");
+    }
+}
+
+#[test]
+fn a_guest_open_to_more_than_atlas_is_refused_in_its_own_words() {
+    let paired = paired();
+    let changes: [(&str, StatusChange); 4] = [
+        ("Remote Login on", |status| {
+            status["remoteLogin"] = json!("on");
+            status["agents"]["held"] = json!("Remote Login is on in the guest.");
+        }),
+        ("an administrator", |status| {
+            status["account"]["admin"] = json!(true);
+            status["agents"]["held"] = json!("The guest's account is an administrator.");
+        }),
+        ("Remote Login unknown", |status| {
+            status["remoteLogin"] = json!("unknown");
+            status["agents"]["held"] =
+                json!("Whether Remote Login is on in the guest cannot be told.");
+        }),
+        ("nothing said of it", |status| {
+            status["remoteLogin"] = json!(null);
+            status["agents"]["held"] = json!(null);
+        }),
+    ];
+    for (what, change) in changes {
+        let mut status = machine_status();
+        change(&mut status);
+        let said = status["agents"]["held"].as_str().map(str::to_owned);
+
+        let refused = Observation::decode(&status)
+            .require_machine(&expect(&paired))
+            .unwrap_err();
+
+        assert_eq!(refused.code, Code::Platform, "{what}");
+        if let Some(said) = said {
+            assert!(
+                refused.error.starts_with(&said),
+                "{what}: {}",
+                refused.error
+            );
+        }
+    }
+}
+
+#[test]
+fn a_window_whose_state_is_unknown_says_to_restart_the_vm() {
+    let paired = paired();
+    let (mut unknown, mut open) = (expect(&paired), expect(&paired));
+    unknown.hands_off = None;
+    open.hands_off = Some(false);
+    let status = Observation::decode(&machine_status());
+
+    let unknown = status.require_machine(&unknown).unwrap_err();
+    let open = status.require_machine(&open).unwrap_err();
+
+    assert!(
+        unknown.error.contains("Restart the VM"),
+        "{}",
+        unknown.error
+    );
+    assert!(open.error.contains("Close it"), "{}", open.error);
+}
+
+#[test]
+fn a_machine_says_whether_it_is_virtual_only_when_its_hello_does() {
+    let mut status = machine_status();
+    assert_eq!(
+        Observation::decode(&status).in_virtual_machine(),
+        Some(true)
+    );
+    status["machine"]["virtual"] = json!(false);
+    assert_eq!(
+        Observation::decode(&status).in_virtual_machine(),
+        Some(false)
+    );
+    status["machine"]["virtual"] = json!("yes");
+    assert_eq!(Observation::decode(&status).in_virtual_machine(), None);
 }
 
 #[test]

@@ -4,7 +4,7 @@ use atlas_core::{
     process::{self, Instance},
     test_support::{
         self,
-        host::{claim, denied, process, resolve_peer},
+        host::{claim, denied, peer_resolved, process, resolve_peer},
     },
     time::now_ms,
 };
@@ -263,4 +263,70 @@ async fn a_denied_cli_walk_attaches_an_apps_only_record_from_the_verified_socket
         Snapshot::sample(session.process(), |_| process::State::Gone).lifetime(&record, now, false);
     assert!(exited.ended.is_some());
     assert!(!exited.live && !exited.active);
+}
+
+#[tokio::test]
+async fn a_vms_host_is_verified_by_this_process_and_a_failed_check_keeps_the_local_session() {
+    let claims = claim();
+    let verified = verified_here(None, claims.clone(), |claims| {
+        json!({"ok": true, "hostSession": peer_resolved(
+            &claims,
+            Some(Instance::new(90, [100, 7])),
+            test_support::UID,
+            |pid| Ok(process(pid)),
+        )})
+    })
+    .await
+    .unwrap();
+    let local = denied();
+    let kept = verified_here(Some(local.clone()), claims, |claims| {
+        json!({"ok": true, "hostSession": peer_resolved(
+            &claims,
+            Some(Instance::new(90, [100, 7])),
+            test_support::UID,
+            |_| Ok(None),
+        )})
+    })
+    .await;
+
+    assert_eq!(verified.host(), Host::Codex);
+    assert_eq!(verified.process(), Some(Instance::new(80, [100, 7])));
+    assert_eq!(kept, Some(local), "unverified, as it was");
+}
+
+/// A keeper that is trusted whoever listens.
+struct Trusting;
+
+impl crate::link::Trust for Trusting {
+    fn trusts(
+        &self,
+        _: &atlas_core::desktop::DesktopId,
+        _: &std::path::Path,
+        _: &std::os::unix::net::UnixStream,
+    ) -> atlas_core::error::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_host_is_verified_without_a_word_to_its_guest() {
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let socket = directory.path().join("keeper.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = crate::test_support::vm_client(directory.path(), None);
+    client.link = crate::link::Link::Keeper(crate::link::Keeper::at(
+        std::sync::Arc::new(client.selected.clone()),
+        atlas_core::desktop::DesktopId::parse(crate::test_support::VM_ID).unwrap(),
+        socket,
+        std::time::Duration::from_secs(5),
+        std::sync::Arc::new(Trusting),
+    ));
+
+    let _ = from_env_verified(&client).await;
+
+    assert!(
+        listener.accept().is_err(),
+        "nothing was asked of the keeper or the guest"
+    );
 }

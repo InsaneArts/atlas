@@ -53,6 +53,23 @@ struct ControlServiceTests {
     #expect(try JSONDecoder().decode(ControlReply.self, from: nonsense).ok == false)
   }
 
+  @Test("a state says whether the window is open, as the line its station reads")
+  func windowState() async throws {
+    let folders = try Folders()
+    let host = FakeHost(power: .running)
+    let (service, _) = try service(host, in: folders)
+
+    let closed = await service.answer(.state)
+    #expect(await service.answer(.window(change, input: true)).outcome == .done)
+    let open = await service.answer(.state)
+    let line = await service.answer(line: Data(#"{"op":"state"}"#.utf8))
+
+    #expect(closed.window == .closed)
+    #expect(open.window == .open)
+    let said = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+    #expect(said?["window"] as? String == "open")
+  }
+
   @Test("the window's input is off only once its window is seen gone")
   func windowOff() async throws {
     let folders = try Folders()

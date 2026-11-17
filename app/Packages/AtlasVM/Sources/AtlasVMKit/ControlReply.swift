@@ -13,6 +13,8 @@ public struct ControlReply: Codable, Equatable, Sendable {
   public var power: PowerState?
   /// Whether `power` was seen just now.
   public var confirmed: Bool?
+  /// Whether its window is open, for a state.
+  public var window: WindowState?
   /// The change answered.
   public var change: ChangeID?
   /// What the change came to; none while it is pending.

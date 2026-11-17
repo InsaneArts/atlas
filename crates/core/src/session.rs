@@ -66,6 +66,9 @@ pub struct NativeObservation {
     /// The epoch the input service proves when its session is on its own
     /// screen, as a machine desktop's is.
     own_screen_epoch: Option<InputEpoch>,
+    /// The backing scale of the display its session is on, which only a
+    /// machine desktop's input is held to.
+    own_screen_scale: Option<f64>,
     pinned: PinObservation,
     pub control_active: Option<bool>,
     pub held: bool,
@@ -97,6 +100,7 @@ impl NativeObservation {
             own_screen_epoch: ProofObservation::decode(&value["session"])
                 .input_epoch(pid.unwrap_or(0), Console::Own)
                 .ok(),
+            own_screen_scale: value["session"]["scale"].as_f64(),
             pinned: PinObservation::decode(&value["enforcedEpoch"]),
             control_active: value["controlActive"].as_bool(),
             held: value["held"] == true,
@@ -158,6 +162,28 @@ pub struct Observation {
     /// machine mode, and the boot it runs in.
     machine_mode: bool,
     boot: Option<String>,
+    /// Whether the machine is a virtual one, as its kernel says.
+    virtual_machine: Option<bool>,
+    /// The digest of the executable a machine desktop's daemon started
+    /// from, in the form its input service says its own.
+    daemon_build: Option<String>,
+    /// Why a machine desktop's guest holds agents while it is open to more
+    /// than Atlas; none once it says it is closed.
+    posture_held: Option<String>,
+}
+
+/// Why a machine desktop's guest holds agents, as its hello `value` says;
+/// none only once Remote Login is off and its account no administrator.
+fn posture_held(value: &Value) -> Option<String> {
+    if value["remoteLogin"] == "off" && value["account"]["admin"] == false {
+        return None;
+    }
+    Some(
+        value["agents"]["held"]
+            .as_str()
+            .unwrap_or("Whether the guest is closed to anyone but Atlas cannot be told.")
+            .to_owned(),
+    )
 }
 
 impl Observation {
@@ -189,7 +215,16 @@ impl Observation {
                 .as_str()
                 .filter(|boot| !boot.is_empty() && boot.len() <= BOOT_LENGTH)
                 .map(str::to_owned),
+            virtual_machine: value["machine"]["virtual"].as_bool(),
+            daemon_build: value["daemon"]["build"].as_str().map(str::to_owned),
+            posture_held: posture_held(value),
         }
+    }
+
+    /// Whether the machine that answered says it is a virtual one; none when
+    /// it did not say.
+    pub fn in_virtual_machine(&self) -> Option<bool> {
+        self.virtual_machine
     }
 
     pub fn display_valid(&self) -> bool {
@@ -312,12 +347,15 @@ impl Observation {
     /// keeps every check [`Observation::require_hidden`] makes but two: the
     /// account need not differ from the station's, since it is another
     /// machine's, and its screen is its own, so it must be on its console,
-    /// with the person's hands off it instead.
+    /// with the person's hands off it instead. Its epoch includes the
+    /// display's scale, which its proof must show too, and its input counts
+    /// only from the very build its daemon started from.
     ///
     /// # Errors
     ///
     /// Returns a refusal when the answer is not the paired machine as
-    /// `expect` says it must be.
+    /// `expect` says it must be, and when its guest holds agents while it
+    /// is open to more than Atlas.
     pub fn require_machine(&self, expect: &MachineExpect<'_>) -> Result<MachineSession> {
         self.require_answer()?;
         let uid = expect.paired.uid;
@@ -346,12 +384,28 @@ impl Observation {
         if !expect.eligible {
             return Err(refused("The desktop is not one this kind may use"));
         }
-        if expect.hands_off != Some(true) {
+        if let Some(why) = &self.posture_held {
             return Err(Error::new(
-                Code::OnConsole,
-                "The desktop's window may be taking your input. Close it, or turn its \
-                 input off, and try again.",
+                Code::Platform,
+                format!("{why} Agents wait until the desktop is closed to anyone but Atlas."),
             ));
+        }
+        match expect.hands_off {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Error::new(
+                    Code::OnConsole,
+                    "The desktop's window may be taking your input. Close it, or turn its \
+                     input off, and try again.",
+                ));
+            }
+            None => {
+                return Err(Error::new(
+                    Code::OnConsole,
+                    "Whether the desktop's window takes your input cannot be told. Restart \
+                     the VM, and try again.",
+                ));
+            }
         }
 
         let invalid = || refused("The desktop's session could not be verified");
@@ -369,6 +423,7 @@ impl Observation {
             || proof.uid != uid
             || proof.width != display.width
             || proof.height != display.height
+            || self.proof.scale != Some(display.scale)
         {
             return Err(invalid());
         }
@@ -382,10 +437,15 @@ impl Observation {
             display_id: proof.display_id,
             input_pid: self.native.pid.unwrap_or(0),
         };
-        let native_matches = self.native.own_screen_epoch.as_ref() == Some(&epoch.input_epoch());
+        let native_matches = self.native.own_screen_epoch.as_ref() == Some(&epoch.input_epoch())
+            && self.native.own_screen_scale == Some(epoch.display.scale);
+        let same_build = self.native.build.is_some() && self.native.build == self.daemon_build;
         Ok(MachineSession {
             capture: self.capture == Some(true),
-            input: self.native.healthy() && self.native.ready == Some(true) && native_matches,
+            input: self.native.healthy()
+                && self.native.ready == Some(true)
+                && native_matches
+                && same_build,
             epoch,
         })
     }

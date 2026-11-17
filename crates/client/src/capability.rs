@@ -57,11 +57,13 @@ impl Doctor {
         }
     }
 
-    /// The report of a VM desktop from its `status` before its proof: never
-    /// ready, stopped when its guest says so, through its keeper, otherwise
-    /// unavailable with why; `refusal` is the one wording for what it cannot
-    /// do yet.
+    /// The report of a VM desktop from its `status`: never ready, stopped
+    /// when its guest says so, through its keeper, otherwise unavailable with
+    /// why: the keeper's own when its session is not live, else its first
+    /// step, [`vm_first_step`]'s, or `refusal`, the one wording for what it
+    /// cannot do yet.
     pub(crate) fn vm(status: Value, refusal: atlas_core::error::Error) -> Self {
+        let first = vm_first_step(&status).map_or_else(|| refusal.error.clone(), |step| step.error);
         let guest = &status["guest"];
         let stop = if guest["ok"] == true {
             &guest["stop"]["state"]
@@ -86,9 +88,10 @@ impl Doctor {
                     .to_owned(),
             )
         } else {
-            VmMode::Unavailable(refusal.error.clone())
+            VmMode::Unavailable(first.clone())
         };
         let mut doctor = Self::unreached(status, refusal);
+        doctor.diagnosis.first_step = atlas_core::session::Guidance::Advice(first);
         doctor.vm = Some(mode);
         doctor
     }
@@ -102,6 +105,51 @@ impl Doctor {
         }
         self
     }
+}
+
+/// What comes first for a VM desktop whose status is `status`, before the
+/// one wording for what this build cannot do on a VM: its proof's refusal,
+/// or, once proven, what its guest still has to be allowed, in its own
+/// words, or that Atlas in it is part way through an update. None once nothing comes before that wording, and for a status
+/// that is no answer, whose refusal is that wording.
+#[must_use]
+pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
+    use atlas_core::error::{Code, Error};
+    if status["ok"] != true {
+        return None;
+    }
+    // A status that says no proof was taken has no proof's refusal to say.
+    if status["proven"] != true {
+        let proof = &status["proof"];
+        let code = proof["code"]
+            .as_str()
+            .and_then(Code::parse)
+            .unwrap_or(Code::Identity);
+        return proof["error"]
+            .as_str()
+            .map(|refused| Error::new(code, refused));
+    }
+    let guest = &status["guest"];
+    if guest["permissions"]["screenCapture"] != true {
+        return Some(Error::new(
+            Code::Permission,
+            "In the VM's window, open System Settings › Privacy & Security › Screen & \
+             System Audio Recording and turn Atlas on.",
+        ));
+    }
+    if status["proof"]["input"] != true {
+        if crate::vm::proof::mid_update(guest) {
+            return Some(Error::new(Code::Update, crate::vm::proof::MID_UPDATE));
+        }
+        return Some(match guest["input"]["held"].as_str() {
+            Some(held) => Error::new(Code::Permission, held),
+            None => Error::new(
+                Code::Input,
+                "The VM's input service is not ready to act; agents wait for it.",
+            ),
+        });
+    }
+    None
 }
 
 /// `report` with what is known of native dialogs (`native`, in `state`) and

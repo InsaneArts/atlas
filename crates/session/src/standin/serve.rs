@@ -22,7 +22,9 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 /// The longest request a stand-in lane reads.
 const REQUEST: u64 = 1 << 20;
 
-/// How the stand-in answers a request, given its lane's header.
+/// How the stand-in answers a request, given its lane's header. A null
+/// answer is none: the lane stays open and says nothing, as a stalled
+/// guest's would, until the stand-in goes.
 pub type Answer = Arc<dyn Fn(&Header, Value) -> Value + Send + Sync>;
 
 /// The station's way to the stand-in across a link, in one generation.
@@ -113,7 +115,11 @@ where
         .await
         .map_err(io)?;
     let request = serde_json::from_slice(&line)?;
-    let mut reply = serde_json::to_vec(&answer(&header, request))?;
+    let answered = answer(&header, request);
+    if answered.is_null() {
+        return std::future::pending().await;
+    }
+    let mut reply = serde_json::to_vec(&answered)?;
     reply.push(b'\n');
     secure.write_all(&reply).await.map_err(io)?;
     secure.shutdown().await.map_err(io)

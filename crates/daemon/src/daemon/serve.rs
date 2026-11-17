@@ -225,6 +225,8 @@ pub struct Daemon {
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
     proof_worker: Mutex<Option<proof::Worker>>,
+    /// How that child is started.
+    proof_starter: proof::Starter,
     /// Whether the helper's apps can be heard on the person's speakers.
     sound: Sound,
     /// The Apple agent that would restart over and over while the helper
@@ -313,6 +315,7 @@ impl Daemon {
             collect_runs: Notify::new(),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
+            proof_starter: proof::Starter::Own,
             sound: Sound::detached(),
             agent: ConsoleAgent::detached(),
             recorder: Arc::new(Recorder::new(recorder::System::real(Console::kept()), None)),
@@ -996,9 +999,11 @@ pub(super) async fn answer(
         Request::Frame { max_dimension, pin } => {
             return stream::one(daemon, reader, writer, max_dimension, pin).await;
         }
-        Request::SessionProof { challenge } => proof::query(&daemon.proof_worker, &challenge)
-            .await
-            .unwrap_or_else(refused),
+        Request::SessionProof { challenge } => {
+            proof::query(&daemon.proof_worker, &daemon.proof_starter, &challenge)
+                .await
+                .unwrap_or_else(refused)
+        }
         Request::StreamDrainStatus {
             daemon_pid,
             producer_generation,

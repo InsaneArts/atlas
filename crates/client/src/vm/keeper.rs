@@ -17,6 +17,7 @@
 //! place, which finishes a handover cut short.
 mod agent;
 mod clients;
+mod observe;
 mod program;
 
 pub use agent::{install_keeper, install_keeper_held};
@@ -231,6 +232,7 @@ async fn started(
         forgotten: std::sync::atomic::AtomicBool::new(false),
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
+        observing: observe::room(),
         shared: Shared::default(),
     });
     keeper.finish_handover()?;
@@ -295,6 +297,13 @@ trait Reach: Send + Sync {
 
     /// The facts trust is judged on now; none when they cannot be told.
     fn facts(&self) -> Pin<Box<dyn Future<Output = Option<Facts>> + Send + '_>>;
+
+    /// The VM's state as its runner, Atlas VM, says it now, the whole
+    /// exchange within `within`.
+    fn runner(
+        &self,
+        within: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<super::runner::Reply>> + Send + '_>>;
 }
 
 /// The VM's station socket, as Atlas VM serves it.
@@ -315,6 +324,14 @@ impl Reach for Socket {
                 .ok()
                 .flatten()
         })
+    }
+
+    fn runner(
+        &self,
+        within: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<super::runner::Reply>> + Send + '_>> {
+        let vm = self.vm.clone();
+        Box::pin(runner_state(move || super::runner::Runner::of(&vm), within))
     }
 }
 
@@ -388,6 +405,8 @@ struct Keeper {
     handing: std::sync::atomic::AtomicBool,
     /// Told once it handed over, so it ends.
     ended: tokio::sync::Notify,
+    /// Room for the observations that run at once.
+    observing: tokio::sync::Semaphore,
     shared: Shared,
 }
 
@@ -417,10 +436,12 @@ impl Shared {
     }
 }
 
-/// A live generation: its control, and its lanes.
+/// A live generation: its control, its lanes, and the guest key its
+/// handshake pinned.
 struct Session {
     control: Control,
     desktop: Desktop,
+    guest: PeerKey,
 }
 
 /// How an attempt at a generation ended.
@@ -522,7 +543,11 @@ impl Keeper {
             control.outbox().clone(),
             Box::new(lanes),
         );
-        let session = Arc::new(Session { control, desktop });
+        let session = Arc::new(Session {
+            control,
+            desktop,
+            guest,
+        });
         {
             let mut state = self.shared.state();
             state.generation = Some(session.control.generation());
@@ -668,7 +693,7 @@ async fn report(session: &Session) -> Value {
     }
     let mut lines = Vec::new();
     let hello = json!({"op": "hello"});
-    let read = read(session, &hello, REPORT, |line| {
+    let read = read(session, LaneKind::Read, &hello, REPORT, |line| {
         lines.push(line);
         true
     });
@@ -764,9 +789,9 @@ impl Keeper {
     }
 }
 
-/// Carry `request` on a `Read` lane of `session`, handing each reply line
-/// to `line` as it comes until its final reply or `line` says to stop, within
-/// `deadline`.
+/// Carry `request` on a lane of `kind` of `session`, handing each reply
+/// line to `line` as it comes until its final reply or `line` says to stop,
+/// within `deadline`.
 ///
 /// # Errors
 ///
@@ -774,6 +799,7 @@ impl Keeper {
 /// the deadline passes first.
 async fn read(
     session: &Session,
+    kind: LaneKind,
     request: &Value,
     deadline: Duration,
     line: impl FnMut(String) -> bool,
@@ -785,7 +811,7 @@ async fn read(
             "The guest did not answer the read in time.",
         )
     };
-    let opened = tokio::time::timeout_at(until, session.desktop.open(LaneKind::Read))
+    let opened = tokio::time::timeout_at(until, session.desktop.open(kind))
         .await
         .map_err(|_| late())??;
     let lane = opened.lane;
@@ -846,6 +872,16 @@ fn lane_failed(error: std::io::Error) -> Error {
         format!("The read's lane to the guest failed: {error}."),
     )
     .with_source(error)
+}
+
+/// The VM's state as the runner `runner` says it, its socket read and
+/// written within `within`, off the runtime: the thread that asks ends with
+/// the exchange.
+async fn runner_state(
+    runner: impl FnOnce() -> Result<super::runner::Runner> + Send + 'static,
+    within: Duration,
+) -> Result<super::runner::Reply> {
+    blocking(move || runner()?.read_within(&super::runner::Operation::State, within)).await
 }
 
 /// `work`, which waits on the disk or the Keychain, off the runtime.

@@ -12,7 +12,10 @@ use atlas_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// What Atlas VM's guest install is given: the Atlas.app to install, the
 /// enrolment its guest pairs for, and the pairing secret, which is sent and
@@ -231,6 +234,17 @@ pub enum Power {
     Unknown,
 }
 
+/// Whether the VM's window is open, as its runner sees it: anything it
+/// says that this build does not know is unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Window {
+    Open,
+    Closed,
+    #[serde(other)]
+    Unknown,
+}
+
 /// What a change came to.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
@@ -253,6 +267,9 @@ pub struct Reply {
     pub power: Option<Power>,
     /// Whether `power` was seen just now.
     pub confirmed: Option<bool>,
+    /// Whether its window is open, for a state; none from a runner of a
+    /// build before it said so.
+    pub window: Option<Window>,
     /// The change answered.
     pub change: Option<Token>,
     /// What the change came to; none while it is pending.
@@ -293,6 +310,27 @@ impl Runner {
         read(&super::Real, &self.socket, operation)
     }
 
+    /// [`Self::read`], the whole exchange on the socket within `within`, so
+    /// nothing waits on a runner that does not answer past it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`], and when `within` passes first.
+    pub(super) fn read_within(&self, operation: &Operation, within: Duration) -> Result<Reply> {
+        refuse_change(operation)?;
+        reply(super::control::ask_within(
+            &self.socket,
+            &operation.request(),
+            within,
+        )?)
+    }
+
+    /// The runner listening at `socket`, for a test that stands in for one.
+    #[cfg(test)]
+    pub(crate) fn at(socket: PathBuf) -> Self {
+        Self { socket }
+    }
+
     /// Ask the change `operation`, once its ID and request are kept in the
     /// VM's lifecycle record `record` through `keep`.
     ///
@@ -318,13 +356,19 @@ fn socket(vms: &Vms, vm: &DesktopId) -> PathBuf {
 }
 
 fn read(system: &impl System, socket: &Path, operation: &Operation) -> Result<Reply> {
+    refuse_change(operation)?;
+    ask(system, socket, operation)
+}
+
+/// Refuse a change asked as a read: it is asked only once it is kept.
+fn refuse_change(operation: &Operation) -> Result<()> {
     if operation.change().is_some() {
         return Err(Error::new(
             Code::BadRequest,
             "A change of Atlas VM is asked only once it is kept.",
         ));
     }
-    ask(system, socket, operation)
+    Ok(())
 }
 
 fn change(
@@ -347,7 +391,11 @@ fn change(
 }
 
 fn ask(system: &impl System, socket: &Path, operation: &Operation) -> Result<Reply> {
-    let answer = system.ask(socket, &operation.request())?;
+    reply(system.ask(socket, &operation.request())?)
+}
+
+/// The runner's `answer` as a reply.
+fn reply(answer: Value) -> Result<Reply> {
     serde_json::from_value(answer).map_err(|error| {
         Error::new(
             Code::Transport,

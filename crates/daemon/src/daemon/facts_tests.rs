@@ -124,10 +124,19 @@ fn the_machine_hello_says_why_agents_are_held() {
         standing: Some("ready"),
         failure: None,
     };
-    let held = machine_hello("Aqua", &declared, open, ready(), &clear(), idle());
+    let held = machine_hello(
+        "Aqua",
+        &declared,
+        &itself(),
+        open,
+        ready(),
+        &clear(),
+        idle(),
+    );
     let admitted = machine_hello(
         "Aqua",
         &declared,
+        &itself(),
         Posture::CLOSED,
         ready(),
         &clear(),
@@ -157,6 +166,7 @@ fn the_machine_hello_says_how_input_stands_and_what_the_person_can_do() {
         machine_hello(
             "Aqua",
             &declared,
+            &itself(),
             Posture::CLOSED,
             Input {
                 standing,
@@ -225,6 +235,62 @@ fn idle() -> Work {
     }
 }
 
+/// A virtual machine in its first boot, its daemon of the build `b1`.
+fn itself() -> Itself {
+    Itself {
+        boot: Some("boot-1".to_owned()),
+        virtual_machine: Some(true),
+        build: Some("b1".to_owned()),
+    }
+}
+
+#[test]
+fn the_machine_hello_says_what_the_station_proves_it_by() {
+    let declared = atlas_session::compatibility::Declared::ours(vec!["machine-proof-v1".into()]);
+    let ready = Input {
+        standing: Some("ready"),
+        failure: None,
+    };
+
+    let hello = machine_hello(
+        "Aqua",
+        &declared,
+        &itself(),
+        Posture::CLOSED,
+        ready,
+        &clear(),
+        idle(),
+    );
+
+    assert_eq!(
+        hello["machine"],
+        json!({"mode": "machine", "boot": "boot-1", "virtual": true})
+    );
+    assert_eq!(hello["daemon"]["build"], "b1");
+    assert_eq!(hello["daemon"]["capabilities"], json!(["machine-proof-v1"]));
+    for side in ["width", "height", "scale"] {
+        assert!(
+            hello["display"][side].as_f64().is_some_and(|it| it > 0.0),
+            "{hello}"
+        );
+    }
+    for permission in ["accessibility", "postEvents", "screenCapture"] {
+        assert!(hello["permissions"][permission].is_boolean(), "{hello}");
+    }
+}
+
+#[test]
+fn a_machine_finds_itself_in_this_boot_as_its_kernel_says() {
+    let found = Itself::now(Some("b1".to_owned()));
+
+    assert_eq!(found.boot, atlas_core::process::boot().ok());
+    assert_eq!(
+        found.virtual_machine,
+        atlas_core::process::in_virtual_machine()
+    );
+    assert_eq!(found.build.as_deref(), Some("b1"));
+}
+
 /// A machine hello in every respect closed and ready, but `stop` and `work`.
 fn reporting(stop: &Stop, work: Work) -> Value {
     let ready = Input {
@@ -232,7 +298,15 @@ fn reporting(stop: &Stop, work: Work) -> Value {
         failure: None,
     };
     let declared = atlas_session::compatibility::Declared::ours(Vec::new());
-    machine_hello("Aqua", &declared, Posture::CLOSED, ready, stop, work)
+    machine_hello(
+        "Aqua",
+        &declared,
+        &itself(),
+        Posture::CLOSED,
+        ready,
+        stop,
+        work,
+    )
 }
 
 #[test]

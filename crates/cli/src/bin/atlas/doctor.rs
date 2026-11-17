@@ -56,14 +56,23 @@ pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error:
         restarts,
     } = match client.desktop().kind() {
         Kind::User(login) => crate::user::doctor::user_report(client, login).await,
-        // Refused as every command on it is, in the failure's own words,
-        // and an update still handing it over said plainly.
+        // Never ready: its first step, from a fresh proof, else refused as
+        // every command on it is, in the failure's own words, and an update
+        // still handing it over said plainly first.
         Kind::Vm(_) => {
+            if let Some(why) = client.handover_unfinished() {
+                let refused = client.unreachable();
+                return Err(refused.with("why", json!(why)).with("next", json!(why)));
+            }
+            let status = client.status().await;
             let refused = client.unreachable();
-            return Err(match client.handover_unfinished() {
-                Some(why) => refused.with("why", json!(why)).with("next", json!(why)),
-                None => refused,
-            });
+            let refused = match status["why"].as_str().or(status["error"].as_str()) {
+                Some(why) if status["ok"] != true && why != refused.error => {
+                    refused.with("why", json!(why))
+                }
+                _ => refused,
+            };
+            return Err(atlas_client::capability::vm_first_step(&status).unwrap_or(refused));
         }
     };
 

@@ -129,6 +129,18 @@ fn the_boot_is_a_uuid() {
 }
 
 #[test]
+fn whether_this_mac_is_a_virtual_machine_is_what_its_kernel_says() {
+    let said = crate::spawn::output(
+        std::process::Command::new("/usr/sbin/sysctl").args(["-n", "kern.hv_vmm_present"]),
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "1");
+
+    assert_eq!(in_virtual_machine(), said);
+}
+
+#[test]
 fn only_this_accounts_live_processes_are_described() {
     let this = Instance::current().unwrap();
     assert!(this.is_this_one());

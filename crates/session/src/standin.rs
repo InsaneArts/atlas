@@ -88,7 +88,8 @@ pub struct StandIn {
     pub unkept: AtomicUsize,
     /// Run as each numbered Resume is carried out, before it is answered.
     pub on_lift: OnLift,
-    /// Whether it is an older guest, declaring no numbered Stops and Resumes.
+    /// Whether it is an older guest, declaring no numbered Stops and
+    /// Resumes, no input lanes and no machine proof.
     pub plain: std::sync::atomic::AtomicBool,
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
@@ -204,13 +205,16 @@ impl StandIn {
             outbox: Arc::new(Outbox::hello(
                 generation,
                 Vec::new(),
-                // Its Stop report is a test's own lanes' to give.
+                // Its Stop report, input lanes and what it is proved by are
+                // a test's own lanes' to give.
                 crate::compatibility::Declared::ours(if self.plain.load(SeqCst) {
                     vec![crate::compatibility::STOP_REPORT.to_owned()]
                 } else {
                     vec![
                         crate::compatibility::ACKNOWLEDGED.to_owned(),
                         crate::compatibility::STOP_REPORT.to_owned(),
+                        crate::compatibility::INPUT_LANES.to_owned(),
+                        crate::compatibility::MACHINE_PROOF.to_owned(),
                     ]
                 }),
             )),

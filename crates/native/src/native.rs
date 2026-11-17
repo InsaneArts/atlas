@@ -52,7 +52,26 @@ pub fn session_info() -> Result<Value> {
         "displayID": display_id,
         "width": bounds.size.width,
         "height": bounds.size.height,
+        "scale": backing_scale(display_id),
     }))
+}
+
+/// The backing pixels per point of `display`, as its mode says; one when it
+/// has none.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn backing_scale(display: u32) -> f64 {
+    use objc2_core_graphics::{CGDisplayCopyDisplayMode, CGDisplayMode};
+    let mode = CGDisplayCopyDisplayMode(display);
+    let (pixels, points) = (
+        CGDisplayMode::pixel_width(mode.as_deref()),
+        CGDisplayMode::width(mode.as_deref()),
+    );
+    if points > 0 {
+        pixels as f64 / points as f64
+    } else {
+        1.0
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -58,6 +58,7 @@ public actor ControlService {
       var reply = ControlReply.served("state", by: incarnation)
       reply.power = power.value
       reply.confirmed = power.confirmed
+      reply.window = await host.windowOpen() ? .open : .closed
       return reply
     case .outcome(let change):
       let record: ChangeRecord?

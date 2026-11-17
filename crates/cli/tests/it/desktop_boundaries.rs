@@ -1517,6 +1517,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "Desktop::left_may_run",
             "Desktop::orphans_run",
             "Desktop::prove",
+            "Desktop::prove_machine",
             "Desktop::record_key",
             "Kind",
             "impl From<crate::user::User> for Desktop",

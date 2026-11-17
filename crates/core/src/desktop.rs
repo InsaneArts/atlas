@@ -5,7 +5,7 @@ use crate::{
     error::Result,
     process::Instance,
     protocol::Left,
-    session::{Observation, Session},
+    session::{MachineExpect, MachineSession, Observation, Session},
 };
 
 /// A desktop agents act on.
@@ -141,16 +141,37 @@ impl Desktop {
     ///
     /// # Errors
     ///
-    /// For a second login, what [`Observation::require_hidden`] refuses.
+    /// For a second login, what [`Observation::require_hidden`] refuses. A
+    /// VM is always refused: it proves itself over its session, through
+    /// [`Desktop::prove_machine`].
     pub fn prove(&self, observation: &Observation) -> Result<Session> {
         match &self.kind {
             Kind::User(login) => observation.require_hidden(login.uid),
-            // A VM proves itself over its session, which the client opens;
-            // one it cannot reach is refused before any observation is read.
             Kind::Vm(_) => Err(crate::error::Error::new(
                 crate::error::Code::Platform,
                 "This VM desktop's proof comes over its session.",
             )),
+        }
+    }
+
+    /// Verify that `observation`, read over a machine desktop's session,
+    /// describes this desktop as `expect` holds it to.
+    ///
+    /// # Errors
+    ///
+    /// For a VM, what [`Observation::require_machine`] refuses. A second
+    /// login is always refused: it proves itself through [`Desktop::prove`].
+    pub fn prove_machine(
+        &self,
+        observation: &Observation,
+        expect: &MachineExpect<'_>,
+    ) -> Result<MachineSession> {
+        match &self.kind {
+            Kind::User(_) => Err(crate::error::Error::new(
+                crate::error::Code::Platform,
+                "A second login's proof comes from its own status.",
+            )),
+            Kind::Vm(_) => observation.require_machine(expect),
         }
     }
 

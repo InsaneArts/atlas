@@ -136,6 +136,13 @@ fn started_from() -> Option<(Option<String>, Executable)> {
     Some((build, (path, (metadata.dev(), metadata.ino()))))
 }
 
+/// The SHA-256 of the executable this process started from, in the form an
+/// input service's hello says its `build`; none when it cannot be read.
+#[must_use]
+pub fn own_build() -> Option<String> {
+    started_from()?.0
+}
+
 impl Service {
     /// Whether the file this process started from has been replaced.
     fn replaced(&self) -> bool {

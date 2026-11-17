@@ -379,6 +379,27 @@ pub fn boot() -> Result<String> {
         .map_err(invalid_boot)
 }
 
+/// Whether this Mac runs in a virtual machine, as its kernel says
+/// (`kern.hv_vmm_present`); none when it does not say.
+#[allow(unsafe_code, reason = "FFI: kern.hv_vmm_present has no safe binding")]
+#[must_use]
+pub fn in_virtual_machine() -> Option<bool> {
+    let mut present: libc::c_int = 0;
+    let mut size = std::mem::size_of_val(&present);
+    // SAFETY: NUL-terminated name and a writable integer of the declared
+    // size; no input buffer.
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"kern.hv_vmm_present".as_ptr(),
+            (&raw mut present).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (status == 0 && size == std::mem::size_of_val(&present)).then_some(present != 0)
+}
+
 fn invalid_boot(cause: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::new(Code::State, "Invalid boot session UUID").with_source(cause)
 }

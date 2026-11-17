@@ -160,6 +160,9 @@ pub(super) struct ProofObservation {
     display_id: Option<u64>,
     pub(super) width: Option<f64>,
     pub(super) height: Option<f64>,
+    /// The display's backing pixels per point, which a machine desktop's
+    /// proof is held to; a second login's is not.
+    pub(super) scale: Option<f64>,
 }
 
 impl ProofObservation {
@@ -175,6 +178,7 @@ impl ProofObservation {
             display_id: proof["displayID"].as_u64(),
             width: proof["width"].as_f64(),
             height: proof["height"].as_f64(),
+            scale: proof["scale"].as_f64(),
         }
     }
 
