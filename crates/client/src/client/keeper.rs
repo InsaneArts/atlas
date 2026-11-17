@@ -173,12 +173,19 @@ impl Client {
             capture: machine.capture,
             input: machine.input,
         };
+        // Commands that need no input run whether or not it is held; input
+        // is refused in the guest's own words before anything is claimed.
+        let input_held = (!machine.input).then(|| {
+            let held = crate::capability::vm_input_held(status);
+            (held.code, held.error)
+        });
         Ok(Verified {
             session,
             observation: Observation::decode(status),
             machine: Some(Pinned {
                 epoch: machine.epoch,
                 generation: proved.observed.generation,
+                input_held,
             }),
         })
     }
@@ -397,8 +404,8 @@ impl Client {
                 json!({"epoch": session.epoch, "capture": session.capture,
                     "input": session.input, "generation": generation}),
                 format!(
-                    "{} is proven: agents run commands there, but this build of Atlas cannot \
-                     see or use its screen yet.",
+                    "{} is proven: agents run commands and send input there, but this build of \
+                     Atlas cannot see its screen yet.",
                     self.selected.name
                 ),
             ),

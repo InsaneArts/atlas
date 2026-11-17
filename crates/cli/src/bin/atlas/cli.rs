@@ -1516,6 +1516,11 @@ pub(super) struct AppTarget {
 }
 
 impl AppTarget {
+    /// Whether it names no app at all.
+    pub(super) const fn names_none(&self) -> bool {
+        self.app.is_none() && self.pid.is_none()
+    }
+
     pub(super) fn target(self) -> Option<agent::Target> {
         self.pid
             .map(|pid| agent::Target::Pid(pid.into()))

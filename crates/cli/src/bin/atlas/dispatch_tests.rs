@@ -1024,6 +1024,91 @@ async fn a_close_on_a_vm_reads_its_guests_apps_and_copies_through_dispatch_and_i
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_raw_batch_naming_an_element_on_a_vm_is_refused_before_it_is_proved_or_claimed() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let batch = r#"[{"type": "move", "x": 1, "y": 1}, {"type": "press", "ref": "8123abc.12"}]"#;
+    let file = dir.path().join("batch.json");
+    std::fs::write(&file, batch).unwrap();
+    let from_file = format!("@{}", file.display());
+
+    for args in [
+        &["input", batch][..],
+        &["input", &from_file],
+        &["input", r#"[{"type": "reference", "ref": "8123abc.12"}]"#],
+        &[
+            "input",
+            r#"[{"type": "set-value", "ref": "8123abc.12", "value": "x"}]"#,
+        ],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let refused = executed(&config, command, &client).await.unwrap_err();
+        assert_eq!(refused.error, client.unreachable().error, "{args:?}");
+        let shown = crate::output::failure(&refused, true);
+        assert!(!shown.to_string().contains("helper"), "{shown}");
+    }
+
+    assert!(keeper.asked_for("observe").is_empty(), "never proved");
+    assert!(keeper.asked_for("change").is_empty(), "nothing sent");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agents_input_on_a_vm_goes_on_input_lanes_through_dispatch_and_is_held_by_either_stop() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    let inputs: [&[&str]; 7] = [
+        &["click", "10", "20"],
+        &["move", "1", "2"],
+        &["key", "cmd+s"],
+        &["type", "hi"],
+        &["scroll", "1", "2", "--dy", "3"],
+        &["drag", "1", "2", "3", "4"],
+        &["input", r#"[{"type": "move", "x": 5, "y": 6}]"#],
+    ];
+
+    for args in inputs {
+        let done = executed(&config, command(args), &client).await.unwrap();
+        assert_eq!(done["ok"], true, "{args:?}: {done}");
+    }
+    client.controller.note_stop(true).unwrap();
+    let station = executed(&config, command(&["click", "10", "20"]), &client).await;
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+    let mut guest = Vec::new();
+    for stop in ["stopped", "unknown"] {
+        *keeper.stop.lock().unwrap() = stop;
+        guest.push(executed(&config, command(&["key", "cmd+s"]), &client).await);
+    }
+
+    let changes = keeper.asked_for("change");
+    assert_eq!(changes.len(), 3 * inputs.len(), "{changes:?}");
+    for batch in changes.chunks(3) {
+        let ops: Vec<&str> = batch
+            .iter()
+            .map(|change| change["request"]["op"].as_str().unwrap())
+            .collect();
+        assert_eq!(ops, ["acquire", "input", "release"], "{batch:?}");
+        for change in batch {
+            assert_eq!(change["lane"], "input");
+            assert_eq!(change["generation"], atlas_client::test_support::GENERATION);
+            assert_eq!(change["request"]["change"], change["change"]);
+            assert_eq!(change["request"]["owner"], batch[0]["request"]["owner"]);
+        }
+    }
+    for held in std::iter::once(station).chain(guest) {
+        let held = held.unwrap_err();
+        assert_eq!(held.code, Code::Stopped, "{held:?}");
+        assert!(!held.error.contains("helper"), "{held:?}");
+    }
+    assert_eq!(keeper.asked_for("change").len(), 3 * inputs.len());
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_keeper_is_asked_anything()
  {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
@@ -1032,8 +1117,16 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
     let one_wording = client.unreachable().error;
 
     for args in [
-        &["move", "1", "2"][..],
-        &["key", "cmd+s"],
+        &["click", "1", "2", "--app", "Finder"][..],
+        &["click", "--ref", "8123abc.12"],
+        &["click", "--app", "Finder", "--name", "OK"],
+        &["key", "cmd+s", "--app", "Finder"],
+        &["type", "hi", "--field", "Search"],
+        &["scroll", "1", "2", "--dy", "3", "--window", "4"],
+        &["drag", "1", "2", "3", "4", "--pid", "812"],
+        &["input", "[]", "--app", "Finder"],
+        &["element", "press", "--ref", "8123abc.12"],
+        &["elements", "--app", "Finder"],
         &["apps"],
         &["screenshot"],
         &["start-input"],

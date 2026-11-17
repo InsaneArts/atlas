@@ -16,7 +16,10 @@ use atlas_core::{
     single_flight::Shared,
     transport::Pending,
 };
-use atlas_session::pairing::{Enrolment, StationRecords};
+use atlas_session::{
+    lane::LaneKind,
+    pairing::{Enrolment, StationRecords},
+};
 use serde_json::{Value, json};
 use std::{
     fmt,
@@ -370,7 +373,7 @@ impl Keeper {
     /// do on a VM, before anything is said; fails when the keeper cannot be
     /// reached or told.
     pub(crate) async fn send_read(&self, request: &Value) -> Result<Pending<Stream>> {
-        if !crate::vm::keeper::carries(request) {
+        if !crate::vm::keeper::carries(&LaneKind::Read, request) {
             return Err(self.selected.unreachable());
         }
         let asked = json!({"op": "read", "request": request,
@@ -378,18 +381,33 @@ impl Keeper {
         self.connected().await?.dispatch(&asked).await
     }
 
-    /// What the keeper is asked to carry `request`, the change `route`
-    /// names, to the guest in the generation `generation` its command
-    /// proved.
-    pub(crate) fn change(&self, route: &Route, request: &Value, generation: u64) -> Value {
+    /// What the keeper is asked to carry `request` to the guest in the
+    /// generation `generation` its command proved: the change `route`
+    /// names, or a read on its input service's lane.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a read on the input lane the keeper does not carry, in the
+    /// one wording for what this build cannot do on a VM.
+    pub(crate) fn change(&self, route: &Route, request: &Value, generation: u64) -> Result<Value> {
         let deadline = duration_ms(self.timeout);
-        match route {
+        Ok(match route {
             Route::Change(change) => json!({"op": "change", "lane": "change",
                 "change": change, "generation": generation, "request": request,
                 "deadline_ms": deadline}),
+            Route::Input(Some(change)) => json!({"op": "change", "lane": "input",
+                "change": change, "generation": generation, "request": request,
+                "deadline_ms": deadline}),
+            Route::Input(None) => {
+                if !crate::vm::keeper::carries(&LaneKind::Input { change: None }, request) {
+                    return Err(self.selected.unreachable());
+                }
+                json!({"op": "read", "lane": "input", "generation": generation,
+                    "request": request, "deadline_ms": deadline})
+            }
             Route::Stage(change) => json!({"op": "stage", "change": change,
                 "generation": generation, "request": request, "deadline_ms": deadline}),
-        }
+        })
     }
 
     /// The keeper's one-line answer to `request`.

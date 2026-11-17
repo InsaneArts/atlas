@@ -2039,13 +2039,26 @@ async fn with_input_service() -> (
     tempfile::TempDir,
     tokio::sync::MutexGuard<'static, ()>,
 ) {
+    with_input_service_on(records()).await
+}
+
+/// [`with_input_service`], the guest's daemon finding `records` as it starts.
+async fn with_input_service_on(
+    records: Records,
+) -> (
+    Served,
+    Controlling,
+    Desktop,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard<'static, ()>,
+) {
     let turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
     let folder = tempfile::tempdir().unwrap();
     let input = crate::machine::input::Input::start(
         crate::machine::input::Starter::of_these_tests(folder.path()),
         folder.path().to_owned(),
     );
-    let served = Served::with_input(records(), Some(input)).await;
+    let served = Served::with_input(records, Some(input)).await;
     let (controlling, desktop) = served.control().await;
     let standing = served.machine.daemon.input.as_ref().unwrap().standing();
     for _ in 0..200 {
@@ -2181,6 +2194,176 @@ async fn what_an_input_lane_was_not_opened_for_is_refused() {
         let reply = replies.last().unwrap();
         assert_eq!(reply["code"], "bad-request", "{reply}");
     }
+}
+
+/// An acquire of input for `owner`, the change `change`.
+fn acquire_for(change: &Token, owner: &Token) -> Value {
+    json!({"op": "acquire", "owner": owner, "epoch": {"uid": 502}, "person": false,
+        "change": change})
+}
+
+/// The lane of the change `change` to input.
+fn input_lane(change: &Token) -> LaneKind {
+    LaneKind::Input {
+        change: Some(change.clone()),
+    }
+}
+
+#[tokio::test]
+async fn an_owner_its_input_service_refused_for_certain_ends_with_nothing_taken_and_is_settled() {
+    let (served, controlling, desktop, _folder, _turn) = with_input_service().await;
+    let (owner, taken) = (Token::new(), Token::new());
+
+    let refused = ask(&desktop, input_lane(&taken), &acquire_for(&taken, &owner)).await;
+    let ended = served.changes.of(&owner).unwrap();
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Settled {
+            changes: vec![taken.clone(), owner.clone()],
+        })
+        .unwrap();
+
+    // The service's own refusal, which took nothing.
+    let refused = refused.last().unwrap();
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_ne!(refused["uncertain"], true, "{refused}");
+    assert!(
+        matches!(&ended, Some(crate::machine::changes::State::Done { reply })
+            if reply["taken"] == false && reply["uncertain"] != true),
+        "{ended:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while served.changes.of(&owner).unwrap().is_some()
+            || served.changes.of(&taken).unwrap().is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("both settled");
+    assert!(served.changes.unresolved().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn input_is_taken_only_by_an_owner_kept_first_and_never_by_one_that_let_go() {
+    let owner = Token::new();
+    // An owner a daemon that went left taking input.
+    let records = records();
+    let kept = json!({"op": "owner", "owner": owner});
+    records.2.ask(&owner, "owner", &kept).unwrap();
+    let (served, _controlling, desktop, _folder, _turn) = with_input_service_on(records).await;
+    let (released, again, unnamed) = (Token::new(), Token::new(), Token::new());
+
+    // A release the service does not acknowledge leaves the owner kept.
+    let release = json!({"op": "release", "owner": owner, "change": released});
+    let refused = ask(&desktop, input_lane(&released), &release).await;
+    let still = served.changes.of(&owner).unwrap();
+    // Proven let go of once the service holds nothing.
+    let ended = outcome_of(&desktop, &owner).await;
+    let after = ask(&desktop, input_lane(&again), &acquire_for(&again, &owner)).await;
+    let nameless = ask(
+        &desktop,
+        input_lane(&unnamed),
+        &json!({"op": "acquire", "owner": "agent", "epoch": {"uid": 502}, "change": unnamed}),
+    )
+    .await;
+
+    assert_ne!(refused.last().unwrap()["released"], true, "{refused:?}");
+    assert_eq!(still, Some(crate::machine::changes::State::Intended));
+    assert_eq!(ended["reply"]["ended"], true, "{ended}");
+    for refused in [after, nameless] {
+        let refused = refused.last().unwrap();
+        assert_eq!(refused["code"], "bad-request", "{refused}");
+        assert_ne!(refused["uncertain"], true, "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_reset_of_the_input_service_is_never_taken_from_the_station() {
+    let (served, _controlling, desktop, _folder, _turn) = with_input_service().await;
+    let (change, epoch) = (Token::new(), json!({"uid": 502}));
+
+    let as_a_change = ask(
+        &desktop,
+        LaneKind::Input {
+            change: Some(change.clone()),
+        },
+        &json!({"op": "reset", "epoch": epoch, "change": change}),
+    )
+    .await;
+    let as_a_read = ask(
+        &desktop,
+        LaneKind::Input { change: None },
+        &json!({"op": "reset", "epoch": epoch}),
+    )
+    .await;
+
+    for replies in [as_a_change, as_a_read] {
+        let reply = replies.last().unwrap();
+        assert_eq!(reply["code"], "bad-request", "{reply}");
+    }
+    assert_eq!(served.changes.of(&change).unwrap(), None, "nothing kept");
+}
+
+/// Records holding an acquire whose outcome is unknown, and a release a
+/// Stop cut short, both of the owner `owner`, as a daemon that went left
+/// them.
+fn left_input(taken: &Token, let_go: &Token, owner: &Token) -> Records {
+    let records = records();
+    let acquire = json!({"op": "acquire", "owner": owner, "epoch": {}, "change": taken});
+    records.2.ask(taken, "acquire", &acquire).unwrap();
+    let release = json!({"op": "release", "owner": owner, "change": let_go});
+    records.2.ask(let_go, "release", &release).unwrap();
+    let stopped = json!({"ok": false, "code": "stopped",
+        "error": "Agents were stopped while the change ran", "uncertain": true});
+    records.2.done(let_go, &stopped).unwrap();
+    records
+}
+
+#[tokio::test]
+async fn changes_to_input_left_unknown_are_ended_once_the_input_service_says_nothing_is_held() {
+    let (taken, let_go, owner) = (Token::new(), Token::new(), Token::new());
+    let (_served, _controlling, desktop, _folder, _turn) =
+        with_input_service_on(left_input(&taken, &let_go, &owner)).await;
+
+    let acquired = outcome_of(&desktop, &taken).await;
+    let released = outcome_of(&desktop, &let_go).await;
+
+    for answered in [acquired, released] {
+        assert_eq!(answered["outcome"], "done", "{answered}");
+        assert_eq!(answered["reply"]["ended"], true, "{answered}");
+        assert_eq!(answered["reply"]["uncertain"], true, "{answered}");
+    }
+}
+
+#[tokio::test]
+async fn a_change_to_input_still_carried_out_here_is_never_ended() {
+    let (taken, let_go, owner) = (Token::new(), Token::new(), Token::new());
+    let (served, _controlling, desktop, _folder, _turn) =
+        with_input_service_on(left_input(&taken, &let_go, &owner)).await;
+    let carrying = served.machine.daemon.keepers.carry(&taken);
+
+    let carried = outcome_of(&desktop, &taken).await;
+    drop(carrying);
+    let after = outcome_of(&desktop, &taken).await;
+
+    assert_eq!(carried["outcome"], "unknown", "{carried}");
+    assert_eq!(after["reply"]["ended"], true, "{after}");
+}
+
+#[tokio::test]
+async fn changes_to_input_on_a_guest_whose_input_service_cannot_say_stay_unknown() {
+    let (taken, let_go, owner) = (Token::new(), Token::new(), Token::new());
+    let served = Served::on(left_input(&taken, &let_go, &owner)).await;
+    let (controlling, desktop) = served.control().await;
+
+    let acquired = outcome_of(&desktop, &taken).await;
+    let released = outcome_of(&desktop, &let_go).await;
+
+    assert_eq!(controlling.unsettled, std::slice::from_ref(&let_go));
+    assert_eq!(acquired["outcome"], "unknown", "{acquired}");
+    assert_eq!(released["outcome"], "done", "{released}");
+    assert_ne!(released["reply"]["ended"], true, "{released}");
 }
 
 #[tokio::test]

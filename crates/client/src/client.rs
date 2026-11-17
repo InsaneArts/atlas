@@ -5,6 +5,7 @@
 //! screenshots and activity log in the private output folder.
 mod apps;
 mod capture;
+mod guest_input;
 mod input;
 mod install;
 mod keeper;
@@ -84,6 +85,9 @@ pub(crate) struct Verified {
 pub(crate) struct Pinned {
     pub(crate) epoch: atlas_core::session::MachineEpoch,
     pub(crate) generation: u64,
+    /// Why its guest takes no input from agents in this session, with the
+    /// code it is refused by; none while it does.
+    pub(crate) input_held: Option<(Code, String)>,
 }
 
 impl Verified {

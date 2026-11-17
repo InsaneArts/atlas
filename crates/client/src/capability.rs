@@ -146,26 +146,50 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
             .map(|refused| Error::new(code, refused));
     }
     let guest = &status["guest"];
+    let name = status["desktop"]["name"].as_str().unwrap_or("the VM");
+    // Asked of the person in the VM's own window, never the helper's.
+    let allow = |setting: &str| {
+        json!(format!(
+            "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s window."
+        ))
+    };
     if guest["permissions"]["screenCapture"] != true {
-        return Some(Error::new(
-            Code::Permission,
-            "In the VM's window, open System Settings › Privacy & Security › Screen & \
-             System Audio Recording and turn Atlas on.",
-        ));
+        return Some(
+            Error::new(
+                Code::Permission,
+                "In the VM's window, open System Settings › Privacy & Security › Screen & \
+                 System Audio Recording and turn Atlas on.",
+            )
+            .with("next", allow("Screen & System Audio Recording")),
+        );
     }
     if status["proof"]["input"] != true {
-        if crate::vm::proof::mid_update(guest) {
-            return Some(Error::new(Code::Update, crate::vm::proof::MID_UPDATE));
-        }
-        return Some(match guest["input"]["held"].as_str() {
-            Some(held) => Error::new(Code::Permission, held),
-            None => Error::new(
-                Code::Input,
-                "The VM's input service is not ready to act; agents wait for it.",
-            ),
+        let held = vm_input_held(guest);
+        return Some(if held.code == Code::Permission {
+            held.with("next", allow("Accessibility"))
+        } else {
+            held
         });
     }
     None
+}
+
+/// Why a VM whose guest's status is `guest` takes no input from agents now,
+/// in the guest's own words where it says why: Atlas in it part way through
+/// an update, what it still has to be allowed, or its input service not
+/// ready.
+pub(crate) fn vm_input_held(guest: &Value) -> atlas_core::error::Error {
+    use atlas_core::error::{Code, Error};
+    if crate::vm::proof::mid_update(guest) {
+        return Error::new(Code::Update, crate::vm::proof::MID_UPDATE);
+    }
+    match guest["input"]["held"].as_str() {
+        Some(held) => Error::new(Code::Permission, held),
+        None => Error::new(
+            Code::Input,
+            "The VM's input service is not ready to act; agents wait for it.",
+        ),
+    }
 }
 
 /// `report` with what is known of native dialogs (`native`, in `state`) and

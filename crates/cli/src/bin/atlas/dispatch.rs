@@ -271,19 +271,37 @@ async fn execute_with(
 }
 
 /// Whether `command` is a change this build makes on a VM desktop: a
-/// command, a background job's start or stop, `open` and `close`, and a
-/// cleanup of what they left.
+/// command, a background job's start or stop, `open` and `close`, a
+/// cleanup of what they left, and an agent's input at a point or of keys
+/// and text. Input checked against an app, a window or a field, and a click
+/// on an element, are not built for a VM.
 fn changes_on_vm(command: &Command) -> bool {
-    matches!(
-        command,
+    match command {
         Command::Run(_)
-            | Command::Open(_)
-            | Command::Close { .. }
-            | Command::Cleanup(_)
-            | Command::Job {
-                command: JobCommand::Start { .. } | JobCommand::Stop { .. }
-            }
-    )
+        | Command::Open(_)
+        | Command::Close { .. }
+        | Command::Cleanup(_)
+        | Command::Job {
+            command: JobCommand::Start { .. } | JobCommand::Stop { .. },
+        }
+        | Command::Move { .. } => true,
+        Command::Click(click) => {
+            click.x.is_some()
+                && click.reference.is_none()
+                && click.window.is_none()
+                && click.target.names_none()
+        }
+        Command::Drag(drag) => drag.window.is_none() && drag.target.names_none(),
+        Command::Scroll(scroll) => scroll.window.is_none() && scroll.target.names_none(),
+        Command::Type(typed) => {
+            typed.window.is_none() && typed.field.is_none() && typed.target.names_none()
+        }
+        Command::Key(keys) => {
+            keys.window.is_none() && keys.field.is_none() && keys.target.names_none()
+        }
+        Command::Input { target, .. } => target.names_none(),
+        _ => false,
+    }
 }
 
 /// Note what a command of `kind`, doing `doing`, left for its session to

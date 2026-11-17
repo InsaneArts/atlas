@@ -497,7 +497,7 @@ async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
         status["notReady"]
             .as_str()
             .unwrap()
-            .contains("cannot see or use its screen yet"),
+            .contains("cannot see its screen yet"),
         "{status}"
     );
     let proof = &status["proof"];
@@ -671,6 +671,12 @@ async fn a_vm_with_no_input_hello_is_proven_with_input_false_and_its_advice_firs
         "{}",
         first.error
     );
+    assert_eq!(
+        first.details["next"],
+        "Ask the person to allow Atlas in Privacy & Security, Accessibility, in work's window."
+    );
+    let shown = serde_json::to_string(&first).unwrap();
+    assert!(!shown.contains("helper"), "{shown}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1111,4 +1117,28 @@ async fn a_lifecycle_record_out_of_reach_for_a_while_is_read_again_by_the_same_c
             .contains("cannot be told")
     );
     assert_eq!(back["ok"], true, "{back}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_without_screen_recording_asks_for_it_in_its_own_window_never_the_helpers() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    *saying.hello.lock().unwrap() = Some(|hello| {
+        hello["permissions"]["screenCapture"] = json!(false);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+
+    assert_eq!(status["proven"], true, "{status}");
+    let first = crate::capability::vm_first_step(&status).unwrap();
+    assert_eq!(first.code, Code::Permission);
+    assert_eq!(
+        first.details["next"],
+        "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio Recording, \
+         in work's window."
+    );
+    let shown = serde_json::to_string(&first).unwrap();
+    assert!(!shown.contains("helper"), "{shown}");
 }

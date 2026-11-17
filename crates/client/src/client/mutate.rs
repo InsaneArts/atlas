@@ -41,6 +41,9 @@ const JOB_START: Duration = Duration::from_secs(30);
 /// How long a VM's guest is given to remove a copy and say what it came to:
 /// it may first put right what an earlier change to it left.
 const REMOVE_COPY: Duration = Duration::from_secs(60);
+/// How long a VM's guest is given to take input, send one batch of it, or
+/// let it go, and say so: longer than its input service gives one batch.
+const INPUT: Duration = Duration::from_secs(30);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -99,6 +102,17 @@ pub(crate) enum Mutation<'a> {
     RemoveCopy {
         copy: &'a Token,
         node: &'a str,
+    },
+    /// Input on a VM's guest taken by `owner` for an agent, in the session
+    /// `epoch` names: the owner its input and its release name.
+    Acquire {
+        owner: &'a str,
+        epoch: InputEpoch,
+    },
+    /// Input on a VM's guest let go of by `owner`, and whatever it left held
+    /// released.
+    Release {
+        owner: &'a str,
     },
 }
 
@@ -173,6 +187,10 @@ impl Mutation<'_> {
             Self::RemoveCopy { copy, node } => {
                 json!({"op": "remove-copy", "copy": copy, "node": node})
             }
+            Self::Acquire { owner, epoch } => {
+                json!({"op": "acquire", "owner": owner, "epoch": epoch, "person": false})
+            }
+            Self::Release { owner } => json!({"op": "release", "owner": owner}),
         }
     }
 
@@ -240,6 +258,9 @@ impl Mutation<'_> {
                     && reply["copy"] == json!(copy)
                     && reply["outcome"].is_string()
             }
+            Self::Acquire { .. } => true,
+            // Only a release that says so let go of what was held.
+            Self::Release { .. } => reply["released"] == true,
         };
 
         valid.then_some(()).ok_or_else(unconfirmed)
@@ -332,7 +353,9 @@ impl Client {
             Mutation::Input { .. }
             | Mutation::Restart
             | Mutation::Logout { .. }
-            | Mutation::RemoveCopy { .. } => (false, false),
+            | Mutation::RemoveCopy { .. }
+            | Mutation::Acquire { .. }
+            | Mutation::Release { .. } => (false, false),
         };
         if stop_before && self.stop_marked() {
             return Err(Error::stopped());
@@ -471,8 +494,11 @@ impl Client {
             | Mutation::Restart
             | Mutation::Logout { .. } => daemon.clone(),
             // Only a VM's guest keeps copies of its own, removed through its
-            // keeper.
-            Mutation::RemoveCopy { .. } => return Err(self.unreachable()),
+            // keeper; and input on one is taken and let go of through it,
+            // where the helper's is taken under its caller's own claim.
+            Mutation::RemoveCopy { .. } | Mutation::Acquire { .. } | Mutation::Release { .. } => {
+                return Err(self.unreachable());
+            }
         })
     }
 
@@ -503,7 +529,9 @@ impl Client {
             Mutation::Run { .. }
             | Mutation::JobStart { .. }
             | Mutation::JobStop { .. }
-            | Mutation::RemoveCopy { .. } => false,
+            | Mutation::RemoveCopy { .. }
+            | Mutation::Acquire { .. }
+            | Mutation::Release { .. } => false,
         };
         if callers {
             return Ok(None);
@@ -637,7 +665,9 @@ impl Client {
             | Mutation::JobStop { .. }
             | Mutation::Restart
             | Mutation::Logout { .. }
-            | Mutation::RemoveCopy { .. } => {}
+            | Mutation::RemoveCopy { .. }
+            | Mutation::Acquire { .. }
+            | Mutation::Release { .. } => {}
         }
         let mut transport = self.transport_for(mutation).ok()?;
         transport.timeout = OUTCOME_WAIT;
@@ -771,11 +801,13 @@ impl Client {
 
     /// [`Client::mutate`] on a VM, in the generation `generation` of its
     /// keeper's session its command's proof was taken in: a command, a job's
-    /// start or stop, or a copy's removal, claimed as the guest's before
-    /// anything goes, said through its keeper, and settled with the guest once
-    /// its claim is cleared. An agent's change is cut short by the person's
-    /// Stop, its outcome left pending until the guest answers it. Anything
-    /// else is refused before it is claimed.
+    /// start or stop, a copy's removal, or input taken, sent or let go of on
+    /// its input service's lane, claimed as the guest's before anything
+    /// goes, said through its keeper, and settled with the guest once its
+    /// claim is cleared. An agent's change is cut short by the person's
+    /// Stop, its outcome left pending until the guest answers it. Input let
+    /// go of is cleanup: it goes after a signal's stop or the person's Stop
+    /// as well. Anything else is refused before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
         mutation: &Mutation<'_>,
@@ -788,6 +820,10 @@ impl Client {
             (Kind::Vm(_), Mutation::JobStart { .. }) => JOB_START,
             (Kind::Vm(_), Mutation::JobStop { .. }) => self.link.timeout(),
             (Kind::Vm(_), Mutation::RemoveCopy { .. }) => REMOVE_COPY,
+            (
+                Kind::Vm(_),
+                Mutation::Input { .. } | Mutation::Acquire { .. } | Mutation::Release { .. },
+            ) => INPUT,
             _ => return Err(self.unreachable()),
         };
         debug_assert!(
@@ -795,10 +831,13 @@ impl Client {
             "only a command started with run lets go of control while it runs"
         );
         let started = Instant::now();
-        self.controller.interrupt().check()?;
+        let cleanup = matches!(mutation, Mutation::Release { .. });
+        if !cleanup {
+            self.controller.interrupt().check()?;
+        }
         let command = release.is_some();
         let agent = self.actor == Actor::Agent && self.doing.is_some();
-        if agent && self.stop_marked() {
+        if agent && !cleanup && self.stop_marked() {
             return Err(self.stopped());
         }
         let change = Token::new();
@@ -815,8 +854,14 @@ impl Client {
             .link
             .clone()
             .with_timeout(self.link.timeout().max(within));
+        let route = match mutation {
+            Mutation::Input { .. } | Mutation::Acquire { .. } | Mutation::Release { .. } => {
+                Route::Input(Some(change.clone()))
+            }
+            _ => Route::Change(change.clone()),
+        };
         let sent = self
-            .send_change(&link, &change, &request, generation, &claim)
+            .send_change(&link, (&route, &request, generation), &claim, cleanup)
             .await
             .map_err(|error| self.pending_on_vm(error))?;
         // As for the helper login: control goes once the request is sent.
@@ -859,6 +904,9 @@ impl Client {
         if reply["ok"] == false && reply["uncertain"] == true && reply.get("next").is_none() {
             reply["next"] = json!(self.kept_pending());
         }
+        if matches!(mutation, Mutation::Input { .. }) {
+            self.keep_from_reply(&mut reply);
+        }
         Ok(reply)
     }
 
@@ -883,31 +931,33 @@ impl Client {
         )
     }
 
-    /// Send `request`, the change `change`, through `link`'s keeper in
+    /// Send `request`, the change `route` names, through `link`'s keeper in
     /// `generation`: connected first, which a signal's stop cuts; then sent,
-    /// the last moment a stop refuses it. Its `claim` is settled whenever
-    /// it is not sent.
+    /// the last moment a stop refuses it, unless it is `cleanup`, which goes
+    /// whatever the stop. Its `claim` is settled whenever it is not sent.
     async fn send_change(
         &self,
         link: &crate::link::Link,
-        change: &Token,
-        request: &Value,
-        generation: u64,
+        (route, request, generation): (&Route, &Value, u64),
         claim: &Pending,
+        cleanup: bool,
     ) -> Result<transport::Pending<crate::link::Stream>> {
         let interrupt = self.controller.interrupt();
-        let route = Route::Change(change.clone());
-        let connected = tokio::select! {
-            biased;
-            connected = link.connect_change(&route, request, generation) => connected,
-            signal = interrupt.cut() => Err(interrupt.cut_short(signal).certain()),
+        let connected = if cleanup {
+            link.connect_change(route, request, generation).await
+        } else {
+            tokio::select! {
+                biased;
+                connected = link.connect_change(route, request, generation) => connected,
+                signal = interrupt.cut() => Err(interrupt.cut_short(signal).certain()),
+            }
         };
         let sent = match connected {
             Ok((connection, asked)) => {
                 let _sending = interrupt.sending();
                 match interrupt.check() {
-                    Ok(()) => connection.dispatch(&asked).await,
-                    Err(stop) => Err(stop),
+                    Err(stop) if !cleanup => Err(stop),
+                    Ok(()) | Err(_) => connection.dispatch(&asked).await,
                 }
             }
             Err(error) => Err(error),

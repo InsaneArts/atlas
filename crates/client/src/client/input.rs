@@ -33,6 +33,13 @@ pub(crate) fn require_looks(verified: &Verified) -> Result<()> {
     if verified.input_offers(LOOKS) {
         return Ok(());
     }
+    if verified.machine().is_some() {
+        return Err(Error::new(
+            Code::Update,
+            "The VM's input service cannot read elements: update Atlas so the VM's Atlas and \
+             this command are one build",
+        ));
+    }
     Err(Error::new(
         Code::Startup,
         "The helper's input service cannot read elements: run atlas start-input, then try again",
@@ -72,7 +79,7 @@ fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
 /// The input service's refusal in `result`: its code when it is one callers
 /// act on, who holds control when it says, and whether the failure may
 /// already have changed state.
-fn native_refusal(result: &Value) -> Error {
+pub(super) fn native_refusal(result: &Value) -> Error {
     let error = Error::refused(
         result["code"]
             .as_str()
@@ -86,6 +93,31 @@ fn native_refusal(result: &Value) -> Error {
         Some(holder) => error.held_by(holder),
         None => error,
     }
+}
+
+/// What input that came to `result` comes to once its release came to
+/// `cleanup`: `result` itself when the release was acknowledged; else the
+/// stop that cut the release short, or an outcome unknown, since what the
+/// input left held may still be held.
+pub(super) fn released(result: Result<Value>, cleanup: Result<Value>) -> Result<Value> {
+    let Err(cleanup) = cleanup else {
+        return result;
+    };
+    // A release the stop cut short says so, as its input may.
+    if cleanup.code == Code::Interrupted {
+        return Err(cleanup);
+    }
+    let message = match result {
+        Ok(_) => format!(
+            "Input finished but native release was not confirmed: {}",
+            cleanup.error
+        ),
+        Err(error) => format!(
+            "{} Native release was not confirmed either: {}",
+            error.error, cleanup.error
+        ),
+    };
+    Err(Error::new(Code::Uncertain, message).uncertain())
 }
 
 impl Client {
@@ -115,25 +147,47 @@ impl Client {
     /// One look at the elements of the app `expect` names, read and kept
     /// by the input service of the session `verified` describes, which the
     /// caller verified just before. Its reply names the look. A read sends
-    /// nothing, so its failure is never uncertain.
+    /// nothing, so its failure is never uncertain. A VM's guest is asked
+    /// through its keeper, on its input service's own lane, in the
+    /// generation and epoch its proof pinned.
     pub(crate) async fn look_at(&self, verified: &Verified, expect: &Expect) -> Result<Value> {
         require_looks(verified)?;
+        let epoch = match verified.machine() {
+            Some(pinned) => pinned.epoch.input_epoch(),
+            None => verified.session().epoch.input_epoch(),
+        };
         let request = json!({
             "op": "elements",
-            "epoch": verified.session().epoch.input_epoch(),
+            "epoch": epoch,
             "expect": expect,
         });
-        let mut transport = self.input_transport()?;
-        transport.timeout = LOOK_TIMEOUT;
-        let connection = transport.connect().await.map_err(Error::certain)?;
-        // Once asked, a read with no answer in time is the one the probe
-        // gave none for.
-        let reply = async { connection.dispatch(&request).await?.finish().await }
-            .await
-            .map_err(|cause| {
-                Error::new(Code::Elements, "The accessibility probe returned no result")
-                    .with_source(cause)
-            })?;
+        let unanswered = |cause: Error| {
+            Error::new(Code::Elements, "The accessibility probe returned no result")
+                .with_source(cause)
+        };
+        let reply = match verified.machine() {
+            Some(pinned) => {
+                let link = self.link.clone().with_timeout(LOOK_TIMEOUT);
+                let route = crate::link::Route::Input(None);
+                let (connection, asked) = link
+                    .connect_change(&route, &request, pinned.generation)
+                    .await
+                    .map_err(Error::certain)?;
+                async { connection.dispatch(&asked).await?.finish().await }
+                    .await
+                    .map_err(unanswered)?
+            }
+            None => {
+                let mut transport = self.input_transport()?;
+                transport.timeout = LOOK_TIMEOUT;
+                let connection = transport.connect().await.map_err(Error::certain)?;
+                // Once asked, a read with no answer in time is the one the
+                // probe gave none for.
+                async { connection.dispatch(&request).await?.finish().await }
+                    .await
+                    .map_err(unanswered)?
+            }
+        };
         if reply["ok"] != true {
             // As the probe's failures read: a refusal of the session keeps
             // its code, and the read's own failure is the elements'.
@@ -262,6 +316,32 @@ impl Client {
         self.input_inner(actions, expected, None, check).await
     }
 
+    /// [`Client::input_owned`] in the session `verified`, which the caller
+    /// proved for its whole command just before: a VM's every batch goes in
+    /// the generation and epoch that one proof pinned, and is refused when
+    /// it is to be checked against an app, which is not built for one.
+    pub(crate) async fn input_owned_in(
+        &self,
+        ownership: &Ownership,
+        actions: Result<actions::Batch<'_>>,
+        verified: &Verified,
+        check: Option<Expect>,
+    ) -> Result<Value> {
+        if verified.machine().is_none() {
+            let expected = Some((&verified.session().epoch, Instant::now()));
+            return self.input_owned(ownership, actions, expected, check).await;
+        }
+        if check.is_some() {
+            return Err(self.unreachable());
+        }
+        self.refuse_references_on_vm(&actions)?;
+        let sent = async {
+            self.controller.require_known_beside(Beside::Commands)?;
+            self.input_on_vm(actions, verified).await
+        };
+        self.advised_on_vm(sent.await)
+    }
+
     /// The input service, still running in this same session, was pinned
     /// to an earlier display (switching accounts can renumber it): pin it to
     /// the current verified display, as start-input does. When the display
@@ -310,8 +390,22 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
         check: Option<Expect>,
     ) -> Result<Value> {
-        // Input on a VM is not built yet: refused before its status is read.
-        self.second_login_only()?;
+        if let Kind::Vm(_) = self.desktop().kind() {
+            // Only an agent's own input at a point, or of keys and text, is
+            // built for a VM: the person's, input checked against an app or a
+            // look taken before, and any naming an element, are refused before
+            // the VM is read.
+            if expected.is_some() || lease.is_some() || check.is_some() {
+                return Err(self.unreachable());
+            }
+            self.refuse_references_on_vm(&actions)?;
+            let sent = async {
+                self.controller.require_known_beside(Beside::Commands)?;
+                let verified = self.verify_vm().await?;
+                self.input_on_vm(actions, &verified).await
+            };
+            return self.advised_on_vm(sent.await);
+        }
         // An agent's input holds control taken beside commands; the person's
         // holds the lease, which no command can start under.
         self.controller.require_known_beside(Beside::Commands)?;
@@ -490,28 +584,10 @@ impl Client {
         let unknown = result
             .as_ref()
             .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true);
-        let Err(cleanup) = cleanup else {
-            if !unknown {
-                self.controller.clear_if(generation)?;
-            }
-            return result;
-        };
-
-        // A release the stop cut short says so, as its input may.
-        if cleanup.code == Code::Interrupted {
-            return Err(cleanup);
+        if cleanup.is_ok() && !unknown {
+            self.controller.clear_if(generation)?;
         }
-        let message = match result {
-            Ok(_) => format!(
-                "Input finished but native release was not confirmed: {}",
-                cleanup.error
-            ),
-            Err(error) => format!(
-                "{} Native release was not confirmed either: {}",
-                error.error, cleanup.error
-            ),
-        };
-        Err(Error::new(Code::Uncertain, message).uncertain())
+        released(result, cleanup)
     }
 
     /// Carry out a change to the input service as a pending mutation: it

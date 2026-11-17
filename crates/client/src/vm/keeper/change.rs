@@ -119,6 +119,16 @@ impl Asked {
             request: asked,
         })
     }
+
+    /// The owner an acquire on an input lane takes input for, when it names
+    /// one by a token.
+    fn owner(&self) -> Option<Token> {
+        let acquire =
+            matches!(self.kind, LaneKind::Input { .. }) && self.request["op"] == "acquire";
+        acquire
+            .then(|| self.request["owner"].as_str().and_then(Token::parse))
+            .flatten()
+    }
 }
 
 /// How a change's carrying ended.
@@ -158,8 +168,13 @@ pub(super) async fn changed(keeper: &Keeper, request: &Value, stream: UnixStream
         }
     };
     // Remembered before anything is said, so it is settled once the
-    // station holds no claim on it, whatever comes of its lane.
+    // station holds no claim on it, whatever comes of its lane; so is the
+    // owner input is taken for, which the guest keeps as a change of its
+    // own.
     session.carried.keep(asked.change.clone());
+    if let Some(owner) = asked.owner() {
+        session.carried.keep(owner);
+    }
     let until = tokio::time::Instant::now() + deadline;
     let opened = tokio::time::timeout(OPENING.min(deadline), session.desktop.open(asked.kind))
         .await
@@ -444,3 +459,7 @@ pub(super) mod tests;
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod jobs_tests;
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod input_tests;

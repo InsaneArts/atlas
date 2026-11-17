@@ -60,19 +60,36 @@ const ASKING: Duration = Duration::from_secs(10);
 const DEADLINE: Duration = Duration::from_secs(30);
 const LONGEST: Duration = Duration::from_secs(120);
 
-/// Whether a client may have `request` carried to the guest as a read: what
-/// the commands this build runs on a VM need, and nothing more. A Stop, a
-/// Resume, its own proof and recovery are the keeper's own; a job's reads
-/// are a list or one job (`show`) and its log, never a stop of every job;
-/// `leftovers` is the guest's word on what work of its may still run.
-/// `open`, `close` and a cleanup read the guest's apps, always in the
-/// session their proof pinned, and its copies.
-pub(crate) fn carries(request: &Value) -> bool {
-    match request["op"].as_str() {
-        Some("hello" | "outcome" | "leftovers" | "copies") => true,
-        Some("apps") => request["session"].is_object(),
-        Some("job") => matches!(request["action"].as_str(), Some("show" | "log")),
+/// Whether a client may have `request` carried to the guest as a read on a
+/// lane of `kind`: what the commands this build runs on a VM need, and
+/// nothing more. A Stop, a Resume, its own proof and recovery are the
+/// keeper's own; a job's reads are a list or one job (`show`) and its log,
+/// never a stop of every job; `leftovers` is the guest's word on what work
+/// of its may still run. `open`, `close` and a cleanup read the guest's
+/// apps, always in the session their proof pinned, and its copies. On the
+/// input service's own lane, only a look at an app's elements, held to the
+/// epoch the command's proof pinned and naming its app.
+pub(crate) fn carries(kind: &LaneKind, request: &Value) -> bool {
+    match (kind, request["op"].as_str()) {
+        (LaneKind::Read, Some("hello" | "outcome" | "leftovers" | "copies")) => true,
+        (LaneKind::Read, Some("apps")) => request["session"].is_object(),
+        (LaneKind::Read, Some("job")) => {
+            matches!(request["action"].as_str(), Some("show" | "log"))
+        }
+        (LaneKind::Input { change: None }, Some("elements")) => {
+            request["epoch"].is_object() && request["expect"].is_object()
+        }
         _ => false,
+    }
+}
+
+/// The lane a client's `read` asks for: the guest's daemon's, unless it
+/// names the input service's; none for any other.
+fn read_lane(request: &Value) -> Option<LaneKind> {
+    match request["lane"].as_str() {
+        None | Some("read") => Some(LaneKind::Read),
+        Some("input") => Some(LaneKind::Input { change: None }),
+        Some(_) => None,
     }
 }
 
@@ -270,7 +287,10 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             let telling = Telling::Resume(revision.flatten());
             let _ = say(&mut writing, &told(keeper, telling, deadline).await).await;
         }
-        Some("read") if request["request"].is_object() && !carries(&request["request"]) => {
+        Some("read")
+            if request["request"].is_object()
+                && read_lane(&request).is_none_or(|lane| !carries(&lane, &request["request"])) =>
+        {
             let refused = refusal(
                 Code::Denied,
                 "The keeper does not carry that read to the guest.",
@@ -282,7 +302,16 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
                 && (request["generation"].is_null() || request["generation"].is_u64()) =>
         {
             let pinned = request["generation"].as_u64();
-            carried(keeper, &request["request"], pinned, deadline, &mut writing).await;
+            let lane = read_lane(&request).unwrap_or(LaneKind::Read);
+            carried(
+                keeper,
+                lane,
+                &request["request"],
+                pinned,
+                deadline,
+                &mut writing,
+            )
+            .await;
         }
         Some("change") => super::change::changed(keeper, &request, writing).await,
         Some("stage") => super::stage::staged(keeper, &request, writing, early).await,
@@ -403,11 +432,12 @@ async fn handed_over(keeper: &Keeper, change: &Value, deadline: Duration) -> Val
     handed
 }
 
-/// Carry `request` on a read lane, passing each reply line on to the client
-/// as it comes, and a refusal line when it could not be carried. A read
-/// `pinned` to a generation is carried only in that generation.
+/// Carry `request` on a lane of `lane`, passing each reply line on to the
+/// client as it comes, and a refusal line when it could not be carried. A
+/// read `pinned` to a generation is carried only in that generation.
 async fn carried(
     keeper: &Keeper,
+    lane: LaneKind,
     request: &Value,
     pinned: Option<u64>,
     deadline: Duration,
@@ -431,7 +461,7 @@ async fn carried(
         return;
     }
     let (lines, replies) = mpsc::unbounded_channel();
-    let reading = read(&session, LaneKind::Read, request, deadline, move |line| {
+    let reading = read(&session, lane, request, deadline, move |line| {
         lines.send(line).is_ok()
     });
     let carrying = async {

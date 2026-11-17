@@ -74,6 +74,7 @@ fn judged(
         carried,
         owned,
         running: &|supervisor| running.contains(supervisor),
+        released: &|_| false,
     }
     .proven_gone(unresolved)
 }
@@ -187,19 +188,76 @@ fn a_job_start_is_judged_by_its_supervisor_and_a_job_change_naming_none_is_never
 #[test]
 fn changes_of_a_kind_with_no_evidence_here_are_never_judged() {
     let guest = guest();
-    let asked = [
-        "acquire",
-        "input",
-        "release",
-        "stage",
-        "remove-copy",
-        "update",
-        "open",
-    ]
-    .map(|operation| intended(&Token::new(), operation))
-    .to_vec();
+    let asked = || {
+        ["stage", "remove-copy", "update", "open"]
+            .map(|operation| intended(&Token::new(), operation))
+            .to_vec()
+    };
 
-    assert!(gone(&guest, asked, &[]).is_empty());
+    assert!(gone(&guest, asked(), &[]).is_empty());
+    let released = Evidence {
+        kept: &guest.kept,
+        proofs: &guest.proofs,
+        carried: &|_| false,
+        owned: &|_| false,
+        running: &|_| false,
+        released: &|_| true,
+    }
+    .proven_gone(asked());
+    assert!(released.is_empty(), "{released:?}");
+}
+
+#[test]
+fn a_change_to_input_is_gone_only_once_the_input_service_let_go_and_none_carries_it_here() {
+    let guest = guest();
+    let (taken, sent, let_go, carried) = (Token::new(), Token::new(), Token::new(), Token::new());
+    let owner = Token::new();
+    let asked = || {
+        vec![
+            intended(&taken, "acquire"),
+            intended(&sent, "input"),
+            intended(&let_go, "release"),
+            intended(&carried, "input"),
+            intended(&owner, "owner"),
+        ]
+    };
+    let judge = |released: &dyn Fn(&Token) -> bool| {
+        Evidence {
+            kept: &guest.kept,
+            proofs: &guest.proofs,
+            carried: &|change| *change == carried,
+            owned: &|_| false,
+            running: &|_| false,
+            released,
+        }
+        .proven_gone(asked())
+    };
+
+    let unsaid = judge(&|_| false);
+    let mut said = judge(&|_| true);
+
+    assert!(unsaid.is_empty(), "{unsaid:?}");
+    said.sort();
+    let mut expected = vec![taken, sent, let_go, owner];
+    expected.sort();
+    assert_eq!(said, expected, "the one still carried out here is kept");
+}
+
+#[test]
+fn what_the_input_service_says_never_ends_a_command() {
+    let folder = tempfile::tempdir().unwrap();
+
+    let judged = Evidence {
+        kept: &Untold,
+        proofs: folder.path(),
+        carried: &|_| false,
+        owned: &|_| false,
+        running: &|_| false,
+        released: &|_| true,
+    }
+    .proven_gone(vec![intended(&Token::new(), "run")]);
+
+    assert!(judged.is_empty());
 }
 
 /// Supervisors whose record cannot be trusted.
@@ -229,6 +287,7 @@ fn supervisors_whose_record_cannot_be_trusted_prove_nothing_gone() {
         carried: &|_| false,
         owned: &|_| false,
         running: &|_| false,
+        released: &|_| false,
     }
     .proven_gone(vec![intended(&Token::new(), "run")]);
 

@@ -104,7 +104,9 @@ pub struct MachineEpoch {
 }
 
 impl MachineEpoch {
-    pub(super) fn input_epoch(&self) -> InputEpoch {
+    /// The epoch the guest's input service holds every acquire, input and
+    /// look in this session to.
+    pub fn input_epoch(&self) -> InputEpoch {
         InputEpoch {
             uid: self.uid,
             security_session_id: self.security_session_id,

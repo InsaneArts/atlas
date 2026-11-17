@@ -55,11 +55,12 @@ pub fn machine_hello(stop: &str) -> Value {
 }
 
 /// The hello of a machine guest's input service, ready, of its daemon's
-/// build.
+/// build, declaring what a real one declares.
 #[must_use]
 pub fn input_hello() -> Value {
     json!({"ok": true, "protocolVersion": 1, "pid": 456, "version": "1.0.0", "build": "b1",
-        "ready": true, "accessibility": true, "session": screen()})
+        "ready": true, "accessibility": true, "session": screen(),
+        "capabilities": atlas_native::native::service::CAPABILITIES})
 }
 
 /// A pairing kept in memory.
@@ -296,6 +297,14 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
         Some("change") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)
         }
+        // Its input service takes, sends and lets go of whatever it is asked.
+        Some("change") if request["lane"] == "input" => match request["request"]["op"].as_str() {
+            Some("acquire") => json!({"ok": true}),
+            Some("input") => json!({"ok": true, "app": null, "bundleId": null,
+                "performed": request["request"]["actions"].as_array().map_or(0, Vec::len)}),
+            Some("release") => json!({"ok": true, "released": true}),
+            _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
+        },
         Some("change") => json!({"ok": true, "exitCode": 0, "timedOut": false,
             "signal": null, "truncated": false,
             "events": [{"event": "started", "pid": 321}, {"event": "output", "data": "aGkK"}]}),

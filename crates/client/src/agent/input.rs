@@ -6,6 +6,7 @@ use crate::client::Client;
 use atlas_control::interrupt::Interrupt;
 use atlas_core::{
     actions::Button,
+    desktop::Kind,
     error::{Code, Error, Holder, Result},
 };
 use serde_json::{Value, json};
@@ -148,12 +149,16 @@ async fn type_once(
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
-    let verified = client.verify().await?;
+    // On a VM, typing into an app or a field it names is not built: refused
+    // before the VM is read. Every part goes in the one proof taken here.
+    if expected.is_some() && matches!(client.desktop().kind(), Kind::Vm(_)) {
+        return Err(client.unreachable());
+    }
+    let verified = client.verify_either().await?;
     let check = match expected {
         Some(expected) => Some(expected.resolve(client, &verified).await?),
         None => None,
     };
-    let epoch = &verified.session().epoch;
 
     // The parts the person already allowed, each just this once, after
     // they stopped typing: those are typed under their permits, and only
@@ -175,10 +180,10 @@ async fn type_once(
         };
         client.set_checking(true);
         let checked = client
-            .input_owned(
+            .input_owned_in(
                 &ownership,
                 atlas_core::actions::Batch::decode(&json!([{"type": "type", "text": probe}])),
-                Some((epoch, Instant::now())),
+                &verified,
                 check.clone(),
             )
             .await;
@@ -192,10 +197,10 @@ async fn type_once(
     }
     let send = async |actions: &Value| {
         client
-            .input_owned(
+            .input_owned_in(
                 &ownership,
                 atlas_core::actions::Batch::decode(actions),
-                Some((epoch, Instant::now())),
+                &verified,
                 check.clone(),
             )
             .await

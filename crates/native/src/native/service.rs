@@ -66,8 +66,9 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// app, with the Dock covering where it takes clicks, and the window and
 /// field it names, reading an app's elements as looks a click can name,
 /// acting on an element of a look through Accessibility, and remembering
-/// what input that named itself came to.
-const CAPABILITIES: [&str; 11] = [
+/// what input that named itself came to. A machine guest's input service
+/// declares the same.
+pub const CAPABILITIES: [&str; 11] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,

@@ -309,7 +309,9 @@ pub(super) async fn app_elements(
     verified: &Verified,
     pid: i64,
 ) -> Result<Scanned> {
-    scanned(&probe(client, Run::inspect().pinned(verified), pid).await?)
+    probe(client, verified, pid, None)
+        .await?
+        .ok_or_else(|| Error::new(Code::Elements, "The accessibility probe returned no result"))
 }
 
 /// [`app_elements`], the helper stopping the scan after `timeout`; None
@@ -320,18 +322,44 @@ pub(super) async fn app_elements_within(
     pid: i64,
     timeout: std::time::Duration,
 ) -> Result<Option<Scanned>> {
-    let reply = probe(client, Run::inspect().within(timeout).pinned(verified), pid).await?;
-    if reply["timedOut"] == true {
-        return Ok(None);
-    }
-    scanned(&reply).map(Some)
+    probe(client, verified, pid, Some(timeout)).await
 }
 
-/// Run the daemon's probe over process `pid` as `run` says.
-async fn probe(client: &Client, run: Run<'_>, pid: i64) -> Result<Value> {
+/// The scan of process `pid` in the desktop `verified` describes, stopped
+/// after `within` when given: none when it was, before it said anything.
+/// The helper runs its daemon's probe; a VM's guest has its input service
+/// look at the app, on its input lane, in the session its proof pinned.
+async fn probe(
+    client: &Client,
+    verified: &Verified,
+    pid: i64,
+    within: Option<std::time::Duration>,
+) -> Result<Option<Scanned>> {
     match client.desktop().kind() {
-        Kind::User(login) => crate::user::elements::probe_in(client, login, run, pid).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::User(login) => {
+            let run = Run::inspect().pinned(verified);
+            let run = match within {
+                Some(timeout) => run.within(timeout),
+                None => run,
+            };
+            let reply = crate::user::elements::probe_in(client, login, run, pid).await?;
+            if reply["timedOut"] == true {
+                return Ok(None);
+            }
+            scanned(&reply).map(Some)
+        }
+        Kind::Vm(_) => {
+            let expect = atlas_core::actions::Expect::new(pid)?;
+            let look = client.look_at(verified, &expect);
+            let looked = match within {
+                Some(timeout) => match tokio::time::timeout(timeout, look).await {
+                    Ok(looked) => looked?,
+                    Err(_) => return Ok(None),
+                },
+                None => look.await?,
+            };
+            Scanned::from_reply(looked).map(Some)
+        }
     }
 }
 

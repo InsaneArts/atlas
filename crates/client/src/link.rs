@@ -196,8 +196,9 @@ impl Link {
     ///
     /// # Errors
     ///
-    /// Refuses every other link; fails when the keeper cannot be reached in
-    /// time or trusted. Nothing was sent whichever.
+    /// Refuses every other link, and a read on an input lane the keeper
+    /// does not carry in the one wording; fails when the keeper cannot be
+    /// reached in time or trusted. Nothing was sent whichever.
     pub(crate) async fn connect_change(
         &self,
         route: &Route,
@@ -206,7 +207,7 @@ impl Link {
     ) -> Result<(Pending<Stream>, Value)> {
         match self {
             Self::Keeper(keeper) => {
-                let asked = keeper.change(route, request, generation);
+                let asked = keeper.change(route, request, generation)?;
                 Ok((keeper.connected().await?, asked))
             }
             Self::Unix(_) | Self::Session(_) => Err(Error::new(
@@ -252,9 +253,9 @@ fn lane_for(session: &Session, request: &Value) -> Result<LaneKind> {
     }
 }
 
-/// Which lane of a VM desktop's session a change goes on: a change of the
-/// guest's daemon, or a stage of a file or folder into it; input is given
-/// its own when it is carried.
+/// Which lane of a VM desktop's session a request goes on: a change of the
+/// guest's daemon, a stage of a file or folder into it, or its input
+/// service's own lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     /// A change the guest's daemon carries out, named by its token.
@@ -262,6 +263,9 @@ pub(crate) enum Route {
     /// A stage, named by its token, whose bytes follow its request once
     /// the guest says it is ready for them.
     Stage(Token),
+    /// The guest's input service: a change to what it holds or does, named
+    /// by its token, or a read, which names none.
+    Input(Option<Token>),
 }
 
 /// A request whose final reply has not come. Dropped so, its lane's work

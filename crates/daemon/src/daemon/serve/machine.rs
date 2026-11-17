@@ -5,6 +5,7 @@
 use super::{Asker, Daemon, Gate, Reader, Writer, answer, write};
 use crate::machine::{
     changes::{Asked, Changes, State},
+    ended::OWNER,
     processes::Supervising,
     stop::{Kept as StopKept, Stop, Why},
     vault::Vault,
@@ -28,6 +29,7 @@ use atlas_session::{
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeSet,
     future::Future,
     io,
     pin::Pin,
@@ -637,12 +639,14 @@ fn committing(daemon: &Daemon) -> bool {
 
 /// Keep as ended each change in `changes` whose outcome is unknown and
 /// whose work is proven gone by evidence of its own kind: `only` that one
-/// when it is named. Anything that cannot be read or kept stays as it is.
-/// Blocking.
+/// when it is named, and the changes to input among them only when
+/// `released` names them. Anything that cannot be read or kept stays as it
+/// is. Blocking.
 fn end_proven(
     daemon: &Daemon,
     changes: &Changes<Arc<dyn Vault>>,
     only: Option<&atlas_core::files::Token>,
+    released: &BTreeSet<atlas_core::files::Token>,
 ) {
     let Some(supervising) = daemon.supervising.as_ref() else {
         return;
@@ -661,10 +665,61 @@ fn end_proven(
         carried: &|change| keepers.carries(change),
         owned: &|supervisor| keepers.owns(supervisor),
         running: &|supervisor| !supervisor.ended(),
+        released: &|change| released.contains(change),
     };
     for change in evidence.proven_gone(unresolved) {
         let _ = changes.ended(&change);
     }
+}
+
+/// The changes to input kept with their outcome unknown that this daemon
+/// does not carry out now: `only` that one when it is named. Blocking.
+fn input_unresolved(
+    daemon: &Daemon,
+    changes: &Changes<Arc<dyn Vault>>,
+    only: Option<&atlas_core::files::Token>,
+) -> BTreeSet<atlas_core::files::Token> {
+    let Ok(unresolved) = changes.unresolved() else {
+        return BTreeSet::new();
+    };
+    unresolved
+        .into_iter()
+        .filter(|intended| crate::machine::ended::INPUT.contains(&intended.operation.as_str()))
+        .filter(|intended| only.is_none_or(|only| intended.change == *only))
+        .filter(|intended| !daemon.keepers.carries(&intended.change))
+        .map(|intended| intended.change)
+        .collect()
+}
+
+/// How long the input service has to say whether it holds anything, when
+/// changes to input wait on it.
+const INPUT_QUIET: Duration = Duration::from_secs(1);
+
+/// Of `unresolved`, changes to input already seen no longer carried out
+/// here, those the input service let go of: all of them once its own hello,
+/// read after they were seen so, says no owner holds input and nothing it
+/// pressed is held or unsettled. None when it cannot say so in time, is not
+/// running, or holds anything.
+async fn input_released(
+    daemon: &Daemon,
+    unresolved: BTreeSet<atlas_core::files::Token>,
+) -> BTreeSet<atlas_core::files::Token> {
+    if unresolved.is_empty() {
+        return unresolved;
+    }
+    let Some(input) = daemon.input.as_deref() else {
+        return BTreeSet::new();
+    };
+    let hello = tokio::time::timeout(INPUT_QUIET, forward(input, 0, br#"{"op":"hello"}"#)).await;
+    let quiet = hello.is_ok_and(|hello| {
+        hello.is_ok_and(|hello| {
+            hello["ok"] == true
+                && hello["controlActive"] == false
+                && hello["heldInput"] == false
+                && hello["unsettled"] == false
+        })
+    });
+    if quiet { unresolved } else { BTreeSet::new() }
 }
 
 /// What a machine guest was made with, which decides what it declares.
@@ -1076,8 +1131,14 @@ impl Machine {
         // proven gone are named as ended first. Read before the lease
         // starts: slow storage never spends it.
         let (records, daemon) = (paired.changes.clone(), self.daemon.clone());
+        let unresolved =
+            tokio::task::spawn_blocking(move || input_unresolved(&daemon, &records, None))
+                .await
+                .unwrap_or_default();
+        let released = input_released(&self.daemon, unresolved).await;
+        let (records, daemon) = (paired.changes.clone(), self.daemon.clone());
         let unsettled = tokio::task::spawn_blocking(move || {
-            end_proven(&daemon, &records, None);
+            end_proven(&daemon, &records, None, &released);
             records.unsettled()
         })
         .await
@@ -1309,10 +1370,24 @@ impl Machine {
                 ..
             }) = protocol::parse(&line)
         {
-            let (daemon, changes) = (self.daemon.clone(), paired.changes.clone());
-            let judging = bounded::off_runtime(&self.blocking, move || {
-                end_proven(&daemon, &changes, Some(&change));
-            });
+            let (daemon, changes, blocking) = (
+                self.daemon.clone(),
+                paired.changes.clone(),
+                self.blocking.clone(),
+            );
+            let judging = async move {
+                let (looked, records, asked) = (daemon.clone(), changes.clone(), change.clone());
+                let unresolved = bounded::off_runtime(&blocking, move || {
+                    input_unresolved(&looked, &records, Some(&asked))
+                })
+                .await
+                .unwrap_or_default();
+                let released = input_released(&daemon, unresolved).await;
+                bounded::off_runtime(&blocking, move || {
+                    end_proven(&daemon, &changes, Some(&change), &released);
+                })
+                .await
+            };
             tokio::select! {
                 _ = judging => {}
                 () = ended(&lanes, header.lane) => return Ok(()),
@@ -1510,10 +1585,19 @@ impl Machine {
                 );
             }
         };
+        // The owner a change to input acts for is carried out here from
+        // before its record is kept until its lane is done: nothing proves
+        // it let go of meanwhile.
+        let (mut owner, mut operation, mut _owning) = (None, None, None);
         if let Some(change) = &change {
             let Ok(request) = serde_json::from_slice::<Value>(line) else {
                 return failure(Code::BadRequest, "The request could not be read");
             };
+            owner = request["owner"]
+                .as_str()
+                .and_then(atlas_core::files::Token::parse);
+            operation = request["op"].as_str().map(str::to_owned);
+            _owning = owner.as_ref().map(|owner| self.daemon.keepers.carry(owner));
             // One asked before is answered from what it came to, Stop or
             // not: only new work is admitted.
             if let Some(answered) = self.intend(change, request).await {
@@ -1522,6 +1606,13 @@ impl Machine {
             // Admitted once its intent is kept: a Stop before or meanwhile
             // ends it here, before it goes, and it is kept as refused.
             if let Some(refusal) = gate.refused() {
+                return self.came_to(change.clone(), refusal).await;
+            }
+            // Input is taken only by an owner kept first, whose record says
+            // when it let go of it.
+            if operation.as_deref() == Some("acquire")
+                && let Some(refusal) = self.owner_kept(owner.as_ref()).await
+            {
                 return self.came_to(change.clone(), refusal).await;
             }
         }
@@ -1539,7 +1630,63 @@ impl Machine {
         };
         // Sent: what it came to is unknown unless the service said.
         let reply = reply.unwrap_or_else(|error| serde_json::json!(error.uncertain()));
+        // The service acknowledged its owner's cleanup, or refused it input
+        // for certain, before any was given: its record says so, and the
+        // station's settlement then removes it.
+        let refused = reply["ok"] == false && reply["uncertain"] != true;
+        let ended = match operation.as_deref() {
+            Some("release") if reply["ok"] == true && reply["released"] == true => {
+                Some(reply.clone())
+            }
+            Some("acquire") if refused => Some(serde_json::json!(
+                {"ok": true, "op": OWNER, "taken": false}
+            )),
+            _ => None,
+        };
+        if let (Some(ended), Some(owner)) = (ended, owner) {
+            self.let_go(owner, &ended).await;
+        }
         self.came_to(change, reply).await
+    }
+
+    /// Keep `owner` before it takes input, as a change of its own whose
+    /// outcome stays unknown until its input service acknowledges it let go:
+    /// none when it is kept, else the refusal of its acquire. One that let
+    /// go already never takes input again.
+    async fn owner_kept(&self, owner: Option<&atlas_core::files::Token>) -> Option<Value> {
+        let Some(owner) = owner.cloned() else {
+            return Some(failure(
+                Code::BadRequest,
+                "Input is taken by an owner named by a token",
+            ));
+        };
+        let changes = self.paired.changes.clone();
+        let request = serde_json::json!({"op": OWNER, "owner": owner});
+        let kept = tokio::task::spawn_blocking(move || changes.ask(&owner, OWNER, &request))
+            .await
+            .map_err(|_| Error::new(Code::State, "The change records could not be read."))
+            .and_then(|asked| asked);
+        match kept {
+            Ok(Asked::Begun | Asked::Again(State::Intended)) => None,
+            Ok(Asked::Again(State::Done { .. })) => Some(failure(
+                Code::BadRequest,
+                "This owner let go of input already; input is taken by a new one",
+            )),
+            Err(error) => Some(serde_json::json!(error.certain())),
+        }
+    }
+
+    /// Keep `owner` as let go of, with the `reply` its input service gave
+    /// its release, while its record still waits for that. Best effort: one
+    /// left waiting is ended once the service is proven to hold nothing.
+    async fn let_go(&self, owner: atlas_core::files::Token, reply: &Value) {
+        let (changes, reply) = (self.paired.changes.clone(), reply.clone());
+        let _ = tokio::task::spawn_blocking(move || {
+            if matches!(changes.of(&owner), Ok(Some(State::Intended))) {
+                let _ = changes.done(&owner, &reply);
+            }
+        })
+        .await;
     }
 
     /// Keep `reply` as what `change` came to, before it is given: one that

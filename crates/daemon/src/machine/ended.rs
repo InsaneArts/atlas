@@ -5,8 +5,13 @@
 //! this daemon no longer carries out, whose every supervisor is done with,
 //! has nothing of it running, whether it ran or not. A job's stop is
 //! bound to its target, the job's own supervisor: its work is gone only
-//! once that supervisor is done with. A kind with no such evidence here is
-//! never judged: what it came to stays unknown.
+//! once that supervisor is done with. Input taken, sent or let go of, and
+//! the owner it was taken for, are gone only once the input service itself
+//! said, after the change was no longer carried out here, that no owner
+//! holds input and nothing is held: its owner's cleanup acknowledged,
+//! whatever owner it was. A vanished lane or handler proves nothing. A
+//! kind with no such evidence here is never judged: what it came to stays
+//! unknown.
 use super::{
     changes::Intended,
     processes::{Remembered, Supervised, done_with},
@@ -22,6 +27,12 @@ use std::path::Path;
 const RUN: &str = "run";
 /// A job's start or stop: only a start leaves a supervisor naming it.
 const JOB: &str = "job";
+/// An owner of the input service, kept before it takes input and until
+/// the service acknowledges it let go.
+pub(crate) const OWNER: &str = "owner";
+/// Input taken, sent or let go of on the input service's own lanes, and
+/// the owner it was for.
+pub(crate) const INPUT: [&str; 4] = ["acquire", "input", "release", OWNER];
 
 /// What a change's work is judged by.
 pub(crate) struct Evidence<'a> {
@@ -35,6 +46,10 @@ pub(crate) struct Evidence<'a> {
     pub(crate) owned: &'a dyn Fn(&Instance) -> bool,
     /// Whether a supervisor's process still runs.
     pub(crate) running: &'a dyn Fn(&Instance) -> bool,
+    /// Whether the input service said, once a change to input was seen no
+    /// longer carried out here, that no owner holds input and nothing is
+    /// held.
+    pub(crate) released: &'a dyn Fn(&Token) -> bool,
 }
 
 /// What a job's change was asked to do, as its kept request says.
@@ -65,22 +80,32 @@ impl Evidence<'_> {
     /// record read later names every supervisor it ever had, unless
     /// retired, which only one proven done with is.
     pub(crate) fn proven_gone(&self, unresolved: Vec<Intended>) -> Vec<Token> {
-        let judged: Vec<Intended> = unresolved
+        let (input, judged): (Vec<Intended>, Vec<Intended>) = unresolved
             .into_iter()
             .filter(|intended| !(self.carried)(&intended.change))
-            .filter(|intended| [RUN, JOB].contains(&intended.operation.as_str()))
+            .filter(|intended| {
+                [RUN, JOB].contains(&intended.operation.as_str())
+                    || INPUT.contains(&intended.operation.as_str())
+            })
+            .partition(|intended| INPUT.contains(&intended.operation.as_str()));
+        let mut gone: Vec<Token> = input
+            .into_iter()
+            .filter(|intended| (self.released)(&intended.change))
+            .map(|intended| intended.change)
             .collect();
         if judged.is_empty() {
-            return Vec::new();
+            return gone;
         }
         let (Ok(work), Ok(boot)) = (self.kept.kept(), atlas_core::process::boot()) else {
-            return Vec::new();
+            return gone;
         };
-        judged
-            .into_iter()
-            .filter(|intended| self.gone(intended, &work, &boot))
-            .map(|intended| intended.change)
-            .collect()
+        gone.extend(
+            judged
+                .into_iter()
+                .filter(|intended| self.gone(intended, &work, &boot))
+                .map(|intended| intended.change),
+        );
+        gone
     }
 
     /// Whether the work of `intended` is gone, `work` being every

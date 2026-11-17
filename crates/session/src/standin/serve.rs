@@ -117,7 +117,12 @@ where
         .map_err(io)?;
     let request: Value = serde_json::from_slice(&line)?;
     let answered = match &header.kind {
-        LaneKind::Change { change } => match stand_in.ask(change) {
+        // A change to input is kept as any change is, as a real guest keeps
+        // it before its input service is asked.
+        LaneKind::Change { change }
+        | LaneKind::Input {
+            change: Some(change),
+        } => match stand_in.ask(change) {
             Asked::Begun => {
                 let Some(reply) = carried_out(stand_in, lanes, &header, request, answer).await
                 else {
@@ -171,8 +176,9 @@ where
 /// Carry out the change on the lane `header` opened, as `answer` answers
 /// it: held first while the stand-in holds changes, ended as cancelled
 /// when its lane is cancelled meanwhile, and kept as what it came to
-/// before it is answered. None when no reply goes: it was cancelled, or
-/// the stand-in drops this one.
+/// before it is answered. A change to input held when a Stop comes is cut
+/// short there, uncertain, as a real guest's is. None when no reply goes:
+/// it was cancelled, or the stand-in drops this one.
 async fn carried_out(
     stand_in: &StandIn,
     lanes: &Lanes,
@@ -180,10 +186,21 @@ async fn carried_out(
     request: Value,
     answer: &Answer,
 ) -> Option<Value> {
-    let LaneKind::Change { change } = &header.kind else {
-        return Some(answer(header, request));
+    let (change, input) = match &header.kind {
+        LaneKind::Change { change } => (change, false),
+        LaneKind::Input {
+            change: Some(change),
+        } => (change, true),
+        _ => return Some(answer(header, request)),
     };
+    let stops = stand_in.stops.load(SeqCst);
     while stand_in.holding.load(SeqCst) {
+        if input && stand_in.stops.load(SeqCst) != stops {
+            let stopped = serde_json::json!({"ok": false, "code": "stopped",
+                "error": "Agents were stopped while the change ran", "uncertain": true});
+            stand_in.done(change, &stopped);
+            return Some(stopped);
+        }
         if lanes.cancelled(header.lane) {
             // Cut short with nothing proving what it left ended, as a
             // cancelled command is.
@@ -193,6 +210,18 @@ async fn carried_out(
             return None;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // The owner input is taken for is kept first, as a change of its own
+    // whose outcome is known once its release is acknowledged.
+    let owner = request["owner"]
+        .as_str()
+        .and_then(atlas_core::files::Token::parse)
+        .filter(|_| input);
+    let operation = request["op"].as_str().map(str::to_owned);
+    if let Some(owner) = &owner
+        && operation.as_deref() == Some("acquire")
+    {
+        stand_in.ask(owner);
     }
     // A copy is removed by the guest's own code, as a change it keeps.
     let reply = if request["op"] == "remove-copy" {
@@ -208,6 +237,21 @@ async fn carried_out(
         .as_array()
         .and_then(|lines| lines.last())
         .unwrap_or(&reply);
+    // Its owner let go of, or refused input for certain before any was given.
+    let ended = match operation.as_deref() {
+        Some("release") if last["ok"] == true && last["released"] == true => Some(last.clone()),
+        Some("acquire") if last["ok"] == false && last["uncertain"] != true => {
+            Some(serde_json::json!({"ok": true, "op": "owner", "taken": false}))
+        }
+        _ => None,
+    };
+    if let (Some(owner), Some(ended)) = (&owner, ended)
+        && stand_in
+            .outcome(owner)
+            .is_some_and(|kept| kept["outcome"] == "unknown")
+    {
+        stand_in.done(owner, &ended);
+    }
     stand_in.done(change, last);
     let dropped = stand_in
         .dropping
