@@ -58,8 +58,17 @@ actor FakeHost: VMHost {
     powered = Observed(.stopped, confirmed: true)
   }
 
+  /// Why each start is refused, in its own words; none lets it start.
+  var startRefusal: String?
+
+  /// Refuse each start for `reason`, or let it start again.
+  func refusingStarts(_ reason: String?) { startRefusal = reason }
+
   func start() async throws {
     try call("start")
+    if let startRefusal {
+      throw HostRefusal(description: startRefusal)
+    }
     if holds {
       await withCheckedContinuation { continuation in
         held = continuation

@@ -321,6 +321,24 @@ impl Controller {
         self.quarantine_marked(generation, Mark::Change, named)
     }
 
+    /// [`Controller::quarantine_by`], waiting at most `wait` for the marker
+    /// lock: for a claimer that holds other locks and must not queue behind
+    /// a stalled marker writer.
+    ///
+    /// # Errors
+    ///
+    /// Busy when the marker lock is held past `wait`, with nothing recorded;
+    /// else as [`Controller::quarantine_by`].
+    pub fn quarantine_by_within(
+        &self,
+        generation: &str,
+        executor: Executor,
+        wait: Duration,
+    ) -> Result<Pending> {
+        let named = (!executor.local()).then_some(executor);
+        self.quarantine_marked_within(generation, Mark::Change, named, Some(wait))
+    }
+
     /// [`Controller::quarantine_command`] under a generation the caller
     /// chose, for a command `executor` carries out: named so, as
     /// [`Controller::quarantine_by`] names a change.
@@ -400,6 +418,18 @@ impl Controller {
         mark: Mark,
         executor: Option<Executor>,
     ) -> Result<Pending> {
+        self.quarantine_marked_within(generation, mark, executor, None)
+    }
+
+    /// [`Controller::quarantine_marked`], the marker lock waited for at most
+    /// `wait` when one is given.
+    fn quarantine_marked_within(
+        &self,
+        generation: &str,
+        mark: Mark,
+        executor: Option<Executor>,
+        wait: Option<Duration>,
+    ) -> Result<Pending> {
         let hold = self.interrupt.claim();
         let live = self
             .live(generation)
@@ -422,7 +452,10 @@ impl Controller {
         // Claim files are only unlinked under the marker lock or by their
         // holder, so if the path still names the locked file here, it will
         // until the claim is dropped.
-        let _lock = self.lock_marker()?;
+        let _lock = match wait {
+            Some(wait) => self.lock_marker_within(wait)?,
+            None => self.lock_marker()?,
+        };
         if !claim.names_own_file() {
             return Err(Error::new(
                 Code::Busy,
@@ -511,6 +544,28 @@ impl Controller {
     /// as [`Controller::clear_if`].
     pub fn clear_if_within(&self, generation: &str, wait: Duration) -> Result<()> {
         let _lock = self.lock_marker_within(wait)?;
+        self.clear_locked(generation)
+    }
+
+    /// [`Controller::clear_if_within`], refusing a marker that cannot be
+    /// read whole: one that may name any change is never taken as cleared
+    /// of this one.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a marker that cannot be read, with nothing settled; else as
+    /// [`Controller::clear_if_within`].
+    pub fn clear_known_within(&self, generation: &str, wait: Duration) -> Result<()> {
+        let _lock = self.lock_marker_within(wait)?;
+        if pending(&self.marker)?
+            .iter()
+            .any(|entry| entry == UNREADABLE)
+        {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read; nothing is settled.",
+            ));
+        }
         self.clear_locked(generation)
     }
 

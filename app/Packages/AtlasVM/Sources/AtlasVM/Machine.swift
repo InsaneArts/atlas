@@ -172,6 +172,11 @@ final class Machine {
     guard earlierGone else {
       throw AtlasVMError.unsupported("An earlier run's VM is not yet seen gone.")
     }
+    // As many as Apple's framework runs already run: said in Atlas VM's own
+    // words, before the framework is asked and when it refuses for that.
+    guard VMLimit.running(among: folder.parent, besides: folder.root) < VMLimit.mostRunning else {
+      throw AtlasVMError.unsupported(VMLimit.reached)
+    }
     // A window on the VM it replaces shows nothing of the new one.
     closeWindow()
     let machine = VZVirtualMachine(configuration: try MachineConfiguration.make(folder, settings: settings))
@@ -195,7 +200,11 @@ final class Machine {
     try record.write(to: folder.incarnation)
     let before = MachineProcess.running() ?? []
     running = machine
-    try await machine.start(options: options)
+    do {
+      try await machine.start(options: options)
+    } catch let error as VZError where error.code == .virtualMachineLimitExceeded {
+      throw AtlasVMError.unsupported(VMLimit.reached)
+    }
     let started = (MachineProcess.running() ?? [])
       .filter { !before.contains($0) }
     if started.count == 1 {

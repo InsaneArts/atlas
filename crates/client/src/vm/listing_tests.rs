@@ -173,3 +173,38 @@ fn a_lifecycle_folder_out_of_reach_is_said_never_taken_for_no_vms() {
     let listing = list_with(&lifecycle, &seen, &home.path().join("atlas.toml")).unwrap();
     assert_eq!(listing["desktops"][0]["lifecycle"], "adding");
 }
+
+/// Atlas VM, as the listing asks the runner of each VM in `vms`.
+struct Asking(crate::vm::Vms);
+
+impl Looks for Asking {
+    fn power(&self, vm: &DesktopId) -> Result<Reply> {
+        Runner::in_vms(&self.0, vm).read(&Operation::State)
+    }
+
+    fn reach(&self, _selected: &Selected, _vm: &DesktopId) -> Value {
+        json!({"reachable": false})
+    }
+}
+
+#[test]
+fn a_listing_reads_a_stopped_vms_power_from_atlas_vm_and_never_starts_it() {
+    let home = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let lifecycle = Lifecycle::under(home.path());
+    let settings = listed(home.path(), "work", WORK);
+    record(&lifecycle, "work", WORK, State::Created);
+    let runner = crate::test_support::StandInRunner::at(
+        &crate::vm::runner::socket_in(home.path(), &id(WORK)),
+        "stopped",
+    );
+
+    let listing = list_with(&lifecycle, &Asking(lifecycle.vms()), &settings).unwrap();
+
+    assert_eq!(
+        listing["desktops"][0]["power"],
+        json!({"state": "stopped", "confirmed": true})
+    );
+    assert_eq!(runner.asked_for("state").len(), 1);
+    assert!(runner.asked_for("start").is_empty());
+    assert_eq!(runner.power(), "stopped");
+}

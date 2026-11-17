@@ -482,6 +482,7 @@ fn looks(row: &Row) -> bool {
             | Op::Read
             | Op::Restart
             | Op::Run
+            | Op::Start
             | Op::Other(_),
         )
         | None => false,

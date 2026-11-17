@@ -248,16 +248,34 @@ async fn execute_with(
     // The person's stop refuses an agent's change at its start; one already
     // under way is the input service's to cut off. On a VM, only the changes
     // this build makes there are let through, so every other is refused in
-    // the one wording before any Stop is read.
+    // the one wording before any Stop is read; one that needs the VM running
+    // starts it when it is stopped, the station's Stop checked first and the
+    // guest's own after.
+    let mut started = None;
     if policy.changes_helper() {
         let client = client()?;
         if !changes_on_vm(&command) {
             client.second_login_only()?;
         }
-        client.require_going().await?;
+        if starts_vm(&command) {
+            started = atlas_client::vm::start::ensure_running(&client).await?;
+        }
+        if let Err(held) = client.require_going().await {
+            return Err(said_started(held, started.as_ref()));
+        }
     }
 
-    let result = carry_out(config, command, client, host, allow_disrupt).await;
+    let mut result = carry_out(config, command, client, host, allow_disrupt).await;
+    if let Some(started) = &started {
+        result = match result {
+            Ok(mut reply) if reply.is_object() => {
+                reply["started"] = started.said();
+                Ok(reply)
+            }
+            Ok(reply) => Ok(reply),
+            Err(error) => Err(started.onto(error)),
+        };
+    }
 
     if kind.recorded(doing)
         && let Ok(client) = client()
@@ -301,6 +319,29 @@ fn changes_on_vm(command: &Command) -> bool {
         }
         Command::Input { target, .. } => target.names_none(),
         _ => false,
+    }
+}
+
+/// Whether `command`, a change this build makes on a VM desktop, needs the
+/// VM running: a command, a background job's start, `open`, and an agent's
+/// input. A close, a cleanup and a job's stop never start it.
+fn starts_vm(command: &Command) -> bool {
+    changes_on_vm(command)
+        && !matches!(
+            command,
+            Command::Close { .. }
+                | Command::Cleanup(_)
+                | Command::Job {
+                    command: JobCommand::Stop { .. },
+                }
+        )
+}
+
+/// `error`, which held a command after `started` started its VM, saying so.
+fn said_started(error: Error, started: Option<&atlas_client::vm::start::Started>) -> Error {
+    match started {
+        Some(started) => started.onto(error),
+        None => error,
     }
 }
 

@@ -293,9 +293,14 @@ impl Runner {
     ///
     /// Fails when this account cannot be read.
     pub fn of(vm: &DesktopId) -> Result<Self> {
-        Ok(Self {
-            socket: socket(&Vms::own()?, vm),
-        })
+        Ok(Self::in_vms(&Vms::own()?, vm))
+    }
+
+    /// The runner of the VM `vm` kept in `vms`.
+    pub(super) fn in_vms(vms: &Vms, vm: &DesktopId) -> Self {
+        Self {
+            socket: socket(vms, vm),
+        }
     }
 
     /// Ask the read `operation`: a hello, the VM's state or a change's
@@ -348,11 +353,43 @@ impl Runner {
     ) -> Result<Reply> {
         change(&super::Real, &self.socket, record, keep, operation)
     }
+
+    /// [`Self::change`], the whole exchange on the socket within `within`,
+    /// so nothing waits on a runner that does not answer past it: an answer
+    /// that comes later is the change's outcome to ask.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::change`], and when `within` passes first.
+    pub(super) fn change_within(
+        &self,
+        record: &mut Record,
+        keep: impl FnOnce(&Record) -> Result<()>,
+        operation: &Operation,
+        within: Duration,
+    ) -> Result<Reply> {
+        record.sending(operation)?;
+        keep(record)?;
+        let reply = reply(super::control::ask_within(
+            &self.socket,
+            &operation.request(),
+            within,
+        )?)?;
+        answers(&reply, operation)?;
+        Ok(reply)
+    }
 }
 
 /// The control socket of `vm` in `vms`.
 fn socket(vms: &Vms, vm: &DesktopId) -> PathBuf {
     vms.folder(vm).join("control")
+}
+
+/// Where the runner of this account's VM `vm` listens when the account's
+/// home is `home`, for a test that stands in for Atlas VM there.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn socket_in(home: &Path, vm: &DesktopId) -> PathBuf {
+    socket(&Vms::under(home, nix::unistd::getuid().as_raw()), vm)
 }
 
 fn read(system: &impl System, socket: &Path, operation: &Operation) -> Result<Reply> {
@@ -381,13 +418,19 @@ fn change(
     record.sending(operation)?;
     keep(record)?;
     let reply = ask(system, socket, operation)?;
+    answers(&reply, operation)?;
+    Ok(reply)
+}
+
+/// Refuse `reply` when it is served for another change than `operation`.
+fn answers(reply: &Reply, operation: &Operation) -> Result<()> {
     if reply.ok && reply.change.as_ref() != operation.change() {
         return Err(Error::new(
             Code::Transport,
             "The VM's runner answered for another change.",
         ));
     }
-    Ok(reply)
+    Ok(())
 }
 
 fn ask(system: &impl System, socket: &Path, operation: &Operation) -> Result<Reply> {

@@ -124,7 +124,7 @@ pub fn unfinished(name: &str, vm: &DesktopId) -> Option<String> {
     unfinished_in(&Station::own().ok()?.path_of(vm), name)
 }
 
-fn unfinished_in(folder: &Path, name: &str) -> Option<String> {
+pub(super) fn unfinished_in(folder: &Path, name: &str) -> Option<String> {
     (!matches!(Record::kept(folder), Ok(None))).then(|| {
         format!(
             "An Atlas update is still handing {name}'s session to the new build; run atlas \

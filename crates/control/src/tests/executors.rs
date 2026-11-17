@@ -343,3 +343,57 @@ fn a_clearing_that_must_not_wait_is_refused_busy_while_the_marker_is_held_and_se
         .unwrap();
     assert!(controller.pending().unwrap().is_empty());
 }
+
+#[test]
+fn a_clearing_that_must_know_the_marker_settles_nothing_beside_one_that_cannot_be_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let theirs = token();
+    drop(controller.quarantine_by(&theirs, Executor::Vm).unwrap());
+    std::fs::write(controller.marker_path(), b"{").unwrap();
+
+    let refused = controller
+        .clear_known_within(&theirs, std::time::Duration::from_secs(1))
+        .unwrap_err();
+
+    assert_eq!(refused.code, Code::State, "{refused:?}");
+    assert_eq!(std::fs::read(controller.marker_path()).unwrap(), b"{");
+    std::fs::write(
+        controller.marker_path(),
+        serde_json::to_vec(&[&theirs]).unwrap(),
+    )
+    .unwrap();
+    controller
+        .clear_known_within(&theirs, std::time::Duration::from_secs(1))
+        .unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+}
+
+#[test]
+fn a_claim_waits_for_the_markers_lock_no_longer_than_it_is_given() {
+    use fs2::FileExt;
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    std::fs::create_dir_all(controller.marker_lock_path().parent().unwrap()).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(controller.marker_lock_path())
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let began = std::time::Instant::now();
+
+    let refused = controller
+        .quarantine_by_within(
+            &token(),
+            Executor::Vm,
+            std::time::Duration::from_millis(200),
+        )
+        .unwrap_err();
+
+    assert_eq!(refused.code, Code::Busy, "{refused:?}");
+    assert!(began.elapsed() < std::time::Duration::from_secs(2));
+    FileExt::unlock(&lock).unwrap();
+    assert!(controller.pending().unwrap().is_empty(), "nothing recorded");
+}

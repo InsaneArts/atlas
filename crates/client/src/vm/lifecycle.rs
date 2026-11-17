@@ -8,8 +8,10 @@
 //!
 //! The station's locks are taken in one order: the uninstall barrier
 //! ([`barrier`]: its record's lock, then the live lock), then the VM's
-//! station-operation lock ([`super::StationHold`]), then its keeper's. The
-//! settings lock stands apart: a settings write holds it for that one
+//! station-operation lock ([`super::StationHold`]), then the VM's
+//! exclusion (its controller's lock, which an update's handover holds past
+//! the barrier alone, and a start when needed takes last, tried and never
+//! waited for), then its keeper's. The settings lock stands apart: a settings write holds it for that one
 //! write, waits for nothing under it and gives up in seconds, so it may be
 //! taken under any of them without a cycle. So may the lock that admits one
 //! removal at a time from a settings file, held only while that removal is
@@ -65,6 +67,11 @@ impl Lifecycle {
             home: home.to_owned(),
             folder: crate::station::Station::under(home).lifecycle_path(),
         }
+    }
+
+    /// The home of the account whose lifecycle it is.
+    pub(in crate::vm) fn home(&self) -> &Path {
+        &self.home
     }
 
     /// The VMs this lifecycle is of: its account's, kept in its home.

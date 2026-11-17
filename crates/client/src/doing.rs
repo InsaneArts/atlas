@@ -598,6 +598,7 @@ fn operation(name: Option<&str>, count: Option<u64>) -> (String, String) {
         Some("logout") => worded("logged out the helper", "log out the helper"),
         Some("screenshot") => worded("took a screenshot", "take a screenshot"),
         Some("apps") => worded("listed the open apps", "list the open apps"),
+        Some("start") => worded("started the VM", "start the VM"),
         _ => worded("did something in the helper", "finish an action"),
     }
 }

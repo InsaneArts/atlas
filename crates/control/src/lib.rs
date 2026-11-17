@@ -485,6 +485,20 @@ impl Controller {
         Ok(self.owning(lock))
     }
 
+    /// Take control for a change another executor makes to the desktop
+    /// itself, such as Atlas VM starting a VM desktop, whatever is pending:
+    /// so it never lands while a service change holds the desktop. Nothing
+    /// pending is read, as that executor's own claims stay pending until it
+    /// answers them.
+    ///
+    /// # Errors
+    ///
+    /// Refuses another controller, as [`Controller::acquire`] does.
+    pub fn acquire_for_executor(&self) -> Result<Ownership> {
+        let lock = self.take_lock()?;
+        Ok(self.owning(lock))
+    }
+
     /// [`Controller::acquire`] for an agent's own action, going on beside
     /// commands still running under their own claims.
     ///

@@ -68,6 +68,18 @@ pub struct Failure {
     pub error: String,
 }
 
+/// A start asked when a command needed the VM running that Atlas VM
+/// refused: kept, so none is asked again for a while.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RefusedStart {
+    pub change: Token,
+    /// Why, in Atlas VM's own words.
+    pub reason: String,
+    /// When it was refused, in milliseconds since 1970.
+    pub at_ms: u64,
+}
+
 /// A VM's lifecycle record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -95,6 +107,13 @@ pub struct Record {
     pub provenance: Provenance,
     #[serde(default)]
     pub failure: Option<Failure>,
+    /// Every start asked because a command needed the VM running, kept
+    /// before it is claimed and asked, until its claim is cleared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub starts: Vec<Token>,
+    /// The last of them Atlas VM refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_start: Option<RefusedStart>,
 }
 
 impl Record {
@@ -119,6 +138,8 @@ impl Record {
             kept: Vec::new(),
             provenance,
             failure: None,
+            starts: Vec::new(),
+            refused_start: None,
         }
     }
 
@@ -154,6 +175,15 @@ impl Record {
     #[must_use]
     pub(in crate::vm) fn last_sent(&self, op: &str) -> Option<&Sent> {
         self.operations.iter().rev().find(|sent| sent.op == op)
+    }
+
+    /// Forget the start `change`, asked because a command needed the VM
+    /// running, once its claim is cleared: it and what was sent for it.
+    pub(in crate::vm) fn start_settled(&mut self, change: &Token) {
+        if self.starts.contains(change) {
+            self.starts.retain(|kept| kept != change);
+            self.operations.retain(|sent| sent.change != *change);
+        }
     }
 
     /// Keep `operation`, a change, as about to be sent. The very same

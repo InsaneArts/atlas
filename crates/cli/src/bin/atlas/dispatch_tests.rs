@@ -1221,3 +1221,123 @@ async fn executed(config: &Path, command: Command, client: &Client) -> Result<Va
     let factory = || Ok(acting.clone());
     execute_with(config, command, &policy, None, &factory, false).await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_vm_is_started_by_run_and_never_by_status_doctor_close_or_a_jobs_stop() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    keeper.runner.set_power("stopped");
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+
+    for args in [
+        &["status"][..],
+        &["doctor"],
+        &["close", "--app", "Probe"],
+        &["job", "stop", atlas_client::test_support::JOB],
+    ] {
+        let _ = executed(&config, command(args), &client).await;
+        assert!(keeper.runner.asked_for("start").is_empty(), "{args:?}");
+        assert_eq!(keeper.runner.power(), "stopped", "{args:?}");
+    }
+    let ran = executed(&config, command(&["run", "--", "/bin/echo", "hi"]), &client)
+        .await
+        .unwrap();
+
+    assert_eq!(ran["output"], "hi\n", "{ran}");
+    assert_eq!(ran["started"]["desktop"], "work", "{ran}");
+    let starts = keeper.runner.asked_for("start");
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert_eq!(ran["started"]["change"], starts[0]["change"]);
+    assert_eq!(keeper.runner.power(), "running");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_started_for_a_command_holds_it_by_the_guests_saved_stop_in_the_vms_words() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    keeper.runner.set_power("stopped");
+    *keeper.stop.lock().unwrap() = "stopped";
+    let config = dir.path().join("settings.toml");
+    let run = || {
+        parse(&["run", "--", "/bin/echo", "hi"])
+            .unwrap()
+            .command
+            .unwrap()
+    };
+
+    let held = executed(&config, run(), &client).await.unwrap_err();
+    let again = executed(&config, run(), &client).await.unwrap_err();
+
+    assert_eq!(held.code, Code::Stopped, "{held:?}");
+    assert_eq!(
+        held.error,
+        "work holds agents until the person resumes them from the Atlas menu bar."
+    );
+    assert_eq!(held.details["started"]["desktop"], "work", "{held:?}");
+    assert_eq!(
+        again.error, held.error,
+        "held the same until the person's Resume"
+    );
+    assert!(
+        again.details.get("started").is_none(),
+        "started once: {again:?}"
+    );
+    assert_eq!(keeper.runner.asked_for("start").len(), 1);
+    assert!(keeper.asked_for("change").is_empty(), "nothing ran");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_vm_is_started_by_a_jobs_start_by_open_and_by_an_agents_input() {
+    for args in [
+        &["job", "start", "--", "/bin/sh", "-c", "sleep 1"][..],
+        &["open", "--app", "TextEdit"],
+        &["click", "10", "10"],
+        &["key", "cmd+a"],
+    ] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        keeper.runner.set_power("stopped");
+        let config = dir.path().join("settings.toml");
+        let command = parse(args).unwrap().command.unwrap();
+
+        let reply = executed(&config, command, &client).await;
+
+        assert_eq!(keeper.runner.asked_for("start").len(), 1, "{args:?}");
+        assert_eq!(keeper.runner.power(), "running", "{args:?}");
+        let started = match &reply {
+            Ok(reply) => reply["started"]["desktop"].clone(),
+            Err(error) => error.details["started"]["desktop"].clone(),
+        };
+        assert_eq!(started, "work", "{args:?}: {reply:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_vms_status_and_doctor_say_it_is_stopped_and_what_starts_it() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    keeper.runner.set_power("stopped");
+    *keeper.away.lock().unwrap() = true;
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    let words = "work is stopped. A command that needs it, such as run, starts it.";
+
+    let status = executed(&config, command(&["status"]), &client)
+        .await
+        .unwrap();
+    let doctor = executed(&config, command(&["doctor"]), &client)
+        .await
+        .unwrap_err();
+
+    assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["notReady"], words, "{status}");
+    assert_eq!(status["proof"]["code"], "not-ready", "{status}");
+    assert_eq!(status["guest"]["error"], words, "{status}");
+    assert_eq!(status["runner"]["power"], "stopped", "{status}");
+    assert_eq!(doctor.error, words, "{doctor:?}");
+    assert_eq!(doctor.code, Code::NotReady);
+    assert!(keeper.runner.asked_for("start").is_empty());
+}

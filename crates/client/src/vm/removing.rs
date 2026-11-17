@@ -200,6 +200,8 @@ fn begun(
             kept: Vec::new(),
             provenance: means.provenance()?,
             failure: None,
+            starts: Vec::new(),
+            refused_start: None,
         },
     };
     let recorded = lifecycle

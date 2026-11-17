@@ -2,6 +2,7 @@
 //! keeper's protocol for a guest that proves itself, paired with a station
 //! key of the test's own, and keeps every request it was asked, so a test
 //! of a command above the client reaches a VM end to end.
+use super::StandInRunner;
 use crate::{client::Client, link::Link};
 use atlas_core::{
     error::{Code, Error, Result},
@@ -100,6 +101,10 @@ pub struct ScriptedKeeper {
     pub asked: Arc<Mutex<Vec<Value>>>,
     /// The guest's own Stop, as its hello says it.
     pub stop: Arc<Mutex<&'static str>>,
+    /// Atlas VM, which runs the VM.
+    pub runner: StandInRunner,
+    /// Whether the keeper reaches no guest, as while the VM is stopped.
+    pub away: Arc<Mutex<bool>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -129,7 +134,9 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// runs no app and keeps no copy, and settles whatever it is asked to.
+/// runs no app and keeps no copy, and settles whatever it is asked to. The
+/// VM is added, its lifecycle record kept in `directory`, and runs, as
+/// Atlas VM, stood in for there too, says.
 #[must_use]
 pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let (station, guest) = (
@@ -147,13 +154,19 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let listener = UnixListener::bind(&socket).expect("the keeper's socket");
     let asked = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(Mutex::new("clear"));
+    let away = Arc::new(Mutex::new(false));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
-        let (asked, stop) = (asked.clone(), stop.clone());
+        let (asked, stop, away) = (asked.clone(), stop.clone(), away.clone());
         async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (asked, stop, peer, own) =
-                    (asked.clone(), stop.clone(), peer.clone(), own.clone());
+                let (asked, stop, away, peer, own) = (
+                    asked.clone(),
+                    stop.clone(),
+                    away.clone(),
+                    peer.clone(),
+                    own.clone(),
+                );
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
                     let mut line = String::new();
@@ -173,7 +186,14 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                         .unwrap_or_else(PoisonError::into_inner)
                         .iter()
                         .any(|asked| asked["request"]["action"] == "stop");
-                    let answer = answered(&request, stop, &peer, &own, job_stopped);
+                    let answer = if *away.lock().unwrap_or_else(PoisonError::into_inner)
+                        && request["op"] != "hello"
+                    {
+                        json!({"ok": false, "code": "transport", "uncertain": false,
+                            "error": "The control connection to the desktop failed."})
+                    } else {
+                        answered(&request, stop, &peer, &own, job_stopped)
+                    };
                     let _ = stream
                         .get_mut()
                         .write_all(format!("{answer}\n").as_bytes())
@@ -183,6 +203,9 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
         }
     });
     let mut client = super::vm_client(directory, None);
+    let id = client.desktop().id();
+    added(directory, &id);
+    let runner = StandInRunner::at(&crate::vm::runner::socket_in(directory, &id), "running");
     let records: Arc<dyn StationRecords> =
         Arc::new(Remembered(Mutex::new(Some(Enrolment::Paired(paired)))));
     client.link = Link::Keeper(
@@ -200,9 +223,37 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
         ScriptedKeeper {
             asked,
             stop,
+            runner,
+            away,
             serving,
         },
     )
+}
+
+/// Keep the VM `id` as added, named `work`, in the lifecycle in `home`.
+fn added(home: &Path, id: &atlas_core::desktop::DesktopId) {
+    use crate::vm::lifecycle::{
+        Lifecycle, Provenance, Reservation,
+        record::{Record, State},
+    };
+    let reservation = Reservation {
+        name: "work".to_owned(),
+        id: id.clone(),
+        named: true,
+        resumed: false,
+    };
+    let mut record = Record::adding(
+        &reservation,
+        home.join("settings.toml"),
+        Provenance {
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            requirement: "identifier \"com.insanearts.atlas\"".to_owned(),
+        },
+    );
+    record.state = State::Created;
+    Lifecycle::under(home)
+        .keep_record(&record)
+        .expect("the VM's lifecycle record");
 }
 
 /// The one background job the scripted keeper's guest keeps.

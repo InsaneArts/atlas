@@ -131,6 +131,22 @@ impl Client {
         Ok(Proved { observed, session })
     }
 
+    /// Whether the VM's keeper holds a session to its guest now and the
+    /// guest proves itself in it, its Stop aside: what a command waits for
+    /// once the VM it needs is started.
+    pub(crate) async fn proven_now(&self) -> bool {
+        let Ok(keeper) = self.keeper().await else {
+            return false;
+        };
+        match keeper.one(&json!({"op": "hello"})).await {
+            Ok(hello) if hello["live"] == true => {}
+            Ok(_) | Err(_) => return false,
+        }
+        self.verify_machine(&keeper)
+            .await
+            .is_ok_and(|proved| proved.session.is_ok())
+    }
+
     /// A VM verified now for one of the commands this build runs on it (an
     /// agent's `run`, a job's start or stop): proved afresh in one
     /// generation of its keeper's session, its guest's own Stop clear, its
@@ -361,9 +377,20 @@ impl Client {
             Ok(proved) => (Some(proved.observed), proved.session),
             Err(refused) => (None, Err(refused)),
         };
-        let guest = match &observed {
-            Some(observed) => observed.status.clone(),
-            None => {
+        // A VM Atlas VM says is stopped is said so, not as a connection that
+        // failed: a command that needs it starts it.
+        let stopped = match &observed {
+            Some(_) => None,
+            None => crate::vm::start::stopped_now(self).await,
+        };
+        let session = match &stopped {
+            Some(stopped) => Err(Error::new(stopped.code, stopped.error.clone())),
+            None => session,
+        };
+        let guest = match (&observed, &stopped) {
+            (Some(observed), _) => observed.status.clone(),
+            (None, Some(stopped)) => json!(stopped),
+            (None, None) => {
                 let read = json!({"op": "read", "request": {"op": "hello"},
                     "deadline_ms": keeper.timeout.as_millis()});
                 match keeper.ask(&read).await {
@@ -426,7 +453,11 @@ impl Client {
             "work": guest_work(&guest),
             "leftovers": leftovers,
             "guest": guest,
-            "runner": observed.as_ref().map(|observed| json!(observed.runner)),
+            "runner": match (&observed, &stopped) {
+                (Some(observed), _) => json!(observed.runner),
+                (None, Some(_)) => json!({"ok": true, "power": "stopped", "confirmed": true}),
+                (None, None) => Value::Null,
+            },
             "station": {"stop": station, "handover": self.handover_unfinished(),
                 "pending": pending},
         }))

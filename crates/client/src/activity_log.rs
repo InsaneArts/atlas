@@ -79,6 +79,7 @@ ops! {
     Restart => "restart",
     Run => "run",
     Screenshot => "screenshot",
+    Start => "start",
 }
 
 impl Op {

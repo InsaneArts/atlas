@@ -15,6 +15,7 @@ pub(crate) mod proof;
 mod removal;
 pub mod removing;
 pub mod runner;
+pub mod start;
 mod station;
 
 pub use agent::{install_agent, install_agent_held};

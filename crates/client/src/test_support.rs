@@ -10,6 +10,7 @@ mod executor;
 mod helper;
 mod keeper;
 mod requester;
+mod runner;
 
 pub use executor::{
     Fixture, WORKER, executor_ready, executor_worker, interrupted_executor, pause_executor,
@@ -19,6 +20,7 @@ pub use keeper::{
     GENERATION, JOB, ScriptedKeeper, input_hello, machine_hello, screen, vm_through_keeper,
 };
 pub use requester::{Requester, WATCHDOG};
+pub use runner::StandInRunner;
 
 use crate::{
     client::Client,
