@@ -2,12 +2,14 @@
 //! Atlas VM under a launchd agent of this account's own, and its removal.
 //! The station's own code, which outlives Atlas VM, and its trust in the
 //! socket Atlas VM serves the VM's guest on.
+pub mod add;
 mod agent;
 mod control;
 mod evidence;
 pub mod handover;
 pub mod keeper;
 pub mod lifecycle;
+pub mod listing;
 mod removal;
 pub mod runner;
 mod station;

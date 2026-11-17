@@ -1613,3 +1613,35 @@ fn a_stop_says_which_desktops_it_could_only_hold_here() {
         "✓ Stopped the agent"
     );
 }
+
+#[test]
+fn desktops_are_listed_by_kind_a_vms_power_apart_from_whether_atlas_reaches_it() {
+    let listed = show(
+        View::Desktops,
+        json!({"ok": true, "desktops": [
+            {"name": "second-login", "kind": "user", "default": true},
+            {"name": "work", "kind": "vm", "default": false, "lifecycle": "created",
+             "power": {"state": "running", "confirmed": true}, "reach": {"reachable": false}},
+            {"name": "spare", "kind": "vm", "default": false, "lifecycle": "adding",
+             "power": {"state": "stopped", "confirmed": false}, "reach": {"reachable": false}},
+        ]}),
+    );
+    let lines: Vec<&str> = listed.out.lines().collect();
+    assert!(lines[1].starts_with("second-login (default)") && lines[1].contains("Second Login"));
+    assert!(lines[2].contains("running") && lines[2].contains("not reachable"));
+    assert!(lines[3].contains("stopped, last known") && lines[3].contains("being added"));
+
+    let none = show(View::Desktops, json!({"ok": true, "desktops": []}));
+    assert!(none.out.starts_with("No desktops yet."));
+
+    let added = show(
+        View::DesktopAdd,
+        json!({"ok": true, "added": {"name": "work", "id": "0123456789abcdef01234567"},
+               "settings": "~/.config/atlas.toml"}),
+    );
+    assert!(
+        added
+            .out
+            .starts_with("✓ The VM \u{201c}work\u{201d} is added to ~/.config/atlas.toml")
+    );
+}

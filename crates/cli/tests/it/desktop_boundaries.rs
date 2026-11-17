@@ -1443,6 +1443,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: accounts Atlas added before desktops were the Second Login's",
     ),
     (
+        "crates/client/src/vm/listing.rs",
+        &["list_with"],
+        "owner: the listing of every desktop, which names each by its kind",
+    ),
+    (
         "crates/core/src/config.rs",
         &[
             "Config",

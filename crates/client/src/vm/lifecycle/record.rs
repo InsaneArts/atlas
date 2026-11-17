@@ -144,13 +144,21 @@ impl Record {
         self.operations.iter().find(|sent| &sent.change == change)
     }
 
+    /// The last change kept as the operation `op`, by its name on the
+    /// socket.
+    #[must_use]
+    pub(in crate::vm) fn last_sent(&self, op: &str) -> Option<&Sent> {
+        self.operations.iter().rev().find(|sent| sent.op == op)
+    }
+
     /// Keep `operation`, a change, as about to be sent. The very same
-    /// request asked again is kept once.
+    /// request asked again is kept once. Going on with an install is kept
+    /// as that install, which must be.
     ///
     /// # Errors
     ///
-    /// Refuses a read, which is never kept, and another request kept under
-    /// the same change.
+    /// Refuses a read, which is never kept, another request kept under the
+    /// same change, and going on with an install not kept.
     pub(crate) fn sending(&mut self, operation: &Operation) -> Result<()> {
         let Some(change) = operation.change() else {
             return Err(Error::new(
@@ -158,6 +166,15 @@ impl Record {
                 "A read of Atlas VM is not a change to keep.",
             ));
         };
+        if let Operation::InstallResume(_) = operation {
+            return match self.sent(change) {
+                Some(kept) if kept.op == "install" => Ok(()),
+                _ => Err(Error::new(
+                    Code::State,
+                    "No install was kept under this change to go on with; it is not sent.",
+                )),
+            };
+        }
         let sent = Sent {
             op: operation.name().to_owned(),
             change: change.clone(),
@@ -217,6 +234,30 @@ impl Lifecycle {
                 "A VM's lifecycle record names another VM.",
             )),
             record => Ok(record),
+        }
+    }
+
+    /// Where the VM `id`'s record is, made or not, no folder made.
+    #[must_use]
+    pub(crate) fn record_at(&self, id: &DesktopId) -> PathBuf {
+        self.folder.join(format!("{}.json", id.as_str()))
+    }
+
+    /// Where the VM `id`'s lifecycle stands, its record read where it is
+    /// and no folder made: none when it has none.
+    ///
+    /// # Errors
+    ///
+    /// Fails when its record cannot be read, or is not one this Atlas
+    /// reads, or names another VM.
+    pub(crate) fn state_of(&self, id: &DesktopId) -> Result<Option<State>> {
+        let record: Option<Record> = read(&self.record_at(id), "A VM's lifecycle record")?;
+        match record {
+            Some(record) if record.id != *id => Err(Error::new(
+                Code::State,
+                "A VM's lifecycle record names another VM.",
+            )),
+            record => Ok(record.map(|record| record.state)),
         }
     }
 

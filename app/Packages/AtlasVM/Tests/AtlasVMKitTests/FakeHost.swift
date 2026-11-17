@@ -107,6 +107,19 @@ actor FakeHost: VMHost {
     return nil
   }
 
+  /// The installs gone on with without their secret, and what each comes
+  /// to; none leaves it pending.
+  var resumed: [ChangeID] = []
+  var resumedOutcome: ChangeOutcome?
+
+  func resumeInstall(_ change: ChangeID) async -> ChangeOutcome? {
+    resumed.append(change)
+    return resumedOutcome
+  }
+
+  /// Make each install gone on with come to `outcome`.
+  func resuming(as outcome: ChangeOutcome?) { resumedOutcome = outcome }
+
   /// Reports that cannot be kept yet, as a full disk leaves them.
   var reportsStick = false
 

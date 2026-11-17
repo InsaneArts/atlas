@@ -55,6 +55,25 @@ impl Lifecycle {
         }
     }
 
+    /// Whether anything was ever kept here: a read that finds nothing need
+    /// make nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the folder cannot be looked at: only one that is not
+    /// there is taken for none.
+    pub(in crate::vm) fn kept_any(&self) -> Result<bool> {
+        match std::fs::symlink_metadata(&self.folder) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::new(
+                Code::State,
+                "This Mac's VM lifecycle records cannot be read.",
+            )
+            .with_source(error)),
+        }
+    }
+
     /// The folder, made private when missing and checked private either
     /// way, as is the station's own that holds it.
     fn folder(&self) -> Result<&Path> {

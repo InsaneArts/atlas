@@ -9,7 +9,7 @@ use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -33,6 +33,12 @@ impl Install {
             enrolment,
             secret,
         }
+    }
+
+    /// The secret it hands over, for a test that stands in for Atlas VM.
+    #[cfg(test)]
+    pub(crate) fn secret(&self) -> &str {
+        &self.secret
     }
 }
 
@@ -65,6 +71,11 @@ pub enum Operation {
     Window { change: Token, input: bool },
     /// Put Atlas inside its guest.
     Install { change: Token, install: Install },
+    /// Go on with the install of this change, already handed its secret,
+    /// without it: its close, the guest account no administrator and
+    /// Remote Login off again. It is no change of its own: the install's
+    /// change answers it.
+    InstallResume(Token),
     /// The station's word that the guest of the install `install` paired
     /// for `enrolment`.
     Paired {
@@ -93,6 +104,7 @@ impl Operation {
             Self::Stop(_) => "stop",
             Self::Window { .. } => "window",
             Self::Install { .. } => "install",
+            Self::InstallResume(_) => "install-resume",
             Self::Paired { .. } => "paired",
             Self::Closed { .. } => "closed",
             Self::Forget(_) => "forget",
@@ -108,6 +120,7 @@ impl Operation {
             | Self::Start(change)
             | Self::Stop(change)
             | Self::Forget(change)
+            | Self::InstallResume(change)
             | Self::Window { change, .. }
             | Self::Install { change, .. }
             | Self::Paired { change, .. }
@@ -148,7 +161,8 @@ impl Operation {
             | Self::Create(change)
             | Self::Start(change)
             | Self::Stop(change)
-            | Self::Forget(change) => json!({"op": op, "change": change}),
+            | Self::Forget(change)
+            | Self::InstallResume(change) => json!({"op": op, "change": change}),
             Self::Window { change, input } => json!({"op": op, "change": change, "input": input}),
             Self::Install { change, install } => json!({
                 "op": op,
@@ -194,8 +208,19 @@ pub struct Hello {
     pub capabilities: Vec<String>,
 }
 
+impl Hello {
+    /// Whether it declares `capability`: a station uses only what is
+    /// declared.
+    #[must_use]
+    pub(super) fn can(&self, capability: &str) -> bool {
+        self.capabilities
+            .iter()
+            .any(|declared| declared == capability)
+    }
+}
+
 /// The VM's power, as its runner sees it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Power {
     Absent,

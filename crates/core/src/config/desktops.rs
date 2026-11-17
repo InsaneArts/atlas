@@ -4,6 +4,10 @@
 //! top, are one `user` desktop called `second-login`. Settings may instead
 //! list desktops under `[[desktops]]` with a `default`; output placement and
 //! what the activity keeps stay settings of the whole Mac.
+mod adding;
+
+pub use adding::{Adding, Admission, Mark};
+
 use super::{Activity, Config, default_output, parse_toml};
 use crate::desktop::{Desktop, DesktopId, RecordKey};
 use crate::error::{Code, Error, Result};
@@ -68,13 +72,15 @@ pub struct VmConfig {
 }
 
 /// What a client is built from: the desktop chosen, by the name the
-/// settings give it, and the name of the Second Login they list, if any,
-/// for advice that sends a person there.
+/// settings give it, the name of the Second Login they list, if any, for
+/// advice that sends a person there, and whether it is a VM still being
+/// added, which only the station's lifecycle tells and every copy shares.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selected {
     pub name: String,
     pub desktop: Chosen,
     pub user_entry: Option<String>,
+    pub adding: Adding,
 }
 
 impl Chosen {
@@ -139,8 +145,41 @@ impl Selected {
     /// the VM in one wording for every command and every surface. Its own
     /// next step, which the command line alone shows, stands in for the one
     /// its code would give (about this Mac) and names the Second Login to use
-    /// instead when the settings list one.
+    /// instead when the settings list one. A VM still being added is said to
+    /// be so, and one whose add cannot be told: only the person's Stop
+    /// reaches either until it is added.
     pub fn unreachable(&self) -> Error {
+        match self.adding.get() {
+            Admission::Open => {}
+            Admission::Adding => {
+                return Error::new(
+                    Code::NotReady,
+                    format!("{} is still being added.", self.name),
+                )
+                .with(
+                    "next",
+                    serde_json::json!(
+                        "Wait for atlas desktop add vm to finish, or run it again to go on."
+                    ),
+                );
+            }
+            Admission::Uncertain => {
+                return Error::new(
+                    Code::State,
+                    format!(
+                        "Whether {} is still being added cannot be told: its lifecycle record \
+                         cannot be read.",
+                        self.name
+                    ),
+                )
+                .with(
+                    "next",
+                    serde_json::json!(
+                        "Run atlas desktop list to see it; only Stop reaches it until then."
+                    ),
+                );
+            }
+        }
         let next = match &self.user_entry {
             Some(user) => format!("Run it again with --desktop {user} to use Second Login."),
             None => "Nothing was sent to it. A later Atlas reaches VM desktops.".to_owned(),
@@ -162,6 +201,7 @@ impl Selected {
             name: SECOND_LOGIN.to_owned(),
             desktop: Chosen::User(config),
             user_entry: None,
+            adding: Adding::default(),
         }
     }
 
@@ -457,6 +497,7 @@ impl Settings {
                 .iter()
                 .find(|listed| listed.desktop.user().is_some())
                 .map(|listed| listed.name.clone()),
+            adding: Adding::default(),
         }
     }
 

@@ -106,3 +106,60 @@ fn a_name_that_is_not_a_desktop_name_is_refused() {
     assert!(lifecycle.reserve(Some("Work Mac"), &[]).is_err());
     assert!(lifecycle.reserve(Some("../x"), &[]).is_err());
 }
+
+#[test]
+fn a_prospect_makes_nothing_and_its_claim_reserves_the_name_it_named() {
+    let (_home, lifecycle) = lifecycle();
+
+    let named = lifecycle.prospect(Some("work"), &[]).unwrap();
+    let unnamed = lifecycle.prospect(None, &["vm"]).unwrap();
+
+    assert_eq!(lifecycle.reservations().unwrap(), []);
+    assert!(!named.resumed && named.named);
+    assert_eq!((unnamed.name.as_str(), unnamed.named), ("vm-2", false));
+    let claimed = lifecycle.claim(&named).unwrap();
+    assert_eq!(claimed, named);
+    assert_eq!(
+        lifecycle.reserved_by(&named.id).unwrap().as_deref(),
+        Some("work")
+    );
+    let resumed = lifecycle.prospect(Some("work"), &["work"]).unwrap();
+    assert!(resumed.resumed);
+    assert_eq!(resumed.id, named.id);
+    assert_eq!(lifecycle.claim(&resumed).unwrap().id, named.id);
+}
+
+#[test]
+fn a_claim_is_refused_for_a_name_taken_or_given_up_since_its_prospect() {
+    let (_home, lifecycle) = lifecycle();
+    let first = lifecycle.prospect(Some("work"), &[]).unwrap();
+    let second = lifecycle.prospect(Some("work"), &[]).unwrap();
+    lifecycle.claim(&first).unwrap();
+    let resumed = lifecycle.prospect(Some("work"), &[]).unwrap();
+
+    let taken = lifecycle.claim(&second).unwrap_err();
+    lifecycle.release("work", &first.id).unwrap();
+    let given_up = lifecycle.claim(&resumed).unwrap_err();
+
+    for refused in [taken, given_up] {
+        assert!(refused.error.contains("changed hands"), "{}", refused.error);
+    }
+    assert_eq!(lifecycle.reservations().unwrap(), []);
+}
+
+#[test]
+fn a_prospect_refuses_what_a_reservation_refuses() {
+    let (_home, lifecycle) = lifecycle();
+    let first = lifecycle.reserve(Some("work"), &[]).unwrap();
+    kept(&lifecycle, &first, State::Created);
+
+    let added = lifecycle.prospect(Some("work"), &[]).unwrap_err();
+    let listed = lifecycle
+        .prospect(Some("second-login"), &["second-login"])
+        .unwrap_err();
+    let invalid = lifecycle.prospect(Some("Work Mac"), &[]).unwrap_err();
+
+    assert!(added.error.contains("already a VM"), "{}", added.error);
+    assert!(listed.error.contains("already list"), "{}", listed.error);
+    assert_eq!(invalid.code, Code::BadRequest);
+}

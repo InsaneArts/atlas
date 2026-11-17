@@ -122,6 +122,10 @@ pub(super) enum Command {
     /// and answered through Atlas.app.
     #[command(hide = true, subcommand)]
     Lifecycle(Lifecycle),
+    /// Add a VM desktop, or list the desktops, VMs being added among them.
+    /// Hidden until agents can use a VM.
+    #[command(hide = true, subcommand)]
+    Desktop(Desktop),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {
@@ -1566,6 +1570,29 @@ pub(super) enum Station {
         /// The settings file the keeper's agent names.
         #[arg(long)]
         settings: PathBuf,
+    },
+}
+
+/// The desktops of this Mac.
+#[derive(Debug, Subcommand)]
+pub(super) enum Desktop {
+    /// Add a desktop, once you allow it in Atlas.app. Asked again, an add
+    /// cut short goes on from where it got.
+    #[command(subcommand)]
+    Add(DesktopKind),
+    /// Every desktop, by kind: a VM's power, whether Atlas reaches it, and
+    /// whether it is still being added.
+    List,
+}
+
+/// The kind of desktop to add.
+#[derive(Debug, Subcommand)]
+pub(super) enum DesktopKind {
+    /// A macOS VM on this Mac.
+    Vm {
+        /// Its name in the settings: vm, vm-2 and on when none is given.
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 

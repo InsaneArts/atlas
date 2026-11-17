@@ -758,3 +758,33 @@ fn elements_take_several_names_a_page_and_values_or_everything() {
         Err(clap::error::ErrorKind::ArgumentConflict)
     );
 }
+
+#[test]
+fn a_vm_is_added_named_or_not_and_the_desktops_listed() {
+    let named = parse(&["desktop", "add", "vm", "--name", "work"]).unwrap();
+    let unnamed = parse(&["desktop", "add", "vm"]).unwrap();
+    let listed = parse(&["desktop", "list"]).unwrap();
+
+    assert!(matches!(
+        named.command,
+        Some(Command::Desktop(Desktop::Add(DesktopKind::Vm { name: Some(ref name) }))) if name == "work"
+    ));
+    assert!(matches!(
+        unnamed.command,
+        Some(Command::Desktop(Desktop::Add(DesktopKind::Vm {
+            name: None
+        })))
+    ));
+    assert!(matches!(
+        listed.command,
+        Some(Command::Desktop(Desktop::List))
+    ));
+    assert!(parse(&["desktop", "add"]).is_err());
+    assert_eq!(
+        parse(&["--desktop", "work", "status"])
+            .unwrap()
+            .desktop
+            .as_deref(),
+        Some("work")
+    );
+}

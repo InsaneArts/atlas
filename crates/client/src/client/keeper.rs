@@ -5,7 +5,7 @@
 use super::{Actor, Client};
 use crate::link::{Keeper, Link};
 use atlas_core::{
-    config::desktops::Chosen,
+    config::desktops::{Admission, Chosen},
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
@@ -65,6 +65,10 @@ impl Client {
     /// A VM's status: its keeper's hello and its guest's own, read through
     /// the keeper, never proven, so never ready.
     pub(super) async fn vm_status(&self) -> Result<Value> {
+        // A VM still being added answers nothing but the person's Stop.
+        if self.admission() != Admission::Open {
+            return Err(self.selected.unreachable());
+        }
         // An update still handing it over is said on every path, the
         // keeper's own failure kept.
         let handing = |error| handing_over(error, self.handover_unfinished());
@@ -132,6 +136,9 @@ impl Client {
                 Code::Stopped,
                 "Only the person resumes agents, from the Atlas menu bar",
             ));
+        }
+        if self.admission() != Admission::Open {
+            return Err(self.selected.unreachable());
         }
         let keeper = self.keeper().await?;
         let revision = self.controller.stop_revision()?;

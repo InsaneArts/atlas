@@ -642,3 +642,117 @@ async fn a_persons_stop_before_the_update_keeps_its_reason_and_revision_through_
     assert_eq!(kept, given);
     assert_eq!(kept.unwrap().why(), StopWhy::Person);
 }
+
+/// Keep `client`'s VM's lifecycle record in `state`, in its test lifecycle.
+fn lifecycle_record(client: &crate::client::Client, state: crate::vm::lifecycle::record::State) {
+    use crate::vm::lifecycle::{Provenance, Reservation, record::Record};
+    let lifecycle = client.lifecycle.as_ref().unwrap();
+    let reservation = Reservation {
+        name: "work".to_owned(),
+        id: client.desktop().id(),
+        named: true,
+        resumed: false,
+    };
+    let mut record = Record::adding(
+        &reservation,
+        "/Users/someone/.config/atlas.toml".into(),
+        Provenance {
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            requirement: "identifier \"com.insanearts.atlas\"".to_owned(),
+        },
+    );
+    record.state = state;
+    lifecycle.keep_record(&record).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_being_added_refuses_every_command_but_the_persons_stop_until_the_same_client_sees_it_added()
+ {
+    use crate::{client::Actor, vm::lifecycle::record::State};
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    lifecycle_record(&client, State::Adding);
+
+    let status = client.status().await;
+    let mut viewer = client.clone();
+    viewer.actor = Actor::Viewer;
+    let refused = [
+        client.reachable().unwrap_err(),
+        client.link.call(&json!({"op": "hello"})).await.unwrap_err(),
+        viewer.resume_vm(&serving.capability).await.unwrap_err(),
+    ];
+    let stopped = client.hold(true).await.unwrap();
+    lifecycle_record(&client, State::Created);
+    let added = client.status().await;
+
+    assert_eq!(status["ok"], false, "{status}");
+    assert_eq!(status["error"], "work is still being added.");
+    for refused in refused {
+        assert_eq!(refused.error, "work is still being added.");
+    }
+    assert_eq!(stopped["kept"], true, "{stopped}");
+    assert_eq!(stopped["delivered"], true, "{stopped}");
+    assert_eq!(added["ok"], true, "the same client sees it added: {added}");
+    assert!(
+        client.controller.stop_noted(),
+        "the Stop holds once it is added"
+    );
+    assert!(client.controller.stop_revision().unwrap().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_whose_lifecycle_record_cannot_be_read_is_refused_as_uncertain_and_still_stopped() {
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    lifecycle_record(&client, crate::vm::lifecycle::record::State::Adding);
+    let path = client
+        .lifecycle
+        .as_ref()
+        .unwrap()
+        .record_at(&client.desktop().id());
+    std::fs::write(&path, br#"{"id":"0123456789abcdef01234567","schema":9}"#).unwrap();
+
+    let status = client.status().await;
+    let refused = client.reachable().unwrap_err();
+    let stopped = client.hold(true).await.unwrap();
+
+    assert_eq!(status["ok"], false, "{status}");
+    for error in [status["error"].as_str().unwrap(), refused.error.as_str()] {
+        assert!(error.contains("cannot be told"), "{error}");
+    }
+    assert_eq!(stopped["delivered"], true, "{stopped}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lifecycle_record_out_of_reach_for_a_while_is_read_again_by_the_same_client_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    lifecycle_record(&client, crate::vm::lifecycle::record::State::Created);
+    assert_eq!(client.status().await["ok"], true);
+    let folder = client
+        .lifecycle
+        .as_ref()
+        .unwrap()
+        .record_at(&client.desktop().id())
+        .parent()
+        .unwrap()
+        .to_owned();
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let out_of_reach = client.status().await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let back = client.status().await;
+
+    assert_eq!(out_of_reach["ok"], false, "{out_of_reach}");
+    assert!(
+        out_of_reach["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be told")
+    );
+    assert_eq!(back["ok"], true, "{back}");
+}

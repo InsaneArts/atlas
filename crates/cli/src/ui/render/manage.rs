@@ -277,6 +277,52 @@ pub(super) fn uninstall(value: &Value) -> String {
     lines.join("\n")
 }
 
+pub(super) fn desktop_added(value: &Value) -> String {
+    let name = text::printable(value["added"]["name"].as_str().unwrap_or("the VM")).into_owned();
+    format!(
+        "{} The VM \u{201c}{name}\u{201d} is added to {}\n  {}",
+        style::ok(),
+        text::printable(value["settings"].as_str().unwrap_or("the settings")),
+        style::dim("Agents cannot use it yet: this build of Atlas does not reach VM desktops.")
+    )
+}
+
+pub(super) fn desktops(value: &Value) -> String {
+    let rows: Vec<Vec<String>> = items(&value["desktops"])
+        .map(|desktop| {
+            let mut name = text::printable(desktop["name"].as_str().unwrap_or("?")).into_owned();
+            if desktop["default"] == true {
+                name.push_str(" (default)");
+            }
+            if desktop["kind"] != "vm" {
+                return vec![
+                    name,
+                    "Second Login".to_owned(),
+                    String::new(),
+                    String::new(),
+                ];
+            }
+            let state = match desktop["lifecycle"].as_str() {
+                Some("adding") => format!("{} being added", style::unknown()),
+                Some("removing") => format!("{} being removed", style::unknown()),
+                _ if desktop["reach"]["reachable"] == true => format!("{} reachable", style::ok()),
+                _ => format!("{} not reachable", style::unknown()),
+            };
+            let power = desktop["power"]["state"].as_str().unwrap_or("unknown");
+            let power = if desktop["power"]["confirmed"] == false && power != "unknown" {
+                format!("{power}, last known")
+            } else {
+                power.to_owned()
+            };
+            vec![name, "VM".to_owned(), power, state]
+        })
+        .collect();
+    if rows.is_empty() {
+        return "No desktops yet. Run atlas init, or atlas desktop add vm.".to_owned();
+    }
+    table::render(&["NAME", "KIND", "POWER", "STATE"], &rows)
+}
+
 pub(super) fn login(value: &Value) -> String {
     if value["available"] == false {
         return format!(

@@ -102,9 +102,13 @@ pub fn vm_client(directory: &Path, user_entry: Option<&str>) -> Client {
             activity: atlas_core::config::Activity::default(),
         }),
         user_entry: user_entry.map(str::to_owned),
+        adding: atlas_core::config::desktops::Adding::default(),
     };
     let mut client = Client::new(selected).unwrap();
     client.controller = Controller::of_at(&client.desktop(), &directory.join("state"));
+    // Its lifecycle is the test's own, never the account's.
+    client.lifecycle = Some(crate::vm::lifecycle::Lifecycle::under(directory));
+    client.admission();
     client
 }
 

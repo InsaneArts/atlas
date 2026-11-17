@@ -38,7 +38,7 @@ use atlas_control::Controller;
 use atlas_core::{
     config::{
         Config,
-        desktops::{Chosen, Selected},
+        desktops::{Admission, Chosen, Selected},
     },
     desktop::{Desktop, Kind},
     error::{Code, Error, Result},
@@ -153,6 +153,9 @@ pub struct Client {
     /// A VM desktop's records folder beneath the output folder; none for
     /// Second Login, whose records are the output folder itself.
     own_records: Option<PathBuf>,
+    /// Where a VM desktop's lifecycle is kept, which says whether it is
+    /// still being added; none for Second Login.
+    pub(crate) lifecycle: Option<crate::vm::lifecycle::Lifecycle>,
     /// What the person allowed this command once, for its next attempt only.
     granted: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
     /// Whether this command's next input is only its check before typing:
@@ -184,7 +187,7 @@ impl Client {
         let timeout = Duration::from_secs(30);
         // The command service: where it listens, and the account the
         // kernel must name at its end.
-        let (link, own_records) = match &selected.desktop {
+        let (link, own_records, lifecycle) = match &selected.desktop {
             Chosen::User(config) => {
                 let login = config.user();
                 atlas_core::session::validate_uid(login.uid)?;
@@ -193,14 +196,15 @@ impl Client {
                     timeout,
                     peer_uid: login.uid,
                 });
-                (link, None)
+                (link, None, None)
             }
             Chosen::Vm(config) => {
                 let link = crate::link::probe(&selected, &config.id, timeout);
-                (link, Some(selected.desktop.records()))
+                let lifecycle = crate::vm::lifecycle::Lifecycle::own().ok();
+                (link, Some(selected.desktop.records()), lifecycle)
             }
         };
-        Ok(Self {
+        let client = Self {
             controller: Controller::new(&desktop)?,
             link,
             #[cfg(any(test, feature = "test-support"))]
@@ -221,8 +225,11 @@ impl Client {
             #[cfg(test)]
             ask_shown: None,
             own_records,
+            lifecycle,
             selected,
-        })
+        };
+        client.admission();
+        Ok(client)
     }
 
     /// The desktop this client acts on, as its settings name it.
@@ -283,9 +290,43 @@ impl Client {
     }
 
     /// The one refusal of what this build cannot do on a VM desktop, named
-    /// for the desktop this client acts on.
+    /// for the desktop this client acts on, its add looked at again first.
     pub fn unreachable(&self) -> Error {
+        self.admission();
         self.selected.unreachable()
+    }
+
+    /// Where this VM's add stands, its lifecycle record looked at again
+    /// when its file changed since: a look at the file, and a small read
+    /// only then, one caller at a time. Every copy of the selection, the
+    /// keeper's link's among them, sees what it finds. A record that cannot
+    /// be read leaves it uncertain, never added.
+    pub(crate) fn admission(&self) -> Admission {
+        use std::os::unix::fs::MetadataExt;
+        let Chosen::Vm(config) = &self.selected.desktop else {
+            return Admission::Open;
+        };
+        let adding = &self.selected.adding;
+        let Some(lifecycle) = &self.lifecycle else {
+            adding.doubt();
+            return adding.get();
+        };
+        let look = || match lifecycle.state_of(&config.id) {
+            Ok(Some(crate::vm::lifecycle::record::State::Adding)) => Admission::Adding,
+            Ok(_) => Admission::Open,
+            Err(_) => Admission::Uncertain,
+        };
+        match std::fs::symlink_metadata(lifecycle.record_at(&config.id)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                adding.renew(None, || Admission::Open);
+            }
+            Err(_) => adding.doubt(),
+            Ok(file) => adding.renew(
+                Some((file.ino(), file.len(), file.ctime(), file.ctime_nsec())),
+                look,
+            ),
+        }
+        adding.get()
     }
 
     /// What the person allowed this command once, for its next attempt.

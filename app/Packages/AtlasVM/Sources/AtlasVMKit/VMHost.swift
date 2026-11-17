@@ -21,6 +21,11 @@ public protocol VMHost: Sendable {
   /// Put Atlas inside the guest for the install change `change`, as far as
   /// it goes; none while it waits on the station's word that it is closed.
   func install(_ change: ChangeID, _ request: InstallRequest) async -> ChangeOutcome?
+  /// Go on with the install `change`, already handed its secret: the guest
+  /// account taken out of the administrators and Remote Login turned off
+  /// again, as far as its close; none while it waits on the station's word,
+  /// or cannot go on yet.
+  func resumeInstall(_ change: ChangeID) async -> ChangeOutcome?
   /// Take the station's word that the install `install` paired: its secret
   /// leaves the share. None while that cannot be kept.
   func paired(install: ChangeID) async -> ChangeOutcome?

@@ -67,6 +67,67 @@ actor GuestInstaller {
     }
   }
 
+  /// Go on with the install `change` without its secret, which its guest
+  /// was handed before it paired: once it reached its close, the second
+  /// administrator proved again, the guest account taken out of the
+  /// administrators again and Remote Login turned off again, each safe to
+  /// repeat. None while it waits on the station's word, or cannot go on
+  /// yet, with why kept to be read; a refusal for good as an install's.
+  func resume(_ change: ChangeID) async -> ChangeOutcome? {
+    let kept: InstallProgress?
+    do {
+      kept = try InstallProgress.read(from: progressFile)
+    } catch {
+      return nil
+    }
+    guard var progress = kept, progress.change == change else { return .refused("No such install.") }
+    if let why = progress.refused {
+      return progress.ended ? .refused(why) : await refuse(progress, why: why)
+    }
+    if progress.passed(.closed) { return .done }
+    // Before its close the guest may still need its secret, which only an
+    // install asked with it hands over.
+    guard progress.passed(.closing) else {
+      progress.failure = "The install has not reached its close; it goes on only when asked with its secret."
+      try? persist(&progress)
+      return nil
+    }
+    do {
+      try await close(&progress)
+      return nil
+    } catch let refusal as InstallRefusal {
+      return await refuse(progress, why: refusal.why)
+    } catch {
+      progress.failure = String(String(describing: error).prefix(500))
+      try? persist(&progress)
+      return nil
+    }
+  }
+
+  /// Close the guest of `progress` again, as its second administrator: the
+  /// guest account demoted, then Remote Login turned off, which leaves
+  /// nothing to sign in to once it holds.
+  private func close(_ progress: inout InstallProgress) async throws {
+    let change = progress.change
+    guard let address = await guestAddress() else { throw RemoteFailure(description: "The guest has no address yet.") }
+    guard let requirement = CodeIdentity.atlasRequirement() else {
+      throw InstallRefusal(why: "Atlas VM's own signature cannot be read.")
+    }
+    let root = { (arguments: String) in Self.asRoot(change, requirement: requirement, arguments) }
+    let admin = Remote(
+      user: Self.admin,
+      address: address,
+      password: try GuestPassword.of("\(desktop).admin"),
+      folder: folder
+    )
+    _ = try admin.sudo("-v")
+    try setup(admin, root("demote --account \(Self.account)"))
+    try keep(&progress, .closing)
+    do {
+      try setup(admin, root("close"))
+    } catch let failure as RemoteFailure where failure.unreachable {}
+  }
+
   /// Refuse the install of `progress` for good, its refusal kept first,
   /// once the VM is kept quarantined and is stopped, and the secret has
   /// left the share; until then it stays pending, and asked again goes on

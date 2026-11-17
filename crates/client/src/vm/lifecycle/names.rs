@@ -54,97 +54,120 @@ impl Lifecycle {
     /// one whose VM is added or being removed; fails when a reservation or
     /// a record cannot be read or made.
     pub fn reserve(&self, name: Option<&str>, listed: &[&str]) -> Result<Reservation> {
-        match name {
-            Some(name) => self.reserve_named(name, listed),
-            None => self.reserve_unnamed(listed),
-        }
-    }
-
-    fn reserve_named(&self, name: &str, listed: &[&str]) -> Result<Reservation> {
-        if !atlas_core::config::desktops::plain_name(name) {
-            return Err(Error::new(
-                Code::BadRequest,
-                format!(
-                    "\"{name}\" is not a desktop name: use 1 to 32 lowercase letters, digits and \
-                     dashes"
-                ),
-            ));
-        }
+        // A name another add took meanwhile is looked at again.
         loop {
-            if let Some(held) = self.held(name)? {
-                if !self.under_way(&held.id)? {
-                    return Err(Error::new(
-                        Code::Config,
-                        format!("There is already a VM named \"{name}\"."),
-                    ));
-                }
-                return Ok(Reservation {
-                    name: name.to_owned(),
-                    id: held.id,
-                    named: held.named,
-                    resumed: true,
-                });
-            }
-            if listed.contains(&name) {
-                return Err(Error::new(
-                    Code::Config,
-                    format!("The settings already list a desktop named \"{name}\"."),
-                ));
-            }
-            if let Some(reservation) = self.reserve_new(name, true)? {
+            if let Some(reservation) = self.claimed(&self.prospect(name, listed)?)? {
                 return Ok(reservation);
             }
         }
     }
 
-    fn reserve_unnamed(&self, listed: &[&str]) -> Result<Reservation> {
-        for (name, held) in self.reservations()? {
-            if !held.named && self.under_way(&held.id)? {
-                return Ok(Reservation {
-                    name,
-                    id: held.id,
-                    named: false,
-                    resumed: true,
-                });
-            }
-        }
-        let names = self.names()?;
-        for at in 1..=TRIES {
-            let name = if at == 1 {
-                UNNAMED.to_owned()
-            } else {
-                format!("{UNNAMED}-{at}")
-            };
-            if listed.contains(&name.as_str()) || names.join(&name).exists() {
-                continue;
-            }
-            if let Some(reservation) = self.reserve_new(&name, false)? {
-                return Ok(reservation);
-            }
-        }
-        Err(Error::new(
-            Code::Config,
-            "Every name an unnamed VM takes is in use; name it with --name.",
-        ))
-    }
-
-    /// `name` reserved for a new VM, made only where no reservation is;
-    /// none when another was made meanwhile.
-    fn reserve_new(&self, name: &str, named: bool) -> Result<Option<Reservation>> {
-        let id = fresh_id()?;
-        let held = Held {
-            id: id.clone(),
-            named,
+    /// What [`Self::reserve`] would give, with nothing made: the reservation
+    /// of the add of `name`, or of the unnamed add, still under way; or a
+    /// free name with a new VM's identifier, for the person to be asked
+    /// about before it is [claimed](Self::claim).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::reserve`].
+    pub(in crate::vm) fn prospect(
+        &self,
+        name: Option<&str>,
+        listed: &[&str],
+    ) -> Result<Reservation> {
+        let fresh = |name: String, named: bool| -> Result<Reservation> {
+            Ok(Reservation {
+                name,
+                id: fresh_id()?,
+                named,
+                resumed: false,
+            })
         };
-        if !create(&self.names()?.join(name), &held)? {
-            return Ok(None);
+        let Some(name) = name else {
+            for (name, held) in self.reservations()? {
+                if !held.named && self.under_way(&held.id)? {
+                    return Ok(Reservation {
+                        name,
+                        id: held.id,
+                        named: false,
+                        resumed: true,
+                    });
+                }
+            }
+            let names = self.names()?;
+            let free = (1..=TRIES)
+                .map(unnamed)
+                .find(|name| !listed.contains(&name.as_str()) && !names.join(name).exists());
+            return match free {
+                Some(name) => fresh(name, false),
+                None => Err(Error::new(
+                    Code::Config,
+                    "Every name an unnamed VM takes is in use; name it with --name.",
+                )),
+            };
+        };
+        plain(name)?;
+        match self.held(name)? {
+            Some(held) if self.under_way(&held.id)? => Ok(Reservation {
+                name: name.to_owned(),
+                id: held.id,
+                named: held.named,
+                resumed: true,
+            }),
+            Some(_) => Err(Error::new(
+                Code::Config,
+                format!("There is already a VM named \"{name}\"."),
+            )
+            .with(
+                "next",
+                serde_json::json!(format!("Use another name, or remove {name} first.")),
+            )),
+            None if listed.contains(&name) => Err(Error::new(
+                Code::Config,
+                format!("The settings already list a desktop named \"{name}\"."),
+            )
+            .with("next", serde_json::json!("Use another name."))),
+            None => fresh(name.to_owned(), true),
         }
-        Ok(Some(Reservation {
-            name: name.to_owned(),
-            id,
-            named,
-            resumed: false,
-        }))
+    }
+
+    /// Make the reservation `prospect` ([`Self::prospect`]) names, for the
+    /// add the person allowed: one resumed must still be held for its VM,
+    /// still being added; a new one is made only where none is.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a name taken, or given up, since it was looked at; fails when
+    /// a reservation or a record cannot be read or made.
+    pub(in crate::vm) fn claim(&self, prospect: &Reservation) -> Result<Reservation> {
+        self.claimed(prospect)?.ok_or_else(|| {
+            Error::new(
+                Code::Config,
+                format!(
+                    "The name \"{}\" changed hands while you were asked; nothing was done. Ask \
+                     again.",
+                    prospect.name
+                ),
+            )
+        })
+    }
+
+    /// [`Self::claim`]: none when the name changed hands since `prospect`.
+    fn claimed(&self, prospect: &Reservation) -> Result<Option<Reservation>> {
+        if prospect.resumed {
+            let held = self.held(&prospect.name)?;
+            let still = match held {
+                Some(held) if held.id == prospect.id => self.under_way(&held.id)?,
+                _ => false,
+            };
+            return Ok(still.then(|| prospect.clone()));
+        }
+        let held = Held {
+            id: prospect.id.clone(),
+            named: prospect.named,
+        };
+        let made = create(&self.names()?.join(&prospect.name), &held)?;
+        Ok(made.then(|| prospect.clone()))
     }
 
     /// Whether the VM `id` is still being added: its record says so, or it
@@ -207,6 +230,28 @@ impl Lifecycle {
             Some(held) if held.id == *id => remove(&self.names()?.join(name)),
             _ => Ok(()),
         }
+    }
+}
+
+/// Refuse `name` unless it is a desktop name.
+fn plain(name: &str) -> Result<()> {
+    if atlas_core::config::desktops::plain_name(name) {
+        return Ok(());
+    }
+    Err(Error::new(
+        Code::BadRequest,
+        format!(
+            "\"{name}\" is not a desktop name: use 1 to 32 lowercase letters, digits and dashes"
+        ),
+    ))
+}
+
+/// The name an unnamed add tries `at`th: `vm`, then `vm-2` and on.
+fn unnamed(at: usize) -> String {
+    if at == 1 {
+        UNNAMED.to_owned()
+    } else {
+        format!("{UNNAMED}-{at}")
     }
 }
 

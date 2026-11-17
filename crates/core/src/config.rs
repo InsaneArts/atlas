@@ -541,7 +541,11 @@ pub(crate) fn resolve_parent(path: &Path) -> Result<PathBuf> {
 
 /// Resolve `path`, and its existing ancestors when it does not exist yet, so
 /// aliases of an absent socket share a lock.
-pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf> {
+///
+/// # Errors
+///
+/// Fails when neither it nor the folder holding it can be resolved.
+pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
         return fs::canonicalize(path).map_err(context("Resolve path", path));
     }

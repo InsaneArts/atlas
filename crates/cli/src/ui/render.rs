@@ -72,6 +72,10 @@ pub enum View {
     Switch,
     Update,
     Uninstall,
+    /// A desktop added.
+    DesktopAdd,
+    /// The desktops listed.
+    Desktops,
     Login,
     /// The menu bar asked to start: said only when it already ran, as one
     /// that starts tells the person itself.
@@ -146,6 +150,8 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Switch => checked(value, manage::switch),
         View::Update => manage::update(value),
         View::Uninstall => checked(value, manage::uninstall),
+        View::DesktopAdd => checked(value, manage::desktop_added),
+        View::Desktops => checked(value, manage::desktops),
         View::Login => checked(value, manage::login),
         View::Menubar => checked(value, manage::menubar),
         View::Monitor => checked(value, |_| manage::monitor()),

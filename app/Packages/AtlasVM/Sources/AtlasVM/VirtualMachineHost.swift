@@ -44,6 +44,11 @@ final class VirtualMachineHost: VMHost {
     await installer.install(change, request)
   }
 
+  /// Go on with an install already handed its secret.
+  func resumeInstall(_ change: ChangeID) async -> ChangeOutcome? {
+    await installer.resume(change)
+  }
+
   /// Take the station's word that its guest paired.
   func paired(install: ChangeID) async -> ChangeOutcome? {
     await installer.paired(install: install)

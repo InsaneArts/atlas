@@ -80,6 +80,10 @@ fn each_operation_is_asked_as_atlas_vm_reads_it() {
             },
             json!({"op": "closed", "change": change, "install": install}),
         ),
+        (
+            Operation::InstallResume(install.clone()),
+            json!({"op": "install-resume", "change": install}),
+        ),
     ];
     for (operation, request) in cases {
         assert_eq!(operation.request(), request, "{}", operation.name());

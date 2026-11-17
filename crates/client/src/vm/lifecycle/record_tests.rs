@@ -169,3 +169,52 @@ fn a_removal_that_deleted_the_passwords_but_left_the_enrolment_says_so() {
         }
     );
 }
+
+#[test]
+fn going_on_with_an_install_is_kept_as_that_install_and_refused_without_one() {
+    let (_home, lifecycle) = lifecycle();
+    let mut record = record(&lifecycle);
+    let (change, other) = (Token::new(), Token::new());
+    let install = Operation::Install {
+        change: change.clone(),
+        install: Install::new(
+            "/Applications/Atlas.app".into(),
+            Token::new(),
+            "the secret".into(),
+        ),
+    };
+    record.sending(&install).unwrap();
+
+    record
+        .sending(&Operation::InstallResume(change.clone()))
+        .unwrap();
+    let refused = record
+        .sending(&Operation::InstallResume(other))
+        .unwrap_err();
+
+    assert_eq!(record.operations.len(), 1);
+    assert_eq!(record.last_sent("install").unwrap().change, change);
+    assert!(refused.error.contains("No install"), "{}", refused.error);
+    let start = Operation::Start(Token::new());
+    record.sending(&start).unwrap();
+    assert_eq!(
+        record
+            .sending(&Operation::InstallResume(start.change().unwrap().clone()))
+            .unwrap_err()
+            .code,
+        Code::State
+    );
+}
+
+#[test]
+fn a_vms_state_is_read_without_making_any_folder() {
+    let (home, lifecycle) = lifecycle();
+    let id = DesktopId::parse("0123456789abcdef01234567").unwrap();
+
+    assert_eq!(lifecycle.state_of(&id).unwrap(), None);
+    assert!(!lifecycle.kept_any().unwrap());
+    assert!(!home.path().join("Library").exists());
+    let record = record(&lifecycle);
+    lifecycle.keep_record(&record).unwrap();
+    assert_eq!(lifecycle.state_of(&record.id).unwrap(), Some(State::Adding));
+}

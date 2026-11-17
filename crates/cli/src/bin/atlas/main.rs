@@ -238,6 +238,9 @@ fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Comm
         | Command::SessionInfo
         | Command::PermissionsInfo
         | Command::ElementsInfo { .. } => return,
+        // Adding and listing desktops read the settings themselves, and
+        // need none to be there.
+        Command::Desktop(_) => return,
         Command::Setup(_)
         | Command::Update(_)
         | Command::UpdateFinish

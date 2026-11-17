@@ -240,6 +240,12 @@ impl Policy {
                 View::Quiet,
             ),
             Command::Uninstall(_) => Self::passive(Local, Tools(Some("Stopped.")), View::Uninstall),
+            Command::Desktop(cli::Desktop::Add(_)) => Self::passive(
+                Local,
+                Prompt("Stopped. Run atlas desktop add vm again to go on."),
+                View::DesktopAdd,
+            ),
+            Command::Desktop(cli::Desktop::List) => Self::local(View::Desktops),
             Command::Agents { action } => Self::passive(
                 Agent,
                 Tools(Some("Stopped.")),

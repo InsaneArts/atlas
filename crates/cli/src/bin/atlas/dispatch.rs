@@ -336,6 +336,7 @@ async fn carry_out(
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => agents(config, host, action).await,
         Command::Uninstall(args) => super::uninstall::run(config, args).await,
+        Command::Desktop(asked) => desktop(config, asked).await,
         Command::Menubar(args) => menu_bar(config, client, args).await,
         Command::Switch(args) => switch(config, args),
         Command::Setup(args) => crate::user::setup::setup(config, client, args).await,
@@ -1000,6 +1001,44 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     // A VM desktop is refused here, with the words every command gives it.
     let config = Config::load(config)?;
     crate::user::switch::switch_on_this_mac(Some(&config.user()), args)
+}
+
+/// Add a desktop once the person allows it, each step said as it goes
+/// ([`said`]), or
+/// list the desktops of the settings at `config`. Both wait on files,
+/// launchd and Atlas VM, so they run off the runtime.
+async fn desktop(config: &Path, asked: cli::Desktop) -> Result<Value> {
+    let config = config.to_owned();
+    let done = match asked {
+        cli::Desktop::Add(cli::DesktopKind::Vm { name }) => {
+            as_yourself("desktop add vm")?;
+            tokio::task::spawn_blocking(move || {
+                atlas_client::vm::add::add(
+                    atlas_client::vm::add::Asked {
+                        name: name.as_deref(),
+                        settings: &config,
+                    },
+                    &said,
+                )
+            })
+            .await
+        }
+        cli::Desktop::List => {
+            tokio::task::spawn_blocking(move || atlas_client::vm::listing::list(&config)).await
+        }
+    };
+    done.map_err(|_| Error::new(Code::Interrupted, "The desktop command stopped."))?
+}
+
+/// Say one step of a long flow: a plain line for a person, and for programs
+/// a JSON line, both on standard error, so whoever watches it sees each
+/// step while the result keeps standard output to itself.
+fn said(line: &str) {
+    if atlas_cli::ui::human() {
+        atlas_cli::ui::progress::say(line);
+    } else {
+        eprintln!("{}", json!({"progress": line}));
+    }
 }
 
 /// Refuse `atlas <command>` run as root (with sudo): it would act for root's

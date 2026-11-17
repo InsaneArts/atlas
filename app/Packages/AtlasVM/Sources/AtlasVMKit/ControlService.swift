@@ -70,9 +70,42 @@ public actor ControlService {
       reply.change = change
       guard let record else { return reply }
       return await answered(record, in: reply)
+    case .installResume(let install):
+      guard !retiring else {
+        return .refused("Its runner is being replaced; ask again in a moment.", by: incarnation)
+      }
+      return await resume(install)
     case .create, .start, .stop, .window, .install, .paired, .closed, .forget:
       return await change(operation)
     }
+  }
+
+  /// Go on with the install `install`, asked again without its secret: an
+  /// install left pending alone, by this run or, once recovered, an earlier
+  /// one's. It is no change of its own: what it comes to is the install's.
+  private func resume(_ install: ChangeID) async -> ControlReply {
+    guard !forgetting else {
+      return .refused("This VM is being removed.", by: incarnation)
+    }
+    var reply = ControlReply.served(ControlOperation.installResume(install).name, by: incarnation)
+    reply.change = install
+    let kept: ChangeRecord?
+    do {
+      kept = try ledger.record(install)
+    } catch {
+      return .refused("What the change came to cannot be read.", by: incarnation)
+    }
+    guard let kept, case .install = kept.operation else {
+      return .refused("No install was asked with this ID.", by: incarnation)
+    }
+    guard kept.outcome == nil else { return await answered(kept, in: reply) }
+    guard kept.run == incarnation.id || lock != nil else {
+      return .refused("Its runner has not recovered yet; ask again in a moment.", by: incarnation)
+    }
+    guard !busy else {
+      return .refused("Another change is being done; ask again once it is.", by: incarnation)
+    }
+    return await go(on: kept, asked: .installResume(install), in: reply)
   }
 
   /// Give way to a newer build of this runner, as its program was replaced:
@@ -265,6 +298,9 @@ public actor ControlService {
       case .install(let change, let request):
         // Told by its own phases, and closed only on the station's word.
         return await host.install(change, request)
+      case .installResume(let install):
+        // No secret: the install was handed it already.
+        return await host.resumeInstall(install)
       case .paired(_, let install, let enrolment):
         // Only for the enrolment that install was asked for.
         guard let kept = try? ledger.record(install), case .install(_, let request) = kept.operation,
@@ -304,7 +340,7 @@ public actor ControlService {
     case .window(_, let input):
       // Off only once it is seen gone.
       return await host.windowOpen() == input ? .done : refusal
-    case .install, .paired, .closed, .forget:
+    case .install, .installResume, .paired, .closed, .forget:
       // Told only by doing it, or by the station's word.
       return nil
     }
@@ -347,7 +383,7 @@ public actor ControlService {
       guard vmGone else { return nil }
       // No window of that run's is left: off holds, on does not.
       return input ? .refused("Its runner went; its window is closed.") : .done
-    case .install, .paired, .closed, .forget:
+    case .install, .installResume, .paired, .closed, .forget:
       // Asked again by the station, which goes on with it.
       return nil
     }

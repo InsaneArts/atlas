@@ -17,6 +17,10 @@ public enum ControlOperation: Equatable, Sendable {
   case window(ChangeID, input: Bool)
   /// Put Atlas inside the VM's guest.
   case install(ChangeID, InstallRequest)
+  /// Go on with the install of this change, already handed its secret,
+  /// asked again without it: as far as its close, the guest account taken
+  /// out of the administrators and Remote Login turned off again.
+  case installResume(ChangeID)
   /// The station's word that the guest of the install change `install`
   /// paired for `enrolment`.
   case paired(ChangeID, install: ChangeID, enrolment: String)
@@ -34,7 +38,8 @@ public enum ControlOperation: Equatable, Sendable {
     case .hello, .state, .outcome:
       nil
     case .create(let change), .start(let change), .stop(let change), .window(let change, _),
-      .install(let change, _), .paired(let change, _, _), .closed(let change, _), .forget(let change):
+      .install(let change, _), .installResume(let change), .paired(let change, _, _), .closed(let change, _),
+      .forget(let change):
       change
     }
   }
@@ -50,6 +55,7 @@ public enum ControlOperation: Equatable, Sendable {
     case .stop: "stop"
     case .window: "window"
     case .install: "install"
+    case .installResume: "install-resume"
     case .paired: "paired"
     case .closed: "closed"
     case .forget: "forget"
@@ -117,6 +123,8 @@ extension ControlOperation: Codable {
       self = .stop(try fields.decode(ChangeID.self, forKey: .change))
     case "forget":
       self = .forget(try fields.decode(ChangeID.self, forKey: .change))
+    case "install-resume":
+      self = .installResume(try fields.decode(ChangeID.self, forKey: .change))
     case "window":
       self = .window(
         try fields.decode(ChangeID.self, forKey: .change),
@@ -158,7 +166,8 @@ extension ControlOperation: Codable {
     switch self {
     case .hello, .state:
       break
-    case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change):
+    case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change),
+      .installResume(let change):
       try fields.encode(change, forKey: .change)
     case .window(let change, let input):
       try fields.encode(change, forKey: .change)
