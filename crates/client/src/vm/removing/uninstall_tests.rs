@@ -121,6 +121,8 @@ fn the_inventory_finds_listed_kept_only_and_lifecycle_only_vms_and_removes_each(
     world.vm("third", THIRD, State::Adding, false);
     world.runner_forgets();
     let before = world.read_settings();
+    let (_, second_login) = crate::vm::removal::tests::left_state(world.home.path(), &id(WORK));
+    crate::vm::removal::tests::left_state(world.home.path(), &id(SPARE));
 
     assert_eq!(pending_of(&world), Pending::Ask);
     let (removed, _) = uninstall(&world);
@@ -145,7 +147,18 @@ fn the_inventory_finds_listed_kept_only_and_lifecycle_only_vms_and_removes_each(
         let recorded = removal::recorded(&world.vms, &id(vm)).unwrap().unwrap();
         assert!(recorded.done, "{vm}");
         assert_eq!(recorded.change, change(), "under the uninstall's change");
+        let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: id(vm) });
+        assert!(
+            crate::vm::removal::tests::state_of(world.home.path(), &vm).is_empty(),
+            "{vm:?}'s controller state forgotten"
+        );
     }
+    let user = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 });
+    assert_eq!(
+        crate::vm::removal::tests::state_of(world.home.path(), &user),
+        second_login,
+        "never another desktop's"
+    );
     assert!(world.names().is_empty());
     assert_eq!(world.grants.get(), 1);
     assert_eq!(

@@ -1,13 +1,13 @@
 //! The stand-in's lanes: each connection the station dials across the link
 //! is authenticated, admitted in one generation and answered once.
 use super::{
-    Controlling, Live, StandIn,
+    Asked, Controlling, Live, StandIn,
     link::{Connection, Link, Tasks},
     station_control,
 };
 use crate::{
     keys::Keypair,
-    lane::{Header, Lanes, Opener, read_header},
+    lane::{Header, LaneKind, Lanes, Opener, read_header},
     secure::{Purpose, connect_as_guest},
     station::{Desktop, Dial, Dialing, Peers, Raw},
 };
@@ -16,7 +16,7 @@ use atlas_core::{
     session::key::PeerKey,
 };
 use serde_json::Value;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, atomic::Ordering::SeqCst};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 /// The longest request a stand-in lane reads.
@@ -24,7 +24,8 @@ const REQUEST: u64 = 1 << 20;
 
 /// How the stand-in answers a request, given its lane's header. A null
 /// answer is none: the lane stays open and says nothing, as a stalled
-/// guest's would, until the stand-in goes.
+/// guest's would, until the stand-in goes. A list is the answer's lines,
+/// said in order.
 pub type Answer = Arc<dyn Fn(&Header, Value) -> Value + Send + Sync>;
 
 /// The station's way to the stand-in across a link, in one generation.
@@ -114,15 +115,88 @@ where
         .read_until(b'\n', &mut line)
         .await
         .map_err(io)?;
-    let request = serde_json::from_slice(&line)?;
-    let answered = answer(&header, request);
+    let request: Value = serde_json::from_slice(&line)?;
+    let answered = match &header.kind {
+        LaneKind::Change { change } => match stand_in.ask(change) {
+            Asked::Begun => {
+                let Some(reply) = carried_out(stand_in, lanes, &header, request, answer).await
+                else {
+                    return Ok(());
+                };
+                reply
+            }
+            Asked::Again(Some(reply)) => reply,
+            Asked::Again(None) => serde_json::json!({"ok": false, "code": "uncertain",
+                "error": "This change was asked for before, and what it came to is unknown",
+                "uncertain": true}),
+        },
+        LaneKind::Read if request["op"] == "outcome" => {
+            let kept = request["change"]
+                .as_str()
+                .and_then(atlas_core::files::Token::parse)
+                .and_then(|change| stand_in.outcome(&change));
+            match kept {
+                Some(outcome) => outcome,
+                None => answer(&header, request),
+            }
+        }
+        _ => answer(&header, request),
+    };
     if answered.is_null() {
         return std::future::pending().await;
     }
-    let mut reply = serde_json::to_vec(&answered)?;
-    reply.push(b'\n');
-    secure.write_all(&reply).await.map_err(io)?;
+    // A list is its lines in order: events first, its final reply last.
+    let lines = match answered {
+        Value::Array(lines) => lines,
+        one => vec![one],
+    };
+    for line in lines {
+        let mut reply = serde_json::to_vec(&line)?;
+        reply.push(b'\n');
+        secure.write_all(&reply).await.map_err(io)?;
+    }
     secure.shutdown().await.map_err(io)
+}
+
+/// Carry out the change on the lane `header` opened, as `answer` answers
+/// it: held first while the stand-in holds changes, ended as cancelled
+/// when its lane is cancelled meanwhile, and kept as what it came to
+/// before it is answered. None when no reply goes: it was cancelled, or
+/// the stand-in drops this one.
+async fn carried_out(
+    stand_in: &StandIn,
+    lanes: &Lanes,
+    header: &Header,
+    request: Value,
+    answer: &Answer,
+) -> Option<Value> {
+    let LaneKind::Change { change } = &header.kind else {
+        return Some(answer(header, request));
+    };
+    while stand_in.holding.load(SeqCst) {
+        if lanes.cancelled(header.lane) {
+            let cancelled = serde_json::json!({"ok": false, "code": "cancelled",
+                "error": "The change was cancelled"});
+            stand_in.done(change, &cancelled);
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let reply = answer(header, request);
+    if reply.is_null() {
+        return Some(reply);
+    }
+    // Kept as its final reply, the last of its lines.
+    let last = reply
+        .as_array()
+        .and_then(|lines| lines.last())
+        .unwrap_or(&reply);
+    stand_in.done(change, last);
+    let dropped = stand_in
+        .dropping
+        .fetch_update(SeqCst, SeqCst, |left| left.checked_sub(1))
+        .is_ok();
+    (!dropped).then_some(reply)
 }
 
 fn io(error: std::io::Error) -> Error {

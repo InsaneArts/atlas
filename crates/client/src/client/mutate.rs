@@ -6,9 +6,11 @@ use super::{
     record::{NOT_RECORDED, recorded_code},
     run::RUN_MARGIN,
 };
-use atlas_control::{Lease, Ownership, Pending, SharedLease};
+use crate::link::Route;
+use atlas_control::{Lease, Ownership, Pending, SharedLease, executors::Executor};
 use atlas_core::{
     actions::{Batch, Expect, Verification},
+    desktop::Kind,
     error::{Code, Error, Result},
     files::Token,
     outcomes::Outcome,
@@ -21,12 +23,18 @@ use atlas_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 use tokio::sync::MutexGuard;
 
 /// How long a service is given to say what a change came to, once its
 /// reply was lost.
 const OUTCOME_WAIT: Duration = Duration::from_secs(2);
+/// How long a VM's guest is given, through its keeper and a lane of its
+/// own, to say what a change came to once its reply was lost.
+const KEPT_OUTCOME_WAIT: Duration = Duration::from_secs(10);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -288,6 +296,11 @@ impl Client {
             release.is_none() || matches!(mutation, Mutation::Run { .. }),
             "only a command started with run lets go of control while it runs"
         );
+        // A VM's changes go through its keeper: only a command for now,
+        // which `mutate_vm` carries.
+        if let Kind::Vm(_) = self.desktop().kind() {
+            return Err(self.unreachable());
+        }
         self.reachable()?;
         let started = Instant::now();
         self.controller.interrupt().check()?;
@@ -338,8 +351,15 @@ impl Client {
         drop(release);
 
         let reply = if agent_command {
-            self.run_to_its_end(sent, &request, command, &mut claim, started)
-                .await
+            self.run_to_its_end(
+                sent.finish(),
+                (&mutation, &change),
+                &request,
+                command,
+                &mut claim,
+                started,
+            )
+            .await
         } else {
             self.answer_or_ask(sent, &mutation, &change, started).await
         };
@@ -506,13 +526,8 @@ impl Client {
         }
     }
 
-    /// [`Client::answer`] to `mutation`, sent under the name `change`. When
-    /// its reply never arrives whole, the service that took it is asked
-    /// what the change came to, and a reply it remembers stands for the one
-    /// that was lost, with the time since `started` for how long it took;
-    /// anything else it says leaves the loss as it was. A reply that
-    /// arrived and was wrong is never asked for again, and a signal's stop
-    /// cuts the question as it cuts the wait.
+    /// [`Client::answer`] to `mutation`, sent under the name `change`, as
+    /// [`Client::answer_or_ask_for`] says.
     async fn answer_or_ask(
         &self,
         sent: transport::Pending,
@@ -520,32 +535,74 @@ impl Client {
         change: &Token,
         started: Instant,
     ) -> Result<Value> {
+        self.answer_or_ask_for(sent.finish(), (mutation, change), started)
+            .await
+    }
+
+    /// [`Client::answer`] to the change `asked` names, its `reply` to come.
+    /// When that reply never arrives whole, the service that took it is
+    /// asked what the change came to, and a reply it remembers stands for
+    /// the one that was lost, with the time since `started` for how long it
+    /// took; anything else it says leaves the loss as it was. A reply that
+    /// arrived and was wrong is never asked for again, and a signal's stop
+    /// cuts the question as it cuts the wait.
+    async fn answer_or_ask_for(
+        &self,
+        reply: impl Future<Output = Result<Value>>,
+        asked: (&Mutation<'_>, &Token),
+        started: Instant,
+    ) -> Result<Value> {
         let interrupt = self.controller.interrupt();
-        let answered = async {
-            match sent.finish().await {
-                Err(lost) if transport::reply_lost(&lost) => {
-                    let Some(mut reply) = self.remembered(mutation, change).await else {
-                        return Err(lost);
-                    };
-                    reply["elapsedMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
-                    Ok(reply)
-                }
-                reply => reply,
-            }
-        };
         tokio::select! {
             biased;
-            reply = answered => reply,
+            reply = self.answered_or_asked(reply, asked, started) => reply,
             signal = interrupt.cut() => Err(interrupt.cut_short(signal)),
         }
     }
 
+    /// `reply`, or what the service remembers of the change `asked` names
+    /// once that reply was lost, as [`Client::answer_or_ask`] says.
+    async fn answered_or_asked(
+        &self,
+        reply: impl Future<Output = Result<Value>>,
+        (mutation, change): (&Mutation<'_>, &Token),
+        started: Instant,
+    ) -> Result<Value> {
+        match reply.await {
+            Err(lost) if transport::reply_lost(&lost) => {
+                let Some(mut reply) = self.remembered(mutation, change).await else {
+                    return Err(lost);
+                };
+                reply["elapsedMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+                Ok(reply)
+            }
+            reply => reply,
+        }
+    }
+
     /// The final reply the service `mutation` went to remembers for
-    /// `change`, when it remembers one. A command started with `run` is
-    /// never asked about: its reply is its output and the group it started,
-    /// which no remembered reply holds, and the helper ends it when its
-    /// connection goes.
+    /// `change`, when it remembers one. A command started with `run` in the
+    /// helper login is never asked about: its reply is its output and the
+    /// group it started, which no remembered reply holds, and the helper
+    /// ends it when its connection goes. A VM's guest keeps a command's
+    /// reply with what it printed, says `outputTruncated` when that was cut,
+    /// and a reply it kept without it says its output is unavailable.
     async fn remembered(&self, mutation: &Mutation<'_>, change: &Token) -> Option<Value> {
+        let asking = json!({"op": "outcome", "change": change});
+        if let Kind::Vm(_) = self.desktop().kind() {
+            // Asked in whatever generation is live: the guest's disk keeps it.
+            let link = self.link.clone().with_timeout(KEPT_OUTCOME_WAIT);
+            let mut reply = Outcome::remembered(&link.call(&asking).await.ok()?)?;
+            if matches!(mutation, Mutation::Run { .. }) {
+                match reply["truncated"].as_bool() {
+                    None => reply["output"] = json!("unavailable"),
+                    // Said in the word a command's reply always cuts by.
+                    Some(true) => reply["outputTruncated"] = json!(true),
+                    Some(false) => {}
+                }
+            }
+            return Some(reply);
+        }
         match mutation {
             Mutation::Run { .. } => return None,
             Mutation::Input { .. }
@@ -556,22 +613,21 @@ impl Client {
         }
         let mut transport = self.transport_for(mutation).ok()?;
         transport.timeout = OUTCOME_WAIT;
-        let answer = transport
-            .call(&json!({"op": "outcome", "change": change}))
-            .await
-            .ok()?;
+        let answer = transport.call(&asking).await.ok()?;
         Outcome::remembered(&answer)
     }
 
-    /// The reply to an agent's sent command, which is written as started
-    /// first. It runs until it ends, unless the person stops agents: then
-    /// the connection is dropped, which ends the command in the helper. What
-    /// it did by then is unknown, so it stays pending. A command that
-    /// started ends with a row too, however it ends. A signal's stop cuts a
-    /// command still unanswered after its grace the same way.
+    /// The reply to an agent's sent command, `reply` to come, which is
+    /// written as started first. It runs until it ends, unless the person
+    /// stops agents: then the connection is dropped, which ends the command
+    /// in the helper. What it did by then is unknown, so it stays pending. A
+    /// command that started ends with a row too, however it ends. A signal's
+    /// stop cuts a command still unanswered after its grace the same way. A
+    /// reply lost on its way from a VM is asked for, as the guest keeps it.
     async fn run_to_its_end(
         &self,
-        sent: transport::Pending,
+        reply: impl Future<Output = Result<Value>>,
+        asked: (&Mutation<'_>, &Token),
         request: &Value,
         command: bool,
         claim: &mut Option<Pending>,
@@ -581,9 +637,9 @@ impl Client {
         let _ = self.record_start(request).await;
         let ended = tokio::select! {
             biased;
-            reply = sent.finish() => reply,
+            reply = self.answered_or_asked(reply, asked, started) => reply,
             () = self.stopped_while_running() => {
-                Err(Error::stopped().uncertain())
+                Err(self.stopped().uncertain())
             }
             signal = interrupt.cut() => Err(interrupt.cut_short(signal)),
         };
@@ -607,7 +663,9 @@ impl Client {
     /// Settle `request` once its `reply` is confirmed: a command whose
     /// helper could not say what it did is unknown from here, before its row
     /// is written, and any other outcome the helper is sure of clears its
-    /// claim. What could not be cleared or recorded is said in warnings.
+    /// claim. A VM's guest is told once its claim is cleared, never before:
+    /// what its command left is the guest's own to keep. What could not be
+    /// cleared or recorded is said in warnings.
     async fn settle(
         &self,
         request: &Value,
@@ -621,6 +679,7 @@ impl Client {
         if unknown && let Some(claim) = claim.take() {
             self.controller.abandon_command(claim);
         }
+        let vm = matches!(self.desktop().kind(), Kind::Vm(_));
 
         let mut warnings = Vec::new();
         // Any command run in the helper under a claim (an agent's own, an
@@ -629,6 +688,7 @@ impl Client {
         // signs in beside it. Work that can't be noted keeps the claim, as
         // an unknown outcome, until a later look notes it or finds it ended.
         if request["op"] == "run"
+            && !vm
             && reply["uncertain"] != true
             && let Some(group) = started_group(&reply)
             && let Err(error) = self.controller.note_run_group(group)
@@ -643,11 +703,19 @@ impl Client {
         }
         if let Some(claim) = &claim
             && reply["uncertain"] != true
-            && let Err(error) = self.controller.clear_if(claim)
         {
-            warnings.push(format!(
-                "Operation completed, but its pending marker could not be cleared: {error}"
-            ));
+            match self.controller.clear_if(claim) {
+                // Said only to a guest that may have heard of it.
+                Ok(()) if vm && reply["sent"] != false => {
+                    if let Some(change) = Token::parse(claim.generation()) {
+                        self.settle_guest(&[change]).await;
+                    }
+                }
+                Ok(()) => {}
+                Err(error) => warnings.push(format!(
+                    "Operation completed, but its pending marker could not be cleared: {error}"
+                )),
+            }
         }
 
         if self
@@ -664,6 +732,145 @@ impl Client {
 
         Ok(reply)
     }
+
+    /// [`Client::mutate`] on a VM, in the generation `generation` of its
+    /// keeper's session its command's proof was taken in: only a command
+    /// for now, claimed as the guest's before anything goes, said through
+    /// its keeper, and settled with the guest once its claim is cleared.
+    /// Anything else is refused before it is claimed.
+    pub(crate) async fn mutate_vm(
+        &self,
+        mutation: &Mutation<'_>,
+        generation: u64,
+        release: Option<Ownership>,
+    ) -> Result<Value> {
+        self.reachable()?;
+        let (Kind::Vm(_), Mutation::Run { timeout, .. }) = (self.desktop().kind(), mutation) else {
+            return Err(self.unreachable());
+        };
+        let started = Instant::now();
+        self.controller.interrupt().check()?;
+        let command = release.is_some();
+        let agent = self.actor == Actor::Agent && self.doing.is_some();
+        if agent && self.stop_marked() {
+            return Err(self.stopped());
+        }
+        let change = Token::new();
+        let claim = if command {
+            self.controller
+                .quarantine_command_by(change.as_str(), Executor::Guest)?
+        } else {
+            self.controller
+                .quarantine_by(change.as_str(), Executor::Guest)?
+        };
+        let mut request = mutation.request();
+        request["change"] = json!(change);
+        let link = self
+            .link
+            .clone()
+            .with_timeout(self.link.timeout().max(*timeout + RUN_MARGIN));
+        let sent = self
+            .send_change(&link, &change, &request, generation, &claim)
+            .await
+            .map_err(|error| self.pending_on_vm(error))?;
+        // As for the helper login: control goes once the request is sent.
+        drop(release);
+
+        let mut claim = Some(claim);
+        let asked = (mutation, &change);
+        let reply = if agent {
+            self.run_to_its_end(
+                through_keeper(sent),
+                asked,
+                &request,
+                command,
+                &mut claim,
+                started,
+            )
+            .await
+        } else {
+            self.answer_or_ask_for(through_keeper(sent), asked, started)
+                .await
+        };
+        let reply = reply.map_err(|error| self.pending_on_vm(error))?;
+        mutation.validate(&reply)?;
+        let mut reply = self
+            .settle(&request, reply, command, claim, started)
+            .await?;
+        if reply["ok"] == false && reply["uncertain"] == true && reply.get("next").is_none() {
+            reply["next"] = json!(self.kept_pending());
+        }
+        Ok(reply)
+    }
+
+    /// `error`, of a change to this VM that may or may not have happened,
+    /// with what an agent does about it there: the helper's own advice
+    /// (a screenshot and a restart) is refused on a VM.
+    fn pending_on_vm(&self, error: Error) -> Error {
+        if !error.uncertain || error.details.contains_key("next") {
+            return error;
+        }
+        let next = self.kept_pending();
+        error.with("next", json!(next))
+    }
+
+    /// What an agent does about a change to this VM whose outcome is not
+    /// known.
+    fn kept_pending(&self) -> String {
+        let name = &self.selected.name;
+        format!(
+            "It may or may not have happened, so don't repeat it. It stays pending until {name} \
+             answers what it came to; atlas --desktop {name} status shows it."
+        )
+    }
+
+    /// Send `request`, the change `change`, through `link`'s keeper in
+    /// `generation`: connected first, which a signal's stop cuts; then sent,
+    /// the last moment a stop refuses it. Its `claim` is settled whenever
+    /// it is not sent.
+    async fn send_change(
+        &self,
+        link: &crate::link::Link,
+        change: &Token,
+        request: &Value,
+        generation: u64,
+        claim: &Pending,
+    ) -> Result<transport::Pending<crate::link::Stream>> {
+        let interrupt = self.controller.interrupt();
+        let route = Route::Change(change.clone());
+        let connected = tokio::select! {
+            biased;
+            connected = link.connect_change(&route, request, generation) => connected,
+            signal = interrupt.cut() => Err(interrupt.cut_short(signal).certain()),
+        };
+        let sent = match connected {
+            Ok((connection, asked)) => {
+                let _sending = interrupt.sending();
+                match interrupt.check() {
+                    Ok(()) => connection.dispatch(&asked).await,
+                    Err(stop) => Err(stop),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = &sent
+            && !error.uncertain
+        {
+            self.controller.clear_if(claim)?;
+        }
+        sent
+    }
+}
+
+/// The reply to a change `sent` through a VM's keeper: the keeper's own word
+/// that the guest's reply did not come whole is a reply lost on its way, and
+/// what the change came to may be asked of the guest.
+async fn through_keeper(sent: transport::Pending<crate::link::Stream>) -> Result<Value> {
+    let reply = sent.finish().await?;
+    if reply["ok"] == false && reply["sent"] == true && reply["uncertain"] == true {
+        return Err(transport::lost_reply(transport::refusal(&reply)));
+    }
+    Ok(reply)
 }
 
 /// The process group of the command a `run` reply is of: the PID its

@@ -246,9 +246,15 @@ async fn execute_with(
     }
 
     // The person's stop refuses an agent's change at its start; one already
-    // under way is the input service's to cut off.
+    // under way is the input service's to cut off. On a VM, only the changes
+    // this build makes there are let through, so every other is refused in
+    // the one wording before any Stop is read.
     if policy.changes_helper() {
-        client()?.require_going().await?;
+        let client = client()?;
+        if !changes_on_vm(&command) {
+            client.second_login_only()?;
+        }
+        client.require_going().await?;
     }
 
     let result = carry_out(config, command, client, host, allow_disrupt).await;
@@ -262,6 +268,11 @@ async fn execute_with(
     // A refusal that can name the other session, or say whose an unknown
     // outcome is, says so.
     host_session::explain::reply(result, || client().ok(), host)
+}
+
+/// Whether `command` is a change this build makes on a VM desktop.
+fn changes_on_vm(command: &Command) -> bool {
+    matches!(command, Command::Run(_))
 }
 
 /// Note what a command of `kind`, doing `doing`, left for its session to

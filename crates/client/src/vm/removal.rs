@@ -359,10 +359,33 @@ pub(super) fn removed(
                 "launchd has not let the VM's session keeper go yet.",
             ));
         }
+        forget_control(vms, desktop, &record)?;
         record.step = Step::Done;
         keep(vms, &marker, &record)?;
     }
     Ok(answer(desktop, &record))
+}
+
+/// The VM's controller state forgotten, its last step before its record
+/// says done: what its agents' changes and Stops left in Atlas's state
+/// folder went with the VM and its work. A removal that kept a folder in
+/// its places, or left a Keychain item, leaves that state too.
+///
+/// # Errors
+///
+/// Busy while a command still holds the VM's control; fails when its state
+/// cannot be removed: the removal goes on when asked again.
+fn forget_control(vms: &Vms, desktop: &DesktopId, record: &Record) -> Result<()> {
+    let left = !record.kept.is_empty()
+        || record.passwords.values().any(|became| became == LEFT)
+        || record.enrolment.as_deref() == Some(LEFT);
+    if left {
+        return Ok(());
+    }
+    let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm {
+        id: desktop.clone(),
+    });
+    atlas_control::Controller::in_home(&vm, &vms.home).forget()
 }
 
 /// The agent's plist removed first, so a bootstrap still on its way has
@@ -664,4 +687,4 @@ fn keep(vms: &Vms, marker: &Path, record: &Record) -> Result<()> {
 
 #[cfg(test)]
 #[path = "removal_tests.rs"]
-mod tests;
+pub(super) mod tests;

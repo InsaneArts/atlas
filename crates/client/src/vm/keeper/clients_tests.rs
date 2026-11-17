@@ -13,20 +13,20 @@ impl Admit for Admitting {
 
 /// A keeper live with its guest and answering clients on a socket of its
 /// own: its fixture, its socket and its Resume capability.
-struct Serving {
-    fixture: Fixture,
-    socket: std::path::PathBuf,
+pub(in crate::vm::keeper) struct Serving {
+    pub(in crate::vm::keeper) fixture: Fixture,
+    pub(in crate::vm::keeper) socket: std::path::PathBuf,
     capability: String,
     _folder: tempfile::TempDir,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
-async fn serving(admitted: bool) -> Serving {
+pub(in crate::vm::keeper) async fn serving(admitted: bool) -> Serving {
     serving_with(admitted, false).await
 }
 
 /// [`serving`], its guest an older one that acknowledges nothing when `plain`.
-async fn serving_with(admitted: bool, plain: bool) -> Serving {
+pub(in crate::vm::keeper) async fn serving_with(admitted: bool, plain: bool) -> Serving {
     let fixture = fixture();
     fixture.guest.standin.plain.store(plain, SeqCst);
     let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
@@ -52,7 +52,7 @@ async fn serving_with(admitted: bool, plain: bool) -> Serving {
 }
 
 /// Every line the keeper answers `request` with, until it closes.
-async fn asked(socket: &Path, request: &Value) -> Vec<Value> {
+pub(in crate::vm::keeper) async fn asked(socket: &Path, request: &Value) -> Vec<Value> {
     let mut stream = UnixStream::connect(socket).await.unwrap();
     let mut line = serde_json::to_vec(request).unwrap();
     line.push(b'\n');
@@ -198,13 +198,13 @@ async fn a_read_is_carried_on_a_lane_of_the_live_generation() {
 
     let answered = asked(
         &serving.socket,
-        &json!({"op": "read", "request": {"op": "elements", "app": "Notes"}, "deadline_ms": 5000}),
+        &json!({"op": "read", "request": {"op": "outcome", "change": "ab"}, "deadline_ms": 5000}),
     )
     .await;
 
     assert_eq!(
         answered,
-        [json!({"ok": true, "echo": {"op": "elements", "app": "Notes"}})]
+        [json!({"ok": true, "echo": {"op": "outcome", "change": "ab"}})]
     );
 }
 
@@ -213,7 +213,7 @@ async fn a_read_pinned_to_a_generation_is_carried_only_in_that_generation() {
     let serving = serving(true).await;
     let live = serving.fixture.keeper.shared.state().generation.unwrap().0;
     let read = |generation: Value| {
-        json!({"op": "read", "request": {"op": "elements"}, "generation": generation,
+        json!({"op": "read", "request": {"op": "outcome"}, "generation": generation,
             "deadline_ms": 5000})
     };
 
@@ -222,7 +222,7 @@ async fn a_read_pinned_to_a_generation_is_carried_only_in_that_generation() {
     let earlier = asked(&serving.socket, &read(json!(live - 1))).await;
     let malformed = asked(&serving.socket, &read(json!("live"))).await;
 
-    assert_eq!(carried, [json!({"ok": true, "echo": {"op": "elements"}})]);
+    assert_eq!(carried, [json!({"ok": true, "echo": {"op": "outcome"}})]);
     for refused in [&stale, &earlier] {
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert_eq!(refused[0]["code"], "session-changed", "{refused:?}");
@@ -246,7 +246,7 @@ async fn a_read_pinned_to_a_generation_that_ended_is_refused_in_the_next() {
 
     let refused = asked(
         &serving.socket,
-        &json!({"op": "read", "request": {"op": "elements"}, "generation": first}),
+        &json!({"op": "read", "request": {"op": "outcome"}, "generation": first}),
     )
     .await;
 
@@ -422,7 +422,10 @@ impl crate::link::Trust for Trusting {
 
 /// A client of the VM `serving` keeps, reaching it through its socket, its
 /// Stop the keeper's own.
-fn client_of(serving: &Serving, directory: &Path) -> crate::client::Client {
+pub(in crate::vm::keeper) fn client_of(
+    serving: &Serving,
+    directory: &Path,
+) -> crate::client::Client {
     client_within(serving, directory, Duration::from_secs(10))
 }
 
@@ -463,12 +466,18 @@ async fn a_vms_status_through_its_keeper_says_both_hellos_and_is_never_proven() 
         crate::overview::overview(&doctor, false, crate::overview::Pending::default(), &[], 0)
             .value;
     assert_eq!(shown["mode"], "stopped");
-    for refused in [
-        client.identity().await.unwrap_err(),
-        client.link.call(&json!({"op": "hello"})).await.unwrap_err(),
-    ] {
-        assert_eq!(refused.error, client.unreachable().error);
-    }
+    let unproven = client.identity().await.unwrap_err();
+    assert_eq!(unproven.error, client.unreachable().error, "{unproven:?}");
+    assert_eq!(
+        client
+            .link
+            .call(&json!({"op": "apps"}))
+            .await
+            .unwrap_err()
+            .error,
+        client.unreachable().error,
+        "a read the keeper does not carry"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -488,7 +497,7 @@ async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
         status["notReady"]
             .as_str()
             .unwrap()
-            .contains("cannot act on a VM yet"),
+            .contains("cannot see or use its screen yet"),
         "{status}"
     );
     let proof = &status["proof"];
@@ -506,7 +515,7 @@ async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
     assert_eq!(
         client.identity().await.unwrap_err().error,
         client.unreachable().error,
-        "nothing but status and doctor proves it"
+        "only a command this build runs on a VM proves it"
     );
 }
 

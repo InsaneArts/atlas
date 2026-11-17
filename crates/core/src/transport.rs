@@ -464,6 +464,13 @@ fn lost(mut failure: Error) -> Error {
     failure.uncertain().with_source(ReplyLost(cause))
 }
 
+/// `failure`, a reply some relay could not carry whole, as one that never
+/// arrived: of unknown outcome, so its peer may be asked what it came to.
+#[must_use]
+pub fn lost_reply(failure: Error) -> Error {
+    lost(failure)
+}
+
 /// Whether `failure` is of a reply that never arrived whole, rather than
 /// one that arrived and was wrong.
 pub fn reply_lost(failure: &Error) -> bool {
@@ -606,6 +613,11 @@ fn output_prefix(reply: &Value, limit: usize) -> Option<Vec<u8>> {
 /// past 1 MiB is cut and said to be (`outputTruncated`). Events
 /// stay only when they could not be decoded.
 pub fn with_output(mut reply: Value) -> Value {
+    // A reply recovered without what the command printed says so, never
+    // that it printed nothing.
+    if reply["output"] == "unavailable" {
+        return reply;
+    }
     let (output, cut) = match run_output(&reply, OUTPUT_LIMIT) {
         Ok(output) => (output, false),
         Err(OutputError::Oversized) => match output_prefix(&reply, OUTPUT_LIMIT) {

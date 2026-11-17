@@ -71,12 +71,28 @@ type AskShown = Arc<dyn Fn(&str) + Send + Sync>;
 pub(crate) struct Verified {
     session: Session,
     observation: Observation,
+    /// A VM's session as its proof pinned it; none for Second Login.
+    machine: Option<Pinned>,
+}
+
+/// A VM's session as one command proved it: its epoch, and the generation of
+/// its keeper's session the proof was taken in, which every change the
+/// command makes carries.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Pinned {
+    pub(crate) epoch: atlas_core::session::MachineEpoch,
+    pub(crate) generation: u64,
 }
 
 impl Verified {
     /// The session as it was verified.
     pub(crate) fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// A VM's session as its proof pinned it; none for Second Login.
+    pub(crate) fn machine(&self) -> Option<&Pinned> {
+        self.machine.as_ref()
     }
 
     /// Whether the input service that answered this verification offers
@@ -88,6 +104,14 @@ impl Verified {
     /// What a read carries to be served only in this session. A daemon that
     /// cannot be told is refused, so no read goes unpinned.
     pub(crate) fn pin(&self) -> Result<SessionPin> {
+        // A VM's guest holds every read and change to the session its proof
+        // names.
+        if let Some(machine) = &self.machine {
+            return Ok(SessionPin {
+                security_session_id: machine.epoch.security_session_id,
+                display_id: machine.epoch.display_id,
+            });
+        }
         if !self.observation.has_capability(SESSION_PIN) {
             return Err(Error::new(
                 Code::Daemon,
@@ -276,13 +300,33 @@ impl Client {
         }
     }
 
-    /// Refuse a VM desktop before anything is read or sent: this build
-    /// cannot reach one yet.
+    /// Refuse a VM desktop before anything is read or sent, unless it is
+    /// added and its keeper is reached: each command on it is then admitted
+    /// on its own checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Client::unreachable`] for a VM desktop still being added,
+    /// or whose keeper this client does not reach.
+    pub fn reachable(&self) -> Result<()> {
+        match self.desktop().kind() {
+            Kind::User(_) => Ok(()),
+            Kind::Vm(_)
+                if self.admission() == Admission::Open && matches!(self.link, Link::Keeper(_)) =>
+            {
+                Ok(())
+            }
+            Kind::Vm(_) => Err(self.unreachable()),
+        }
+    }
+
+    /// Refuse a VM desktop before anything is read or sent, for what this
+    /// build does on a Second Login alone.
     ///
     /// # Errors
     ///
     /// Returns [`Client::unreachable`] for a VM desktop.
-    pub fn reachable(&self) -> Result<()> {
+    pub fn second_login_only(&self) -> Result<()> {
         match self.desktop().kind() {
             Kind::User(_) => Ok(()),
             Kind::Vm(_) => Err(self.unreachable()),
@@ -519,12 +563,16 @@ impl Client {
     /// session are checked by. It verifies the helper as
     /// [`Client::identity`] does.
     pub(crate) async fn verify(&self) -> Result<Verified> {
-        self.reachable()?;
+        // What this build does on a VM verifies it through its own path,
+        // `verify_vm`: everything else is refused here, before anything is
+        // asked of it, in the one wording.
+        self.second_login_only()?;
         let observation = self.observed().await;
         let session = self.desktop().prove(&observation)?;
         Ok(Verified {
             session,
             observation,
+            machine: None,
         })
     }
 

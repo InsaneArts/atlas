@@ -552,3 +552,103 @@ fn a_removal_under_the_callers_lock_never_takes_it_again_and_its_keeper_lock_com
     assert_eq!(removed["removal"], "done", "{removed}");
     assert!(!vms.folder(&desktop()).exists());
 }
+
+/// What the controller of the VM `vm` keeps in the state folder under
+/// `home`, with a pending command and the person's Stop, beside a Second
+/// Login's own: the names of each, sorted.
+pub(in crate::vm) fn left_state(home: &Path, vm: &DesktopId) -> (Vec<String>, Vec<String>) {
+    let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: vm.clone() });
+    let user = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 });
+    for desktop in [&vm, &user] {
+        let controller = atlas_control::Controller::in_home(desktop, home);
+        drop(
+            controller
+                .quarantine_by(
+                    Token::new().as_str(),
+                    atlas_control::executors::Executor::Guest,
+                )
+                .unwrap(),
+        );
+        controller.note_stop(true).unwrap();
+    }
+    (state_of(home, &vm), state_of(home, &user))
+}
+
+/// The names `desktop`'s controller keeps in the state folder under `home`,
+/// sorted.
+pub(in crate::vm) fn state_of(home: &Path, desktop: &atlas_core::desktop::Desktop) -> Vec<String> {
+    let folder = home.join("Library/Caches/Atlas");
+    let named = format!("{}.", desktop.id().as_str());
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                .filter(|name| name.starts_with(&named))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_vm_removed_whole_forgets_its_controller_state_and_never_anothers() {
+    let (home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    let (own, others) = left_state(home.path(), &desktop());
+    assert!(!own.is_empty());
+
+    let removed = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(removed["removal"], "done", "{removed}");
+    let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: desktop() });
+    let user = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 });
+    assert!(
+        state_of(home.path(), &vm).is_empty(),
+        "{:?}",
+        state_of(home.path(), &vm)
+    );
+    assert_eq!(state_of(home.path(), &user), others);
+}
+
+#[test]
+fn a_removal_that_kept_a_folder_or_left_a_keychain_item_leaves_the_vms_controller_state() {
+    let (home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    let runner = try_lock(&vms.lifecycle(&desktop())).unwrap().unwrap();
+    remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    drop(runner);
+    std::fs::remove_dir_all(vms.folder(&desktop())).unwrap();
+    std::fs::create_dir_all(vms.folder(&desktop())).unwrap();
+    let (own, _) = left_state(home.path(), &desktop());
+
+    let removal = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(removal["removal"], "done", "{removal}");
+    assert_eq!(removal["kept"].as_array().unwrap().len(), 1, "{removal}");
+    let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: desktop() });
+    assert_eq!(state_of(home.path(), &vm), own);
+}
+
+#[test]
+fn a_vm_whose_control_a_command_still_holds_is_not_done_until_it_lets_go() {
+    let (home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    let vm = atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: desktop() });
+    let held = atlas_control::Controller::in_home(&vm, home.path())
+        .acquire(false)
+        .unwrap();
+
+    let busy = remove_with(&vms, &fake, &desktop(), &change()).unwrap_err();
+    drop(held);
+    let removed = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(busy.code, atlas_core::error::Code::Busy);
+    assert_eq!(removed["removal"], "done", "{removed}");
+    assert!(state_of(home.path(), &vm).is_empty());
+}

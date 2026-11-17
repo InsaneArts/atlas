@@ -5,6 +5,7 @@
 use atlas_core::{
     config::desktops::Selected,
     error::{Code, Error, Result},
+    files::Token,
     protocol::{self, ConnectionPhase},
     transport::{Pending, Transport, refusal as refusal_of},
 };
@@ -31,7 +32,7 @@ mod keeper;
 
 pub use keeper::Keeper;
 pub(crate) use keeper::Launchd;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use keeper::Trust;
 pub(crate) use keeper::probe;
 
@@ -39,8 +40,9 @@ pub(crate) use keeper::probe;
 pub enum Link {
     Unix(Transport),
     Session(Session),
-    /// A VM desktop's session keeper: only what a VM does before its proof
-    /// goes through it, by its own calls; every other request is refused.
+    /// A VM desktop's session keeper: its own calls, the reads it carries
+    /// to the guest and the changes a command makes; every other request is
+    /// refused.
     Keeper(Keeper),
     Unreachable(Unreachable),
 }
@@ -176,11 +178,43 @@ impl Link {
         let kind = match self {
             Self::Unix(_) => LaneKind::Read,
             Self::Session(session) => lane_for(session, request)?,
-            Self::Keeper(keeper) => return Err(keeper.selected.unreachable()),
+            // Its keeper carries its cancel, and only the reads it serves.
+            Self::Keeper(keeper) => {
+                return Ok((keeper.send_read(request).await?, Unanswered(None)));
+            }
             Self::Unreachable(unreachable) => return Err(unreachable.selected.unreachable()),
         };
         let (pending, unanswered) = self.connect(kind).await?;
         Ok((pending.dispatch(request).await?, unanswered))
+    }
+
+    /// A connection to a VM desktop's keeper for `request`, the change
+    /// `route` names, in the generation `generation` its command proved,
+    /// made and trusted within this link's deadline, and what is to be said
+    /// on it: nothing is sent yet. A keeper cancels a change whose client
+    /// goes before its final reply, so nothing is left to cancel here.
+    ///
+    /// # Errors
+    ///
+    /// Refuses every other link; fails when the keeper cannot be reached in
+    /// time or trusted. Nothing was sent whichever.
+    pub(crate) async fn connect_change(
+        &self,
+        route: &Route,
+        request: &Value,
+        generation: u64,
+    ) -> Result<(Pending<Stream>, Value)> {
+        match self {
+            Self::Keeper(keeper) => {
+                let asked = keeper.change(route, request, generation);
+                Ok((keeper.connected().await?, asked))
+            }
+            Self::Unix(_) | Self::Session(_) => Err(Error::new(
+                Code::Platform,
+                "Only a VM desktop takes its changes through its keeper.",
+            )),
+            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
+        }
     }
 
     /// Exchange one request with the desktop within this link's deadline.
@@ -218,6 +252,15 @@ fn lane_for(session: &Session, request: &Value) -> Result<LaneKind> {
     }
 }
 
+/// Which lane of a VM desktop's session a change goes on: only a change of
+/// the guest's daemon for now; input and stages are given theirs when they
+/// are carried.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// A change the guest's daemon carries out, named by its token.
+    Change(Token),
+}
+
 /// A request whose final reply has not come. Dropped so, its lane's work
 /// is cancelled over control: the lane's connection closing says nothing
 /// to the desktop's work. The helper login's socket needs none, as its
@@ -246,6 +289,8 @@ impl Drop for Unanswered {
 pub enum Stream {
     Unix(UnixStream),
     Lane(Box<Secure<Raw>>),
+    /// A VM's session keeper, trusted on this very connection.
+    Keeper(UnixStream),
 }
 
 impl AsyncRead for Stream {
@@ -255,7 +300,9 @@ impl AsyncRead for Stream {
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Self::Unix(stream) => Pin::new(stream).poll_read(context, buffer),
+            Self::Unix(stream) | Self::Keeper(stream) => {
+                Pin::new(stream).poll_read(context, buffer)
+            }
             Self::Lane(lane) => Pin::new(lane.as_mut()).poll_read(context, buffer),
         }
     }
@@ -268,21 +315,23 @@ impl AsyncWrite for Stream {
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            Self::Unix(stream) => Pin::new(stream).poll_write(context, bytes),
+            Self::Unix(stream) | Self::Keeper(stream) => {
+                Pin::new(stream).poll_write(context, bytes)
+            }
             Self::Lane(lane) => Pin::new(lane.as_mut()).poll_write(context, bytes),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Self::Unix(stream) => Pin::new(stream).poll_flush(context),
+            Self::Unix(stream) | Self::Keeper(stream) => Pin::new(stream).poll_flush(context),
             Self::Lane(lane) => Pin::new(lane.as_mut()).poll_flush(context),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            Self::Unix(stream) => Pin::new(stream).poll_shutdown(context),
+            Self::Unix(stream) | Self::Keeper(stream) => Pin::new(stream).poll_shutdown(context),
             Self::Lane(lane) => Pin::new(lane.as_mut()).poll_shutdown(context),
         }
     }

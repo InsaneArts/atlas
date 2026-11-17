@@ -278,6 +278,17 @@ pub(crate) trait Kept: Send + Sync {
     /// Fails when it cannot be kept.
     fn done(&self, change: &Token, reply: &Value) -> Result<()>;
 
+    /// Keep what the command `change` came to: `printed`, its `reply` with
+    /// what it printed, when there is room for that, else `reply`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Kept::done`].
+    fn done_printing(&self, change: &Token, reply: &Value, printed: &Value) -> Result<()> {
+        let _ = reply;
+        self.done(change, printed)
+    }
+
     /// What `change` came to, if it is kept: none while unresolved.
     ///
     /// # Errors
@@ -1189,13 +1200,28 @@ pub(super) async fn answer(
 /// be kept is never sent as it is: the change stays intended there, so it
 /// goes as uncertain, and what it came to stays unknown.
 async fn keep(daemon: &Daemon, remembering: Option<Remembering>, reply: &Value) -> Value {
+    keep_as(daemon, remembering, reply, None).await
+}
+
+/// [`keep`], keeping on a machine's disk, for a command, `printed`: `reply`
+/// with what it printed, when the disk keeps room for it.
+async fn keep_as(
+    daemon: &Daemon,
+    remembering: Option<Remembering>,
+    reply: &Value,
+    printed: Option<&Value>,
+) -> Value {
     let mut reply = reply.clone();
     if let (Some(kept), Some(change)) = (
         daemon.kept.clone(),
         remembering.as_ref().and_then(Remembering::change).cloned(),
     ) {
-        let keeping = reply.clone();
-        let done = tokio::task::spawn_blocking(move || kept.done(&change, &keeping)).await;
+        let (keeping, printed) = (reply.clone(), printed.cloned());
+        let done = tokio::task::spawn_blocking(move || match printed {
+            Some(printed) => kept.done_printing(&change, &keeping, &printed),
+            None => kept.done(&change, &keeping),
+        })
+        .await;
         if !matches!(done, Ok(Ok(()))) {
             reply = interrupted(
                 Code::Uncertain,
@@ -1543,6 +1569,11 @@ async fn run_registered(
     };
     // Cancelled or retired during any wait before it starts, it never does.
     let unless = || asker.refused_now();
+    // A machine's change names its supervisor before its program starts,
+    // and keeps what it printed with what it came to.
+    let change = remembering.as_ref().and_then(Remembering::change).cloned();
+    let printed = (daemon.kept.is_some() && change.is_some())
+        .then(|| Arc::new(std::sync::Mutex::new(run::Printed::default())));
     let lease = asker
         .gate
         .as_ref()
@@ -1560,10 +1591,18 @@ async fn run_registered(
                 stops: None,
                 judged: None,
                 job: None,
+                change,
+                printed: printed.clone(),
             }
         });
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;
-    let reply = keep(daemon, remembering, &reply).await;
+    let printed = printed.map(|printed| {
+        printed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .kept(&reply)
+    });
+    let reply = keep_as(daemon, remembering, &reply, printed.as_ref()).await;
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,
         () = handler.closed() => {

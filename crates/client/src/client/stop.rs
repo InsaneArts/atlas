@@ -213,6 +213,18 @@ impl Client {
         if self.actor == Actor::Viewer {
             return Ok(());
         }
+        // A VM has no input service of the station's to ask: its station's
+        // Stop first, then its guest's own, read through its keeper.
+        if let Kind::Vm(_) = self.desktop().kind() {
+            if self.stop_marked() {
+                return Err(self.stopped());
+            }
+            self.reachable()?;
+            return match self.guest_stopped().await {
+                Some(held) => Err(held),
+                None => Ok(()),
+            };
+        }
 
         let marked = self.stop_marked();
         let hello = self.input_transport()?.call(&json!({"op": "hello"})).await;

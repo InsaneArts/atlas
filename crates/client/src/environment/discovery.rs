@@ -419,7 +419,7 @@ pub(crate) async fn inspect(
     references: &[PathBuf],
 ) -> Result<Discovery> {
     selection(tools, apps, environment, references)?;
-    client.reachable()?;
+    client.second_login_only()?;
 
     let status = Observation::decode(&client.status().await);
     let session = client.desktop().prove(&status)?;

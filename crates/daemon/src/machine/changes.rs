@@ -41,8 +41,18 @@ pub const STORE: &str = "outcomes";
 /// Changes kept at once; a new one past it is refused as busy.
 pub const BOUND: usize = 1024;
 
-/// The longest reply kept whole; a longer one keeps what it came to.
-const REPLY: usize = 256 * 1024;
+/// The most of what a command printed that is kept with what it came to.
+pub(crate) const OUTPUT: usize = 256 * 1024;
+
+/// The most of what commands printed kept across every record at once: a
+/// command that ends past it keeps none, and a settled record frees its
+/// share.
+const PRINTED: usize = 32 * 1024 * 1024;
+
+/// The longest reply kept whole; a longer one keeps what it came to. A
+/// command's reply fits with its kept output, which goes as base64.
+const REPLY: usize = 384 * 1024;
+const _: () = assert!(OUTPUT.div_ceil(3) * 4 + 16 * 1024 <= REPLY);
 
 /// The longest a kept text of a shortened reply may be.
 const SHORT: usize = 1024;
@@ -133,6 +143,8 @@ pub struct Changes<V> {
     commitment: Commitment<V>,
     /// Changes kept at once.
     bound: usize,
+    /// The most of what commands printed kept across every record.
+    printed: usize,
     /// One write or read at a time, and what it last verified: a record
     /// that did not change is not read again. A change to its file is never
     /// answered from, and is caught when the daemon next starts.
@@ -145,7 +157,18 @@ impl<V: Vault> Changes<V> {
             folder: folder.into(),
             commitment: Commitment::new(vault, STORE),
             bound: BOUND,
+            printed: PRINTED,
             verified: Mutex::new(None),
+        }
+    }
+
+    /// A store keeping at most `printed` bytes of what commands printed,
+    /// for a test of that bound.
+    #[cfg(test)]
+    fn printing_at_most(folder: impl Into<PathBuf>, vault: V, printed: usize) -> Self {
+        Self {
+            printed,
+            ..Self::new(folder, vault)
         }
     }
 
@@ -370,8 +393,46 @@ impl<V: Vault> Changes<V> {
     /// Fails when the change was never asked for, or the store is unknown
     /// or cannot be written.
     pub fn done(&self, change: &Token, reply: &Value) -> Result<()> {
+        self.done_with(change, |_| reply)
+    }
+
+    /// Keep what `change`, a command, came to: `printed`, its `reply` with
+    /// what it printed, while what every other record keeps of what
+    /// commands printed leaves room for it within the store's bound; else
+    /// `reply` alone, whose recovery then says its output is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// As [`Changes::done`].
+    pub fn done_printing(&self, change: &Token, reply: &Value, printed: &Value) -> Result<()> {
+        let room = self.printed;
+        self.done_with(change, |records| {
+            let others: usize = records
+                .iter()
+                .filter(|(kept, _)| kept.as_str() != change.as_str())
+                .map(|(_, record)| match &record.state {
+                    State::Done { reply } => printed_size(reply),
+                    State::Intended => 0,
+                })
+                .sum();
+            if others.saturating_add(printed_size(printed)) <= room {
+                printed
+            } else {
+                reply
+            }
+        })
+    }
+
+    /// Keep as what `change` came to the reply `choose` picks, given every
+    /// record kept now.
+    fn done_with<'a>(
+        &self,
+        change: &Token,
+        choose: impl FnOnce(&Records) -> &'a Value,
+    ) -> Result<()> {
         let mut last = self.verified();
         let (manifest, mut records) = self.trusted(&mut last)?;
+        let reply = choose(&records);
         let mut record = records
             .get(change.as_str())
             .map(|record| Record::clone(record))
@@ -473,6 +534,19 @@ fn kept(reply: &Value) -> Result<Value> {
         return Ok(reply.clone());
     }
     Ok(shortened(reply))
+}
+
+/// How much of what a command printed `reply` keeps: its output events'
+/// bytes, as their base64 says.
+fn printed_size(reply: &Value) -> usize {
+    reply["events"].as_array().map_or(0, |events| {
+        events
+            .iter()
+            .filter(|event| event["event"] == "output")
+            .filter_map(|event| event["data"].as_str())
+            .map(|data| data.len() / 4 * 3)
+            .sum()
+    })
 }
 
 /// What `reply` came to, its texts cut short.
@@ -596,6 +670,10 @@ fn unknown() -> Error {
 impl<V: Vault> crate::daemon::serve::Kept for Changes<V> {
     fn done(&self, change: &Token, reply: &Value) -> Result<()> {
         Changes::done(self, change, reply)
+    }
+
+    fn done_printing(&self, change: &Token, reply: &Value, printed: &Value) -> Result<()> {
+        Changes::done_printing(self, change, reply, printed)
     }
 
     /// An intended change is unknown, never running: after a restart

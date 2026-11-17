@@ -321,6 +321,50 @@ impl Controller {
         self.quarantine_marked(generation, Mark::Change, named)
     }
 
+    /// [`Controller::quarantine_command`] under a generation the caller
+    /// chose, for a command `executor` carries out: named so, as
+    /// [`Controller::quarantine_by`] names a change.
+    ///
+    /// # Errors
+    ///
+    /// As [`Controller::quarantine_command`], and when its executor cannot
+    /// be recorded.
+    pub fn quarantine_command_by(&self, generation: &str, executor: Executor) -> Result<Pending> {
+        let named = (!executor.local()).then_some(executor);
+        self.quarantine_marked(generation, Mark::Command, named)
+    }
+
+    /// Every pending generation, from one read of the marker under its lock,
+    /// waiting at most `wait` for it: for a reader that must never queue
+    /// behind control, and looks again later instead. What it read is synced
+    /// to disk before it is said, so no change is taken as settled on a
+    /// clearing a crash could still undo.
+    ///
+    /// # Errors
+    ///
+    /// Busy when the lock is held past `wait`, marker or not; refuses a
+    /// marker that cannot be read, which may name any change; fails when what
+    /// was read cannot be kept for good, and on other storage failures.
+    pub fn pending_within(&self, wait: Duration) -> Result<Vec<String>> {
+        let _lock = self.lock_marker_within(wait)?;
+        let pending = pending(&self.marker)?;
+        if pending.iter().any(|entry| entry == UNREADABLE) {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read.",
+            ));
+        }
+        // A clearing whose folder sync failed left what was read unsynced.
+        #[cfg(test)]
+        if super::faults::marker_sync_fails() {
+            return Err(std::io::Error::other("the folder could not be synced").into());
+        }
+        File::open(&self.directory)
+            .and_then(|folder| folder.sync_all())
+            .map_err(context("Sync pending marker folder", &self.directory))?;
+        Ok(pending)
+    }
+
     /// [`Controller::quarantine_as`], recorded as `mark` says, its executor
     /// named when it is not the desktop's own services.
     fn quarantine_marked(

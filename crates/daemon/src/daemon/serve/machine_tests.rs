@@ -905,6 +905,17 @@ async fn a_guests_build_is_the_executable_it_started_from_whatever_replaces_that
     );
 }
 
+/// `reply` as a command's kept one is without what it printed: the reply
+/// that was sent as its final line.
+fn without_printed(reply: &Value) -> Value {
+    let mut reply = reply.clone();
+    if let Some(row) = reply.as_object_mut() {
+        row.remove("events");
+        row.remove("truncated");
+    }
+    reply
+}
+
 /// A command that adds a line to `file` each time it runs.
 fn appending(file: &std::path::Path, change: &Token) -> Value {
     json!({"op": "run", "argv": ["/bin/sh", "-c", format!("echo ran >> '{}'", file.display())],
@@ -926,7 +937,9 @@ async fn a_change_asked_for_twice_runs_once_and_is_answered_from_what_it_came_to
     let again = ask(&desktop, lane(), &appending(&file, &change)).await;
 
     assert_eq!(first.last().unwrap()["ok"], true, "{first:?}");
-    assert_eq!(again, [first.last().unwrap().clone()]);
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert_eq!(without_printed(&again[0]), *first.last().unwrap());
+    assert_eq!(again[0]["truncated"], false);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "ran\n");
     assert!(matches!(
         served.changes.of(&change).unwrap(),
@@ -963,10 +976,91 @@ async fn what_a_change_came_to_is_answered_by_a_daemon_that_started_since() {
     .await;
 
     assert_eq!(
-        atlas_core::outcomes::Outcome::remembered(&asked[0]),
+        atlas_core::outcomes::Outcome::remembered(&asked[0])
+            .as_ref()
+            .map(without_printed),
         Some(ran.last().unwrap().clone()),
         "{asked:?}"
     );
+}
+
+/// What `reply`'s output events say, decoded.
+fn printed(reply: &Value) -> Vec<u8> {
+    atlas_core::transport::run_output(reply, 1 << 20).unwrap()
+}
+
+#[tokio::test]
+async fn a_commands_supervisor_is_kept_naming_its_change_before_its_program_starts() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let kept = served.records.path().join("supervisors/processes.json");
+    let request = json!({"op": "run", "argv": ["/bin/cat", kept], "change": change});
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+
+    let mut said = json!({"ok": true});
+    said["events"] = json!(replies[..replies.len() - 1]);
+    let record: Value = serde_json::from_slice(&printed(&said)).unwrap();
+    let supervisors = record["work"].as_array().unwrap();
+    assert!(
+        supervisors
+            .iter()
+            .any(|supervised| supervised["change"] == json!(change)),
+        "{record}"
+    );
+    assert_eq!(replies.last().unwrap()["exitCode"], 0, "{replies:?}");
+}
+
+#[tokio::test]
+async fn what_a_command_printed_is_kept_with_what_it_came_to_and_cut_past_its_bound() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (small, large) = (Token::new(), Token::new());
+    let bound = crate::machine::changes::OUTPUT;
+
+    ask(
+        &desktop,
+        LaneKind::Change {
+            change: small.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/printf", "hi"], "change": small}),
+    )
+    .await;
+    ask(
+        &desktop,
+        LaneKind::Change {
+            change: large.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/head", "-c", (bound + 1000).to_string(),
+            "/dev/zero"], "change": large}),
+    )
+    .await;
+
+    let kept = |change: &Token| match served.changes.of(change).unwrap() {
+        Some(crate::machine::changes::State::Done { reply }) => reply,
+        other => panic!("{other:?}"),
+    };
+    let small = kept(&small);
+    assert_eq!(printed(&small), b"hi");
+    assert_eq!(small["truncated"], false);
+    assert!(
+        small["events"][0]["pid"]
+            .as_i64()
+            .is_some_and(|pid| pid > 1),
+        "{small}"
+    );
+    let large = kept(&large);
+    assert_eq!(printed(&large).len(), bound);
+    assert_eq!(large["truncated"], true);
+    assert_eq!(large["exitCode"], 0);
 }
 
 #[tokio::test]
@@ -1646,6 +1740,7 @@ fn left_behind(code: Option<u8>) -> (Records, crate::machine::processes::Supervi
         boot: atlas_core::process::boot().unwrap(),
         generation: atlas_session::generation::Generation(1),
         supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+        change: None,
         job: None,
     };
     supervising.kept.add(supervised.clone()).unwrap();
@@ -1825,6 +1920,7 @@ async fn work_kept_from_another_boot_is_forgotten_before_none_is_said() {
         boot: "an earlier boot".into(),
         generation: atlas_session::generation::Generation(1),
         supervisor: atlas_core::process::Instance::new(100_500, [1, 0]),
+        change: None,
         job: None,
     };
     kept.add(earlier).unwrap();
@@ -4523,6 +4619,7 @@ async fn work_handed_to_recovery_while_the_hello_reads_it_is_never_said_to_be_no
             boot: atlas_core::process::boot().unwrap(),
             generation: atlas_session::generation::Generation(1),
             supervisor,
+            change: None,
             job: None,
         })
         .unwrap();

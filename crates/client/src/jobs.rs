@@ -437,7 +437,7 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
 /// reported as an empty list.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     // A desktop this build cannot reach has none it can tell.
-    client.reachable()?;
+    client.second_login_only()?;
     let mine = client.task.as_ref().map(|task| task.key().clone());
     let store = client.output_dir().ok().map(Store::at);
     let recorded: Vec<JobEntry> = mine

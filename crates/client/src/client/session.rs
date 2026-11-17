@@ -228,7 +228,7 @@ impl Client {
     /// Returns a refusal to log out, or an error when the helper has not logged
     /// out yet.
     pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
-        self.reachable()?;
+        self.second_login_only()?;
         let observation = self.observed().await;
         self.desktop().prove(&observation)?;
         let claim = self.controller.quarantine()?;

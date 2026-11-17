@@ -16,6 +16,7 @@ mod executor;
 pub mod executors;
 #[cfg(test)]
 mod faults;
+mod forget;
 pub mod interrupt;
 mod lease;
 mod marker;
@@ -277,10 +278,13 @@ impl Controller {
     ///
     /// Returns an error when this account's home is unavailable.
     pub fn new(desktop: &Desktop) -> Result<Self> {
-        Ok(Self::in_directory(
-            desktop,
-            &home()?.join("Library/Caches/Atlas"),
-        ))
+        Ok(Self::in_home(desktop, &home()?))
+    }
+
+    /// The controller of `desktop` for the account whose home is `home`.
+    #[must_use]
+    pub fn in_home(desktop: &Desktop, home: &Path) -> Self {
+        Self::in_directory(desktop, &home.join("Library/Caches/Atlas"))
     }
 
     /// The controller of the hidden login `uid`, with its state in

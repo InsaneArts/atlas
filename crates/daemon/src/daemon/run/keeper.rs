@@ -186,6 +186,7 @@ pub(super) async fn keep(
         mut stops,
         judged,
         job,
+        change,
         ..
     } = lease;
     keepers.set(supervisor, Keeping::Active);
@@ -194,6 +195,7 @@ pub(super) async fn keep(
             boot,
             generation,
             supervisor,
+            change,
             job,
         })
         .map_err(|error| failure(error.code, error.error));

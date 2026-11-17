@@ -465,6 +465,58 @@ pub(in crate::daemon) struct Lease {
     /// The background job it runs, kept beside its supervisor; none for a
     /// command.
     pub(super) job: Option<crate::machine::processes::JobRecord>,
+    /// The change it is started for, kept beside its supervisor.
+    pub(super) change: Option<atlas_core::files::Token>,
+    /// Where what a command prints is kept with what it comes to; none
+    /// for a job, whose output goes to its log.
+    pub(super) printed: Option<Arc<std::sync::Mutex<Printed>>>,
+}
+
+/// What a command on a machine desktop printed, kept with what it came to
+/// so its reply, lost on its way, still says it: its first
+/// [`OUTPUT`](crate::machine::changes::OUTPUT) bytes, and whether more were
+/// cut.
+#[derive(Debug, Default)]
+pub(in crate::daemon) struct Printed {
+    started: Option<i32>,
+    output: Vec<u8>,
+    truncated: bool,
+}
+
+impl Printed {
+    fn push(&mut self, bytes: &[u8]) {
+        let room = crate::machine::changes::OUTPUT.saturating_sub(self.output.len());
+        let kept = bytes.len().min(room);
+        self.truncated |= kept < bytes.len();
+        self.output.extend_from_slice(&bytes[..kept]);
+    }
+
+    /// `reply` as it is kept: with the command's start and what it printed
+    /// as the events a reply carries, and whether that was cut short.
+    pub(in crate::daemon) fn kept(&self, reply: &Value) -> Value {
+        let mut events = Vec::new();
+        if let Some(pid) = self.started {
+            events.push(json!({"event": "started", "pid": pid}));
+        }
+        if !self.output.is_empty() {
+            events.push(json!({"event": "output", "data": STANDARD.encode(&self.output)}));
+        }
+        let mut kept = reply.clone();
+        kept["events"] = json!(events);
+        kept["truncated"] = json!(self.truncated);
+        kept
+    }
+}
+
+/// Keep what `printed` holds, when it is there, by `keep`.
+fn printing(printed: Option<&Arc<std::sync::Mutex<Printed>>>, keep: impl FnOnce(&mut Printed)) {
+    if let Some(printed) = printed {
+        keep(
+            &mut printed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.
@@ -734,6 +786,8 @@ struct Watch {
     /// What tells a supervised command's keeper the command no longer
     /// waits for its program to start.
     starting: Option<Arc<std::sync::Mutex<bool>>>,
+    /// Where what it prints is kept with what it comes to, when it is.
+    printed: Option<Arc<std::sync::Mutex<Printed>>>,
 }
 
 impl Watch {
@@ -759,6 +813,9 @@ impl Watch {
             Ok(0) => self.closed = true,
             Err(_) => self.abandon_pipe(),
             Ok(count) if !self.cause.abandoned() => {
+                printing(self.printed.as_ref(), |printed| {
+                    printed.push(&buffer[..count])
+                });
                 self.output.push(&buffer[..count]);
                 if self.output.full() {
                     self.flush(events);
@@ -871,6 +928,7 @@ async fn run_at(
     unless: Unless<'_>,
     lease: Option<Lease>,
 ) -> Value {
+    let printed = lease.as_ref().and_then(|lease| lease.printed.clone());
     let mut spawned = match spawn(argv, home.as_deref(), unless, lease, None).await {
         Ok(spawned) => spawned,
         Err(refusal) => return refusal,
@@ -880,8 +938,12 @@ async fn run_at(
     let mut watch = Watch {
         supervised,
         starting: spawned.told.as_ref().map(|told| told.starting.clone()),
+        printed,
         ..Watch::default()
     };
+    printing(watch.printed.as_ref(), |printed| {
+        printed.started = Some(group.as_raw());
+    });
     if events
         .try_send(json!({"event": "started", "pid": group.as_raw()}))
         .is_err()

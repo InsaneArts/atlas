@@ -310,6 +310,8 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
         check: Option<Expect>,
     ) -> Result<Value> {
+        // Input on a VM is not built yet: refused before its status is read.
+        self.second_login_only()?;
         // An agent's input holds control taken beside commands; the person's
         // holds the lease, which no command can start under.
         self.controller.require_known_beside(Beside::Commands)?;
@@ -347,7 +349,7 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
         check: Option<Expect>,
     ) -> Result<Value> {
-        self.reachable()?;
+        self.second_login_only()?;
         let observation = Observation::decode(status);
         let session = self.desktop().prove(&observation)?;
         // An input service older than this one may call a password field a

@@ -18,11 +18,13 @@ use crate::{
     secure::{Purpose, connect_as_guest},
     station::control::{Control, Event},
 };
-use atlas_core::{desktop::DesktopId, error::Result, session::key::PeerKey};
+use atlas_core::{desktop::DesktopId, error::Result, files::Token, session::key::PeerKey};
+use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
     time::Duration,
 };
@@ -73,6 +75,36 @@ impl std::fmt::Debug for OnLift {
     }
 }
 
+/// What a test runs as the station settles changes, before they are forgotten.
+#[derive(Default)]
+pub struct OnSettled(Mutex<Option<Settling>>);
+
+/// A test's hook on a settlement.
+type Settling = Box<dyn Fn(&[Token]) + Send + Sync>;
+
+impl OnSettled {
+    /// Run `hook` with each settlement to come.
+    pub fn set(&self, hook: impl Fn(&[Token]) + Send + Sync + 'static) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    fn run(&self, changes: &[Token]) {
+        if let Some(hook) = &*self.0.lock().unwrap_or_else(PoisonError::into_inner) {
+            hook(changes);
+        }
+    }
+}
+
+impl std::fmt::Debug for OnSettled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OnSettled(..)")
+    }
+}
+
+/// What a change the stand-in was asked for stands at: none while it is
+/// carried out, then the reply it came to.
+pub type Record = Option<Value>;
+
 /// The stand-in desktop.
 #[derive(Debug)]
 pub struct StandIn {
@@ -94,6 +126,15 @@ pub struct StandIn {
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
     pub settled: Mutex<Vec<atlas_core::files::Token>>,
+    /// Run as each settlement comes, before what it names is forgotten.
+    pub on_settled: OnSettled,
+    /// Every change asked for and not settled yet, by its name: what it
+    /// came to once it is done.
+    pub changes: Mutex<BTreeMap<Token, Record>>,
+    /// While set, a change asked for waits before it is carried out.
+    pub holding: AtomicBool,
+    /// How many replies to come it keeps and never sends, its lane cut.
+    pub dropping: AtomicUsize,
     /// Every generation that retired, and why.
     pub retired: Arc<Mutex<Vec<(Generation, Retired)>>>,
     /// The generation live now: a newer one retires it.
@@ -156,6 +197,10 @@ impl StandIn {
             plain: std::sync::atomic::AtomicBool::new(false),
             dials: Mutex::new(Vec::new()),
             settled: Mutex::new(Vec::new()),
+            on_settled: OnSettled::default(),
+            changes: Mutex::default(),
+            holding: AtomicBool::new(false),
+            dropping: AtomicUsize::new(0),
             retired: Arc::new(Mutex::new(Vec::new())),
             current: Mutex::new(None),
             dial_gate: Arc::new(tokio::sync::Semaphore::new(
@@ -204,13 +249,14 @@ impl StandIn {
             authority,
             outbox: Arc::new(Outbox::hello(
                 generation,
-                Vec::new(),
+                self.unsettled(),
                 // Its Stop report, input lanes and what it is proved by are
                 // a test's own lanes' to give.
                 crate::compatibility::Declared::ours(if self.plain.load(SeqCst) {
                     vec![crate::compatibility::STOP_REPORT.to_owned()]
                 } else {
                     vec![
+                        crate::compatibility::CHANGES.to_owned(),
                         crate::compatibility::ACKNOWLEDGED.to_owned(),
                         crate::compatibility::STOP_REPORT.to_owned(),
                         crate::compatibility::INPUT_LANES.to_owned(),
@@ -243,6 +289,60 @@ impl StandIn {
             .abort_handle(),
         );
         Ok(live)
+    }
+}
+
+/// What a change asked of the stand-in stands at when it comes.
+#[derive(Debug, PartialEq)]
+pub enum Asked {
+    /// New: kept as asked for, to be carried out now.
+    Begun,
+    /// Asked before: what it came to, none while that is unknown.
+    Again(Record),
+}
+
+impl StandIn {
+    fn records(&self) -> std::sync::MutexGuard<'_, BTreeMap<Token, Record>> {
+        self.changes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The changes it keeps done that the station has not settled, as its
+    /// hello names them.
+    pub fn unsettled(&self) -> Vec<Token> {
+        self.records()
+            .iter()
+            .filter(|(_, record)| record.is_some())
+            .map(|(change, _)| change.clone())
+            .collect()
+    }
+
+    /// Keep `change` as asked for, unless it was asked for before.
+    pub fn ask(&self, change: &Token) -> Asked {
+        let mut records = self.records();
+        match records.get(change) {
+            Some(record) => Asked::Again(record.clone()),
+            None => {
+                records.insert(change.clone(), None);
+                Asked::Begun
+            }
+        }
+    }
+
+    /// Keep `reply` as what `change` came to.
+    pub fn done(&self, change: &Token, reply: &Value) {
+        self.records().insert(change.clone(), Some(reply.clone()));
+    }
+
+    /// What `change` came to, as an `outcome` read answers it, when it is
+    /// one the stand-in keeps; an unknown one while it is carried out.
+    pub fn outcome(&self, change: &Token) -> Option<Value> {
+        let outcome = match self.records().get(change)? {
+            Some(reply) => atlas_core::outcomes::Outcome::Done {
+                reply: reply.clone(),
+            },
+            None => atlas_core::outcomes::Outcome::Unknown,
+        };
+        Some(outcome.answer())
     }
 }
 
@@ -304,6 +404,15 @@ impl Guest for Handler {
     }
 
     fn settled(&self, changes: Vec<atlas_core::files::Token>) {
+        self.standin.on_settled.run(&changes);
+        {
+            let mut kept = self.standin.records();
+            for change in &changes {
+                if kept.get(change).is_some_and(Option::is_some) {
+                    kept.remove(change);
+                }
+            }
+        }
         self.standin
             .settled
             .lock()

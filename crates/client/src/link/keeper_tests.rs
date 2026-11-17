@@ -214,3 +214,66 @@ fn a_keeper_that_could_not_start_is_said_to_with_why() {
         "work's session keeper could not start: The station's key was made by another program."
     );
 }
+
+/// A keeper judged only after a long wait on the system.
+struct Slow;
+
+impl Trust for Slow {
+    fn trusts(&self, _: &DesktopId, _: &Path, _: &UnixStream) -> Result<()> {
+        std::thread::sleep(Duration::from_secs(3));
+        Ok(())
+    }
+}
+
+/// A keeper at a socket that takes connections and never accepts one,
+/// judged by `trust`, each exchange within `timeout`.
+fn never_accepting(
+    folder: &Path,
+    trust: Arc<dyn Trust>,
+    timeout: Duration,
+) -> (Keeper, std::os::unix::net::UnixListener) {
+    let path = folder.join("keeper.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let keeper = Keeper::at(
+        selected(),
+        DesktopId::parse(crate::test_support::VM_ID).unwrap(),
+        path,
+        timeout,
+        trust,
+    );
+    (keeper, listener)
+}
+
+#[tokio::test]
+async fn a_keeper_that_never_accepts_or_whose_judgement_lingers_is_given_up_within_the_deadline() {
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let timeout = Duration::from_millis(300);
+    let (backlogged, _listener) = never_accepting(folder.path(), Arc::new(Refusing), timeout);
+    // Its backlog filled by connections nobody takes.
+    let mut waiting = Vec::new();
+    for _ in 0..512 {
+        match UnixStream::connect(folder.path().join("keeper.sock")) {
+            Ok(stream) => waiting.push(stream),
+            Err(_) => break,
+        }
+    }
+    let slow_folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (lingering, _slow) = never_accepting(slow_folder.path(), Arc::new(Slow), timeout);
+    let started = std::time::Instant::now();
+
+    let refused = [
+        backlogged.ask(&json!({"op": "hello"})).await.unwrap_err(),
+        lingering.ask(&json!({"op": "hello"})).await.unwrap_err(),
+        lingering.connected().await.err().unwrap(),
+    ];
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    for refused in refused {
+        assert_eq!(refused.code, Code::Transport, "{refused:?}");
+        assert!(!refused.uncertain, "nothing was sent: {refused:?}");
+    }
+}

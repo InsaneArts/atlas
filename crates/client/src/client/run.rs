@@ -4,6 +4,7 @@
 //! [`Client::run`] runs it.
 use super::{Client, Mutation, Verified};
 use atlas_control::{Ownership, SharedLease};
+use atlas_core::desktop::Kind;
 use atlas_core::{
     error::{Code, Error, Result},
     transport::{OutputError, accepted, run_output},
@@ -171,17 +172,34 @@ impl Client {
     /// Run argv in the verified hidden helper as `run` says.
     pub(crate) async fn run(&self, argv: Vec<String>, run: Run<'_>) -> Result<Value> {
         check_run(&argv, run.timeout)?;
+        let vm = matches!(self.desktop().kind(), Kind::Vm(_));
+        // On a VM, only an agent's own command for now.
+        if vm && !matches!(run.mode, Mode::Beside) {
+            return Err(self.unreachable());
+        }
         let taken = match run.mode {
             Mode::Held => Some(self.controller.acquire(false)?),
             Mode::Beside => Some(self.controller.acquire_beside_commands()?),
             Mode::Owned | Mode::Pending | Mode::Inspect => None,
         };
 
-        let pin = match run.pin {
-            Some(verified) => Some(verified.pin()?),
+        // A VM's command goes only in the session its proof pinned, in the
+        // generation that proof was taken in.
+        let (pin, generation) = match run.pin {
+            Some(verified) => (
+                Some(verified.pin()?),
+                verified.machine().map(|machine| machine.generation),
+            ),
+            None if vm => {
+                let verified = self.verify_vm().await?;
+                (
+                    Some(verified.pin()?),
+                    verified.machine().map(|machine| machine.generation),
+                )
+            }
             None => {
                 self.identity().await?;
-                None
+                (None, None)
             }
         };
         let mutation = Mutation::Run {
@@ -189,6 +207,9 @@ impl Client {
             timeout: run.timeout,
             pin,
         };
+        if let Some(generation) = generation {
+            return self.mutate_vm(&mutation, generation, taken).await;
+        }
 
         match run.mode {
             // Control taken for a held run stays held until the command

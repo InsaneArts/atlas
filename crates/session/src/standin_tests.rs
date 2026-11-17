@@ -748,3 +748,49 @@ async fn a_replaced_generations_numbered_stop_is_never_answered_on_the_one_after
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(first_station.heard.applied.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_change_the_stand_in_carried_out_is_named_at_each_hello_until_the_station_settles_it() {
+    let link = Link::new(Conditions::default());
+    let (standin, station) = (
+        StandIn::new(desktop(), Duration::ZERO),
+        Keypair::generate().unwrap(),
+    );
+    let (done, asked) = (Token::new(), Token::new());
+    assert_eq!(standin.ask(&done), Asked::Begun);
+    standin.done(&done, &serde_json::json!({"ok": true}));
+    assert_eq!(standin.ask(&asked), Asked::Begun);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hooked = seen.clone();
+    standin.on_settled.set(move |changes| {
+        hooked.lock().unwrap().extend_from_slice(changes);
+    });
+
+    let (_live, controlling, _connection) = connected(&link, &standin, &station).await;
+    assert_eq!(controlling.unsettled, std::slice::from_ref(&done));
+    assert_eq!(
+        standin.ask(&done),
+        Asked::Again(Some(serde_json::json!({"ok": true})))
+    );
+    assert_eq!(
+        standin.outcome(&asked).unwrap()["outcome"],
+        "unknown",
+        "one carried out still is unknown"
+    );
+    say(
+        &controlling,
+        Said::Settled {
+            changes: vec![done.clone()],
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while standin.outcome(&done).is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("settled");
+
+    assert_eq!(*seen.lock().unwrap(), [done]);
+    assert!(standin.unsettled().is_empty());
+}

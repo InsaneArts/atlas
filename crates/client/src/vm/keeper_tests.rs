@@ -304,39 +304,21 @@ pub(super) struct Saying {
     pub(super) hello: Mutex<Option<fn(&mut Value)>>,
     /// Whether its input lanes stall: open, and silent.
     pub(super) input_stalls: std::sync::atomic::AtomicBool,
+    /// Every command it was asked to run, in order.
+    pub(super) runs: Mutex<Vec<Value>>,
+    /// What a command it runs replies, in place of one that printed
+    /// `hi`.
+    pub(super) ran: Mutex<Option<Value>>,
 }
 
-/// The facts of a machine guest's own screen: account 502's, its daemon,
-/// process 123, the proof's parent.
-pub(super) fn screen() -> Value {
-    json!({"ok": true, "uid": 502, "hasGraphicAccess": true, "parentPID": 123,
-        "onConsole": true, "securitySessionID": 42, "displayID": 7, "width": 1440.0,
-        "height": 900.0, "scale": 2.0})
+/// The reply of a command a machine guest ran that printed `hi` and kept
+/// what it printed.
+pub(super) fn ran_hi() -> Value {
+    json!({"ok": true, "exitCode": 0, "timedOut": false, "signal": null, "truncated": false,
+        "events": [{"event": "started", "pid": 321}, {"event": "output", "data": "aGkK"}]})
 }
 
-/// The hello of a machine guest that proves itself: account 502, in
-/// machine mode, in a virtual machine, closed to anyone but Atlas, its Stop
-/// `stop`.
-pub(super) fn machine_hello(stop: &str) -> Value {
-    json!({"ok": true, "op": "hello", "user": {"uid": 502},
-        "session": {"managerName": "Aqua", "onConsole": true},
-        "display": {"width": 1440.0, "height": 900.0, "scale": 2.0},
-        "permissions": {"accessibility": true, "postEvents": true, "screenCapture": true},
-        "machine": {"mode": "machine", "boot": "boot-1", "virtual": true},
-        "daemon": {"protocol": 1, "pid": 123, "version": "1.0.0", "build": "b1",
-            "capabilities": ["machine-proof-v1"]},
-        "remoteLogin": "off", "account": {"admin": false},
-        "agents": {"admitted": true, "held": null, "stopped": false},
-        "input": {"standing": "ready", "failure": null, "held": null},
-        "stop": {"state": stop}, "work": {"state": "none"}})
-}
-
-/// The hello of a machine guest's input service, ready, of its daemon's
-/// build.
-pub(super) fn input_hello() -> Value {
-    json!({"ok": true, "protocolVersion": 1, "pid": 456, "version": "1.0.0", "build": "b1",
-        "ready": true, "accessibility": true, "session": screen()})
-}
+pub(super) use crate::test_support::{input_hello, machine_hello, screen};
 
 impl Guest {
     /// Answer its lanes as a machine guest that proves itself, as the
@@ -362,6 +344,10 @@ impl Guest {
                             change(&mut hello);
                         }
                         hello
+                    }
+                    (LaneKind::Change { .. }, Some("run")) => {
+                        said.runs.lock().unwrap().push(request);
+                        said.ran.lock().unwrap().clone().unwrap_or_else(ran_hi)
                     }
                     (LaneKind::Read, Some("session-proof")) => {
                         let asked = request["challenge"].as_str().unwrap_or_default().to_owned();

@@ -40,13 +40,17 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 5] = [
+pub(super) const CAPABILITIES: [&str; 6] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
     "handover-v1",
     super::observe::CAPABILITY,
+    super::change::CAPABILITY,
 ];
+/// The reads a client may have carried to the guest, by their operation:
+/// what the commands this build runs on a VM need, and nothing more.
+pub(crate) const READS: [&str; 2] = ["hello", "outcome"];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
 /// The longest request.
@@ -197,6 +201,18 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
     if !admitted(&writing, admit).await {
         return;
     }
+    // Only a request said whole, its newline last, is taken: one cut short
+    // at the client's end or at the size bound may be a change its client
+    // holds as never sent.
+    if line.last() != Some(&b'\n') {
+        let mut refused = refusal(
+            Code::BadRequest,
+            "The keeper takes only a whole request, ended by its newline; nothing was done.",
+        );
+        refused["sent"] = json!(false);
+        let _ = say(&mut writing, &refused).await;
+        return;
+    }
     let Ok(request) = serde_json::from_slice::<Value>(&line) else {
         let _ = say(
             &mut writing,
@@ -238,10 +254,25 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
         }
         Some("read")
             if request["request"].is_object()
+                && !READS.contains(&request["request"]["op"].as_str().unwrap_or_default()) =>
+        {
+            let refused = refusal(
+                Code::Denied,
+                "The keeper does not carry that read to the guest.",
+            );
+            let _ = say(&mut writing, &refused).await;
+        }
+        Some("read")
+            if request["request"].is_object()
                 && (request["generation"].is_null() || request["generation"].is_u64()) =>
         {
             let pinned = request["generation"].as_u64();
             carried(keeper, &request["request"], pinned, deadline, &mut writing).await;
+        }
+        Some("change") => super::change::changed(keeper, &request, writing).await,
+        Some("settle") => {
+            let settled = super::change::settled(keeper, &request).await;
+            let _ = say(&mut writing, &settled).await;
         }
         Some("observe") => {
             let challenge = request["challenge"].as_str();
@@ -378,24 +409,33 @@ async fn carried(
         let _ = say(writing, &serde_json::to_value(&refused).unwrap_or_default()).await;
         return;
     }
-    let (lines, mut replies) = mpsc::unbounded_channel();
+    let (lines, replies) = mpsc::unbounded_channel();
     let reading = read(&session, LaneKind::Read, request, deadline, move |line| {
         lines.send(line).is_ok()
     });
-    let passing = async {
-        while let Some(line) = replies.recv().await {
-            let mut line = line.into_bytes();
-            line.push(b'\n');
-            if writing.write_all(&line).await.is_err() {
-                return false;
+    let carrying = async {
+        // Owning what the read hands on, so a client that went stops the
+        // read, and its lane is cancelled.
+        let passing = async {
+            let mut replies = replies;
+            while let Some(line) = replies.recv().await {
+                let mut line = line.into_bytes();
+                line.push(b'\n');
+                if writing.write_all(&line).await.is_err() {
+                    return false;
+                }
             }
+            true
+        };
+        let (read, open) = tokio::join!(reading, passing);
+        if let (Err(error), true) = (read, open) {
+            let _ = say(writing, &serde_json::to_value(&error).unwrap_or_default()).await;
         }
-        true
     };
-    let (read, open) = tokio::join!(reading, passing);
-    if let (Err(error), true) = (read, open) {
-        let _ = say(writing, &serde_json::to_value(&error).unwrap_or_default()).await;
-    }
+    // A client that stops reading never holds the keeper past the read's
+    // deadline: it is left with its connection's end, never a line cut short
+    // and a word after it.
+    let _ = tokio::time::timeout(deadline + super::change::SAYING, carrying).await;
 }
 
 fn refusal(code: Code, why: &str) -> Value {
@@ -411,4 +451,4 @@ async fn say(writing: &mut UnixStream, said: &Value) -> std::io::Result<()> {
 
 #[cfg(test)]
 #[path = "clients_tests.rs"]
-mod tests;
+pub(super) mod tests;

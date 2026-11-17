@@ -1323,8 +1323,8 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/client.rs",
-        &["Client::reachable"],
-        "owner: which desktops this build can reach",
+        &["Client::reachable", "Client::second_login_only"],
+        "owner: which desktops this build can reach, and for what",
     ),
     (
         "crates/client/src/client.rs",

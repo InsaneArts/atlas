@@ -429,7 +429,9 @@ impl Jobs {
             keepers: daemon.keepers.clone(),
             stops: Some(stopping_rx),
             judged: Some(judged),
+            change: Some(record.change.clone()),
             job: Some(record.clone()),
+            printed: None,
         };
         let spawned = run::spawn(
             &start.argv,

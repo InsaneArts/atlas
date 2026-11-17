@@ -930,3 +930,92 @@ async fn a_stop_keeps_a_vm_desktops_hold_and_says_it_did_not_reach_it_while_anot
     let vm = made(&settings.desktops()[1]).unwrap();
     assert!(vm.controller.stop_noted(), "the VM's Stop is kept here");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_on_a_vm_reaches_its_change_lane_through_dispatch_and_is_held_by_either_stop() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let run = || {
+        parse(&["run", "--", "/bin/echo", "hi"])
+            .unwrap()
+            .command
+            .unwrap()
+    };
+    let policy = Policy::of(&run());
+    assert!(policy.changes_helper());
+    client.doing = policy.doing.clone();
+    let factory = || Ok(client.clone());
+
+    let ran = execute_with(&config, run(), &policy, None, &factory, false)
+        .await
+        .unwrap();
+    client.controller.note_stop(true).unwrap();
+    let station = execute_with(&config, run(), &policy, None, &factory, false).await;
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+    let mut guest = Vec::new();
+    for stop in ["stopped", "unknown"] {
+        *keeper.stop.lock().unwrap() = stop;
+        guest.push(execute_with(&config, run(), &policy, None, &factory, false).await);
+    }
+
+    assert_eq!(ran["output"], "hi\n", "{ran}");
+    let changes = keeper.asked_for("change");
+    assert_eq!(changes.len(), 1, "only the command let go: {changes:?}");
+    assert_eq!(changes[0]["lane"], "change");
+    assert_eq!(
+        changes[0]["generation"],
+        atlas_client::test_support::GENERATION
+    );
+    assert_eq!(changes[0]["request"]["op"], "run");
+    assert_eq!(changes[0]["request"]["change"], changes[0]["change"]);
+    assert_eq!(
+        changes[0]["request"]["argv"],
+        json!(["/bin/echo", "hi"]),
+        "{changes:?}"
+    );
+    for held in std::iter::once(station).chain(guest) {
+        let held = held.unwrap_err();
+        assert_eq!(held.code, Code::Stopped);
+        assert!(held.error.contains("work"), "{held:?}");
+        assert!(!held.error.contains("helper"), "{held:?}");
+    }
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_keeper_is_asked_anything()
+ {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let one_wording = client.unreachable().error;
+
+    for args in [
+        &["move", "1", "2"][..],
+        &["key", "cmd+s"],
+        &["apps"],
+        &["screenshot"],
+        &["start-input"],
+        &["job", "list"],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let policy = Policy::of(&command);
+        let mut acting = client.clone();
+        acting.doing = policy.doing.clone();
+        let factory = || Ok(acting.clone());
+
+        let refused = execute_with(&config, command, &policy, None, &factory, false)
+            .await
+            .unwrap_err();
+
+        assert_eq!(refused.error, one_wording, "{args:?}");
+    }
+    assert!(
+        keeper.asked.lock().unwrap().is_empty(),
+        "{:?}",
+        keeper.asked.lock().unwrap()
+    );
+    assert!(client.controller.pending().unwrap().is_empty());
+}

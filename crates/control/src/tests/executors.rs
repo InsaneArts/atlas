@@ -167,3 +167,108 @@ fn a_damaged_executor_record_is_cleared_before_a_new_change_is_taken_with_nothin
     controller.clear().unwrap();
     assert!(controller.pending().unwrap().is_empty());
 }
+
+#[test]
+fn a_command_another_executor_carries_out_runs_beside_others_and_waits_for_its_answer() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let theirs = token();
+    let command = controller
+        .quarantine_command_by(&theirs, Executor::Guest)
+        .unwrap();
+
+    assert!(controller.commands().contains(&theirs));
+    let beside = Controller::at(505, directory.path())
+        .acquire_beside_commands()
+        .unwrap();
+    drop(beside);
+    controller.abandon_command(command);
+    controller.clear().unwrap();
+    assert_eq!(controller.pending().unwrap(), std::slice::from_ref(&theirs));
+}
+
+#[test]
+fn the_pending_changes_are_read_without_waiting_and_never_from_a_marker_that_cannot_be_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    assert!(
+        controller
+            .pending_within(std::time::Duration::ZERO)
+            .unwrap()
+            .is_empty()
+    );
+    let generation = token();
+    drop(
+        controller
+            .quarantine_by(&generation, Executor::Guest)
+            .unwrap(),
+    );
+
+    assert_eq!(
+        controller
+            .pending_within(std::time::Duration::ZERO)
+            .unwrap(),
+        std::slice::from_ref(&generation)
+    );
+    let held = controller.lock_marker().unwrap();
+    let busy = controller
+        .pending_within(std::time::Duration::ZERO)
+        .unwrap_err();
+    assert_eq!(busy.code, "busy");
+    drop(held);
+    std::fs::write(&controller.marker, b"[").unwrap();
+    assert!(
+        controller
+            .pending_within(std::time::Duration::ZERO)
+            .is_err()
+    );
+}
+
+#[test]
+fn the_pending_changes_are_read_under_the_lock_even_with_no_marker() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let held = controller.lock_marker().unwrap();
+
+    let busy = controller
+        .pending_within(std::time::Duration::ZERO)
+        .unwrap_err();
+
+    assert!(!controller.marker.exists());
+    assert_eq!(busy.code, "busy");
+    drop(held);
+    assert!(
+        controller
+            .pending_within(std::time::Duration::ZERO)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_clearing_whose_folder_was_not_synced_is_never_read_as_settled_until_it_is() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let generation = token();
+    drop(
+        controller
+            .quarantine_by(&generation, Executor::Guest)
+            .unwrap(),
+    );
+    // Unlinked, its folder not synced: a crash could bring it back.
+    crate::faults::fail_marker_sync();
+    assert!(controller.clear_if(&generation).is_err());
+    assert!(!controller.marker.exists());
+
+    crate::faults::fail_marker_sync();
+    let unsynced = controller.pending_within(std::time::Duration::ZERO);
+
+    assert!(unsynced.is_err(), "nothing is said settled");
+    assert!(
+        controller
+            .pending_within(std::time::Duration::ZERO)
+            .unwrap()
+            .is_empty(),
+        "once synced"
+    );
+}

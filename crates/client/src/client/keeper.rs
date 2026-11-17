@@ -1,8 +1,9 @@
 //! What a client asks of a VM desktop through its session keeper: its status
-//! with a fresh proof of it, never ready yet, and the person's Stop and
-//! Resume. Everything else stays refused in the one wording for what this
-//! build cannot do on a VM.
-use super::{Actor, Client};
+//! with a fresh proof of it, never ready yet; the proof a command acts in,
+//! and its guest's own Stop; and the person's Stop and Resume. Everything
+//! else stays refused in the one wording for what this build cannot do on
+//! a VM.
+use super::{Actor, Client, Pinned, Verified};
 use crate::{
     link::{Keeper, Link},
     vm::proof::Observed,
@@ -10,9 +11,13 @@ use crate::{
 use atlas_core::{
     config::desktops::{Admission, Chosen},
     error::{Code, Error, Result},
-    session::MachineSession,
+    files::Token,
+    session::{MachineSession, Observation, Session},
 };
 use serde_json::{Value, json};
+
+/// How long a status waits for the station's pending changes to be read.
+const PENDING_READ: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// A VM's proof as one command took it: what its keeper observed, and the
 /// session that proves or why it does not.
@@ -98,6 +103,95 @@ impl Client {
         Ok(Proved { observed, session })
     }
 
+    /// A VM verified now for one of the commands this build runs on it (an
+    /// agent's `run`): proved afresh in one generation of
+    /// its keeper's session, its guest's own Stop clear, its agents not
+    /// stopped, open to no one but Atlas, and no update handing its session
+    /// over. The command keeps the proof's
+    /// generation for every change it makes.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM that does not prove, or proves but is held as above:
+    /// stopped while its guest, or the update handing it over, holds
+    /// agents.
+    pub(super) async fn verify_vm(&self) -> Result<Verified> {
+        if let Some(why) = self.handover_unfinished() {
+            return Err(Error::new(Code::Stopped, why));
+        }
+        let keeper = self.keeper().await?;
+        let proved = self.verify_machine(&keeper).await?;
+        let machine = proved.session?;
+        let status = &proved.observed.status;
+        if let Some(held) = guest_held(&self.selected.name, status) {
+            return Err(held);
+        }
+        if status["agents"]["admitted"] != true {
+            let held = status["agents"]["held"]
+                .as_str()
+                .unwrap_or("Agents wait until the desktop is closed to anyone but Atlas.");
+            return Err(Error::new(Code::Platform, held));
+        }
+        let epoch = &machine.epoch;
+        let session = Session {
+            epoch: atlas_core::session::Epoch {
+                uid: epoch.uid,
+                capture_pid: epoch.capture_pid,
+                display: epoch.display.clone(),
+                security_session_id: epoch.security_session_id,
+                display_id: epoch.display_id,
+                input_pid: epoch.input_pid,
+            },
+            capture: machine.capture,
+            input: machine.input,
+        };
+        Ok(Verified {
+            session,
+            observation: Observation::decode(status),
+            machine: Some(Pinned {
+                epoch: machine.epoch,
+                generation: proved.observed.generation,
+            }),
+        })
+    }
+
+    /// Why the VM's guest holds agents now, as its own hello read through
+    /// the keeper says; none when its Stop is clear and its agents go on.
+    /// A hello that cannot be read holds them as a Stop not known.
+    pub(super) async fn guest_stopped(&self) -> Option<Error> {
+        let hello = match self.link.call(&json!({"op": "hello"})).await {
+            Ok(hello) if hello["ok"] == true => hello,
+            Ok(_) | Err(_) => json!({"stop": {"state": "unknown"}}),
+        };
+        guest_held(&self.selected.name, &hello)
+    }
+
+    /// The refusal of an agent's change while the person's Stop holds:
+    /// named for the VM this client acts on, the helper's own otherwise.
+    pub(crate) fn stopped(&self) -> Error {
+        if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+            return Error::stopped();
+        }
+        Error::new(
+            Code::Stopped,
+            format!(
+                "The person stopped agents on {}. Ask them before doing anything more there.",
+                self.selected.name
+            ),
+        )
+    }
+
+    /// Tell the VM's guest it may forget what `changes` came to, the
+    /// station's claims on them cleared: best effort, as its keeper settles
+    /// them by itself once it sees them unclaimed.
+    pub(super) async fn settle_guest(&self, changes: &[Token]) {
+        if let Link::Keeper(keeper) = &self.link {
+            let _ = keeper
+                .one(&json!({"op": "settle", "changes": changes}))
+                .await;
+        }
+    }
+
     /// A VM's status: its keeper's hello, its guest's own and a fresh proof
     /// of it, read through the keeper. It is never ready yet, proven or not.
     pub(super) async fn vm_status(&self) -> Result<Value> {
@@ -132,6 +226,14 @@ impl Client {
             Ok(Ok(None)) => json!({"state": "clear"}),
             Ok(Err(_)) | Err(_) => json!({"state": "unknown"}),
         };
+        // The changes whose outcome the station does not know yet, read
+        // without queueing behind control.
+        let controller = self.controller.clone();
+        let pending = tokio::task::spawn_blocking(move || controller.pending_within(PENDING_READ))
+            .await
+            .map_or(json!("unknown"), |pending| {
+                pending.map_or(json!("unknown"), |pending| json!(pending))
+            });
         let generation = observed.as_ref().map(|observed| observed.generation);
         let mid_update = !session.as_ref().is_ok_and(|session| session.input)
             && crate::vm::proof::mid_update(&guest);
@@ -146,7 +248,8 @@ impl Client {
                 json!({"epoch": session.epoch, "capture": session.capture,
                     "input": session.input, "generation": generation}),
                 format!(
-                    "{} is proven, but this build of Atlas cannot act on a VM yet.",
+                    "{} is proven: agents run commands there, but this build of Atlas cannot \
+                     see or use its screen yet.",
                     self.selected.name
                 ),
             ),
@@ -165,7 +268,8 @@ impl Client {
             "keeper": hello,
             "guest": guest,
             "runner": observed.as_ref().map(|observed| json!(observed.runner)),
-            "station": {"stop": station, "handover": self.handover_unfinished()},
+            "station": {"stop": station, "handover": self.handover_unfinished(),
+                "pending": pending},
         }))
     }
 
@@ -278,6 +382,38 @@ fn observe_refused(refused: &Value, name: &str) -> Error {
         refused,
         "The VM's session keeper did not observe it.",
     )
+}
+
+/// Why the guest of the VM `name`, whose hello is `hello`, holds agents, in
+/// its own why: its saved Stop not clear, an unknown one included, or its
+/// agents stopped; none when they go on.
+fn guest_held(name: &str, hello: &Value) -> Option<Error> {
+    let resume = "until the person resumes them from the Atlas menu bar";
+    let why = match (
+        hello["stop"]["state"].as_str(),
+        hello["stop"]["why"].as_str(),
+    ) {
+        (Some("clear"), _) if hello["agents"]["stopped"] == false => return None,
+        (Some("clear"), _) => format!("{name} is stopping its agents, so it holds them {resume}."),
+        (Some("stopped"), Some("person")) => {
+            format!(
+                "The person stopped agents on {name}. Ask them before doing anything more there."
+            )
+        }
+        (Some("stopped"), Some("control-lost" | "lapsed")) => {
+            format!("{name} lost its session with this Mac, so it holds agents {resume}.")
+        }
+        (Some("stopped"), Some("restarted")) => format!(
+            "{name}'s Atlas started again after work it began may have run on, so it holds agents \
+             {resume}."
+        ),
+        (Some("stopped"), Some("revoked")) => {
+            format!("{name}'s pairing with this Mac was revoked, so it holds agents.")
+        }
+        (Some("stopped"), _) => format!("{name} holds agents {resume}."),
+        _ => format!("{name}'s own Stop cannot be read, so agents wait {resume}."),
+    };
+    Some(Error::new(Code::Stopped, why))
 }
 
 fn late(client: &Client) -> Error {

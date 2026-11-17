@@ -259,7 +259,7 @@ impl Preview {
 
 async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
     // Refused before control is taken, not once it is held.
-    client.reachable()?;
+    client.second_login_only()?;
     let output = client.output_dir()?;
     let agent_adopts = scope.adopting && client.actor == Actor::Agent;
     if agent_adopts {

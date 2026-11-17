@@ -43,6 +43,11 @@ pub struct Supervised {
     /// The generation it was started for.
     pub generation: Generation,
     pub supervisor: Instance,
+    /// The change it was started for, kept before its program may start:
+    /// what tells whether the work of a change whose outcome is unknown
+    /// may still run. None for a supervisor kept by an earlier build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<atlas_core::files::Token>,
     /// The background job it runs, when it runs one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<JobRecord>,

@@ -5,15 +5,16 @@
 //! listens on it (which `LOCAL_PEERTOKEN` names on the connecting end) runs
 //! code signed as Atlas, in this account, as the very process launchd runs
 //! for the VM's keeper.
-use super::{Link, Unreachable};
+use super::{Link, Route, Stream, Unreachable};
 use crate::station::Station;
 use atlas_core::{
     app_bundle::signature::{APP_IDENTIFIER, requirement_for},
-    config::desktops::Selected,
+    config::desktops::{Admission, Selected},
     desktop::DesktopId,
     error::{Code, Error, Result},
     launchd::Job,
     single_flight::Shared,
+    transport::Pending,
 };
 use atlas_session::pairing::{Enrolment, StationRecords};
 use serde_json::{Value, json};
@@ -36,6 +37,14 @@ use std::{
 const HELLO: Duration = Duration::from_secs(2);
 /// The longest line a keeper's answer holds.
 const LINE: u64 = 4 << 20;
+/// How much longer than its own deadline a keeper's answer is waited for:
+/// the keeper says why it gave up at its deadline, and that is heard.
+const MARGIN: Duration = Duration::from_secs(1);
+
+/// `duration` in whole milliseconds, as the keeper reads a deadline.
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
 
 /// The keeper of a VM, reached on its socket.
 #[derive(Clone)]
@@ -167,7 +176,7 @@ impl Keeper {
     }
 
     /// This keeper, its VM's pairing kept in `records`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_pairing(mut self, records: Arc<dyn StationRecords>) -> Self {
         self.pairing = Some(records);
         self
@@ -246,17 +255,138 @@ impl Keeper {
         }
     }
 
-    /// Ask the keeper `request`, within this link's deadline: every line of
-    /// its answer.
+    /// Ask the keeper `request`, within this link's deadline, its connection
+    /// and trust included: every line of its answer.
     ///
     /// # Errors
     ///
-    /// As [`Keeper::exchange`].
+    /// Fails when the keeper cannot be reached, is not trusted, or does not
+    /// answer whole in time.
     pub async fn ask(&self, request: &Value) -> Result<Vec<Value>> {
-        let (keeper, request) = (self.clone(), request.clone());
-        tokio::task::spawn_blocking(move || keeper.exchange(&request, keeper.timeout))
+        let until = tokio::time::Instant::now() + self.timeout;
+        let mut stream = self.trusted(until).await?;
+        let unreached = |error: std::io::Error| {
+            Error::new(
+                Code::Transport,
+                format!("{}'s session keeper did not answer.", self.selected.name),
+            )
+            .with_source(error)
+        };
+        let exchanging = async {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            let mut line = serde_json::to_vec(request)?;
+            line.push(b'\n');
+            stream.write_all(&line).await.map_err(unreached)?;
+            let mut reader =
+                tokio::io::BufReader::new(tokio::io::AsyncReadExt::take(&mut stream, LINE));
+            let mut answer = Vec::new();
+            loop {
+                let mut said = String::new();
+                if reader.read_line(&mut said).await.map_err(unreached)? == 0 {
+                    return Ok(answer);
+                }
+                answer.push(serde_json::from_str(&said).map_err(|_| {
+                    Error::new(
+                        Code::Protocol,
+                        format!(
+                            "{}'s session keeper said something not understood.",
+                            self.selected.name
+                        ),
+                    )
+                })?);
+            }
+        };
+        tokio::time::timeout_at(until, exchanging)
             .await
-            .map_err(|_| Error::new(Code::Transport, "Asking the session keeper stopped."))?
+            .map_err(|_| unreached(std::io::ErrorKind::TimedOut.into()))?
+    }
+
+    /// A connection to the keeper made by `until`, without blocking, and its
+    /// listener judged by then off the runtime: a judgement that outlives
+    /// `until` is left to end by itself with its connection.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the keeper cannot be reached in time or is not trusted.
+    async fn trusted(&self, until: tokio::time::Instant) -> Result<tokio::net::UnixStream> {
+        let late = || {
+            Error::new(
+                Code::Transport,
+                format!(
+                    "{}'s session keeper did not take the connection in time.",
+                    self.selected.name
+                ),
+            )
+        };
+        let stream = tokio::time::timeout_at(until, tokio::net::UnixStream::connect(&self.socket))
+            .await
+            .map_err(|_| late())?
+            .map_err(|error| {
+                Error::new(
+                    Code::Transport,
+                    format!("{}'s session keeper did not answer.", self.selected.name),
+                )
+                .with_source(error)
+            })?
+            .into_std()?;
+        let keeper = self.clone();
+        let judging = tokio::task::spawn_blocking(move || {
+            keeper.trust.trusts(&keeper.vm, &keeper.socket, &stream)?;
+            Ok::<_, Error>(stream)
+        });
+        let trusted = tokio::time::timeout_at(until, judging)
+            .await
+            .map_err(|_| late())?
+            .map_err(|_| Error::new(Code::Transport, "Reaching the session keeper stopped."))??;
+        Ok(tokio::net::UnixStream::from_std(trusted)?)
+    }
+
+    /// A connection to the keeper, trusted before anything is said on it,
+    /// both within this link's deadline ([`Keeper::trusted`]). Its answer is
+    /// waited for the link's deadline from when it is said, with a moment
+    /// more for the keeper's last word.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM still being added, or whose add cannot be told; fails
+    /// when the keeper cannot be reached in time or is not trusted.
+    pub(crate) async fn connected(&self) -> Result<Pending<Stream>> {
+        if self.selected.adding.get() != Admission::Open {
+            return Err(self.selected.unreachable());
+        }
+        let until = tokio::time::Instant::now() + self.timeout;
+        Ok(Pending::over_authenticated(
+            Stream::Keeper(self.trusted(until).await?),
+            self.timeout + MARGIN,
+        ))
+    }
+
+    /// Send `request`, a read, to the guest through the keeper, when it is
+    /// one the keeper carries: what comes back is its reply to read.
+    ///
+    /// # Errors
+    ///
+    /// Refuses any other read in the one wording for what this build cannot
+    /// do on a VM, before anything is said; fails when the keeper cannot be
+    /// reached or told.
+    pub(crate) async fn send_read(&self, request: &Value) -> Result<Pending<Stream>> {
+        let op = request["op"].as_str().unwrap_or_default();
+        if !crate::vm::keeper::READS.contains(&op) {
+            return Err(self.selected.unreachable());
+        }
+        let asked = json!({"op": "read", "request": request,
+            "deadline_ms": duration_ms(self.timeout)});
+        self.connected().await?.dispatch(&asked).await
+    }
+
+    /// What the keeper is asked to carry `request`, the change `route`
+    /// names, to the guest in the generation `generation` its command
+    /// proved.
+    pub(crate) fn change(&self, route: &Route, request: &Value, generation: u64) -> Value {
+        let Route::Change(change) = route;
+        json!({"op": "change", "lane": "change", "change": change,
+            "generation": generation, "request": request,
+            "deadline_ms": duration_ms(self.timeout)})
     }
 
     /// The keeper's one-line answer to `request`.

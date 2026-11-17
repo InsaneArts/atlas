@@ -1033,3 +1033,20 @@ async fn a_request_whose_flush_fails_after_it_was_written_may_have_run() {
     assert_eq!(failed.code, Code::Transport);
     assert!(failed.uncertain);
 }
+
+#[test]
+fn a_reply_whose_output_is_unavailable_says_so_and_never_that_it_printed_nothing() {
+    let recovered = json!({"ok": true, "exitCode": 0, "output": "unavailable"});
+
+    assert_eq!(with_output(recovered.clone()), recovered);
+}
+
+#[test]
+fn a_reply_a_relay_could_not_carry_whole_is_one_that_never_arrived() {
+    let carried = Error::new(Code::Transport, "The lane failed.");
+
+    let lost = super::lost_reply(carried);
+
+    assert!(super::reply_lost(&lost));
+    assert!(lost.uncertain);
+}

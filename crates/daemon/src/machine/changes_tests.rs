@@ -339,3 +339,40 @@ fn only_changes_still_intended_are_listed_as_intended_with_their_operation() {
         }]
     );
 }
+
+#[test]
+fn what_commands_printed_is_kept_within_one_bound_across_every_record_and_a_settled_one_frees_its_share()
+ {
+    let folder = tempfile::tempdir().unwrap();
+    let vault = Arc::new(Memory::default());
+    create(&vault, STORE).unwrap();
+    // Room for two commands' output of 3 bytes each, as base64 says it.
+    let changes = Changes::printing_at_most(folder.path(), vault, 6);
+    let reply = json!({"ok": true, "exitCode": 0});
+    let mut printed = reply.clone();
+    printed["events"] = json!([{"event": "output", "data": "aGkK"}]);
+    printed["truncated"] = json!(false);
+    let commands: Vec<Token> = (0..4).map(|_| Token::new()).collect();
+    let kept = |change: &Token| match changes.of(change).unwrap() {
+        Some(State::Done { reply }) => reply,
+        other => panic!("{other:?}"),
+    };
+
+    for change in &commands[..3] {
+        changes.ask(change, "run", &run("echo")).unwrap();
+        changes.done_printing(change, &reply, &printed).unwrap();
+    }
+    changes.settled(std::slice::from_ref(&commands[0])).unwrap();
+    changes.ask(&commands[3], "run", &run("echo")).unwrap();
+    changes
+        .done_printing(&commands[3], &reply, &printed)
+        .unwrap();
+
+    assert_eq!(kept(&commands[1]), printed);
+    assert_eq!(
+        kept(&commands[2]),
+        reply,
+        "past the bound: none of its output"
+    );
+    assert_eq!(kept(&commands[3]), printed, "the settled one's share freed");
+}

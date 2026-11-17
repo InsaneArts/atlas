@@ -10,18 +10,24 @@
 //! person's Stop it says Stop until the guest answers it applied. It never
 //! resumes by itself.
 //!
+//! It carries each command's changes on lanes of the generation that
+//! command proved ([`change`]), and tells the guest to forget what a change
+//! came to only once the station holds no claim on it: at each hello, and
+//! every [`WATCH`] for the changes it carried.
+//!
 //! An update of Atlas replaces its program while it runs; it does nothing
 //! on its own then. The update hands it over ([`super::handover`]): asked,
 //! it keeps the station's Stop for the update, says it, leaves its
 //! generation and ends, and launchd starts the new build's keeper in its
 //! place, which finishes a handover cut short.
 mod agent;
+mod change;
 mod clients;
 mod observe;
 mod program;
 
 pub use agent::{install_keeper, install_keeper_held};
-pub(crate) use clients::{PROTOCOL, RESUME_KEY};
+pub(crate) use clients::{PROTOCOL, READS, RESUME_KEY};
 use program::Program;
 
 use super::{
@@ -63,7 +69,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 /// The first wait before dialling again, doubled after each attempt that
 /// went nowhere.
@@ -80,7 +86,7 @@ const WATCH: Duration = Duration::from_secs(1);
 const FORGETTING: Duration = Duration::from_secs(10);
 /// How long the guest's own report is waited for on a new generation.
 const REPORT: Duration = Duration::from_secs(10);
-/// The longest reply line a read carries.
+/// The longest reply line a read or a change carries.
 const LINE: u64 = 4 << 20;
 
 /// The label of `vm`'s keeper's own launchd agent.
@@ -442,6 +448,9 @@ struct Session {
     control: Control,
     desktop: Desktop,
     guest: PeerKey,
+    /// The changes carried in it, settled once the station holds no claim
+    /// on them.
+    carried: change::Carried,
 }
 
 /// How an attempt at a generation ended.
@@ -526,11 +535,29 @@ impl Keeper {
             Ok(stream) => stream,
             Err(refused) => return self.refused(refused),
         };
+        // Of the changes the guest's hello names, only those the station
+        // holds no claim on are settled: a marker that cannot be read now
+        // claims every one.
+        let claims = self.claimed().await;
+        let claimed = |change: &atlas_core::files::Token| {
+            claims
+                .as_ref()
+                .is_none_or(|claims| claims.iter().any(|claim| claim == change.as_str()))
+        };
         let (control, mut events) =
-            match control::open(stream, &self.own, guest, &self.vm, |_| false).await {
+            match control::open(stream, &self.own, guest, &self.vm, &claimed).await {
                 Ok(opened) => opened,
                 Err(error) => return Ended::Failed(error.error),
             };
+        // What the hello named and could not settle yet is looked at again
+        // each tick, as the changes carried in the generation are.
+        let carried = change::Carried::of(
+            control
+                .unsettled()
+                .iter()
+                .filter(|change| claimed(change))
+                .cloned(),
+        );
         let peers = Peers {
             desktop: self.vm.clone(),
             own: self.own.clone(),
@@ -547,6 +574,7 @@ impl Keeper {
             control,
             desktop,
             guest,
+            carried,
         });
         {
             let mut state = self.shared.state();
@@ -763,6 +791,7 @@ impl Keeper {
                     applied.revision = revision;
                 }
             }
+            self.settling(session).await;
             tokio::time::sleep(WATCH).await;
         }
     }
@@ -818,41 +847,68 @@ async fn read(
     let carried = tokio::time::timeout_at(until, carry(opened.stream, request, line))
         .await
         .unwrap_or_else(|_| Err(late()));
-    // A read given up is cancelled on the guest too.
-    if carried.is_err() {
+    // A read given up, by its reader or for a failure, is cancelled on the
+    // guest too.
+    if !matches!(carried, Ok(true)) {
         session.desktop.cancel(lane);
     }
-    carried
+    carried.map(drop)
 }
 
 /// Say `request` on the opened lane `stream` and hand each reply line to
 /// `line` until the final one, which ends it: the guest says nothing after
 /// its final reply, and may end the lane without finishing it, so nothing is
-/// read past it.
+/// read past it. Whether the final reply came, rather than `line` saying to
+/// stop first.
 async fn carry<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     request: &Value,
     mut line: impl FnMut(String) -> bool,
-) -> Result<()> {
+) -> Result<bool> {
     let mut said = serde_json::to_vec(request)?;
     said.push(b'\n');
     stream.write_all(&said).await.map_err(lane_failed)?;
     stream.flush().await.map_err(lane_failed)?;
-    let mut reader = BufReader::new(tokio::io::AsyncReadExt::take(stream, LINE));
+    let mut reader = BufReader::new(stream);
     loop {
-        let mut reply = String::new();
-        if reader.read_line(&mut reply).await.map_err(lane_failed)? == 0 {
+        let Some(reply) = reply_line(&mut reader).await.map_err(lane_failed)? else {
             return Err(Error::new(
                 Code::Transport,
                 "The read's lane to the guest ended before its final reply.",
             ));
-        }
+        };
         let reply = reply.trim_end().to_owned();
         let last = final_reply(&reply);
         if !line(reply) || last {
-            return Ok(());
+            return Ok(last);
         }
     }
+}
+
+/// The next reply line on `reader`, its newline taken off: none once the
+/// lane ended between lines. Each line is bounded on its own by [`LINE`].
+///
+/// # Errors
+///
+/// Refuses a line the lane's end cut short, never passed on as if whole,
+/// and one longer than [`LINE`]; fails when the lane does.
+async fn reply_line<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Option<String>> {
+    let mut line = String::new();
+    let read = tokio::io::AsyncReadExt::take(&mut *reader, LINE)
+        .read_line(&mut line)
+        .await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if line.pop() != Some('\n') {
+        let why = if read as u64 >= LINE {
+            "a reply line longer than the keeper carries"
+        } else {
+            "a reply line cut short by the lane's end"
+        };
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, why));
+    }
+    Ok(Some(line))
 }
 
 /// Whether `line` is a request's final reply: an object that is not an
