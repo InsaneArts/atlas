@@ -760,7 +760,7 @@ fn elements_take_several_names_a_page_and_values_or_everything() {
 }
 
 #[test]
-fn a_vm_is_added_named_or_not_and_the_desktops_listed() {
+fn a_vm_is_added_named_or_not_removed_by_its_name_and_the_desktops_listed() {
     let named = parse(&["desktop", "add", "vm", "--name", "work"]).unwrap();
     let unnamed = parse(&["desktop", "add", "vm"]).unwrap();
     let listed = parse(&["desktop", "list"]).unwrap();
@@ -780,6 +780,26 @@ fn a_vm_is_added_named_or_not_and_the_desktops_listed() {
         Some(Command::Desktop(Desktop::List))
     ));
     assert!(parse(&["desktop", "add"]).is_err());
+    assert!(matches!(
+        parse(&["desktop", "remove", "work"]).unwrap().command,
+        Some(Command::Desktop(Desktop::Remove { name: Some(ref name), id: None })) if name == "work"
+    ));
+    assert!(parse(&["desktop", "remove"]).is_err());
+    assert!(matches!(
+        parse(&["desktop", "remove", "--id", "0123456789abcdef01234567"]).unwrap().command,
+        Some(Command::Desktop(Desktop::Remove { name: None, id: Some(ref id) }))
+            if id == "0123456789abcdef01234567"
+    ));
+    assert!(
+        parse(&[
+            "desktop",
+            "remove",
+            "work",
+            "--id",
+            "0123456789abcdef01234567"
+        ])
+        .is_err()
+    );
     assert_eq!(
         parse(&["--desktop", "work", "status"])
             .unwrap()

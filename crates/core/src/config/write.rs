@@ -142,13 +142,23 @@ pub enum Change {
     /// alone, as the default; settings that name one helper become a list
     /// of their Second Login, kept as it was, the default still, and the VM.
     AddVm { name: String, id: DesktopId },
-    /// Take the VM `id`, listed as `name`, off the list, as `disposition`
-    /// says. A VM the list no longer holds is already off it.
+    /// Take the VM `id` off the list, found by its identifier whatever it
+    /// is named now, as `disposition` says. A VM the list no longer holds
+    /// is already off it. The VMs `going`, whose own removals are under
+    /// way, are never handed the default and never count as left.
     RemoveVm {
-        name: String,
         id: DesktopId,
         disposition: Disposition,
+        going: Vec<DesktopId>,
     },
+}
+
+/// What a change made of the settings file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Applied {
+    pub written: Written,
+    /// The desktop it made the default, when it moved the default.
+    pub default: Option<String>,
 }
 
 /// What becomes of the settings when a VM is removed.
@@ -179,7 +189,7 @@ impl Change {
             Some(read_text(path)?)
         };
         let text = match self.edit(current.as_deref(), path)? {
-            Some(edit) => edit.text,
+            Some((edit, _)) => edit.text,
             None => current.ok_or_else(|| super::missing(path))?,
         };
         loads(&text, path)
@@ -194,20 +204,41 @@ impl Change {
     /// desktop, and an old form's kept copy that holds something else; and
     /// fails as [`update`] does.
     pub fn apply(&self, path: &Path) -> Result<Written> {
-        update(path, |current| self.edit(current, path))
+        self.applied(path).map(|applied| applied.written)
     }
 
-    /// The text `current`, the file at `path`'s, with this change made.
-    fn edit(&self, current: Option<&str>, path: &Path) -> Result<Option<Edit>> {
+    /// [`Self::apply`], with the default it committed when it moved it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::apply`].
+    pub fn applied(&self, path: &Path) -> Result<Applied> {
+        let mut default = None;
+        let written = update(path, |current| {
+            let edit = self.edit(current, path)?;
+            default = edit.as_ref().and_then(|(_, moved)| moved.clone());
+            Ok(edit.map(|(edit, _)| edit))
+        })?;
+        Ok(Applied {
+            written,
+            default: default.filter(|_| written == Written::Changed),
+        })
+    }
+
+    /// The text `current`, the file at `path`'s, with this change made, and
+    /// the desktop it makes the default when it moves the default.
+    fn edit(&self, current: Option<&str>, path: &Path) -> Result<Option<(Edit, Option<String>)>> {
         match self {
-            Self::AddVm { name, id } => added(current, path, name, id).map(Some),
+            Self::AddVm { name, id } => {
+                added(current, path, name, id).map(|edit| Some((edit, None)))
+            }
             Self::RemoveVm {
-                name,
                 id,
                 disposition,
+                going,
             } => match (current, disposition) {
                 (_, Disposition::Uninstall) | (None, Disposition::Desktop) => Ok(None),
-                (Some(text), Disposition::Desktop) => removed(text, path, name, id),
+                (Some(text), Disposition::Desktop) => removed(text, path, id, going),
             },
         }
     }
@@ -254,36 +285,45 @@ fn added(current: Option<&str>, path: &Path, name: &str, id: &DesktopId) -> Resu
     })
 }
 
-/// The settings `text` of the file at `path` with the VM `id`, listed as
-/// `name`, off the list; none when the list does not hold it.
-fn removed(text: &str, path: &Path, name: &str, id: &DesktopId) -> Result<Option<Edit>> {
+/// The settings `text` of the file at `path` with the VM `id` off the list,
+/// found by its identifier, and the desktop made the default when the VM
+/// was it, never one of `going`; none when the list does not hold it.
+fn removed(
+    text: &str,
+    path: &Path,
+    id: &DesktopId,
+    going: &[DesktopId],
+) -> Result<Option<(Edit, Option<String>)>> {
     let settings = Settings::parse(text.as_bytes(), path)?;
-    let listed = settings
-        .desktops()
-        .iter()
-        .position(|listed| listed.name == name);
-    let Some(index) = listed else {
+    let is = |listed: &super::desktops::Listed, vm: &DesktopId| matches!(&listed.desktop, super::desktops::Chosen::Vm(config) if config.id == *vm);
+    let Some(this) = settings.desktops().iter().find(|listed| is(listed, id)) else {
         return Ok(None);
     };
-    if settings.desktops()[index].desktop.desktop() != crate::desktop::Desktop::from(vm(id)) {
-        return Err(Error::new(
-            Code::Config,
-            format!("The settings list \"{name}\" as another desktop"),
-        ));
-    }
-    let left: Vec<_> = settings
+    let name = this.name.clone();
+    let others: Vec<_> = settings
         .desktops()
         .iter()
-        .filter(|listed| listed.name != name)
+        .filter(|listed| !is(listed, id))
+        .collect();
+    let left: Vec<_> = others
+        .iter()
+        .filter(|listed| !going.iter().any(|vm| is(listed, vm)))
         .collect();
     let Some(first) = left.first() else {
-        return Err(Error::new(
-            Code::Config,
+        let error = if others.is_empty() {
             format!(
                 "{name} is the only desktop the settings list. To remove it with the rest of \
                  Atlas, run atlas uninstall."
-            ),
-        ));
+            )
+        } else {
+            let names: Vec<&str> = others.iter().map(|listed| listed.name.as_str()).collect();
+            format!(
+                "{name} is the last desktop the settings list that is not being removed ({} \
+                 being removed). To remove it with the rest of Atlas, run atlas uninstall.",
+                names.join(", ")
+            )
+        };
+        return Err(Error::new(Code::Config, error));
     };
     let default = (settings.default_desktop().name == name).then(|| {
         left.iter()
@@ -294,7 +334,8 @@ fn removed(text: &str, path: &Path, name: &str, id: &DesktopId) -> Result<Option
     });
     let mut document = parsed(text, path)?;
     let named = |entry: &dyn toml_edit::TableLike| {
-        entry.get("name").and_then(toml_edit::Item::as_str) == Some(name)
+        entry.get("kind").and_then(toml_edit::Item::as_str) == Some("vm")
+            && entry.get("id").and_then(toml_edit::Item::as_str) == Some(id.as_str())
     };
     match document.get_mut("desktops") {
         Some(toml_edit::Item::ArrayOfTables(tables)) => {
@@ -313,14 +354,10 @@ fn removed(text: &str, path: &Path, name: &str, id: &DesktopId) -> Result<Option
         }
         _ => return Err(invalid(path, &"desktops is not a list")),
     }
-    if let Some(default) = default {
-        super::desktops::put(document.as_table_mut(), "default", default.into());
+    if let Some(default) = &default {
+        super::desktops::put(document.as_table_mut(), "default", default.as_str().into());
     }
-    Ok(Some(Edit::text(document.to_string())))
-}
-
-fn vm(id: &DesktopId) -> crate::vm::Vm {
-    crate::vm::Vm { id: id.clone() }
+    Ok(Some((Edit::text(document.to_string()), default)))
 }
 
 /// The list entry of the VM `id`, named `name`.

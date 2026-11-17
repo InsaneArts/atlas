@@ -1,6 +1,6 @@
 //! Views of looking after Atlas itself: agents, switching, updates,
 //! removal and the menu bar's login item.
-use super::{Rendered, card, items, style, text};
+use super::{Rendered, card, items, strings, style, text};
 use crate::ui::table;
 use atlas_core::error::Code;
 use serde_json::Value;
@@ -285,6 +285,49 @@ pub(super) fn desktop_added(value: &Value) -> String {
         text::printable(value["settings"].as_str().unwrap_or("the settings")),
         style::dim("Agents cannot use it yet: this build of Atlas does not reach VM desktops.")
     )
+}
+
+pub(super) fn desktop_removed(value: &Value) -> String {
+    let name = text::printable(value["removed"]["name"].as_str().unwrap_or("the VM")).into_owned();
+    let mut lines = vec![format!(
+        "{} The VM \u{201c}{name}\u{201d} is removed from {}",
+        style::ok(),
+        text::printable(value["settings"].as_str().unwrap_or("the settings"))
+    )];
+    if let Some(default) = value["default"].as_str() {
+        lines.push(format!(
+            "  The default desktop is now \u{201c}{}\u{201d}.",
+            text::printable(default)
+        ));
+    }
+    let kept: Vec<&str> = strings(&value["kept"]).collect();
+    if !kept.is_empty() {
+        lines.push(format!("{} Atlas kept:", style::warn()));
+        lines.extend(
+            kept.iter()
+                .map(|path| format!("    {}", text::printable(path))),
+        );
+        lines.push(format!(
+            "  {}",
+            text::printable(value["keptWhy"].as_str().unwrap_or_default())
+        ));
+    }
+    let left: Vec<&Value> = items(&value["left"]).collect();
+    if !left.is_empty() {
+        lines.push(format!("{} Left in the Keychain:", style::warn()));
+        lines.extend(left.iter().map(|item| {
+            format!(
+                "    {} {}",
+                text::printable(item["service"].as_str().unwrap_or("?")),
+                text::printable(item["account"].as_str().unwrap_or("?"))
+            )
+        }));
+        lines.push(format!(
+            "  {}",
+            text::printable(value["leftNext"].as_str().unwrap_or_default())
+        ));
+    }
+    lines.join("\n")
 }
 
 pub(super) fn desktops(value: &Value) -> String {

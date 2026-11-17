@@ -122,7 +122,8 @@ pub(super) enum Command {
     /// and answered through Atlas.app.
     #[command(hide = true, subcommand)]
     Lifecycle(Lifecycle),
-    /// Add a VM desktop, or list the desktops, VMs being added among them.
+    /// Add or remove a VM desktop, or list the desktops, VMs being added
+    /// among them.
     /// Hidden until agents can use a VM.
     #[command(hide = true, subcommand)]
     Desktop(Desktop),
@@ -1580,6 +1581,17 @@ pub(super) enum Desktop {
     /// cut short goes on from where it got.
     #[command(subcommand)]
     Add(DesktopKind),
+    /// Remove a VM desktop, once you allow it in Atlas.app: the VM, its
+    /// settings entry and what Atlas kept of it. Asked again, a removal cut
+    /// short goes on from where it got.
+    Remove {
+        /// The VM's name, as atlas desktop list shows it.
+        #[arg(required_unless_present = "id", conflicts_with = "id")]
+        name: Option<String>,
+        /// The VM's identifier instead, as its removal names it.
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Every desktop, by kind: a VM's power, whether Atlas reaches it, and
     /// whether it is still being added.
     List,

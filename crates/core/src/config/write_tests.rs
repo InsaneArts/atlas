@@ -37,11 +37,11 @@ fn add(name: &str, vm: &str) -> Change {
     }
 }
 
-fn remove(name: &str, vm: &str, disposition: Disposition) -> Change {
+fn remove(vm: &str, disposition: Disposition) -> Change {
     Change::RemoveVm {
-        name: name.to_owned(),
         id: id(vm),
         disposition,
+        going: Vec::new(),
     }
 }
 
@@ -180,9 +180,7 @@ fn a_default_vm_removed_hands_the_default_to_second_login() {
         .replace("default = \"second-login\"", "default = \"work\"");
     std::fs::write(&path, text).unwrap();
 
-    remove("work", VM, Disposition::Desktop)
-        .apply(&path)
-        .unwrap();
+    remove(VM, Disposition::Desktop).apply(&path).unwrap();
 
     let settings = Settings::load(&path).unwrap();
     assert_eq!(names(&path), ["second-login"]);
@@ -196,9 +194,7 @@ fn a_default_vm_removed_without_second_login_hands_the_default_to_the_first_left
     add("work", VM).apply(&path).unwrap();
     add("play", OTHER_VM).apply(&path).unwrap();
 
-    remove("work", VM, Disposition::Desktop)
-        .apply(&path)
-        .unwrap();
+    remove(VM, Disposition::Desktop).apply(&path).unwrap();
 
     assert_eq!(
         Settings::load(&path).unwrap().default_desktop().name,
@@ -213,12 +209,8 @@ fn the_sole_desktop_is_refused_by_a_removal_and_left_as_it_is_by_uninstall() {
     add("work", VM).apply(&path).unwrap();
     let before = std::fs::read(&path).unwrap();
 
-    let refused = remove("work", VM, Disposition::Desktop)
-        .check(&path)
-        .unwrap_err();
-    let uninstalled = remove("work", VM, Disposition::Uninstall)
-        .apply(&path)
-        .unwrap();
+    let refused = remove(VM, Disposition::Desktop).check(&path).unwrap_err();
+    let uninstalled = remove(VM, Disposition::Uninstall).apply(&path).unwrap();
 
     assert!(
         refused.error.contains("atlas uninstall"),
@@ -234,31 +226,58 @@ fn a_vm_no_longer_listed_is_already_removed() {
     let folder = tempfile::tempdir().unwrap();
     let path = settings_in(folder.path(), OLD);
 
-    let removed = remove("work", VM, Disposition::Desktop)
-        .apply(&path)
-        .unwrap();
+    let removed = remove(VM, Disposition::Desktop).apply(&path).unwrap();
 
     assert_eq!(removed, Written::Unchanged);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), OLD);
 }
 
 #[test]
-fn a_name_listed_as_another_desktop_is_never_removed_as_the_vm() {
+fn a_vm_is_found_by_its_id_whatever_it_is_named_now_and_another_of_its_old_name_is_left() {
     let folder = tempfile::tempdir().unwrap();
     let path = settings_in(folder.path(), OLD);
+    add("work", VM).apply(&path).unwrap();
+    let renamed = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("name = \"work\"", "name = \"job\"");
+    std::fs::write(&path, renamed).unwrap();
     add("work", OTHER_VM).apply(&path).unwrap();
-    let before = std::fs::read(&path).unwrap();
 
-    let refused = remove("work", VM, Disposition::Desktop)
+    let removed = remove(VM, Disposition::Desktop).apply(&path).unwrap();
+
+    assert_eq!(removed, Written::Changed);
+    assert_eq!(names(&path), ["second-login", "work"]);
+    assert!(std::fs::read_to_string(&path).unwrap().contains(OTHER_VM));
+    assert!(!std::fs::read_to_string(&path).unwrap().contains(VM));
+}
+
+#[test]
+fn a_vm_being_removed_is_never_handed_the_default_nor_counted_as_left() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("atlas.toml");
+    add("work", VM).apply(&path).unwrap();
+    add("spare", OTHER_VM).apply(&path).unwrap();
+    add("play", "fedcba9876543210fedcba98")
         .apply(&path)
-        .unwrap_err();
+        .unwrap();
+    let going = |vms: &[&str]| Change::RemoveVm {
+        id: id(VM),
+        disposition: Disposition::Desktop,
+        going: vms.iter().map(|vm| id(vm)).collect(),
+    };
 
-    assert!(
-        refused.error.contains("another desktop"),
-        "{}",
-        refused.error
+    let alone = going(&[OTHER_VM, "fedcba9876543210fedcba98"])
+        .check(&path)
+        .unwrap_err();
+    let applied = going(&[OTHER_VM]).applied(&path).unwrap();
+
+    assert!(alone.error.contains("not being removed"), "{}", alone.error);
+    assert_eq!(applied.written, Written::Changed);
+    assert_eq!(applied.default.as_deref(), Some("play"));
+    assert_eq!(
+        Settings::load(&path).unwrap().default_desktop().name,
+        "play"
     );
-    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]

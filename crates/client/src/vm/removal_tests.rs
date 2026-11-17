@@ -44,7 +44,7 @@ fn a_stopped_vm_is_removed_whole_and_asked_again_answers_the_same() {
     assert!(fake.launched.lock().unwrap()[0].starts_with("bootout gui/"));
     assert_eq!(removed["passwords"][desktop().as_str()], "deleted");
     assert!(
-        fake.deleted.lock().unwrap().is_empty(),
+        fake.ran.lock().unwrap().is_empty(),
         "the runner deleted them"
     );
 }
@@ -186,21 +186,146 @@ fn another_removal_of_a_vm_being_removed_is_refused() {
     drop(runner);
 }
 
+fn admin() -> String {
+    format!("{}.admin", desktop().as_str())
+}
+
+/// What Atlas VM's deletion-only entry keeps, for the removal `change`.
+fn entry_result(vms: &Vms, change: &str, guest: &str, admin_fate: &str) -> (PathBuf, Value) {
+    (
+        vms.forgotten(&desktop()),
+        json!({"change": change, "passwords": {desktop().as_str(): guest, admin(): admin_fate}}),
+    )
+}
+
 #[test]
-fn passwords_its_runner_did_not_delete_are_deleted_never_asking() {
+fn passwords_a_runner_that_cannot_run_left_are_deleted_by_atlas_vms_deletion_only_entry() {
     let (_home, vms) = home();
     let fake = Fake::new();
     made(&vms, 41, Some(42));
+    *fake.entry.lock().unwrap() = Some(entry_result(&vms, change().as_str(), "deleted", "absent"));
 
     let removal = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
 
     assert_eq!(removal["removal"], "done", "{removal}");
     assert_eq!(
-        *fake.deleted.lock().unwrap(),
-        [
-            desktop().as_str().to_owned(),
-            format!("{}.admin", desktop().as_str())
-        ]
+        *fake.ran.lock().unwrap(),
+        [format!(
+            "{} forget-passwords {} --removal {}",
+            fake.program().unwrap().display(),
+            desktop().as_str(),
+            change().as_str()
+        )],
+        "run from this Atlas's own bundle, under this removal"
+    );
+    assert_eq!(removal["passwords"][desktop().as_str()], "deleted");
+    assert_eq!(removal["passwords"][admin()], "absent");
+    assert_eq!(removal["left"], json!([]));
+}
+
+#[test]
+fn passwords_are_left_and_named_when_the_deletion_only_entry_fails_too() {
+    for case in [
+        "exits otherwise",
+        "another removal's result",
+        "no result",
+        "a password it left",
+    ] {
+        let (_home, vms) = home();
+        let fake = Fake::new();
+        made(&vms, 41, Some(42));
+        let other = "d".repeat(48);
+        let result = match case {
+            "another removal's result" => Some(entry_result(&vms, &other, "deleted", "deleted")),
+            "no result" => None,
+            "a password it left" => Some(entry_result(&vms, change().as_str(), "deleted", "left")),
+            _ => Some(entry_result(&vms, change().as_str(), "deleted", "deleted")),
+        };
+        *fake.entry.lock().unwrap() = result;
+        *fake.entry_fails.lock().unwrap() = case == "exits otherwise";
+
+        let removal = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+        assert_eq!(removal["removal"], "done", "{case}: {removal}");
+        assert_eq!(fake.ran.lock().unwrap().len(), 1, "{case}");
+        assert_eq!(removal["passwords"][admin()], "left", "{case}: {removal}");
+        let left = removal["left"].as_array().unwrap();
+        assert!(
+            left.contains(&json!({"service": "com.insanearts.atlas.vm", "account": admin()})),
+            "{case}: {removal}"
+        );
+        if case == "a password it left" {
+            assert_eq!(removal["passwords"][desktop().as_str()], "deleted");
+            assert_eq!(left.len(), 1, "{case}: {removal}");
+        } else {
+            assert_eq!(removal["passwords"][desktop().as_str()], "left");
+            assert_eq!(left.len(), 2, "{case}: {removal}");
+        }
+    }
+}
+
+#[test]
+fn an_earlier_result_of_the_deletion_only_entry_is_never_taken_for_this_ones() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    let (path, earlier) = entry_result(&vms, change().as_str(), "deleted", "deleted");
+    atlas_core::files::private_folder(&vms.removals(), atlas_core::error::Code::State).unwrap();
+    atlas_core::files::write_private(&path, earlier.to_string().as_bytes()).unwrap();
+    // This run exits cleanly and keeps nothing.
+    let removal = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(
+        removal["passwords"][desktop().as_str()],
+        "left",
+        "{removal}"
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn items_left_are_looked_up_again_and_recorded_gone_once_deleted_by_hand() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    // Locked: neither the entry nor the station could delete anything.
+    *fake.entry_fails.lock().unwrap() = true;
+    *fake.locked.lock().unwrap() = true;
+    let left = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    assert_eq!(left["enrolment"], "left", "{left}");
+    assert_eq!(left["left"].as_array().unwrap().len(), 3, "{left}");
+
+    // Still locked: a lookup that cannot tell leaves each as it was.
+    let untold = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    assert_eq!(untold, left);
+
+    // The person deleted the guest's password and the enrolment by hand.
+    *fake.locked.lock().unwrap() = false;
+    *fake.passwords.lock().unwrap() = vec![admin()];
+    let looked = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+
+    assert_eq!(looked["passwords"][desktop().as_str()], "gone", "{looked}");
+    assert_eq!(looked["passwords"][admin()], "left", "{looked}");
+    assert_eq!(looked["enrolment"], "gone", "{looked}");
+    assert_eq!(
+        looked["left"],
+        json!([{"service": "com.insanearts.atlas.vm", "account": admin()}])
+    );
+    let recorded = recorded(&vms, &desktop()).unwrap().unwrap();
+    assert_eq!(
+        recorded.passwords[desktop().as_str()],
+        "gone",
+        "kept in the removal's own record"
+    );
+    assert_eq!(recorded.enrolment.as_deref(), Some("gone"));
+
+    fake.passwords.lock().unwrap().clear();
+    let cleared = remove_with(&vms, &fake, &desktop(), &change()).unwrap();
+    assert_eq!(cleared["left"], json!([]), "{cleared}");
+    assert_eq!(
+        fake.ran.lock().unwrap().len(),
+        1,
+        "the entry is not run again"
     );
 }
 
@@ -245,7 +370,7 @@ fn a_runner_busy_when_asked_to_forget_is_asked_again_while_it_lives() {
     );
     assert_eq!(removed["removal"], "done", "{removed}");
     assert!(
-        fake.deleted.lock().unwrap().is_empty(),
+        fake.ran.lock().unwrap().is_empty(),
         "the runner deleted them"
     );
 }

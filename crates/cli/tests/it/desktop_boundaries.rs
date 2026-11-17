@@ -1448,6 +1448,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: the listing of every desktop, which names each by its kind",
     ),
     (
+        "crates/client/src/vm/removing.rs",
+        &["found"],
+        "owner: a VM's removal, which refuses the Second Login by name",
+    ),
+    (
         "crates/core/src/config.rs",
         &[
             "Config",

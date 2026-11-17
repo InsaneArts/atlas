@@ -24,6 +24,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// What became of an item the removal could not delete without asking.
+const LEFT: &str = "left";
+/// What became of an item left, once it is found deleted by hand.
+const GONE: &str = "gone";
+
 /// How far a removal got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,11 +86,14 @@ struct Record {
     forgot: Option<Value>,
     /// The runs proved gone, kept before anything is deleted.
     proved: Option<Vec<Run>>,
-    /// What became of each password.
+    /// What became of each password: `deleted`, `absent`, `left` when it
+    /// could not be deleted without asking, and `gone` once a password left
+    /// is found deleted by hand.
     passwords: BTreeMap<String, String>,
     /// What was found in the folder's places and left, being another.
     kept: Vec<String>,
-    /// What became of the VM's enrolment, kept until it paired.
+    /// What became of the VM's enrolment, kept until it paired, as each
+    /// password's.
     #[serde(default)]
     enrolment: Option<String>,
 }
@@ -106,7 +114,19 @@ fn pending(step: Step, why: &str) -> Value {
     json!({"ok": true, "removal": "pending", "step": step, "why": why})
 }
 
-fn answer(record: &Record) -> Value {
+fn answer(desktop: &DesktopId, record: &Record) -> Value {
+    let mut left: Vec<Value> = record
+        .passwords
+        .iter()
+        .filter(|(_, became)| *became == LEFT)
+        .map(|(account, _)| json!({"service": super::PASSWORDS, "account": account}))
+        .collect();
+    if record.enrolment.as_deref() == Some(LEFT) {
+        left.push(json!({
+            "service": crate::station::enrolment::SERVICE,
+            "account": desktop.as_str(),
+        }));
+    }
     json!({
         "ok": true,
         "removal": "done",
@@ -114,6 +134,7 @@ fn answer(record: &Record) -> Value {
         "passwords": record.passwords,
         "enrolment": record.enrolment,
         "kept": record.kept,
+        "left": left,
     })
 }
 
@@ -141,7 +162,7 @@ fn remove_with(
     )
 }
 
-fn removed(
+pub(super) fn removed(
     vms: &Vms,
     system: &impl System,
     hold: &StationHold<'_>,
@@ -152,9 +173,13 @@ fn removed(
     let mut record = match read(&marker)? {
         // Done: written through again first, so an answer given is one
         // a power cut cannot take back.
-        Some(record) if record.step == Step::Done => {
-            sync(&vms.removals())?;
-            return Ok(answer(&record));
+        Some(mut record) if record.step == Step::Done => {
+            if looked_again(system, desktop, &mut record) {
+                keep(vms, &marker, &record)?;
+            } else {
+                sync(&vms.removals())?;
+            }
+            return Ok(answer(desktop, &record));
         }
         Some(record) if &record.change != change => {
             return Ok(json!({"ok": false, "error": "Another removal of this VM is under way."}));
@@ -284,29 +309,34 @@ fn removed(
             .forgot
             .as_ref()
             .is_some_and(|forgot| forgot["outcome"]["state"] == "done");
-        for account in [
-            desktop.as_str().to_owned(),
-            format!("{}.admin", desktop.as_str()),
-        ] {
-            if record.passwords.contains_key(&account) {
-                continue;
-            }
-            let became = if forgotten {
-                "deleted"
+        let accounts = accounts(desktop);
+        if !accounts
+            .iter()
+            .all(|account| record.passwords.contains_key(account))
+        {
+            // Only Atlas VM, which made them, deletes them without asking:
+            // its deletion-only entry when its runner could not.
+            let fates = if forgotten {
+                accounts
+                    .iter()
+                    .map(|account| (account.clone(), "deleted".to_owned()))
+                    .collect()
             } else {
-                match system.delete_password(&account) {
-                    Ok(true) => "deleted",
-                    Ok(false) => "absent",
-                    Err(_) => "left",
-                }
+                forgotten_by_entry(vms, system, desktop, &record.change).unwrap_or_default()
             };
-            record.passwords.insert(account, became.to_owned());
+            for account in accounts {
+                let became = fates
+                    .get(&account)
+                    .cloned()
+                    .unwrap_or_else(|| LEFT.to_owned());
+                record.passwords.entry(account).or_insert(became);
+            }
         }
         if record.enrolment.is_none() {
             let became = match system.delete_enrolment(desktop) {
                 Ok(true) => "deleted",
                 Ok(false) => "absent",
-                Err(_) => "left",
+                Err(_) => LEFT,
             };
             record.enrolment = Some(became.to_owned());
         }
@@ -332,7 +362,7 @@ fn removed(
         record.step = Step::Done;
         keep(vms, &marker, &record)?;
     }
-    Ok(answer(&record))
+    Ok(answer(desktop, &record))
 }
 
 /// The agent's plist removed first, so a bootstrap still on its way has
@@ -370,6 +400,87 @@ fn retire_keeper(vms: &Vms, system: &impl System, desktop: &DesktopId) -> Result
     }
     let _ = system.launchctl(&["bootout", &format!("{}/{label}", vms.domain())])?;
     Ok(())
+}
+
+/// The Keychain accounts of the VM `desktop`'s two passwords, its guest's
+/// and its second administrator's, as Atlas VM keeps them.
+fn accounts(desktop: &DesktopId) -> [String; 2] {
+    [
+        desktop.as_str().to_owned(),
+        format!("{}.admin", desktop.as_str()),
+    ]
+}
+
+/// What Atlas VM's deletion-only entry keeps of the passwords it deleted
+/// under a removal.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Forgotten {
+    change: Token,
+    passwords: BTreeMap<String, String>,
+}
+
+/// The VM's passwords, deleted by Atlas VM's deletion-only entry, run from
+/// this Atlas's own bundle under the removal `change`, which its barrier
+/// must name: what became of each, once the entry exited cleanly and the
+/// result it kept says so for this removal; none otherwise. It never
+/// starts the VM, and no runner lives while the removal is here.
+fn forgotten_by_entry(
+    vms: &Vms,
+    system: &impl System,
+    desktop: &DesktopId,
+    change: &Token,
+) -> Option<BTreeMap<String, String>> {
+    let result = vms.forgotten(desktop);
+    // An earlier try's result is never taken for this one's.
+    match std::fs::remove_file(&result) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return None,
+        _ => {}
+    }
+    let program = system.program().ok()?;
+    let arguments = [
+        "forget-passwords",
+        desktop.as_str(),
+        "--removal",
+        change.as_str(),
+    ];
+    if !system.run(&program, &arguments).ok()? {
+        return None;
+    }
+    let forgotten: Forgotten =
+        serde_json::from_slice(&atlas_core::files::read_own(&result, 16 * 1024)?).ok()?;
+    if forgotten.change != *change {
+        return None;
+    }
+    accounts(desktop)
+        .into_iter()
+        .map(|account| {
+            let became = forgotten.passwords.get(&account)?;
+            ["deleted", "absent", LEFT]
+                .contains(&became.as_str())
+                .then(|| (account, became.clone()))
+        })
+        .collect()
+}
+
+/// Each item `record`, a finished removal, left, looked up afresh and
+/// never asking: one gone since, deleted by hand, is recorded `gone`.
+/// Whether any was.
+fn looked_again(system: &impl System, desktop: &DesktopId, record: &mut Record) -> bool {
+    let mut changed = false;
+    for (account, became) in &mut record.passwords {
+        if became == LEFT && matches!(system.password_present(account), Ok(false)) {
+            GONE.clone_into(became);
+            changed = true;
+        }
+    }
+    if record.enrolment.as_deref() == Some(LEFT)
+        && matches!(system.enrolment_present(desktop), Ok(false))
+    {
+        record.enrolment = Some(GONE.to_owned());
+        changed = true;
+    }
+    changed
 }
 
 /// The station's own folder for `desktop` deleted: its pairing record and

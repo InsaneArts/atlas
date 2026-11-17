@@ -15,6 +15,10 @@ if let socket = ProcessInfo.processInfo.environment["ATLAS_VM_ASKPASS"] {
 let arguments = CommandLine.arguments
 /// Where its VMs are kept.
 let parent = VMFolder.parent(home: FileManager.default.homeDirectoryForCurrentUser)
+// Only a removed VM's passwords deleted, under its removal; no VM started.
+if ForgetPasswordsEntry.asked(arguments) {
+  exit(ForgetPasswordsEntry.run(arguments, parent: parent))
+}
 guard arguments.count == 3, arguments[1] == "serve", let folder = VMFolder(in: parent, desktop: arguments[2]) else {
   FileHandle.standardError
     .write(Data("usage: AtlasVM serve <desktop>\n".utf8))

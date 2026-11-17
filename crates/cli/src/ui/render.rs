@@ -74,6 +74,8 @@ pub enum View {
     Uninstall,
     /// A desktop added.
     DesktopAdd,
+    /// A desktop removed.
+    DesktopRemove,
     /// The desktops listed.
     Desktops,
     Login,
@@ -151,6 +153,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Update => manage::update(value),
         View::Uninstall => checked(value, manage::uninstall),
         View::DesktopAdd => checked(value, manage::desktop_added),
+        View::DesktopRemove => checked(value, manage::desktop_removed),
         View::Desktops => checked(value, manage::desktops),
         View::Login => checked(value, manage::login),
         View::Menubar => checked(value, manage::menubar),

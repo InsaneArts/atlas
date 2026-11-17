@@ -92,6 +92,10 @@ fn preflight_with(this: &Path, keeper: &Path, key: impl FnOnce() -> Result<()>) 
              and no VM is made. Run Atlas from where it was when its first VM was added, or \
              remove every VM first.",
         )
+        .with(
+            "next",
+            serde_json::json!("Open Atlas from where it was when its first VM was added."),
+        )
         .with_source(error)
     })
 }

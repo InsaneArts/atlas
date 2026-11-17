@@ -245,6 +245,11 @@ impl Policy {
                 Prompt("Stopped. Run atlas desktop add vm again to go on."),
                 View::DesktopAdd,
             ),
+            Command::Desktop(cli::Desktop::Remove { .. }) => Self::passive(
+                Local,
+                Prompt("Stopped. Run atlas desktop remove again to go on."),
+                View::DesktopRemove,
+            ),
             Command::Desktop(cli::Desktop::List) => Self::local(View::Desktops),
             Command::Agents { action } => Self::passive(
                 Agent,

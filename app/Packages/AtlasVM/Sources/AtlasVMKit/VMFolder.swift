@@ -39,6 +39,18 @@ public struct VMFolder: Equatable, Sendable {
     parent.appending(path: ".removals/\(desktop).json")
   }
 
+  /// What the deletion-only entry made of its passwords, beside the record
+  /// of its removal.
+  var forgottenPasswords: URL {
+    parent.appending(path: ".removals/\(desktop).passwords.json")
+  }
+
+  /// The Keychain accounts of its two passwords: its guest's and its second
+  /// administrator's.
+  var passwordAccounts: [String] {
+    [desktop, "\(desktop).admin"]
+  }
+
   /// Where every VM's folder is, in the home folder `home`.
   public static func parent(home: URL) -> URL {
     home.appending(path: "Library/Application Support/Atlas/VMs", directoryHint: .isDirectory)

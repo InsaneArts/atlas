@@ -171,6 +171,16 @@ pub fn delete(item: Item<'_>) -> Result<bool> {
     checked(status, "delete").map(|()| true)
 }
 
+/// Whether there is an item `item` names, whoever made it, looked up afresh
+/// and never asking: its secret is not read, so another program's counts.
+///
+/// # Errors
+///
+/// Fails when the Keychain cannot be looked in, a locked one among them.
+pub fn present(item: Item<'_>) -> Result<bool> {
+    Ok(found(item)?.is_some())
+}
+
 /// The item `item` names, if there is one.
 fn found(item: Item<'_>) -> Result<Option<CFRetained<SecKeychainItem>>> {
     // SAFETY: the keys and values are the framework's own constants.

@@ -139,3 +139,35 @@ fn a_secret_added_once_is_never_replaced_by_another_add() {
     assert_eq!(read(item).unwrap().as_deref(), Some(&b"first"[..]));
     assert!(delete(item).unwrap());
 }
+
+#[test]
+#[ignore = "writes to the account's own Keychain; run by hand on a Mac"]
+fn an_item_another_program_made_is_found_present_never_asking_and_absent_once_deleted() {
+    let (service, account) = scratch("present");
+    let item = Item {
+        service: &service,
+        account: &account,
+    };
+    let planted = atlas_core::spawn::status(
+        std::process::Command::new("/usr/bin/security")
+            .args(["add-generic-password", "-s", &service, "-a", &account])
+            .args(["-w", "planted-planted-planted-planted!"]),
+    )
+    .unwrap();
+    assert!(planted.success());
+
+    let there = present(item);
+    let removed =
+        atlas_core::spawn::status(std::process::Command::new("/usr/bin/security").args([
+            "delete-generic-password",
+            "-s",
+            &service,
+            "-a",
+            &account,
+        ]))
+        .unwrap();
+
+    assert!(removed.success());
+    assert!(there.unwrap());
+    assert!(!present(item).unwrap());
+}

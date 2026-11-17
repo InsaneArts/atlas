@@ -1003,10 +1003,9 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     crate::user::switch::switch_on_this_mac(Some(&config.user()), args)
 }
 
-/// Add a desktop once the person allows it, each step said as it goes
-/// ([`said`]), or
-/// list the desktops of the settings at `config`. Both wait on files,
-/// launchd and Atlas VM, so they run off the runtime.
+/// Add or remove a desktop once the person allows it, each step said as it
+/// goes ([`said`]), or list the desktops of the settings at `config`. Each
+/// waits on files, launchd and Atlas VM, so they run off the runtime.
 async fn desktop(config: &Path, asked: cli::Desktop) -> Result<Value> {
     let config = config.to_owned();
     let done = match asked {
@@ -1016,6 +1015,37 @@ async fn desktop(config: &Path, asked: cli::Desktop) -> Result<Value> {
                 atlas_client::vm::add::add(
                     atlas_client::vm::add::Asked {
                         name: name.as_deref(),
+                        settings: &config,
+                    },
+                    &said,
+                )
+            })
+            .await
+        }
+        cli::Desktop::Remove { name, id } => {
+            use atlas_client::vm::removing::{Asked, Which, remove};
+            as_yourself("desktop remove")?;
+            let id = id
+                .map(|id| {
+                    atlas_core::desktop::DesktopId::parse(&id).ok_or_else(|| {
+                        Error::new(
+                            Code::Usage,
+                            format!("\"{id}\" is not a VM's id: 24 lowercase hexadecimal digits."),
+                        )
+                    })
+                })
+                .transpose()?;
+            tokio::task::spawn_blocking(move || {
+                let which = match (&id, &name) {
+                    (Some(id), _) => Which::Id(id),
+                    (None, Some(name)) => Which::Name(name),
+                    (None, None) => {
+                        return Err(Error::new(Code::Usage, "Name the VM to remove."));
+                    }
+                };
+                remove(
+                    Asked {
+                        which,
                         settings: &config,
                     },
                     &said,

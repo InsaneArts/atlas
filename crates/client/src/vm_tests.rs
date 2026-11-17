@@ -19,8 +19,19 @@ pub(super) struct Fake {
     pub(super) reply: Mutex<Option<Value>>,
     /// Every request the runner was asked.
     pub(super) asked: Mutex<Vec<Value>>,
-    /// The passwords deleted.
-    pub(super) deleted: Mutex<Vec<String>>,
+    /// The VM passwords the Keychain holds, by account.
+    pub(super) passwords: Mutex<Vec<String>>,
+    /// Whether the Keychain holds the VM's enrolment.
+    pub(super) enrolment: Mutex<bool>,
+    /// Whether the Keychain cannot be looked in.
+    pub(super) locked: Mutex<bool>,
+    /// Every program run, with its arguments, joined.
+    pub(super) ran: Mutex<Vec<String>>,
+    /// What Atlas VM's deletion-only entry writes when it is run, and
+    /// where; nothing when none is given.
+    pub(super) entry: Mutex<Option<(PathBuf, Value)>>,
+    /// Whether that entry exits other than cleanly.
+    pub(super) entry_fails: Mutex<bool>,
     /// The enrolments deleted, by VM.
     pub(super) enrolments: Mutex<Vec<String>>,
     /// The processes still running, by PID.
@@ -88,17 +99,44 @@ impl System for Fake {
             .ok_or_else(|| Error::new(Code::Transport, "nothing listens"))
     }
 
-    fn delete_password(&self, account: &str) -> Result<bool> {
-        self.deleted.lock().unwrap().push(account.to_owned());
-        Ok(true)
+    fn password_present(&self, account: &str) -> Result<bool> {
+        if *self.locked.lock().unwrap() {
+            return Err(Error::new(Code::Identity, "The Keychain is locked."));
+        }
+        Ok(self
+            .passwords
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|kept| kept == account))
     }
 
     fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool> {
+        if *self.locked.lock().unwrap() {
+            return Err(Error::new(Code::Identity, "The Keychain is locked."));
+        }
         self.enrolments
             .lock()
             .unwrap()
             .push(desktop.as_str().to_owned());
         Ok(true)
+    }
+
+    fn enrolment_present(&self, _desktop: &DesktopId) -> Result<bool> {
+        if *self.locked.lock().unwrap() {
+            return Err(Error::new(Code::Identity, "The Keychain is locked."));
+        }
+        Ok(*self.enrolment.lock().unwrap())
+    }
+
+    fn run(&self, program: &Path, arguments: &[&str]) -> Result<bool> {
+        let mut ran = vec![program.to_string_lossy().into_owned()];
+        ran.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+        self.ran.lock().unwrap().push(ran.join(" "));
+        if let Some((path, result)) = self.entry.lock().unwrap().clone() {
+            atlas_core::files::write_private(&path, result.to_string().as_bytes())?;
+        }
+        Ok(!*self.entry_fails.lock().unwrap())
     }
 
     fn ended(&self, instance: &Instance) -> Option<bool> {

@@ -11,6 +11,7 @@ pub mod keeper;
 pub mod lifecycle;
 pub mod listing;
 mod removal;
+pub mod removing;
 pub mod runner;
 mod station;
 
@@ -152,6 +153,13 @@ impl Vms {
         self.removals().join(format!("{}.json", desktop.as_str()))
     }
 
+    /// What Atlas VM's deletion-only entry made of the VM's passwords,
+    /// beside its removal's record.
+    fn forgotten(&self, desktop: &DesktopId) -> PathBuf {
+        self.removals()
+            .join(format!("{}.passwords.json", desktop.as_str()))
+    }
+
     fn label(desktop: &DesktopId) -> String {
         format!("com.insanearts.atlas.vm.{}", desktop.as_str())
     }
@@ -184,11 +192,16 @@ trait System {
     fn launchctl(&self, arguments: &[&str]) -> Result<bool>;
     /// Ask the runner on the control socket `socket` the request `request`.
     fn ask(&self, socket: &Path, request: &Value) -> Result<Value>;
-    /// Delete the Keychain password of `account`, never asking: whether
-    /// there was one.
-    fn delete_password(&self, account: &str) -> Result<bool>;
+    /// Whether the Keychain holds the VM password of `account`, looked up
+    /// afresh and never asking.
+    fn password_present(&self, account: &str) -> Result<bool>;
     /// Delete the VM's enrolment, never asking: whether there was one.
     fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool>;
+    /// Whether the Keychain holds the VM's enrolment, looked up afresh and
+    /// never asking.
+    fn enrolment_present(&self, desktop: &DesktopId) -> Result<bool>;
+    /// Run `program` with `arguments`, bounded: whether it exited zero.
+    fn run(&self, program: &Path, arguments: &[&str]) -> Result<bool>;
     /// Whether `instance` has ended; none when that cannot be told.
     fn ended(&self, instance: &Instance) -> Option<bool>;
     /// Every process of the framework's that runs a VM now, of this
@@ -335,8 +348,8 @@ impl System for Real {
         control::ask(socket, request)
     }
 
-    fn delete_password(&self, account: &str) -> Result<bool> {
-        atlas_native::keychain::delete(atlas_native::keychain::Item {
+    fn password_present(&self, account: &str) -> Result<bool> {
+        atlas_native::keychain::present(atlas_native::keychain::Item {
             service: PASSWORDS,
             account,
         })
@@ -345,6 +358,21 @@ impl System for Real {
     fn delete_enrolment(&self, desktop: &DesktopId) -> Result<bool> {
         use crate::station::enrolment::Enrolments;
         crate::station::enrolment::Keychain.forget(desktop)
+    }
+
+    fn enrolment_present(&self, desktop: &DesktopId) -> Result<bool> {
+        crate::station::enrolment::Keychain.present(desktop)
+    }
+
+    fn run(&self, program: &Path, arguments: &[&str]) -> Result<bool> {
+        let output = atlas_core::bounded::output(
+            std::process::Command::new(program).args(arguments),
+            atlas_core::bounded::FILE,
+        )
+        .map_err(|error| {
+            Error::new(Code::State, "Atlas VM could not be run.").with_source(error)
+        })?;
+        Ok(output.status.success())
     }
 
     fn ended(&self, instance: &atlas_core::process::Instance) -> Option<bool> {

@@ -1,3 +1,4 @@
+import AtlasVMKit
 import Foundation
 import Security
 
@@ -29,17 +30,17 @@ enum GuestPassword {
   /// locked Keychain refuses rather than asks; the accounts left.
   static func forget(_ desktop: String) -> [String] {
     [desktop, "\(desktop).admin"]
-      .filter { !deleted($0) }
+      .filter { delete($0) == .left }
   }
 
-  /// Whether the password of `account` is gone, or was never kept; never
-  /// tried unless interaction is known to be off, and put back as it was.
-  private static func deleted(_ account: String) -> Bool {
+  /// Delete the password of `account`: what became of it. Never tried
+  /// unless interaction is known to be off, and put back as it was.
+  static func delete(_ account: String) -> PasswordFate {
     var allowed: DarwinBoolean = true
     guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
       SecKeychainSetUserInteractionAllowed(false) == errSecSuccess
     else {
-      return false
+      return .left
     }
     defer { SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
     let query: [String: Any] = [
@@ -47,8 +48,11 @@ enum GuestPassword {
       kSecAttrService as String: service,
       kSecAttrAccount as String: account,
     ]
-    let status = SecItemDelete(query as CFDictionary)
-    return status == errSecSuccess || status == errSecItemNotFound
+    switch SecItemDelete(query as CFDictionary) {
+    case errSecSuccess: return .deleted
+    case errSecItemNotFound: return .absent
+    default: return .left
+    }
   }
 
   private static func read(_ desktop: String) throws -> String? {

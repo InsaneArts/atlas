@@ -15,7 +15,7 @@ use std::io::Read;
 
 /// The Keychain service enrolments are kept under, each as its VM's
 /// identifier.
-const SERVICE: &str = "com.insanearts.atlas.enrolment";
+pub(crate) const SERVICE: &str = "com.insanearts.atlas.enrolment";
 
 /// The most read of a secret given on standard input.
 const GIVEN: u64 = 1024;
@@ -70,6 +70,16 @@ impl Keychain {
             service: SERVICE,
             account: vm.as_str(),
         }
+    }
+
+    /// Whether `vm`'s enrolment is kept, looked up afresh and never asking;
+    /// its secret is not read.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the Keychain cannot be looked in.
+    pub(crate) fn present(self, vm: &DesktopId) -> Result<bool> {
+        keychain::present(Self::item(vm))
     }
 }
 

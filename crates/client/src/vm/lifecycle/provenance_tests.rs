@@ -48,6 +48,10 @@ fn a_station_key_another_program_made_fails_the_add_before_a_vm_exists() {
 
     assert_eq!(refused.code, Code::Identity);
     assert!(refused.error.contains("another path"), "{}", refused.error);
+    assert_eq!(
+        refused.details["next"],
+        "Open Atlas from where it was when its first VM was added."
+    );
 }
 
 #[test]

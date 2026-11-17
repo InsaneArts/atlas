@@ -1645,3 +1645,39 @@ fn desktops_are_listed_by_kind_a_vms_power_apart_from_whether_atlas_reaches_it()
             .starts_with("✓ The VM \u{201c}work\u{201d} is added to ~/.config/atlas.toml")
     );
 }
+
+#[test]
+fn a_vm_removed_says_the_new_default_and_names_what_it_kept_and_left() {
+    let clean = show(
+        View::DesktopRemove,
+        json!({"ok": true, "removed": {"name": "work", "id": "0123456789abcdef01234567"},
+               "settings": "~/.config/atlas.toml", "default": "second-login",
+               "kept": [], "left": []}),
+    );
+    assert_eq!(
+        clean.out,
+        "✓ The VM \u{201c}work\u{201d} is removed from ~/.config/atlas.toml\n  \
+         The default desktop is now \u{201c}second-login\u{201d}."
+    );
+
+    let short = show(
+        View::DesktopRemove,
+        json!({"ok": true, "removed": {"name": "work", "id": "0123456789abcdef01234567"},
+               "settings": "~/.config/atlas.toml", "default": null,
+               "kept": ["/Users/me/VMs/0123456789abcdef01234567"],
+               "keptWhy": "These were not the VM's own.",
+               "left": [{"service": "com.insanearts.atlas.vm",
+                         "account": "0123456789abcdef01234567.admin"}],
+               "leftNext": "In Keychain Access, search for each by its name."}),
+    );
+    let lines: Vec<&str> = short.out.lines().collect();
+    assert_eq!(lines.len(), 7, "{}", short.out);
+    assert_eq!(lines[1], "! Atlas kept:");
+    assert_eq!(lines[2], "    /Users/me/VMs/0123456789abcdef01234567");
+    assert_eq!(lines[4], "! Left in the Keychain:");
+    assert_eq!(
+        lines[5],
+        "    com.insanearts.atlas.vm 0123456789abcdef01234567.admin"
+    );
+    assert!(lines[6].contains("Keychain Access"));
+}

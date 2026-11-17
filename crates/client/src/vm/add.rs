@@ -304,7 +304,7 @@ fn begun(
 }
 
 /// The settings at `path`; none when there is no file yet.
-fn settings_at(path: &Path) -> Result<Option<Settings>> {
+pub(super) fn settings_at(path: &Path) -> Result<Option<Settings>> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::writing(path, error)),

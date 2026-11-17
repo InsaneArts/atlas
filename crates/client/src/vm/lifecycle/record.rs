@@ -87,6 +87,10 @@ pub struct Record {
     /// The removal's change, kept before the removal begins.
     #[serde(default)]
     pub removal: Option<Token>,
+    /// What its removal found in the VM's places and left, being
+    /// another's: kept here, and said, for as long as the record is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<String>,
     /// The Atlas that made its Keychain items.
     pub provenance: Provenance,
     #[serde(default)]
@@ -112,6 +116,7 @@ impl Record {
             steps: Vec::new(),
             operations: Vec::new(),
             removal: None,
+            kept: Vec::new(),
             provenance,
             failure: None,
         }
@@ -301,6 +306,21 @@ impl Lifecycle {
         }
         records.sort_by(|one, other| one.id.as_str().cmp(other.id.as_str()));
         Ok(records)
+    }
+
+    /// The removal recorded for the VM `id` in this account's VMs folder,
+    /// whatever its lifecycle record says: its change, and whether it is
+    /// done; none when none is recorded.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the removal record cannot be read.
+    pub(in crate::vm) fn recorded_removal(&self, id: &DesktopId) -> Result<Option<(Token, bool)>> {
+        let vms = crate::vm::Vms::under(&self.home, nix::unistd::getuid().as_raw());
+        Ok(
+            crate::vm::removal::recorded(&vms, id)?
+                .map(|recorded| (recorded.change, recorded.done)),
+        )
     }
 
     /// What became of `record`'s removal, as the removal record in this

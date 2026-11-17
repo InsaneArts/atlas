@@ -11,7 +11,8 @@
 //! ([`super::StationHold`]), then its keeper's. The settings lock stands
 //! apart: a settings write holds it for that one write, waits for nothing
 //! under it and gives up in seconds, so it may be taken under any of them
-//! without a cycle.
+//! without a cycle. So may the lock that admits one removal at a time from a
+//! settings file, held only while that removal is counted and recorded.
 pub mod barrier;
 pub mod grant;
 mod names;
@@ -21,12 +22,22 @@ pub mod record;
 pub use names::Reservation;
 pub use provenance::{Provenance, preflight_station_key};
 
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::{
+    error::{Code, Error, Result},
+    files::{Lock, LockFile},
+};
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// The most of one lifecycle file read.
 const LONGEST: u64 = 256 * 1024;
+
+/// How long a removal waits to be admitted while another is being.
+const ADMITTING: Duration = Duration::from_secs(5);
 
 /// The station's lifecycle folder in one account's home.
 #[derive(Clone, Debug)]
@@ -72,6 +83,33 @@ impl Lifecycle {
             )
             .with_source(error)),
         }
+    }
+
+    /// The lock that admits one removal at a time from the settings file
+    /// `settings`, by its canonical path: held while a removal is counted
+    /// against what the settings would have left, with every other removal
+    /// already under way, and recorded as under way itself. It is taken
+    /// under a VM's station-operation lock and waits for nothing under it,
+    /// giving up in seconds, as the settings lock does.
+    ///
+    /// # Errors
+    ///
+    /// Refuses while another removal is being admitted that long; fails
+    /// when the lock cannot be reached.
+    pub(in crate::vm) fn admitting_removal(&self, settings: &Path) -> Result<LockFile> {
+        let digest = Sha256::digest(settings.as_os_str().as_encoded_bytes());
+        let name = format!(
+            ".removing-{}.lock",
+            atlas_core::name::hex(digest.get(..16).unwrap_or(&digest))
+        );
+        let lock = atlas_core::files::open_lock(&self.folder()?.join(name))?;
+        atlas_core::files::lock_within(&lock, Lock::Exclusive, ADMITTING).map_err(|_| {
+            Error::new(
+                Code::Busy,
+                "Another VM's removal from these settings is being admitted; try again.",
+            )
+        })?;
+        Ok(lock)
     }
 
     /// The folder, made private when missing and checked private either

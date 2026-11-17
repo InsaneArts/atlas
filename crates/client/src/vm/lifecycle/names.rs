@@ -207,6 +207,16 @@ impl Lifecycle {
         Ok(held)
     }
 
+    /// The VM that reserved `name`, and whether the person named it; none
+    /// when none did.
+    ///
+    /// # Errors
+    ///
+    /// Fails when its reservation cannot be read.
+    pub(in crate::vm) fn reserved(&self, name: &str) -> Result<Option<(DesktopId, bool)>> {
+        Ok(self.held(name)?.map(|held| (held.id, held.named)))
+    }
+
     /// The name the VM `id` reserved, when it reserved one.
     ///
     /// # Errors
