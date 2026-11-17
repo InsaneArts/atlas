@@ -140,3 +140,23 @@ fn a_vms_lock_and_removal_record_are_kept_outside_its_folder() {
         "com.insanearts.atlas.vm.a7a5000000000000000000f1.plist"
     );
 }
+
+#[test]
+fn a_hold_is_refused_past_another_accounts_barrier_and_taken_past_its_own() {
+    let (_home, vms) = home();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let foreign = lifecycle::Lifecycle::under(elsewhere.path())
+        .admit()
+        .unwrap();
+    let own = lifecycle::Lifecycle::under(&vms.home).admit().unwrap();
+
+    let refused = hold_in(&vms, &desktop(), &foreign).unwrap_err();
+    let held = hold_in(&vms, &desktop(), &own).unwrap();
+
+    assert!(
+        refused.error.contains("another account's"),
+        "{}",
+        refused.error
+    );
+    assert_eq!(held.unwrap().desktop(), &desktop());
+}

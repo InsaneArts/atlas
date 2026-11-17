@@ -214,6 +214,7 @@ impl Policy {
             | Command::MachineSetup(_)
             | Command::Vm(_)
             | Command::Station(_)
+            | Command::Lifecycle(_)
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::SessionProofServe

@@ -530,6 +530,9 @@ pub struct Held {
     keepers: Box<dyn Keepers>,
     desks: Vec<Desk>,
     _exclusions: Vec<Ownership>,
+    /// The uninstall barrier, passed before any desktop's exclusion and
+    /// held as long as they are; none when there is no VM to hold.
+    _admitted: Option<super::lifecycle::barrier::Admitted>,
 }
 
 impl std::fmt::Debug for Held {
@@ -547,19 +550,37 @@ impl std::fmt::Debug for Held {
 ///
 /// # Errors
 ///
-/// Refuses keepers that cannot be accounted for ([`discover`]), a desktop's
-/// exclusion held elsewhere, and work that runs or cannot be told, naming
-/// the desktops and what runs.
+/// Refuses keepers that cannot be accounted for ([`discover`]), an
+/// uninstall's VM phase under way, a desktop's exclusion held elsewhere,
+/// and work that runs or cannot be told, naming the desktops and what runs.
 pub fn hold_for_update(allow_disrupt: bool) -> Result<Held> {
     let found = discover()?;
     let desks = found
         .iter()
         .map(|found| Desk::own(found.selected.name.clone(), found.vm.clone()))
         .collect::<Result<Vec<_>>>()?;
-    hold(Box::new(Launchd::of(&found)), desks, allow_disrupt)
+    hold(
+        &super::lifecycle::Lifecycle::own()?,
+        Box::new(Launchd::of(&found)),
+        desks,
+        allow_disrupt,
+    )
 }
 
-fn hold(keepers: Box<dyn Keepers>, desks: Vec<Desk>, allow_disrupt: bool) -> Result<Held> {
+fn hold(
+    lifecycle: &super::lifecycle::Lifecycle,
+    keepers: Box<dyn Keepers>,
+    desks: Vec<Desk>,
+    allow_disrupt: bool,
+) -> Result<Held> {
+    // First in the station's order: no keeper is handed over while an
+    // uninstall's VM phase is under way. An update with no VM to hold
+    // passes no barrier, as it touches none.
+    let admitted = if desks.is_empty() {
+        None
+    } else {
+        Some(lifecycle.admit()?)
+    };
     let exclusions = desks
         .iter()
         .map(Desk::exclusion)
@@ -568,6 +589,7 @@ fn hold(keepers: Box<dyn Keepers>, desks: Vec<Desk>, allow_disrupt: bool) -> Res
         keepers,
         desks,
         _exclusions: exclusions,
+        _admitted: admitted,
     };
     held.idle(allow_disrupt)?;
     Ok(held)
@@ -605,8 +627,8 @@ impl Held {
 ///
 /// # Errors
 ///
-/// Refuses a VM the settings do not list, its exclusion held elsewhere, and
-/// work running; fails when its keeper does not hand over, or the new one
+/// Refuses a VM the settings do not list, an uninstall's VM phase under
+/// way, its exclusion held elsewhere, and work running; fails when its keeper does not hand over, or the new one
 /// does not serve in time. The handover stays recorded then, for the next
 /// keeper and the next run.
 pub fn hand_over(key: &str, settings: &Path, allow_disrupt: bool) -> Result<Value> {
@@ -623,14 +645,22 @@ pub fn hand_over(key: &str, settings: &Path, allow_disrupt: bool) -> Result<Valu
         settings: settings.to_owned(),
     };
     let desk = Desk::own(listed.name.clone(), vm)?;
-    handed(&Launchd::of(&[found]), &desk, allow_disrupt, SERVING)
+    let admitted = super::lifecycle::Lifecycle::own()?.admit()?;
+    handed(
+        &Launchd::of(&[found]),
+        &desk,
+        &admitted,
+        allow_disrupt,
+        SERVING,
+    )
 }
 
-/// [`hand_over`] of `desk` through `keepers`, the new keeper given
-/// `serving` to be seen.
+/// [`hand_over`] of `desk` through `keepers`, past the uninstall barrier
+/// `_passed` holds, the new keeper given `serving` to be seen.
 pub(crate) fn handed(
     keepers: &dyn Keepers,
     desk: &Desk,
+    _passed: &impl super::lifecycle::barrier::Passed,
     allow_disrupt: bool,
     serving: Duration,
 ) -> Result<Value> {

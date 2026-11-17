@@ -53,6 +53,10 @@ fn main() -> ExitCode {
     // job that started it: the helper's one-time opener opens the window
     // once the desktop is up.
     let Some(command) = cli.command.take() else {
+        // Opened to ask the person, set up or not: the approval window.
+        if let Some(request) = cli.approve.take() {
+            return approve(&request);
+        }
         if opened_as_app() {
             if let Some(opened) = crate::user::open::first_login_opener() {
                 return opened;
@@ -145,6 +149,11 @@ fn main() -> ExitCode {
     // What the station keeps for a VM is kept alone, before anything else.
     if let Command::Station(asked) = command {
         return station(asked, &config, cli.allow_disrupt);
+    }
+
+    // The person's grant is asked and answered alone, before anything else.
+    if let Command::Lifecycle(asked) = command {
+        return lifecycle(asked, &config);
     }
 
     // A machine desktop's root installer runs alone, before anything else.
@@ -617,6 +626,34 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Opened to show the request `request` in Atlas.app's approval window,
+/// whether Atlas is set up or not: the window replaces this process, as the
+/// onboarding window does.
+fn approve(request: &str) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+
+    let Some(request) = atlas_core::files::Token::parse(request) else {
+        eprintln!("That names no request.");
+        return ExitCode::FAILURE;
+    };
+    let Ok(executable) = std::env::current_exe() else {
+        return ExitCode::FAILURE;
+    };
+    let error = match atlas_cli::menubar::app_program() {
+        Ok(window) => std::process::Command::new(window)
+            .arg("--approve")
+            .arg(request.as_str())
+            .env("ATLAS_CLI", &executable)
+            .exec(),
+        Err(error) => {
+            eprintln!("{}", error.error);
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!("Atlas could not open: {error}");
+    ExitCode::FAILURE
+}
+
 /// Ctrl-C during a question or a wait puts the cursor back and says how to
 /// resume (`message`, when a person is asked), instead of leaving a
 /// half-drawn line. A question Ctrl-C ends (`prompt`) waits a second
@@ -706,6 +743,68 @@ fn vm(asked: cli::Vm) -> ExitCode {
             .ok_or_else(invalid)
             .and_then(|(desktop, change)| atlas_client::vm::remove(&desktop, &change)),
     });
+    match done {
+        Ok(found) => {
+            println!("{found}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{}", json!(error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The person's grant of a VM's lifecycle operation, and print what it came
+/// to as one JSON line, only when an Atlas command asked: Atlas.app reads a
+/// request and answers it, and Atlas asks one, so no other caller opens the
+/// approval window.
+fn lifecycle(asked: cli::Lifecycle, settings: &std::path::Path) -> ExitCode {
+    use atlas_client::vm::lifecycle::grant;
+    use atlas_core::{desktop::DesktopId, files::Token};
+    let invalid = || {
+        atlas_core::error::Error::new(
+            atlas_core::error::Code::BadRequest,
+            "That names no valid request or desktop.",
+        )
+    };
+    let done = match asked {
+        cli::Lifecycle::Request { id } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| Token::parse(&id).ok_or_else(invalid))
+            .and_then(|id| grant::request(&id))
+            .map(|shown| json!({"ok": true, "request": shown})),
+        cli::Lifecycle::Answer { id, allow, .. } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| Token::parse(&id).ok_or_else(invalid))
+            .and_then(|id| grant::answer(&id, allow))
+            .map(|()| json!({"ok": true, "answer": if allow { "allowed" } else { "refused" }})),
+        cli::Lifecycle::Ask {
+            kind,
+            name,
+            desktop_id,
+        } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| DesktopId::parse(&desktop_id).ok_or_else(invalid))
+            .and_then(|vm| {
+                let settings = std::path::absolute(settings)
+                    .map_err(|error| atlas_core::error::Error::writing(settings, error))?;
+                let operation = grant::Operation {
+                    kind: match kind {
+                        cli::GrantKind::Add => grant::Kind::Add,
+                        cli::GrantKind::Remove => grant::Kind::Remove,
+                        cli::GrantKind::Uninstall => grant::Kind::Uninstall,
+                    },
+                    vm,
+                    name,
+                    settings,
+                };
+                let change = grant::ask(operation.clone())?.take(&operation)?;
+                Ok(json!({
+                    "ok": true,
+                    "allowed": true,
+                    "change": change,
+                    "done": "nothing: only the grant was asked for and used",
+                }))
+            }),
+    };
     match done {
         Ok(found) => {
             println!("{found}");

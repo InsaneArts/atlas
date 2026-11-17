@@ -1,7 +1,7 @@
 //! The launchd agent that keeps a VM's runner, Atlas VM, alive in this
 //! account's own session: one per VM, its plist this account's own, judged
 //! by what launchd loaded and never repaired while its runner may serve.
-use super::{System, Vms, sync, try_lock};
+use super::{StationHold, System, Vms, sync, with_hold};
 use atlas_core::{
     desktop::DesktopId,
     error::{Error, Result},
@@ -22,10 +22,27 @@ pub fn install_agent(desktop: &DesktopId) -> Result<Value> {
     install_with(&Vms::own()?, &super::Real, desktop)
 }
 
+/// [`install_agent`] under the VM's station-operation lock, which its
+/// caller holds: it is never taken again here.
+///
+/// # Errors
+///
+/// As [`install_agent`].
+pub fn install_agent_held(hold: &StationHold<'_>) -> Result<Value> {
+    installed(&Vms::own()?, &super::Real, hold)
+}
+
 fn install_with(vms: &Vms, system: &impl System, desktop: &DesktopId) -> Result<Value> {
-    let Some(_station) = try_lock(&vms.station_lock(desktop))? else {
-        return Ok(pending("Another station operation holds this VM."));
-    };
+    with_hold(
+        vms,
+        desktop,
+        || pending("Another station operation holds this VM."),
+        |hold| installed(vms, system, hold),
+    )
+}
+
+fn installed(vms: &Vms, system: &impl System, hold: &StationHold<'_>) -> Result<Value> {
+    let desktop = hold.desktop();
     // A marker that cannot be read is never taken for absent.
     match std::fs::symlink_metadata(vms.removal(desktop)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

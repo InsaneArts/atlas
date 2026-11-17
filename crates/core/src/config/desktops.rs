@@ -14,7 +14,7 @@ use std::{
 };
 
 /// The name today's settings give their one desktop.
-const SECOND_LOGIN: &str = "second-login";
+pub(super) const SECOND_LOGIN: &str = "second-login";
 
 /// The variable a person or an agent's host names a desktop with.
 const NAME_VARIABLE: &str = "ATLAS_DESKTOP";
@@ -28,7 +28,7 @@ const KEY_VARIABLE: &str = "ATLAS_DESKTOP_KEY";
 const NAME_MAX: usize = 32;
 
 /// The helper's fields, which only a `user` desktop has.
-const USER_FIELDS: [&str; 4] = [
+pub(super) const USER_FIELDS: [&str; 4] = [
     "helper_uid",
     "socket_path",
     "identity_probe",
@@ -523,8 +523,9 @@ pub fn for_children() -> Option<(&'static str, String)> {
     }
 }
 
-/// Whether `name` is a desktop name: lowercase letters, digits and dashes.
-fn plain_name(name: &str) -> bool {
+/// Whether `name` is a desktop name: 1 to 32 lowercase letters, digits and
+/// dashes.
+pub fn plain_name(name: &str) -> bool {
     (1..=NAME_MAX).contains(&name.len())
         && name
             .bytes()
@@ -610,7 +611,7 @@ pub fn with_user(text: &str, path: &Path, user: &Config) -> Result<String> {
 
 /// Set `key` of `entry` to `value`, keeping the comments and spacing the
 /// value it replaces had.
-fn put(entry: &mut dyn toml_edit::TableLike, key: &str, mut value: toml_edit::Value) {
+pub(super) fn put(entry: &mut dyn toml_edit::TableLike, key: &str, mut value: toml_edit::Value) {
     match entry.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
         Some(written) => {
             *value.decor_mut() = written.decor().clone();

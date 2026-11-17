@@ -1492,6 +1492,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "exception: the way in for the user's own setup, update and removal",
     ),
     (
+        "crates/core/src/config/write.rs",
+        &["removed"],
+        "owner: the settings writer, which hands a removed default to the Second Login",
+    ),
+    (
         "crates/core/src/desktop.rs",
         &[
             "<Desktop as From<crate::user::User>>::from",

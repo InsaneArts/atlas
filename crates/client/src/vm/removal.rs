@@ -4,9 +4,9 @@
 //! there no runner starts and no agent is installed. The folder is deleted
 //! only once no runner of it lives and every VM its runs started is gone.
 use super::{
-    System, Vms,
+    StationHold, System, Vms,
     evidence::{self, Run},
-    sync, take_lock, try_lock,
+    sync, take_lock, try_lock, with_hold,
 };
 use atlas_core::{
     desktop::DesktopId,
@@ -117,18 +117,37 @@ fn answer(record: &Record) -> Value {
     })
 }
 
+/// [`remove`] under the VM's station-operation lock, which its caller
+/// holds: it is never taken again here.
+///
+/// # Errors
+///
+/// As [`remove`].
+pub fn remove_held(hold: &StationHold<'_>, change: &Token) -> Result<Value> {
+    removed(&Vms::own()?, &super::Real, hold, change)
+}
+
 fn remove_with(
     vms: &Vms,
     system: &impl System,
     desktop: &DesktopId,
     change: &Token,
 ) -> Result<Value> {
-    let Some(_station) = try_lock(&vms.station_lock(desktop))? else {
-        return Ok(pending(
-            Step::Marked,
-            "Another station operation holds this VM.",
-        ));
-    };
+    with_hold(
+        vms,
+        desktop,
+        || pending(Step::Marked, "Another station operation holds this VM."),
+        |hold| removed(vms, system, hold, change),
+    )
+}
+
+fn removed(
+    vms: &Vms,
+    system: &impl System,
+    hold: &StationHold<'_>,
+    change: &Token,
+) -> Result<Value> {
+    let desktop = hold.desktop();
     let marker = vms.removal(desktop);
     let mut record = match read(&marker)? {
         // Done: written through again first, so an answer given is one
@@ -435,6 +454,32 @@ fn name(path: &Path) -> Result<FileName> {
 /// Fails when its record cannot be read: it may be under way.
 pub(super) fn under_way(marker: &Path) -> Result<bool> {
     Ok(read(marker)?.is_some_and(|record| record.step != Step::Done))
+}
+
+/// What a VM's removal record says, for its lifecycle to reconcile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Recorded {
+    pub(super) change: Token,
+    pub(super) done: bool,
+    pub(super) kept: Vec<String>,
+    pub(super) passwords: BTreeMap<String, String>,
+    pub(super) enrolment: Option<String>,
+}
+
+/// The removal record of `desktop` in `vms`; none when there is none.
+///
+/// # Errors
+///
+/// Fails when it cannot be read: a record that is there is never taken for
+/// absent.
+pub(super) fn recorded(vms: &Vms, desktop: &DesktopId) -> Result<Option<Recorded>> {
+    Ok(read(&vms.removal(desktop))?.map(|record| Recorded {
+        done: record.step == Step::Done,
+        change: record.change,
+        kept: record.kept,
+        passwords: record.passwords,
+        enrolment: record.enrolment,
+    }))
 }
 
 /// The record at `marker`; none when there is none.

@@ -6,7 +6,7 @@ use atlas_core::{
     error::Result,
 };
 use atlas_daemon::identity::{Identity, Standing};
-use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
+use std::{fs, path::Path};
 
 /// The configuration for `helper` in the managed private layout.
 ///
@@ -21,7 +21,7 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
         socket_path: layout.paths().socket(),
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
         input_socket: layout.paths().input_socket(),
-        output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
+        output_dir: config::runs_folder()?,
         activity: config::Activity::default(),
     })
 }
@@ -53,33 +53,26 @@ pub fn absent(path: &Path) -> bool {
     )
 }
 
-/// Write a new configuration atomically, readable only by this account.
+/// Write a new configuration, readable only by this account, through the one
+/// settings writer: made only where there is none.
 ///
 /// # Errors
 ///
 /// Returns the failure to make the folder or write the file, including when one
 /// is already there.
 pub fn write_config(path: &Path, config: &Config) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| problem("The configuration needs a directory"))?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-
     let toml = config.to_toml()?;
-    atlas_core::files::write_beside(
-        path,
-        0o600,
-        |file| Ok(file.write_all(toml.as_bytes())?),
+    config::write::update(path, |current| match current {
         // Never replaces a configuration that appeared meanwhile.
-        |temporary| Ok(fs::hard_link(temporary, path)?),
-    )
+        Some(_) => Err(problem(format!("{} is already there", config::tilde(path)))),
+        None => Ok(Some(config::write::Edit::text(toml.clone()))),
+    })
+    .map(|_| ())
 }
 
 /// Replace the configuration that named `previous` (its helper account is
-/// gone or changed), atomically, and only while the file still says so.
+/// gone or changed), through the one settings writer, and only while the
+/// file still says so.
 ///
 /// # Errors
 ///
@@ -96,51 +89,33 @@ pub fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result
     }
 
     // Settings that list desktops keep every other one: only the Second
-    // Login's helper changes. The file is read through the guarded reader
-    // and replaced through its folder's own descriptor, never by its name.
+    // Login's helper changes, judged against the file as it is under the
+    // settings lock, so a change made meanwhile is never lost.
     let changed = || {
         problem(format!(
             "{} changed while Atlas was updating it; run atlas init again",
             config::tilde(path)
         ))
     };
-    let (resolved, identity, before) = read_settings(path)?;
-    let toml = config::desktops::with_user(&before, path, config)?;
-    let parent = resolved.parent().unwrap_or_else(|| Path::new("/"));
-    let name = resolved
-        .file_name()
-        .ok_or_else(|| problem(format!("{} names no file", config::tilde(path))))?;
-    let folder = atlas_core::checked::folder(parent)?;
-    let current = Config::load_user(path).map_err(|error| changed().with_source(error))?;
-    let (_, now, again) = read_settings(path)?;
-    if current != *previous
-        || now != identity
-        || again != before
-        || folder.entry_identity(name)? != Some(identity)
-    {
-        return Err(changed());
-    }
-    folder.replace(name, toml.as_bytes(), 0o600)
-}
-
-/// The most of a settings file read: more than any settings file holds.
-const SETTINGS_LIMIT: u64 = 64 * 1024;
-
-/// The settings at `path`, read through the guarded reader: their real
-/// path, which file they are, and their text.
-fn read_settings(
-    path: &Path,
-) -> Result<(std::path::PathBuf, atlas_core::checked::Identity, String)> {
-    let reading = atlas_core::checked::read(path)?;
-    let resolved = reading.path().to_path_buf();
-    let identity = reading.identity()?;
-    let bytes = reading.read_up_to(SETTINGS_LIMIT + 1)?;
-    if bytes.len() as u64 > SETTINGS_LIMIT {
-        return Err(problem(format!("{} is too large", config::tilde(path))));
-    }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| problem(format!("{} is not UTF-8 text", config::tilde(path))))?;
-    Ok((resolved, identity, text))
+    config::write::update(path, |current| {
+        let text = current.ok_or_else(changed)?;
+        let current = config::desktops::Settings::parse(text.as_bytes(), path)
+            .and_then(|settings| settings.user())
+            .map_err(|error| changed().with_source(error))?;
+        if !current.same_helper(previous) {
+            return Err(changed());
+        }
+        // Only the helper changes: where records go and what the activity
+        // keeps stay as the file says now, whoever changed them meanwhile.
+        let helper = Config {
+            output_dir: current.output_dir,
+            activity: current.activity,
+            ..config.clone()
+        };
+        let toml = config::desktops::with_user(text, path, &helper)?;
+        Ok(Some(config::write::Edit::text(toml).private()))
+    })
+    .map(|_| ())
 }
 
 /// Keep the selected account through configuration, refusing UID reassignment

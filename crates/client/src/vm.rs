@@ -7,11 +7,13 @@ mod control;
 mod evidence;
 pub mod handover;
 pub mod keeper;
+pub mod lifecycle;
 mod removal;
+pub mod runner;
 mod station;
 
-pub use agent::install_agent;
-pub use removal::remove;
+pub use agent::{install_agent, install_agent_held};
+pub use removal::{remove, remove_held};
 pub use station::{Facts, Refused, StationSocket, Untrusted, facts, trusted};
 
 use atlas_core::{
@@ -192,6 +194,101 @@ trait System {
     fn machines(&self) -> Option<Vec<Instance>>;
     /// The program Atlas VM is, in the Atlas.app the station runs from.
     fn program(&self) -> Result<PathBuf>;
+}
+
+/// A VM's station-operation lock, held: the proof the internal form of each
+/// of the station's operations on the VM takes, so none takes the lock
+/// again under the caller that holds it. Taken past the uninstall barrier,
+/// whose guard it borrows for as long as it lives, so the barrier is never
+/// let go while the lock is held; before the VM's keeper's lock; and a
+/// settings write may be made under it.
+///
+/// A hold cannot outlive the guard it was taken past:
+///
+/// ```compile_fail,E0716
+/// # fn taken(vm: &atlas_core::desktop::DesktopId) -> atlas_core::error::Result<()> {
+/// use atlas_client::vm::lifecycle::Lifecycle;
+/// let hold = atlas_client::vm::hold(vm, &Lifecycle::own()?.admit()?)?;
+/// drop(hold);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// while one taken past a guard that lives on is the caller's to use:
+///
+/// ```no_run
+/// # fn taken(vm: &atlas_core::desktop::DesktopId) -> atlas_core::error::Result<()> {
+/// use atlas_client::vm::lifecycle::Lifecycle;
+/// let admitted = Lifecycle::own()?.admit()?;
+/// let hold = atlas_client::vm::hold(vm, &admitted)?;
+/// drop(hold);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct StationHold<'a> {
+    desktop: DesktopId,
+    _lock: LockFile,
+    _passed: std::marker::PhantomData<&'a ()>,
+}
+
+impl StationHold<'_> {
+    /// The VM it holds.
+    #[must_use]
+    pub fn desktop(&self) -> &DesktopId {
+        &self.desktop
+    }
+}
+
+/// Take the VM `desktop`'s station-operation lock, past the uninstall
+/// barrier `passed` holds, which the hold borrows; none while another
+/// holds the lock.
+///
+/// # Errors
+///
+/// Refuses a barrier guard of another account's; fails when this account,
+/// or the lock, cannot be reached.
+pub fn hold<'a>(
+    desktop: &DesktopId,
+    passed: &'a impl lifecycle::barrier::Passed,
+) -> Result<Option<StationHold<'a>>> {
+    hold_in(&Vms::own()?, desktop, passed)
+}
+
+fn hold_in<'a>(
+    vms: &Vms,
+    desktop: &DesktopId,
+    passed: &'a impl lifecycle::barrier::Passed,
+) -> Result<Option<StationHold<'a>>> {
+    if !lifecycle::barrier::guards(passed, &vms.home) {
+        return Err(Error::new(
+            Code::State,
+            "The uninstall barrier passed is another account's.",
+        ));
+    }
+    Ok(
+        try_lock(&vms.station_lock(desktop))?.map(|lock| StationHold {
+            desktop: desktop.clone(),
+            _lock: lock,
+            _passed: std::marker::PhantomData,
+        }),
+    )
+}
+
+/// What each locking wrapper does: pass the uninstall barrier of `vms`'s
+/// account, take `desktop`'s station-operation lock, and do `work` under
+/// both; `busy` while another holds the lock.
+fn with_hold(
+    vms: &Vms,
+    desktop: &DesktopId,
+    busy: impl FnOnce() -> Value,
+    work: impl FnOnce(&StationHold<'_>) -> Result<Value>,
+) -> Result<Value> {
+    let admitted = lifecycle::Lifecycle::under(&vms.home).admit()?;
+    match hold_in(vms, desktop, &admitted)? {
+        Some(hold) => work(&hold),
+        None => Ok(busy()),
+    }
 }
 
 /// The lock at `path`, its folder made private first, taken within

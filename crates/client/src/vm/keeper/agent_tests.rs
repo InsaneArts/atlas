@@ -130,3 +130,21 @@ fn no_keeper_is_installed_while_its_vm_is_being_removed() {
     assert!(!plist(&vms).exists());
     assert!(fake.launched.lock().unwrap().is_empty());
 }
+
+#[test]
+fn the_keepers_held_form_works_under_the_callers_lock_and_never_takes_it_again() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    let admitted = crate::vm::lifecycle::Lifecycle::under(&vms.home)
+        .admit()
+        .unwrap();
+    let hold = crate::vm::hold_in(&vms, &desktop(), &admitted)
+        .unwrap()
+        .unwrap();
+
+    let wrapped = install_with(&vms, &fake, &desktop(), &program(), &settings()).unwrap();
+    let held = installed(&vms, &fake, &hold, &program(), &settings()).unwrap();
+
+    assert_eq!(wrapped["why"], "Another station operation holds this VM.");
+    assert_ne!(held["why"], "Another station operation holds this VM.");
+}

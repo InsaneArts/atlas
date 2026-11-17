@@ -16,7 +16,12 @@ function guarded(env) {
   return spawnSync('/bin/sh', ['-c', fail + guard[0]], { env: { ...env } }).status;
 }
 
-const variables = ['ATLAS_LOCAL_TEAM', 'ATLAS_TEST_HOLD_RELEASE', 'ATLAS_TEST_HAND_RUN'];
+const variables = [
+  'ATLAS_LOCAL_TEAM',
+  'ATLAS_TEST_HOLD_RELEASE',
+  'ATLAS_TEST_HAND_RUN',
+  'ATLAS_TEST_FAKE_GRANT',
+];
 
 test('a release with no test variable set is allowed', () => {
   assert.equal(guarded({ PATH: process.env.PATH }), 0);

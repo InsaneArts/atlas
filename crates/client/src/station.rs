@@ -68,6 +68,13 @@ impl Station {
         self.root.join(RecordKey::vm(vm).as_str())
     }
 
+    /// Where the station keeps each VM's lifecycle, made or not: beside
+    /// the VMs' own folders, never in one, since a removal deletes those.
+    #[must_use]
+    pub fn lifecycle_path(&self) -> PathBuf {
+        self.root.join("lifecycle")
+    }
+
     /// `vm`'s pairing record, in its private folder.
     ///
     /// # Errors

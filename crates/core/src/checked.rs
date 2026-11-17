@@ -215,6 +215,52 @@ impl Folder {
     /// Returns the I/O error of writing or renaming it.
     pub fn replace(&self, name: &OsStr, bytes: &[u8], mode: u32) -> Result<()> {
         let final_name = c_name(name)?;
+        let temp = self.written(name, bytes, mode)?;
+        renameat(&self.dir, temp.as_c_str(), &self.dir, final_name.as_c_str()).map_err(|error| {
+            self.remove_temp(&temp);
+            problem(format!(
+                "Could not place {} in {}: {error}",
+                name.to_string_lossy(),
+                self.path.display()
+            ))
+        })
+    }
+
+    /// Make the entry `name` in this folder with `bytes`, mode `mode`, only
+    /// while there is none, through the folder's own descriptor: written
+    /// whole beside it first, then linked in place, which fails when the
+    /// name is taken. Whether it was made; an entry already there is never
+    /// replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of writing or linking it.
+    pub fn create_new(&self, name: &OsStr, bytes: &[u8], mode: u32) -> Result<bool> {
+        let final_name = c_name(name)?;
+        let temp = self.written(name, bytes, mode)?;
+        let linked = nix::unistd::linkat(
+            &self.dir,
+            temp.as_c_str(),
+            &self.dir,
+            final_name.as_c_str(),
+            AtFlags::empty(),
+        );
+        self.remove_temp(&temp);
+        match linked {
+            Ok(()) => Ok(true),
+            Err(nix::errno::Errno::EEXIST) => Ok(false),
+            Err(error) => Err(problem(format!(
+                "Could not place {} in {}: {error}",
+                name.to_string_lossy(),
+                self.path.display()
+            ))),
+        }
+    }
+
+    /// A temporary file made in this folder with no link followed, holding
+    /// `bytes` with exactly `mode` and written to the disk, for `name`: its
+    /// name.
+    fn written(&self, name: &OsStr, bytes: &[u8], mode: u32) -> Result<CString> {
         let temp = CString::new(format!(".atlas-{}.tmp", crate::files::token()))
             .map_err(|_| problem("A temporary name holds NUL"))?;
         let opened = openat(
@@ -239,29 +285,25 @@ impl Folder {
             file.write_all(bytes)?;
             file.sync_all()
         })();
-        let remove_temp = || {
-            let _ = nix::unistd::unlinkat(
-                &self.dir,
-                temp.as_c_str(),
-                nix::unistd::UnlinkatFlags::NoRemoveDir,
-            );
-        };
         if let Err(error) = placed {
-            remove_temp();
+            self.remove_temp(&temp);
             return Err(problem(format!(
                 "Could not write {} in {}: {error}",
                 name.to_string_lossy(),
                 self.path.display()
             )));
         }
-        renameat(&self.dir, temp.as_c_str(), &self.dir, final_name.as_c_str()).map_err(|error| {
-            remove_temp();
-            problem(format!(
-                "Could not place {} in {}: {error}",
-                name.to_string_lossy(),
-                self.path.display()
-            ))
-        })
+        Ok(temp)
+    }
+
+    /// Remove the temporary file `temp`; one already gone is fine, and one
+    /// left behind holds nothing a reader takes for the file.
+    fn remove_temp(&self, temp: &CString) {
+        let _ = nix::unistd::unlinkat(
+            &self.dir,
+            temp.as_c_str(),
+            nix::unistd::UnlinkatFlags::NoRemoveDir,
+        );
     }
 }
 

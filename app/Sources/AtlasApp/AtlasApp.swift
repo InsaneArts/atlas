@@ -31,6 +31,8 @@ enum AtlasApp {
       NoticeAlert.show(title: title, message: message, switchBack: switchBack, commands: configuration.commands)
     case .login(let change):
       LoginCommand.run(change, loginItem: loginItem)
+    case .approval(let id):
+      ApprovalAlone.run(id: id, commands: configuration.commands, clock: clock)
     case .onboarding:
       OnboardingAlone.run(commands: configuration.commands, loginItem: loginItem, clock: clock)
     #if DEBUG

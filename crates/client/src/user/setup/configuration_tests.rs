@@ -299,3 +299,41 @@ fn replacing_a_listed_second_login_changes_only_its_helper() {
     assert!(written.contains("[[desktops]]"), "{written}");
     assert_eq!(Config::load_user(&path).unwrap(), replacement);
 }
+
+#[test]
+fn an_add_racing_an_activity_change_and_a_helper_repair_loses_none_of_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let path = root.join("atlas.toml");
+    let previous = configuration_at(&root);
+    write_config(&path, &previous).unwrap();
+    let replacement = Config {
+        helper_uid: 60002,
+        ..previous.clone()
+    };
+    let vm = atlas_core::desktop::DesktopId::parse("0123456789abcdef01234567").unwrap();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            config::write::Change::AddVm {
+                name: "work".to_owned(),
+                id: vm.clone(),
+            }
+            .apply(&path)
+            .unwrap()
+        });
+        scope.spawn(|| config::keep_days(&path, 4).unwrap());
+        scope.spawn(|| replace_config(&path, &previous, &replacement).unwrap());
+    });
+
+    let settings = config::desktops::Settings::load(&path).unwrap();
+    let names: Vec<_> = settings
+        .desktops()
+        .iter()
+        .map(|listed| listed.name.as_str())
+        .collect();
+    assert_eq!(names, ["second-login", "work"]);
+    let user = settings.user().unwrap();
+    assert_eq!(user.helper_uid, 60002);
+    assert_eq!(user.activity.keep_days, 4);
+}

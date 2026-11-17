@@ -58,6 +58,9 @@ struct ActionTests {
       (.limitTypedText(80), ["config", "--typed-text-limit", "80"]),
       (.limitTypedText(0), ["config", "--typed-text-limit", "0"]),
       (.deletePictures, ["config", "--delete-pictures"]),
+      (.lifecycleRequest(id: "ab"), ["lifecycle", "request", "--id", "ab"]),
+      (.lifecycleAnswer(id: "ab", allow: true), ["lifecycle", "answer", "--id", "ab", "--allow"]),
+      (.lifecycleAnswer(id: "ab", allow: false), ["lifecycle", "answer", "--id", "ab", "--refuse"]),
     ] as [(Action, [String])]
   )
   func arguments(action: Action, arguments: [String]) {

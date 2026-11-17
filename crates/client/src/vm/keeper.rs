@@ -19,7 +19,7 @@ mod agent;
 mod clients;
 mod program;
 
-pub use agent::install_keeper;
+pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{PROTOCOL, RESUME_KEY};
 use program::Program;
 

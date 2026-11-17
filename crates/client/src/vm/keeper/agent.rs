@@ -2,7 +2,7 @@
 //! account's own session, beside the VM's runner's: one per VM, judged by
 //! what launchd loaded and never reloaded while it matches, since that would
 //! end the session it holds.
-use super::super::{System, Vms, sync, try_lock};
+use super::super::{StationHold, System, Vms, sync, with_hold};
 use atlas_core::{
     desktop::{DesktopId, RecordKey},
     error::{Error, Result},
@@ -22,11 +22,28 @@ const EXIT_TIMEOUT: u64 = 30;
 /// Fails when Atlas's program cannot be found, the plist cannot be written
 /// or launchd cannot be asked.
 pub fn install_keeper(vm: &DesktopId, settings: &Path) -> Result<Value> {
+    let (program, settings) = program_and(settings)?;
+    install_with(&Vms::own()?, &super::super::Real, vm, &program, &settings)
+}
+
+/// [`install_keeper`] under the VM's station-operation lock, which its
+/// caller holds: it is never taken again here.
+///
+/// # Errors
+///
+/// As [`install_keeper`].
+pub fn install_keeper_held(hold: &StationHold<'_>, settings: &Path) -> Result<Value> {
+    let (program, settings) = program_and(settings)?;
+    installed(&Vms::own()?, &super::super::Real, hold, &program, &settings)
+}
+
+/// Atlas's program in the app it runs from, and `settings` made absolute.
+fn program_and(settings: &Path) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let program =
         atlas_core::app_bundle::installed_app()?.join(atlas_core::app_bundle::BUNDLE_EXECUTABLE);
     let settings =
         std::path::absolute(settings).map_err(|error| Error::writing(settings, error))?;
-    install_with(&Vms::own()?, &super::super::Real, vm, &program, &settings)
+    Ok((program, settings))
 }
 
 fn install_with(
@@ -36,9 +53,22 @@ fn install_with(
     program: &Path,
     settings: &Path,
 ) -> Result<Value> {
-    let Some(_station) = try_lock(&vms.station_lock(vm))? else {
-        return Ok(pending("Another station operation holds this VM."));
-    };
+    with_hold(
+        vms,
+        vm,
+        || pending("Another station operation holds this VM."),
+        |hold| installed(vms, system, hold, program, settings),
+    )
+}
+
+fn installed(
+    vms: &Vms,
+    system: &impl System,
+    hold: &StationHold<'_>,
+    program: &Path,
+    settings: &Path,
+) -> Result<Value> {
+    let vm = hold.desktop();
     // A marker that cannot be read is never taken for absent.
     match std::fs::symlink_metadata(vms.removal(vm)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

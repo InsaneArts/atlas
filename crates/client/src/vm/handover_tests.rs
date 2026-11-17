@@ -1,4 +1,5 @@
 use super::*;
+use crate::vm::lifecycle::Lifecycle;
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering::SeqCst},
@@ -6,6 +7,11 @@ use std::sync::{
 
 fn vm() -> DesktopId {
     DesktopId::parse("0123456789abcdef01234567").unwrap()
+}
+
+/// An add's or removal's pass of the barrier of a lifecycle in `home`.
+fn admitted(home: &Path) -> crate::vm::lifecycle::barrier::Admitted {
+    Lifecycle::under(home).admit().unwrap()
 }
 
 fn instance(pid: i32) -> Instance {
@@ -142,7 +148,13 @@ fn an_update_is_refused_while_work_runs_on_a_vm_unless_disrupting_it_is_allowed(
     *standing.hello.lock().unwrap() = Some(json!({"ok": true, "work": {"state": "running",
         "jobs": 1, "changes": 0, "supervisors": 2}}));
 
-    let refused = hold(Box::new(standing), vec![desk(folder.path())], false).unwrap_err();
+    let refused = hold(
+        &Lifecycle::under(folder.path()),
+        Box::new(standing),
+        vec![desk(folder.path())],
+        false,
+    )
+    .unwrap_err();
 
     assert_eq!(refused.code, Code::Busy);
     assert_eq!(
@@ -161,7 +173,13 @@ fn an_update_is_refused_while_work_runs_on_a_vm_unless_disrupting_it_is_allowed(
     let standing = Standing::new(folder.path());
     *standing.hello.lock().unwrap() = Some(json!({"ok": true, "work": {"state": "running",
         "jobs": 1}}));
-    let held = hold(Box::new(standing), vec![desk(folder.path())], true).unwrap();
+    let held = hold(
+        &Lifecycle::under(folder.path()),
+        Box::new(standing),
+        vec![desk(folder.path())],
+        true,
+    )
+    .unwrap();
     assert!(held.idle(true).is_ok());
     assert!(held.idle(false).is_err(), "checked again before the swap");
 }
@@ -216,7 +234,14 @@ fn a_handover_is_recorded_while_asked_and_forgotten_once_the_old_keeper_is_gone_
     let desk = desk(folder.path());
     let standing = Standing::new(&desk.folder);
 
-    let handed = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap();
+    let handed = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
 
     assert_eq!(handed["handed"], true, "{handed}");
     assert_eq!(handed["from"], 41);
@@ -238,14 +263,28 @@ fn a_handover_cut_short_by_its_keeper_ending_is_finished_by_the_next_run_once_th
     // The keeper ended before it answered: the record stays.
     *standing.answer.lock().unwrap() = None;
     *standing.next.lock().unwrap() = None;
-    let cut = handed(&standing, &desk, false, Duration::from_millis(300)).unwrap_err();
+    let cut = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_millis(300),
+    )
+    .unwrap_err();
     assert_eq!(cut.code, Code::Update, "{}", cut.error);
     let kept = Record::kept(&desk.folder).unwrap().unwrap();
     assert_eq!(kept.from, instance(41));
 
     // launchd starts the next keeper; the next run sees it serve.
     *standing.serving.lock().unwrap() = Some(instance(42));
-    let finished = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap();
+    let finished = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
 
     assert_eq!(finished["handed"], true, "{finished}");
     assert_eq!(finished["change"], json!(kept.change));
@@ -270,7 +309,14 @@ fn a_handover_whose_keeper_still_serves_is_asked_again_under_its_recorded_change
     // Work that began since the handover was recorded refuses it.
     *standing.hello.lock().unwrap() = Some(json!({"ok": true, "work": {"state": "running",
         "jobs": 1, "changes": 0, "supervisors": 0}}));
-    let refused = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap_err();
+    let refused = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
     assert_eq!(refused.code, Code::Busy, "{}", refused.error);
     assert_eq!(
         standing.handovers.load(SeqCst),
@@ -280,7 +326,14 @@ fn a_handover_whose_keeper_still_serves_is_asked_again_under_its_recorded_change
     assert!(Record::kept(&desk.folder).unwrap().is_some());
 
     *standing.hello.lock().unwrap() = Some(json!({"ok": true, "work": {"state": "none"}}));
-    let handed = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap();
+    let handed = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
 
     assert_eq!(handed["change"], json!(change));
     assert_eq!(
@@ -299,7 +352,14 @@ fn a_handover_with_work_running_is_refused_and_nothing_is_recorded_or_asked() {
     *standing.hello.lock().unwrap() = Some(json!({"ok": true, "work": {"state": "running",
         "jobs": 0, "changes": 1, "supervisors": 0}}));
 
-    let refused = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap_err();
+    let refused = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
 
     assert_eq!(refused.code, Code::Busy);
     assert_eq!(
@@ -310,7 +370,14 @@ fn a_handover_with_work_running_is_refused_and_nothing_is_recorded_or_asked() {
     assert_eq!(standing.handovers.load(SeqCst), 0);
     assert_eq!(Record::kept(&desk.folder).unwrap(), None);
 
-    let allowed = handed(&standing, &desk, true, Duration::from_secs(5)).unwrap();
+    let allowed = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        true,
+        Duration::from_secs(5),
+    )
+    .unwrap();
     assert_eq!(allowed["handed"], true, "{allowed}");
 }
 
@@ -322,7 +389,14 @@ fn a_handover_the_keeper_refuses_or_whose_new_keeper_never_serves_stays_recorded
     *standing.answer.lock().unwrap() = Some(json!({"ok": false, "code": "stopped",
         "error": "The Stop cannot be kept."}));
 
-    let refused = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap_err();
+    let refused = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
 
     assert_eq!(refused.code, Code::Update);
     assert_eq!(refused.error, "The Stop cannot be kept.");
@@ -330,7 +404,14 @@ fn a_handover_the_keeper_refuses_or_whose_new_keeper_never_serves_stays_recorded
 
     *standing.answer.lock().unwrap() = Some(json!({"ok": true, "said": false}));
     *standing.next.lock().unwrap() = None;
-    let late = handed(&standing, &desk, false, Duration::from_millis(300)).unwrap_err();
+    let late = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_millis(300),
+    )
+    .unwrap_err();
     assert!(
         late.error.contains("did not start in time"),
         "{}",
@@ -347,14 +428,27 @@ fn a_handover_is_refused_while_the_desktops_exclusion_is_held_and_none_runs_with
     let held = desk.controller.acquire(false).unwrap();
 
     assert_eq!(
-        handed(&standing, &desk, true, Duration::from_secs(5))
-            .unwrap_err()
-            .code,
+        handed(
+            &standing,
+            &desk,
+            &admitted(folder.path()),
+            true,
+            Duration::from_secs(5)
+        )
+        .unwrap_err()
+        .code,
         Code::Busy
     );
     drop(held);
     standing.loaded = false;
-    let none = handed(&standing, &desk, true, Duration::from_secs(5)).unwrap();
+    let none = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        true,
+        Duration::from_secs(5),
+    )
+    .unwrap();
     assert_eq!(none["handed"], false, "{none}");
     assert_eq!(standing.handovers.load(SeqCst), 0);
 }
@@ -461,7 +555,12 @@ fn a_vm_whose_keeper_is_not_live_runs_nothing_only_once_atlas_vm_confirms_its_po
 
     standing.stopped = true;
     assert_eq!(running(&standing, &desk(folder.path())), None);
-    let held = hold(Box::new(standing), vec![desk(folder.path())], false);
+    let held = hold(
+        &Lifecycle::under(folder.path()),
+        Box::new(standing),
+        vec![desk(folder.path())],
+        false,
+    );
     assert!(held.is_ok(), "a stopped VM does not block the update");
 
     // A guest that reports work runs it, whatever its power is said to be.
@@ -521,13 +620,27 @@ fn a_handover_with_no_keeper_running_keeps_the_updates_stop_only_once_the_vm_is_
     // No keeper answers, so what runs in the guest cannot be told.
     *standing.serving.lock().unwrap() = None;
 
-    let refused = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap_err();
+    let refused = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
     assert_eq!(refused.code, Code::Busy, "{}", refused.error);
     assert!(!desk.controller.stop_noted(), "nothing done");
 
     // Atlas VM confirms the VM is powered off: nothing runs there.
     standing.stopped = true;
-    let handed = handed(&standing, &desk, false, Duration::from_secs(5)).unwrap();
+    let handed = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
 
     assert_eq!(handed["handed"], false, "{handed}");
     assert_eq!(handed["noted"], true);
@@ -659,4 +772,36 @@ fn an_update_whose_settings_omit_a_running_keepers_vm_still_finds_it_and_refuses
             .error
             .contains("keeps another VM")
     );
+}
+
+#[test]
+fn an_update_and_a_handover_are_refused_while_an_uninstalls_vm_phase_is_under_way() {
+    let folder = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::under(folder.path());
+    let uninstalling = lifecycle.uninstalling(&Token::new()).unwrap();
+    drop(uninstalling);
+
+    let update = hold(
+        &lifecycle,
+        Box::new(Standing::new(folder.path())),
+        vec![desk(folder.path())],
+        true,
+    )
+    .unwrap_err();
+    let handover = lifecycle.admit().unwrap_err();
+    let alone = hold(
+        &lifecycle,
+        Box::new(Standing::new(folder.path())),
+        Vec::new(),
+        true,
+    );
+
+    for refused in [update, handover] {
+        assert!(
+            refused.error.contains("being uninstalled"),
+            "{}",
+            refused.error
+        );
+    }
+    assert!(alone.is_ok(), "an update with no VM touches none");
 }

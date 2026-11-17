@@ -78,6 +78,10 @@ public enum Action: Sendable, Equatable {
   case limitTypedText(Int)
   /// Delete every picture of agent actions on this Mac.
   case deletePictures
+  /// Read the request a command made of the person, which the approval window shows.
+  case lifecycleRequest(id: String)
+  /// Answer that request: allow it, or refuse it.
+  case lifecycleAnswer(id: String, allow: Bool)
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -144,6 +148,9 @@ public enum Action: Sendable, Equatable {
     case .limitTypedText(let characters): ["config", "--typed-text-limit", "\(characters)"]
     // The person confirmed in Settings.
     case .deletePictures: ["config", "--delete-pictures"]
+    case .lifecycleRequest(let id): ["lifecycle", "request", "--id", id]
+    // The person pressed a button in the approval window.
+    case .lifecycleAnswer(let id, let allow): ["lifecycle", "answer", "--id", id, allow ? "--allow" : "--refuse"]
     }
   }
 }

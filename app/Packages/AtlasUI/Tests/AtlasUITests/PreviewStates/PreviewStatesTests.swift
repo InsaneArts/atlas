@@ -10,7 +10,7 @@
     func namesAreUnique() {
       for names in [
         PreviewStates.panel.map(\.name), PreviewStates.onboarding.map(\.name), PreviewStates.viewer.map(\.name),
-        PreviewStates.settings.map(\.name), PreviewStates.alert.map(\.name),
+        PreviewStates.settings.map(\.name), PreviewStates.alert.map(\.name), PreviewStates.approval.map(\.name),
       ] {
         #expect(Set(names).count == names.count)
       }

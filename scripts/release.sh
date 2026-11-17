@@ -30,9 +30,10 @@ fail() {
 
 # Each of these changes the released code when it is set, empty or not: a
 # local signing team, a build that never releases a guest's update (for
-# rollback checks), and one whose hidden VM commands a person runs by hand.
-# A release refuses whenever one is even present.
-for variable in ATLAS_LOCAL_TEAM ATLAS_TEST_HOLD_RELEASE ATLAS_TEST_HAND_RUN; do
+# rollback checks), one whose hidden VM commands a person runs by hand, and
+# one that allows every lifecycle request without Atlas.app's window. A
+# release refuses whenever one is even present.
+for variable in ATLAS_LOCAL_TEAM ATLAS_TEST_HOLD_RELEASE ATLAS_TEST_HAND_RUN ATLAS_TEST_FAKE_GRANT; do
 	eval "present=\${$variable+set}"
 	[ -z "$present" ] || fail "unset $variable: it is for local test builds"
 done

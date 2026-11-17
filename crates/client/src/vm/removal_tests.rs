@@ -402,3 +402,28 @@ fn a_keeper_job_a_late_bootstrap_brings_keeps_the_removal_from_done() {
             >= 2
     );
 }
+
+#[test]
+fn a_removal_under_the_callers_lock_never_takes_it_again_and_its_keeper_lock_comes_after() {
+    let (_home, vms) = home();
+    let fake = Fake::new();
+    made(&vms, 41, Some(42));
+    *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
+    let uninstalling = crate::vm::lifecycle::Lifecycle::under(&vms.home)
+        .uninstalling(&Token::new())
+        .unwrap();
+    let hold = crate::vm::hold_in(&vms, &desktop(), &uninstalling)
+        .unwrap()
+        .unwrap();
+
+    let wrapped = remove_with(&vms, &fake, &desktop(), &change()).unwrap_err();
+    let removed = removed(&vms, &fake, &hold, &change()).unwrap();
+
+    assert!(
+        wrapped.error.contains("being uninstalled"),
+        "{}",
+        wrapped.error
+    );
+    assert_eq!(removed["removal"], "done", "{removed}");
+    assert!(!vms.folder(&desktop()).exists());
+}

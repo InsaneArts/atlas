@@ -38,6 +38,17 @@ pub struct Item<'a> {
     pub account: &'a str,
 }
 
+/// This program's designated requirement, as text: with its path, what
+/// makes an item it makes its own, so the same Atlas elsewhere, or another
+/// build here, finds it another program's.
+///
+/// # Errors
+///
+/// Fails when this program's signing cannot be read.
+pub fn own_requirement() -> Result<String> {
+    made::own_requirement()
+}
+
 /// The secret kept as `item`; none when there is no such item.
 ///
 /// # Errors

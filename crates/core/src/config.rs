@@ -8,12 +8,11 @@ use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
 };
 
 pub mod desktops;
+pub mod write;
 
 use desktops::Settings;
 
@@ -447,7 +446,7 @@ impl Config {
 /// Returns the failure to read, parse or write the settings, or a refusal
 /// when the file changed while it was being updated.
 pub fn keep_pictures(path: &Path, on: bool) -> Result<()> {
-    set_activity(path, "pictures_before_actions", (!on).then(|| false.into()))
+    write::activity(path, "pictures_before_actions", (!on).then(|| false.into()))
 }
 
 /// Keep pictures `days` days in the settings at `path`, as
@@ -458,7 +457,7 @@ pub fn keep_pictures(path: &Path, on: bool) -> Result<()> {
 /// As [`keep_pictures`], and a refusal of a number of days out of range.
 pub fn keep_days(path: &Path, days: u32) -> Result<()> {
     let set = (days != a_week()).then(|| i64::from(days).into());
-    set_activity(path, "keep_days", set)
+    write::activity(path, "keep_days", set)
 }
 
 /// Keep at most `limit` characters of typed text in the settings at
@@ -468,156 +467,11 @@ pub fn keep_days(path: &Path, days: u32) -> Result<()> {
 ///
 /// As [`keep_pictures`].
 pub fn typed_text_limit(path: &Path, limit: Option<u32>) -> Result<()> {
-    set_activity(
+    write::activity(
         path,
         "typed_text_limit",
         limit.map(|limit| i64::from(limit).into()),
     )
-}
-
-/// How long a settings write waits for another to finish.
-const WRITING: Duration = Duration::from_secs(5);
-
-/// The settings file at `path` as one settings write holds it: its folder,
-/// proven unchangeable by any other account; its name there; the file opened
-/// through the guarded reader and locked for this writer alone; which file
-/// that is; and its bytes, read through that descriptor.
-struct Locked {
-    folder: crate::checked::Folder,
-    name: std::ffi::OsString,
-    file: crate::files::LockFile,
-    identity: crate::checked::Identity,
-    before: Vec<u8>,
-    mode: u32,
-    resolved: PathBuf,
-}
-
-/// The settings file at `path`, locked for this writer alone, so two
-/// settings writes never lose one another's change: the lock is on the file
-/// opened through the guarded reader, taken again when another writer
-/// replaced it meanwhile. Nothing is read or written by its name again.
-fn locked(path: &Path) -> Result<Locked> {
-    let deadline = Instant::now() + WRITING;
-    loop {
-        let reading = crate::checked::read(path)?;
-        let resolved = reading.path().to_path_buf();
-        let identity = reading.identity()?;
-        let file = crate::files::LockFile(reading.into_file());
-        crate::files::lock_retrying(&file, crate::files::Lock::Exclusive, deadline, |deadline| {
-            Instant::now() < deadline
-        })
-        .map_err(|_| {
-            Error::new(
-                Code::Config,
-                format!("{} is being updated; try again", tilde(&resolved)),
-            )
-        })?;
-        let parent = resolved.parent().unwrap_or_else(|| Path::new("/"));
-        let name = resolved
-            .file_name()
-            .ok_or_else(|| Error::new(Code::Config, "Settings name no file"))?
-            .to_os_string();
-        let folder = crate::checked::folder(parent)?;
-        if folder.entry_identity(&name)? != Some(identity) {
-            continue;
-        }
-        let before = held_bytes(&file)?;
-        let mode = file.0.metadata()?.permissions().mode() & 0o777;
-        return Ok(Locked {
-            folder,
-            name,
-            file,
-            identity,
-            before,
-            mode,
-            resolved,
-        });
-    }
-}
-
-/// The locked settings file's bytes, read through its descriptor from the
-/// start, refused past the limit.
-fn held_bytes(file: &crate::files::LockFile) -> Result<Vec<u8>> {
-    use std::io::{Seek, SeekFrom};
-
-    let mut reader = file.0.try_clone()?;
-    reader.seek(SeekFrom::Start(0))?;
-    let bytes = crate::files::read_up_to(reader, LIMIT + 1)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
-    }
-    Ok(bytes)
-}
-
-/// Set `key` of `[activity]` to `value`, or leave it out with none, in the
-/// settings at `path`, changing nothing else in the file. Another settings
-/// write waits its turn.
-fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
-    let held = locked(path)?;
-    let path = held.resolved.clone();
-    let before = held.before.clone();
-    let invalid = |error: &dyn std::fmt::Display| {
-        Error::new(Code::Config, format!("{}: {error}", tilde(&path)))
-    };
-    let text = std::str::from_utf8(&before).map_err(|_| invalid(&"it is not UTF-8 text"))?;
-    let mut document = text
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|error| unparsed(&tilde(&path), text, error.span(), NOT_TOML))?;
-    let not_a_table = || invalid(&"activity is not a table");
-    match value {
-        Some(mut value) => {
-            let activity = document
-                .entry("activity")
-                .or_insert_with(toml_edit::table)
-                .as_table_like_mut()
-                .ok_or_else(not_a_table)?;
-            match activity
-                .get_mut(key)
-                .and_then(toml_edit::Item::as_value_mut)
-            {
-                Some(written) => {
-                    *value.decor_mut() = written.decor().clone();
-                    *written = value;
-                }
-                None => {
-                    activity.insert(key, toml_edit::Item::Value(value));
-                }
-            }
-        }
-        None => {
-            if let Some(activity) = document.get_mut("activity") {
-                let activity = activity.as_table_like_mut().ok_or_else(not_a_table)?;
-                activity.remove(key);
-                if activity.is_empty() {
-                    document.remove("activity");
-                }
-            }
-        }
-    }
-    let text = document.to_string();
-    if text.as_bytes() == before {
-        return Ok(());
-    }
-    // Only settings that load again are written.
-    if text.len() as u64 > LIMIT {
-        return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
-    }
-    Settings::parse(text.as_bytes(), &path)?;
-
-    // Still the very file locked and read, unchanged: then it is replaced
-    // through its folder's own descriptor.
-    if held.folder.entry_identity(&held.name)? != Some(held.identity)
-        || held_bytes(&held.file)? != before
-    {
-        return Err(Error::new(
-            Code::Config,
-            format!(
-                "{} changed while Atlas was updating it; try again",
-                tilde(&path)
-            ),
-        ));
-    }
-    held.folder.replace(&held.name, text.as_bytes(), held.mode)
 }
 
 fn missing(path: &Path) -> Error {
@@ -641,6 +495,16 @@ pub fn tilde(path: impl AsRef<Path>) -> String {
         },
         _ => path.display().to_string(),
     }
+}
+
+/// Where Atlas keeps its runs unless the settings say otherwise: in its own
+/// folder in this account's home.
+///
+/// # Errors
+///
+/// Returns an error when this account's home is unavailable.
+pub fn runs_folder() -> Result<PathBuf> {
+    Ok(home()?.join("Library/Application Support/Atlas/runs"))
 }
 
 /// This process's home: where its own settings, caches and records live.

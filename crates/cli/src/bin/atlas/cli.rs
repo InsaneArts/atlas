@@ -49,6 +49,10 @@ pub(super) struct Cli {
         hide = true
     )]
     pub(super) desktop: Option<String>,
+    /// Show the request with this ID in Atlas.app's approval window: how
+    /// Atlas.app is opened to ask the person.
+    #[arg(long, value_name = "REQUEST", hide = true)]
+    pub(super) approve: Option<String>,
     /// Seconds a command that changes the helper waits for another Atlas
     /// command to finish before answering busy, in place of `ATLAS_WAIT`: 30
     /// unless given, 0 answers at once, at most 600.
@@ -114,6 +118,10 @@ pub(super) enum Command {
     /// The station's own state for a VM desktop, as Atlas keeps it.
     #[command(hide = true, subcommand)]
     Station(Station),
+    /// The person's grant of adding, removing or uninstalling a VM, asked
+    /// and answered through Atlas.app.
+    #[command(hide = true, subcommand)]
+    Lifecycle(Lifecycle),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
     Daemon {
@@ -1559,6 +1567,47 @@ pub(super) enum Station {
         #[arg(long)]
         settings: PathBuf,
     },
+}
+
+/// The person's grant of a VM's lifecycle operation.
+#[derive(Debug, Subcommand)]
+pub(super) enum Lifecycle {
+    /// What Atlas.app's approval window shows of the request with this ID.
+    Request {
+        #[arg(long)]
+        id: String,
+    },
+    /// The person's answer to the request with this ID, from Atlas.app.
+    Answer {
+        #[arg(long)]
+        id: String,
+        /// The person allowed it.
+        #[arg(long, conflicts_with = "refuse", required_unless_present = "refuse")]
+        allow: bool,
+        /// The person refused it.
+        #[arg(long)]
+        refuse: bool,
+    },
+    /// Ask the person to allow an operation, and use their grant, doing
+    /// nothing else: for checking the approval window.
+    Ask {
+        #[arg(long, value_enum)]
+        kind: GrantKind,
+        /// The VM's name.
+        #[arg(long)]
+        name: String,
+        /// The VM's identifier.
+        #[arg(long)]
+        desktop_id: String,
+    },
+}
+
+/// What a grant lets a command do.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(super) enum GrantKind {
+    Add,
+    Remove,
+    Uninstall,
 }
 
 /// What the station asks of a VM desktop on this Mac.

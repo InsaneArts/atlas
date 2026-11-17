@@ -4,6 +4,8 @@ enum LaunchMode: Equatable {
   case notice(title: String, message: String, switchBack: String?)
   /// Turn Open at Login on or off, or report it, as JSON.
   case login(String)
+  /// The approval window on its own, for the request with this ID.
+  case approval(String)
   /// The setup window on its own.
   case onboarding
   /// Draw every setup screen to PNGs in a folder, in light or dark (debug builds).

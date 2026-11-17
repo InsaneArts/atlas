@@ -29,8 +29,23 @@ pub enum Kind {
 /// The name a desktop's live state carries: its locks, Stop, pending
 /// outcomes and frames. It names the account or machine behind the
 /// desktop, so replacing that names another.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DesktopId(String);
+
+impl TryFrom<String> for DesktopId {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&text).ok_or_else(|| format!("{text} is not a desktop's identifier"))
+    }
+}
+
+impl From<DesktopId> for String {
+    fn from(id: DesktopId) -> Self {
+        id.0
+    }
+}
 
 crate::name::name_type! {
     /// The name a desktop's records, sign-ins and session bindings carry:

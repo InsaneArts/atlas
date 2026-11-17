@@ -14,6 +14,9 @@ enum LaunchArguments {
     if let change = value(after: "--login", in: arguments) {
       return .login(change)
     }
+    if let id = value(after: "--approve", in: arguments) {
+      return .approval(id)
+    }
     if arguments.contains("--onboarding") {
       return .onboarding
     }

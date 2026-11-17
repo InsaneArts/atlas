@@ -17,6 +17,13 @@ struct LaunchArgumentsTests {
     #expect(LaunchArguments.mode(["app", "--notice", "Title"]) == .app(render: nil, dark: false), "no message")
   }
 
+  @Test("--approve opens the approval window for its request, before the setup window")
+  func approveOpensTheApprovalWindow() {
+    #expect(LaunchArguments.mode(["app", "--approve", "ab12"]) == .approval("ab12"))
+    #expect(LaunchArguments.mode(["app", "--onboarding", "--approve", "ab12"]) == .approval("ab12"))
+    #expect(LaunchArguments.mode(["app", "--approve"]) == .app(render: nil, dark: false), "no request")
+  }
+
   @Test("--attach starts the app that attaches to the service itself, after the flag modes")
   func attachStartsTheAttachingApp() {
     #expect(LaunchArguments.mode(["app", "--attach"]) == .attach)

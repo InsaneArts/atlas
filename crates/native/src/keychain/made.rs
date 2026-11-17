@@ -205,7 +205,7 @@ fn own_code() -> Option<CFRetained<SecStaticCode>> {
 
 /// This program's designated requirement, as text: what an entry that
 /// trusts this program, and nothing broader, holds.
-fn own_requirement() -> Result<String> {
+pub(super) fn own_requirement() -> Result<String> {
     let on_disk = own_code().ok_or_else(|| refused("check", 0))?;
     let mut requirement: *mut SecRequirement = null_mut();
     // SAFETY: `requirement` is a valid place for the call's result.
