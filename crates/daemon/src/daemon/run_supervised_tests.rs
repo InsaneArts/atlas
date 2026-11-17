@@ -89,6 +89,7 @@ fn kept_in(
         change: None,
         carrying: None,
         printed: None,
+        handed: None,
     }
 }
 

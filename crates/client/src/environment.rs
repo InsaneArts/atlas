@@ -48,7 +48,7 @@ use std::{
 #[cfg(test)]
 pub(crate) use undo::PlanPhase;
 pub(crate) use undo::{PlanState, Undone, plan_states, undo_plan};
-pub use worker::worker;
+pub use worker::{machine_worker, worker};
 
 pub(crate) const MAX_FILE: u64 = 128 * 1024 * 1024;
 pub(crate) const MAX_RECORD: u64 = 4 * 1024 * 1024;

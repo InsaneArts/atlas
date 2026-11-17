@@ -47,6 +47,7 @@ fn silent_supervisor(words: &[&str]) -> (Child, UnixStream) {
         argv0: words[0].into(),
         program: words[0].into(),
         arguments: words[1..].iter().map(OsString::from).collect(),
+        handed: false,
     };
     let supervisor = invocation::Supervisor::of_these_tests();
     let (daemon, theirs) = atlas_core::spawn::socket_pair().unwrap();
@@ -486,6 +487,7 @@ fn the_supervisor_keeps_none_of_the_output_open_once_the_program_has_it() {
         arguments: ["-c", "echo said; /bin/sleep 30 >/dev/null 2>&1 &"]
             .map(OsString::from)
             .to_vec(),
+        handed: false,
     };
     let supervisor = invocation::Supervisor::of_these_tests();
     let (mut lifeline, theirs) = atlas_core::spawn::socket_pair().unwrap();
@@ -816,4 +818,128 @@ fn a_second_stop_never_shortens_the_first_one_s_grace() {
     assert!(ends_within(&mut child, Duration::from_secs(3)));
     drop(lifeline);
     renewals.join().unwrap();
+}
+
+/// A supervisor of `words`, handed a packet when `handed`, its output read
+/// here: its child, the daemon's end of its lifeline, and its output.
+fn heard_supervisor(words: &[&str], handed: bool) -> (Child, UnixStream, std::io::PipeReader) {
+    use std::os::unix::process::CommandExt;
+    let invocation = Invocation {
+        lease: Duration::from_millis(800),
+        proofs: proofs(),
+        argv0: words[0].into(),
+        program: words[0].into(),
+        arguments: words[1..].iter().map(OsString::from).collect(),
+        handed,
+    };
+    let supervisor = invocation::Supervisor::of_these_tests();
+    let (lifeline, theirs) = atlas_core::spawn::socket_pair().unwrap();
+    let (output, writing) = atlas_core::spawn::pipe().unwrap();
+    let mut command = Command::new(supervisor.program());
+    command
+        .args(supervisor.arguments(&invocation))
+        .stdin(Stdio::from(OwnedFd::from(theirs)))
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(OwnedFd::from(writing)))
+        .process_group(0);
+    let child = atlas_core::spawn::spawn(&mut command).unwrap();
+    drop(command);
+    (child, lifeline, output)
+}
+
+/// The frame that hands `packet` over the lifeline.
+fn packet_frame(packet: &[u8]) -> Vec<u8> {
+    let mut frame = vec![PACKET];
+    frame.extend(u32::try_from(packet.len()).unwrap().to_be_bytes());
+    frame.extend(packet);
+    frame
+}
+
+#[test]
+fn a_handed_program_reads_its_packet_on_its_standard_input_and_nothing_more() {
+    // Larger than a socket's buffer: written while the program reads it.
+    let packet: Vec<u8> = (0..200_000).map(|at| b'a' + (at % 26) as u8).collect();
+    let (mut child, mut lifeline, mut output) = heard_supervisor(&["/bin/cat"], true);
+
+    // Read as it comes: more than the output pipe holds.
+    let reading = std::thread::spawn(move || {
+        let mut said = Vec::new();
+        output.read_to_end(&mut said).unwrap();
+        said
+    });
+    lifeline.write_all(&packet_frame(&packet)).unwrap();
+    lifeline.write_all(&[RENEW]).unwrap();
+
+    assert_eq!(
+        told(&mut lifeline).and_then(|status| status.code()),
+        Some(0)
+    );
+    assert_eq!(reading.join().unwrap(), packet);
+    assert_eq!(child.wait().unwrap().code(), Some(i32::from(DONE)));
+}
+
+#[test]
+fn a_program_not_handed_a_packet_reads_nothing_on_its_standard_input() {
+    let (mut child, mut lifeline, mut output) = heard_supervisor(&["/bin/cat"], false);
+
+    lifeline.write_all(&[RENEW]).unwrap();
+
+    assert_eq!(
+        told(&mut lifeline).and_then(|status| status.code()),
+        Some(0)
+    );
+    let mut said = Vec::new();
+    output.read_to_end(&mut said).unwrap();
+    assert!(said.is_empty(), "{said:?}");
+    assert_eq!(child.wait().unwrap().code(), Some(i32::from(DONE)));
+}
+
+#[test]
+fn a_handed_program_never_starts_without_its_packet_or_with_one_out_of_place() {
+    let folder = tempfile::tempdir().unwrap();
+    let mark = folder.path().join("ran");
+    let touch = ["/usr/bin/touch", mark.to_str().unwrap()];
+    let too_long = {
+        let mut frame = vec![PACKET];
+        frame.extend(u32::try_from(HANDED + 1).unwrap().to_be_bytes());
+        frame
+    };
+    let cases: [(bool, Vec<u8>); 5] = [
+        // Handed, its word to start with no packet before it.
+        (true, vec![RENEW]),
+        // Handed, its packet past the bound.
+        (true, too_long),
+        // Handed twice.
+        (true, [packet_frame(b"{}"), packet_frame(b"{}")].concat()),
+        // Not handed, yet sent one.
+        (false, packet_frame(b"{}")),
+        // Its packet cut short.
+        (true, packet_frame(b"{}")[..4].to_vec()),
+    ];
+
+    for (handed, said) in cases {
+        let (mut child, mut lifeline, _output) = heard_supervisor(&touch, handed);
+        lifeline.write_all(&said).unwrap();
+        let _ = lifeline.shutdown(std::net::Shutdown::Write);
+
+        let status = child.wait().unwrap();
+
+        assert_eq!(status.code(), Some(i32::from(ENDED)), "{said:?}");
+        assert!(!mark.exists(), "the program ran: {said:?}");
+    }
+}
+
+#[test]
+fn a_packet_after_the_word_to_start_ends_the_work() {
+    let (mut child, mut lifeline, _output) = heard_supervisor(
+        &["/bin/sh", "-c", "/bin/cat >/dev/null; /bin/sleep 30"],
+        true,
+    );
+    lifeline.write_all(&packet_frame(b"{}")).unwrap();
+    lifeline.write_all(&[RENEW]).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    lifeline.write_all(&packet_frame(b"{}")).unwrap();
+
+    assert!(ends_within(&mut child, Duration::from_secs(2)));
 }

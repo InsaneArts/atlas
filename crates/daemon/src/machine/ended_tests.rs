@@ -424,3 +424,35 @@ fn a_job_change_an_earlier_guest_kept_without_its_request_is_judged_as_before() 
         [started]
     );
 }
+
+#[test]
+fn an_environment_change_is_judged_at_each_crash_boundary_as_a_command_is() {
+    let guest = guest();
+    let (unstarted, started, other_boot, carried) =
+        (Token::new(), Token::new(), Token::new(), Token::new());
+    let kept = supervisor(10, Some(&started));
+    guest.kept.add(kept.clone()).unwrap();
+    let mut earlier = supervisor(11, Some(&other_boot));
+    earlier.boot = "another boot".into();
+    guest.kept.add(earlier.clone()).unwrap();
+    let asked = |change: &Token| vec![intended(change, "environment")];
+
+    // Cut after its intent, before its supervisor was kept.
+    assert_eq!(gone(&guest, asked(&unstarted), &[]), [unstarted]);
+    // Its supervisor kept: gone only once that supervisor is done with.
+    assert!(gone(&guest, asked(&started), &[kept.supervisor]).is_empty());
+    assert!(gone(&guest, asked(&started), &[]).is_empty(), "no proof");
+    proof::leave(&guest.proofs, &kept.supervisor, ENDED).unwrap();
+    assert!(gone(&guest, asked(&started), &[kept.supervisor]).is_empty());
+    assert_eq!(
+        gone(&guest, asked(&started), &[]),
+        std::slice::from_ref(&started)
+    );
+    // Its supervisor from another boot.
+    assert_eq!(
+        gone(&guest, asked(&other_boot), &[earlier.supervisor]),
+        [other_boot]
+    );
+    // Still carried out here: never judged.
+    assert!(judged(&guest, asked(&carried), &[], &|_| true, &|_| false).is_empty());
+}

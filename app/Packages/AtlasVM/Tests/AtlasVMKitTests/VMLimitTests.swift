@@ -30,8 +30,10 @@ struct VMLimitTests {
     for folder in [running, stopped, unread, never] {
       try VMFolder.makePrivate(folder.root)
     }
-    try RunRecord(run: run, machine: MachineProcess(pid: getpid())).write(to: running.incarnation)
-    try RunRecord(run: run, machine: gone).write(to: stopped.incarnation)
+    let alive = RunRecord(run: run, machine: MachineProcess(pid: getpid()))
+    try alive.write(to: running.incarnation)
+    let exited = RunRecord(run: run, machine: gone)
+    try exited.write(to: stopped.incarnation)
     try PrivateFile.write(Data("not a record".utf8), to: unread.incarnation)
 
     #expect(VMLimit.running(among: parent) == 2)

@@ -187,7 +187,7 @@ impl<V: Vault> Changes<V> {
     /// A store keeping at most `printed` bytes of what commands printed,
     /// for a test of that bound.
     #[cfg(test)]
-    fn printing_at_most(folder: impl Into<PathBuf>, vault: V, printed: usize) -> Self {
+    pub(crate) fn printing_at_most(folder: impl Into<PathBuf>, vault: V, printed: usize) -> Self {
         Self {
             printed,
             ..Self::new(folder, vault)

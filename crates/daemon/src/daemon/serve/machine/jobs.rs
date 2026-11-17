@@ -433,6 +433,7 @@ impl Jobs {
             carrying: Some(daemon.keepers.carry(&record.change)),
             job: Some(record.clone()),
             printed: None,
+            handed: None,
         };
         let spawned = run::spawn(
             &start.argv,

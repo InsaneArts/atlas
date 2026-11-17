@@ -328,6 +328,28 @@ requests! { request =>
         )?,
         pin: pin(request)?,
     }),
+    /// The environment worker run on a machine desktop by its own Atlas,
+    /// `packet` handed to it: `apply` for a request that may change it.
+    "environment" Environment {
+        apply: bool,
+        timeout: Duration,
+        pin: Option<SessionPin>,
+        packet: Value,
+    } = Ok(Request::Environment {
+        apply: boolean(request, "apply")?,
+        timeout: millis(
+            request,
+            "timeoutMs",
+            Duration::from_millis(1)..=RUN_TIMEOUT_MAX,
+            Some(RUN_TIMEOUT),
+        )?,
+        pin: pin(request)?,
+        packet: request
+            .get("packet")
+            .filter(|packet| packet.is_object())
+            .cloned()
+            .ok_or_else(|| bad("environment requires its \"packet\" object"))?,
+    }),
     /// Background jobs: start, stop, stop every one, show, read a log.
     "job" Job(JobRequest) = job(request).map(Request::Job),
     /// Part of a file in the helper, or its digest.
@@ -424,6 +446,7 @@ impl Request {
             Self::Screenshot { .. } => (Hidden, None, Read("screenshot")),
             Self::Read(ReadRequest { pin, .. }) => (Hidden, *pin, Read("read")),
             Self::Run { pin, .. } => (Hidden, *pin, Mutation("run")),
+            Self::Environment { pin, .. } => (Hidden, *pin, Mutation("environment")),
             Self::Restart => (Any, None, Mutation("restart")),
             Self::Logout { .. } => (Hidden, None, Mutation("logout")),
             Self::Job(JobRequest::Start { pin, .. }) => (Hidden, *pin, Mutation("job-start")),

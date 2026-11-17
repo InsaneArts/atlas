@@ -323,9 +323,13 @@ fn run(
     // A refusing environment worker exits distinctly, so its caller can tell
     // the refusal from the command it would have run.
     let worker = match &command {
+        Command::EnvironmentWorker { machine: true, .. } => {
+            Some(atlas_daemon::worker::MACHINE_REFUSAL.to_owned())
+        }
         Command::EnvironmentWorker { packet, .. } => Some(
             packet
-                .parent()
+                .as_deref()
+                .and_then(std::path::Path::parent)
                 .and_then(|request| request.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -396,8 +400,12 @@ fn run(
         }
         Err(error) => {
             if let Some(request) = worker {
+                // A machine worker that read its packet names its refusal
+                // as the packet told it; any other by its request.
                 let mut refusal = json!(error);
-                refusal["refusal"] = json!(request);
+                if refusal.get("refusal").is_none() {
+                    refusal["refusal"] = json!(request);
+                }
                 eprintln!("{refusal}");
                 return ExitCode::from(atlas_client::environment::WORKER_REFUSED);
             }

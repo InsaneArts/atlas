@@ -6,7 +6,10 @@
 //!
 //! Its standard input is the lifeline, a Unix socket its own alone: the
 //! daemon writes [`RENEW`] while the generation the work belongs to is
-//! live, and the supervisor says back how the program ended. The socket
+//! live, and the supervisor says back how the program ended. Work handed a
+//! packet has it come first, one [`PACKET`] frame before the word to start,
+//! and its program reads it on its standard input, a socket the supervisor
+//! made; any other program's standard input is nothing. The socket
 //! closing, a lease gone unrenewed, or anything else on it, ends every
 //! process the supervisor started: its group, and every descendant it has
 //! seen leave the group. It goes on supervising until all of them are gone,
@@ -25,8 +28,9 @@ use std::{
     collections::HashSet,
     ffi::OsString,
     io::{ErrorKind, Read, Write},
+    net::Shutdown,
     os::{
-        fd::AsFd,
+        fd::{AsFd, OwnedFd},
         unix::{net::UnixStream, process::CommandExt},
     },
     path::PathBuf,
@@ -46,6 +50,14 @@ pub const RENEW: u8 = b'.';
 /// The lifeline's word to end the work gracefully: followed by the grace, in
 /// milliseconds, as two bytes, most significant first.
 pub const STOP: u8 = b'!';
+
+/// The lifeline's frame that hands the program its packet: followed by its
+/// length, as four bytes, most significant first, then the packet itself.
+/// Only work handed one reads it, once, before the word to start.
+pub const PACKET: u8 = b'P';
+
+/// The longest packet the program may be handed: one request's line.
+pub const HANDED: usize = atlas_core::protocol::MAX_REQUEST;
 
 /// The least and the most grace a stop may give.
 pub const GRACE: std::ops::RangeInclusive<u16> = 1_000..=60_000;
@@ -144,7 +156,9 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
         begun,
         telling: Arc::clone(&telling),
     };
-    if !listen(lifeline, Arc::clone(&lease), ending)
+    // Where the packet a handed program reads is kept until it starts.
+    let packet = invocation.handed.then(|| Arc::new(Mutex::new(None)));
+    if !listen(lifeline, Arc::clone(&lease), ending, packet.clone())
         || !watch(Arc::clone(&lease), Arc::clone(&work))
     {
         work.end();
@@ -160,12 +174,28 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
     if !lease.went() {
         work.end();
     }
+    // A handed program reads its packet from a socket made here, so it can
+    // tell who made it. With no packet before the word, nothing starts.
+    let handing = packet.map(|packet| {
+        let packet = take(&packet).unwrap_or_else(|| work.end());
+        let pair = atlas_core::spawn::socket_pair().unwrap_or_else(|_| work.end());
+        (packet, pair)
+    });
     let mut command = Command::new(&invocation.program);
     command
         .arg0(&invocation.argv0)
         .args(&invocation.arguments)
-        .stdin(Stdio::null())
         .stdout(Stdio::from(output));
+    let handing = match handing {
+        Some((packet, (ours, theirs))) => {
+            command.stdin(Stdio::from(OwnedFd::from(theirs)));
+            Some((packet, ours))
+        }
+        None => {
+            command.stdin(Stdio::null());
+            None
+        }
+    };
     // Checked again once nothing else may start: a lease that ran out while
     // waiting starts nothing.
     let Ok(Some(mut child)) = atlas_core::spawn::spawn_if(&mut command, || lease.open()) else {
@@ -178,6 +208,14 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
     // The program has the output now: this process keeps none of it open.
     drop(command);
     let _ = let_go_of_output();
+    // Its own end stays open while it supervises, so the program can still
+    // ask who made its standard input once the packet is all written.
+    let _handed = handing.map(|(packet, ours)| {
+        if !hand(&ours, packet) {
+            work.end();
+        }
+        ours
+    });
     let mut told = false;
     loop {
         if !told && let Some(status) = child.try_wait().unwrap_or_else(|_| work.end()) {
@@ -192,6 +230,29 @@ pub fn supervise(invocation: &Invocation, lifeline: UnixStream) {
         }
         std::thread::sleep(LOOK);
     }
+}
+
+/// The packet `slot` holds, taken: none when none came.
+fn take(slot: &Mutex<Option<Vec<u8>>>) -> Option<Vec<u8>> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner).take()
+}
+
+/// Write `packet` to the program on a thread of its own, then say it is
+/// all there, so a program slow to read it never holds up supervision.
+/// False when the thread cannot be started.
+fn hand(ours: &UnixStream, packet: Vec<u8>) -> bool {
+    let Ok(mut writing) = ours.try_clone() else {
+        return false;
+    };
+    std::thread::Builder::new()
+        .spawn(move || {
+            // A program that ends before reading it all changes nothing:
+            // its end is told on the lifeline as any is.
+            if writing.write_all(&packet).is_ok() {
+                let _ = writing.shutdown(Shutdown::Write);
+            }
+        })
+        .is_ok()
 }
 
 /// Point this process's standard error, the program's output, at nothing.
@@ -418,12 +479,15 @@ fn end_gracefully<K: Kernel + 'static, C: Clock>(
 
 /// Read the lifeline on a thread of its own: each renewal kept as it is
 /// received, and a STOP begun at once with its grace and said back, while
-/// renewals still come through the grace. False when the thread cannot be
-/// started.
+/// renewals still come through the grace. Work handed a packet keeps the
+/// one it is sent in `packet` before the word to start; a packet sent to
+/// work not handed one, a second one, one after the word or one too long
+/// loses the lease. False when the thread cannot be started.
 fn listen<C: Clock + 'static, K: Kernel + 'static>(
     mut lifeline: impl Read + Send + 'static,
     lease: Arc<Lease<C>>,
     ending: Ending<K>,
+    packet: Option<Arc<Mutex<Option<Vec<u8>>>>>,
 ) -> bool {
     std::thread::Builder::new()
         .spawn(move || {
@@ -431,6 +495,14 @@ fn listen<C: Clock + 'static, K: Kernel + 'static>(
             loop {
                 match lifeline.read(&mut byte) {
                     Ok(1) if byte[0] == RENEW => lease.renew(),
+                    Ok(1) if byte[0] == PACKET => {
+                        let Some(slot) = packet.as_deref() else {
+                            return lease.lose();
+                        };
+                        if lease.held().renewed || !keep_packet(&mut lifeline, slot) {
+                            return lease.lose();
+                        }
+                    }
                     Ok(1) if byte[0] == STOP => {
                         let mut grace = [0; 2];
                         if lifeline.read_exact(&mut grace).is_err() {
@@ -462,6 +534,31 @@ fn listen<C: Clock + 'static, K: Kernel + 'static>(
             }
         })
         .is_ok()
+}
+
+/// Read one packet's length and bytes from `lifeline` into `slot`, which
+/// must hold none yet: whether it did, within [`HANDED`].
+fn keep_packet(lifeline: &mut impl Read, slot: &Mutex<Option<Vec<u8>>>) -> bool {
+    let mut length = [0; 4];
+    if lifeline.read_exact(&mut length).is_err() {
+        return false;
+    }
+    let Ok(length) = usize::try_from(u32::from_be_bytes(length)) else {
+        return false;
+    };
+    if length > HANDED {
+        return false;
+    }
+    let mut packet = vec![0; length];
+    if lifeline.read_exact(&mut packet).is_err() {
+        return false;
+    }
+    let mut kept = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if kept.is_some() {
+        return false;
+    }
+    *kept = Some(packet);
+    true
 }
 
 /// End the work on a thread of its own the moment the lease ends, however

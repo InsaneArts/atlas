@@ -962,10 +962,12 @@ impl Asker {
     }
 
     /// The refusal of `request` on a machine's session: there, a change is
-    /// only a command, until the others keep their ownership to the end.
+    /// only a command or the environment worker, until the others keep
+    /// their ownership to the end.
     fn unavailable(&self, request: &Request, phase: ConnectionPhase) -> Option<Value> {
         let changes = matches!(phase, ConnectionPhase::Mutation(_));
-        (self.gate.is_some() && changes && !matches!(request, Request::Run { .. }))
+        let command = matches!(request, Request::Run { .. } | Request::Environment { .. });
+        (self.gate.is_some() && changes && !command)
             .then(|| failure(Code::Platform, "This desktop cannot make that change yet"))
     }
 }
@@ -1080,9 +1082,31 @@ pub(super) async fn answer(
                 timeout,
                 policy,
                 asker,
+                handed: None,
             };
             return serve_run(daemon, ran, connection, phase).await;
         }
+        // The environment worker is the desktop's own Atlas, handed its
+        // packet: only a machine desktop that supervises its commands runs it.
+        Request::Environment {
+            apply,
+            timeout,
+            packet,
+            ..
+        } => match environment(&daemon, &asker, &packet, apply) {
+            Ok((argv, handed)) => {
+                let connection = (reader, writer, remembering);
+                let ran = Ran {
+                    argv,
+                    timeout,
+                    policy,
+                    asker,
+                    handed: Some(handed),
+                };
+                return serve_run(daemon, ran, connection, phase).await;
+            }
+            Err(refusal) => refusal,
+        },
         Request::Restart => {
             return acknowledge(&mut writer, "restart", remembering, || {
                 daemon.restarting.notify_one();
@@ -1353,6 +1377,33 @@ struct Ran {
     timeout: Duration,
     policy: Policy,
     asker: Asker,
+    /// What an environment change hands its worker; none for a command.
+    handed: Option<run::environment::Handed>,
+}
+
+/// The environment worker's words and what it is handed, for `packet` on
+/// a machine desktop that supervises its commands; else the refusal, with
+/// nothing run.
+fn environment(
+    daemon: &Daemon,
+    asker: &Asker,
+    packet: &Value,
+    apply: bool,
+) -> std::result::Result<(Vec<String>, run::environment::Handed), Value> {
+    if asker.gate.is_none() {
+        return Err(failure(
+            Code::Platform,
+            "Only a machine desktop runs its environment worker this way",
+        ));
+    }
+    let Some(supervising) = &daemon.supervising else {
+        return Err(failure(
+            Code::Platform,
+            "This desktop cannot supervise commands, so none is run",
+        ));
+    };
+    let argv = run::environment::Handed::argv(&supervising.worker, apply)?;
+    Ok((argv, run::environment::Handed::of(packet)))
 }
 
 async fn serve_run(
@@ -1539,6 +1590,7 @@ async fn run_registered(
         timeout,
         policy,
         asker,
+        handed,
     } = ran;
     // Queued behind others, it is checked again, its generation too.
     let refusal = policy
@@ -1557,6 +1609,11 @@ async fn run_registered(
     // Events reach the client through their own writer, so a slow
     // client never stalls supervision of the command.
     let (events, queue) = mpsc::channel(run::EVENTS);
+    // A worker's answer goes only as what its change came to.
+    let queue = match handed {
+        Some(handed) if handed.answers() => without_output(queue),
+        Some(_) | None => queue,
+    };
     let mut delivery = tokio::spawn(deliver(queue, writer, || Ok(())));
     // A Stop since it was admitted ends it, a Resume after or not.
     let stops = asker
@@ -1580,7 +1637,8 @@ async fn run_registered(
     // A machine's change names its supervisor before its program starts,
     // and keeps what it printed with what it came to.
     let change = remembering.as_ref().and_then(Remembering::change).cloned();
-    let printed = (daemon.kept.is_some() && change.is_some())
+    // A worker's answer is read from what it printed, kept or not.
+    let printed = (handed.is_some() || (daemon.kept.is_some() && change.is_some()))
         .then(|| Arc::new(std::sync::Mutex::new(run::Printed::default())));
     let lease = asker
         .gate
@@ -1602,15 +1660,25 @@ async fn run_registered(
                 carrying: change.as_ref().map(|change| daemon.keepers.carry(change)),
                 change,
                 printed: printed.clone(),
+                handed: handed.as_ref().map(|handed| handed.packet.clone()),
             }
         });
     let reply = run::run_unless(argv, *timeout, events, cancel, &unless, lease).await;
-    let printed = printed.map(|printed| {
-        printed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .kept(&reply)
-    });
+    let (reply, printed) = match printed {
+        Some(printed) => {
+            let printed = printed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match handed {
+                Some(handed) => handed.answered(&reply, &printed),
+                None => {
+                    let kept = printed.kept(&reply);
+                    (reply, Some(kept))
+                }
+            }
+        }
+        None => (reply, None),
+    };
     let reply = keep_as(daemon, remembering, &reply, printed.as_ref()).await;
     let delivered = tokio::select! {
         delivered = &mut delivery => delivered,
@@ -1627,6 +1695,20 @@ async fn run_registered(
         written = write(&mut writer, &reply) => written,
         () = handler.closed() => Err(handler_left()),
     }
+}
+
+/// `queue` with no command output in it: what an environment worker prints
+/// is its answer, which reaches the station as what its change came to.
+fn without_output(mut queue: mpsc::Receiver<Value>) -> mpsc::Receiver<Value> {
+    let (passing, passed) = mpsc::channel(run::EVENTS);
+    tokio::spawn(async move {
+        while let Some(event) = queue.recv().await {
+            if event["event"] != "output" && passing.send(event).await.is_err() {
+                return;
+            }
+        }
+    });
+    passed
 }
 
 fn handler_left() -> Error {

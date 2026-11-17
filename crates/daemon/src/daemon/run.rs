@@ -473,6 +473,9 @@ pub(in crate::daemon) struct Lease {
     /// Where what a command prints is kept with what it comes to; none
     /// for a job, whose output goes to its log.
     pub(super) printed: Option<Arc<std::sync::Mutex<Printed>>>,
+    /// The packet its program is handed on its standard input, sent to its
+    /// supervisor before the word to start; none for any other command.
+    pub(super) handed: Option<Vec<u8>>,
 }
 
 /// What a command on a machine desktop printed, kept with what it came to
@@ -671,6 +674,7 @@ pub(in crate::daemon) async fn spawn(
                 argv0: name.into(),
                 program: executable.clone(),
                 arguments: arguments.iter().map(Into::into).collect(),
+                handed: lease.handed.is_some(),
             };
             let mut command = Command::new(lease.supervisor.program());
             command
@@ -1080,6 +1084,7 @@ async fn run_at(
     }
 }
 
+pub(in crate::daemon) mod environment;
 pub(crate) mod keeper;
 
 #[cfg(test)]

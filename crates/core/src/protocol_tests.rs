@@ -260,6 +260,13 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
             true,
             "run",
         ),
+        (
+            json!({"op": "environment", "packet": {"version": 1}}),
+            true,
+            true,
+            true,
+            "environment",
+        ),
         (json!({"op": "restart"}), false, false, true, "restart"),
         (json!({"op": "logout"}), true, false, true, "logout"),
         (
@@ -773,4 +780,45 @@ fn a_sound_request_reads_or_sets_whether_the_helper_is_muted() {
 fn a_screen_away_is_refused_in_the_words_of_its_kind() {
     assert_eq!(away(Off)["code"], "on-console");
     assert_eq!(away(Own)["code"], "session-changed");
+}
+
+#[test]
+fn an_environment_request_hands_its_packet_whole_within_the_run_bounds() {
+    let packet = json!({"version": 1, "request": {"operation": "apply"}});
+
+    let parsed = parse(
+        json!({"op": "environment", "apply": true, "timeoutMs": 5000, "packet": packet})
+            .to_string()
+            .as_bytes(),
+    );
+
+    assert_eq!(
+        parsed,
+        Ok(Request::Environment {
+            apply: true,
+            timeout: Duration::from_secs(5),
+            pin: None,
+            packet,
+        })
+    );
+    let Ok(Request::Environment { apply, timeout, .. }) =
+        parse(br#"{"op":"environment","packet":{}}"#)
+    else {
+        panic!("an environment request with only its packet");
+    };
+    assert!(!apply);
+    assert_eq!(timeout, Duration::from_secs(30));
+    for refused in [
+        r#"{"op":"environment"}"#,
+        r#"{"op":"environment","packet":"/tmp/packet.json"}"#,
+        r#"{"op":"environment","packet":[]}"#,
+        r#"{"op":"environment","packet":{},"apply":"yes"}"#,
+        r#"{"op":"environment","packet":{},"timeoutMs":600001}"#,
+    ] {
+        assert_eq!(
+            parse(refused.as_bytes()).unwrap_err()["code"],
+            "bad-request",
+            "{refused}"
+        );
+    }
 }

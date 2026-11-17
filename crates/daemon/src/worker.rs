@@ -13,6 +13,18 @@ use std::{os::fd::AsFd, path::Path};
 /// The one refusal of a worker started where it does not belong.
 pub const REFUSAL: &str = "Atlas runs this itself; it can't be run from here";
 
+/// The exit code of an environment worker that refused before it did
+/// anything, its refusal its only output.
+pub const REFUSED: u8 = 125;
+
+/// The name a machine guest's environment worker gives its refusal.
+pub const MACHINE_REFUSAL: &str = "machine";
+
+/// The longest answer a machine guest's environment worker may give, its
+/// line's end included: kept whole as what its change came to.
+pub const ANSWER: usize = 256 * 1024;
+const _: () = assert!(ANSWER <= crate::machine::changes::OUTPUT);
+
 /// In a test's Atlas, the process that stands for the daemon launchd would
 /// run, by its PID: tests run the workers as their own children.
 #[cfg(any(test, feature = "test-support"))]
@@ -41,6 +53,78 @@ pub(crate) fn handed_by(handed: Option<Peer>, parent: u32, uid: u32) -> bool {
     handed == Some(Peer { pid: parent, uid })
 }
 
+/// Where a machine guest's environment worker finds itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Handing {
+    /// This process's account.
+    uid: u32,
+    /// The process that started it.
+    parent: u32,
+    /// Who made the socket that is its standard input, when it is one.
+    handed: Option<Peer>,
+    /// Its parent's account and parent, as the kernel says now; none when
+    /// it would not say.
+    supervisor: Option<(u32, u32)>,
+    /// Whether its parent runs this very Atlas.
+    same_atlas: bool,
+}
+
+impl Handing {
+    /// Where this process is now.
+    fn now() -> Self {
+        let parent = std::os::unix::process::parent_id();
+        let supervisor = i32::try_from(parent)
+            .ok()
+            .and_then(|pid| atlas_core::process::info(pid).ok().flatten())
+            .filter(|info| !info.zombie)
+            .and_then(|info| Some((info.uid, u32::try_from(info.ppid).ok()?)));
+        let program = atlas_core::app_bundle::signature::executable_of(parent);
+        let own = std::env::current_exe().ok();
+        Self {
+            uid: nix::unistd::getuid().as_raw(),
+            parent,
+            handed: handed(),
+            supervisor,
+            same_atlas: matches!((program, own), (Some(program), Some(own)) if same_atlas(&program, &own)),
+        }
+    }
+}
+
+/// The daemon a machine guest's environment worker was started for: its
+/// parent's parent, once its standard input is a socket its parent made in
+/// its own account and its parent runs this very Atlas. Whether that daemon
+/// is the one launchd runs is proven apart.
+///
+/// # Errors
+///
+/// Returns the one refusal.
+fn judge_environment_worker(place: &Handing) -> Result<u32> {
+    allowed(handed_by(place.handed, place.parent, place.uid) && place.same_atlas)?;
+    match place.supervisor {
+        Some((uid, daemon)) if uid == place.uid && daemon > 1 => Ok(daemon),
+        _ => Err(refusal()),
+    }
+}
+
+/// Refuse unless this process is a machine guest's environment worker as
+/// its daemon starts one: handed its packet by a supervisor of this very
+/// Atlas, on a socket that supervisor made, the supervisor the child of
+/// the daemon launchd runs. The daemon, by its PID, read once: what the
+/// packet must name as the session's.
+///
+/// # Errors
+///
+/// Returns the one refusal.
+pub fn machine_environment_worker() -> Result<u32> {
+    let daemon = judge_environment_worker(&Handing::now())?;
+    #[cfg(any(test, feature = "test-support"))]
+    if test_daemon() == Some(daemon) {
+        return Ok(daemon);
+    }
+    crate::machine::launch::prove_pid_now(daemon).map_err(|error| refusal().with_source(error))?;
+    Ok(daemon)
+}
+
 /// Refuse unless this process is a supervisor as a machine guest's daemon
 /// starts one: that daemon's child, as launchd started it, with a lifeline
 /// the daemon made as its standard input.
@@ -55,7 +139,7 @@ pub fn machine_supervisor() -> Result<()> {
     if test_daemon() == Some(parent) {
         return Ok(());
     }
-    crate::machine::launch::prove_parent_now().map_err(|error| refusal().with_source(error))
+    crate::machine::launch::prove_pid_now(parent).map_err(|error| refusal().with_source(error))
 }
 
 /// Refuse unless an Atlas command started this process: its parent runs

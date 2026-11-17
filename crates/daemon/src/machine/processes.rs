@@ -82,6 +82,9 @@ pub struct Supervising {
     pub supervisor: super::supervise::invocation::Supervisor,
     pub proofs: PathBuf,
     pub kept: std::sync::Arc<dyn Remembered>,
+    /// The program an environment change runs as its worker: this daemon's
+    /// own executable, never one a request names.
+    pub worker: PathBuf,
 }
 
 /// Where a machine's supervisors are kept on its disk.

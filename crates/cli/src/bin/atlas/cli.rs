@@ -78,7 +78,13 @@ pub(super) enum Command {
     Environment(Environment),
     #[command(hide = true)]
     EnvironmentWorker {
-        packet: PathBuf,
+        /// The packet a Second Login's worker reads, by its path.
+        #[arg(required_unless_present = "machine", conflicts_with = "machine")]
+        packet: Option<PathBuf>,
+        /// A machine desktop's worker, its packet handed on its standard
+        /// input by its daemon's supervisor.
+        #[arg(long)]
+        machine: bool,
         #[arg(long)]
         apply: bool,
     },

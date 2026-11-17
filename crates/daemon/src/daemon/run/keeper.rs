@@ -7,7 +7,7 @@
 use super::Lease;
 use crate::machine::{
     processes::{Remembered, Supervised},
-    supervise::{DONE, ENDED, RENEW, STOP, proof},
+    supervise::{DONE, ENDED, HANDED, PACKET, RENEW, STOP, proof},
 };
 use atlas_core::{error::Code, files::Token, process::Instance, protocol::failure};
 use serde_json::Value;
@@ -231,6 +231,7 @@ pub(super) async fn keep(
         job,
         change,
         carrying,
+        handed,
         ..
     } = lease;
     keepers.set(supervisor, Keeping::Active);
@@ -259,17 +260,21 @@ pub(super) async fn keep(
         Ok(()) => admitted(),
         Err(refusal) => Some(refusal),
     };
-    match refusal {
-        Some(refusal) => {
+    // A handed program's packet goes ahead of the word to start.
+    let went = match refusal {
+        Some(refusal) => Err(refusal),
+        None => match hand(&mut lifeline, handed.as_deref()).await {
+            Ok(()) => go(&starting, &lifeline, &*admitted).await,
+            Err(refusal) => Err(refusal),
+        },
+    };
+    match went {
+        Err(refusal) => {
             // Dropping the lifeline ends the supervisor, which started nothing.
             drop(lifeline);
             let _ = verdict.send(Verdict::Refused(refusal));
         }
-        None if let Err(refusal) = go(&starting, &lifeline, &*admitted).await => {
-            drop(lifeline);
-            let _ = verdict.send(Verdict::Refused(refusal));
-        }
-        None => {
+        Ok(()) => {
             let _ = verdict.send(Verdict::Went);
             renew(&mut lifeline, &mut over, stops.as_mut()).await;
             drop(lifeline);
@@ -339,6 +344,32 @@ async fn renew(
             }
         }
     }
+}
+
+/// Send `packet`, when there is one, as the frame that hands it to the
+/// program: the supervisor keeps it until the word to start. The refusal
+/// when it could not be sent, or is too long to hand.
+async fn hand(
+    lifeline: &mut OwnedWriteHalf,
+    packet: Option<&[u8]>,
+) -> std::result::Result<(), Value> {
+    let Some(packet) = packet else {
+        return Ok(());
+    };
+    let length = u32::try_from(packet.len())
+        .ok()
+        .filter(|_| packet.len() <= HANDED)
+        .ok_or_else(|| failure(Code::BadRequest, "The packet is too long to hand over"))?;
+    let mut frame = Vec::with_capacity(packet.len() + 5);
+    frame.push(PACKET);
+    frame.extend(length.to_be_bytes());
+    frame.extend(packet);
+    lifeline.write_all(&frame).await.map_err(|_| {
+        failure(
+            Code::SpawnFailed,
+            "The command's supervisor was gone before it was handed its packet",
+        )
+    })
 }
 
 /// Give the word to start, unless the command has stopped waiting for it

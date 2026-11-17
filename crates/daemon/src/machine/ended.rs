@@ -1,5 +1,6 @@
 //! Whether the work of a change whose outcome is unknown is proven gone,
-//! by evidence of the change's own kind. A command and a job's start leave
+//! by evidence of the change's own kind. A command, the environment worker
+//! and a job's start leave
 //! a durable link before any effect: the change's intent, then the record
 //! of the supervisor started for it, and only then its program. So one
 //! this daemon no longer carries out, whose every supervisor is done with,
@@ -25,6 +26,11 @@ use std::path::Path;
 
 /// A command's operation.
 const RUN: &str = "run";
+/// The environment worker, run as a command is: its supervisor, kept naming
+/// the change before the worker starts, is what proves it gone.
+const ENVIRONMENT: &str = "environment";
+/// What is judged as a command is.
+const RUN_LIKE: [&str; 2] = [RUN, ENVIRONMENT];
 /// A job's start or stop: only a start leaves a supervisor naming it.
 const JOB: &str = "job";
 /// An owner of the input service, kept before it takes input and until
@@ -84,7 +90,8 @@ impl Evidence<'_> {
             .into_iter()
             .filter(|intended| !(self.carried)(&intended.change))
             .filter(|intended| {
-                [RUN, JOB].contains(&intended.operation.as_str())
+                RUN_LIKE.contains(&intended.operation.as_str())
+                    || intended.operation == JOB
                     || INPUT.contains(&intended.operation.as_str())
             })
             .partition(|intended| INPUT.contains(&intended.operation.as_str()));
@@ -126,7 +133,8 @@ impl Evidence<'_> {
             .all(|supervised| done(&supervised));
         let named_done = named.iter().all(done);
         match (intended.operation.as_str(), Asked::of(intended)) {
-            (RUN, _) | (JOB, Some(Asked::Start)) => unnamed_done && named_done,
+            (operation, _) if RUN_LIKE.contains(&operation) => unnamed_done && named_done,
+            (JOB, Some(Asked::Start)) => unnamed_done && named_done,
             // Its target is the supervisor running that job, whichever build
             // kept it: a stop that began proves nothing while the job may
             // still run. None kept means none ran it, or it was retired once

@@ -246,5 +246,6 @@ fn supervising(records: &Path) -> Result<Supervising> {
         supervisor: Supervisor::atlas()?,
         proofs,
         kept: Arc::new(Processes::new(folder.join("processes.json"), vault)),
+        worker: std::env::current_exe()?,
     })
 }

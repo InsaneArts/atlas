@@ -52,3 +52,75 @@ fn a_worker_this_test_started_is_not_the_job_launchd_runs() {
         "com.insanearts.atlas.tests.no-such-job"
     )));
 }
+
+/// A machine guest's environment worker as its daemon starts one: handed
+/// its packet by its parent, a supervisor of this Atlas, the child of the
+/// daemon 300.
+fn handing() -> Handing {
+    Handing {
+        uid: 502,
+        parent: 400,
+        handed: Some(Peer { pid: 400, uid: 502 }),
+        supervisor: Some((502, 300)),
+        same_atlas: true,
+    }
+}
+
+#[test]
+fn an_environment_worker_handed_its_packet_by_its_supervisor_names_the_daemon_above_it() {
+    assert_eq!(judge_environment_worker(&handing()).unwrap(), 300);
+}
+
+#[test]
+fn an_environment_worker_anywhere_else_is_refused() {
+    let places = [
+        // Its standard input is nothing, a pipe or a terminal: started by
+        // hand, or by an agent's command.
+        Handing {
+            handed: None,
+            ..handing()
+        },
+        // A socket it made for itself.
+        Handing {
+            handed: Some(Peer { pid: 401, uid: 502 }),
+            ..handing()
+        },
+        // A socket made in another account.
+        Handing {
+            handed: Some(Peer { pid: 400, uid: 503 }),
+            ..handing()
+        },
+        // A parent that is not this Atlas: a shell, or a test.
+        Handing {
+            same_atlas: false,
+            ..handing()
+        },
+        // A parent the kernel would not say anything of.
+        Handing {
+            supervisor: None,
+            ..handing()
+        },
+        // A parent in another account.
+        Handing {
+            supervisor: Some((503, 300)),
+            ..handing()
+        },
+        // A parent launchd took over: its daemon is gone.
+        Handing {
+            supervisor: Some((502, 1)),
+            ..handing()
+        },
+    ];
+
+    for place in places {
+        assert!(
+            refused(judge_environment_worker(&place).map(|_| ())),
+            "{place:?}"
+        );
+    }
+}
+
+#[test]
+fn an_environment_worker_this_test_started_is_refused() {
+    assert!(refused(machine_environment_worker().map(|_| ())));
+}

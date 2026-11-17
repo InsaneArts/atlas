@@ -637,3 +637,46 @@ fn a_kept_file_in_a_folder_shared_since_still_finishes() {
     assert_eq!(result["keptTargets"], json!(["dir/file"]));
     assert_eq!(result["retainedDirectories"], json!(["dir"]));
 }
+
+#[test]
+fn a_machine_worker_handed_a_packet_for_another_daemon_does_nothing() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("new", b"incoming")]);
+    let packet = json!({
+        "version": 1,
+        "expected": {"uid": 501, "capturePid": 321, "securitySessionId": 456, "displayId": 1,
+            "width": 1920.0, "height": 1200.0},
+        "request": {"operation": "apply", "plan": plan},
+        "refusal": "a1b2c3",
+    });
+
+    let error = machine_worker(packet.to_string().as_bytes(), true, 322).unwrap_err();
+
+    assert!(error.error.contains("daemon changed"), "{}", error.error);
+    assert_eq!(
+        error.details["refusal"], "a1b2c3",
+        "named as its packet said"
+    );
+    assert!(!sandbox.home.join("new").exists());
+    let unread = machine_worker(b"/tmp/packet.json", true, 321).unwrap_err();
+    assert!(
+        unread.details.get("refusal").is_none(),
+        "no packet, no name"
+    );
+}
+
+#[test]
+fn a_machine_workers_answer_too_long_to_keep_whole_is_refused_with_what_to_do() {
+    let sandbox = Sandbox::new();
+    let preview = sandbox.preview(vec![sandbox.payload("new", b"incoming")]);
+    let mut long = preview.clone();
+    long["files"][0]["pad"] = json!("a".repeat(atlas_daemon::worker::ANSWER));
+
+    assert_eq!(keepable(preview.clone(), false).unwrap(), preview);
+    let read = keepable(long.clone(), false).unwrap_err();
+    assert_eq!(read.error, TOO_LONG);
+    assert!(!read.uncertain, "a read changed nothing");
+    let change = keepable(long, true).unwrap_err();
+    assert_eq!(change.error, TOO_LONG);
+    assert!(change.uncertain, "a change may have been made");
+}

@@ -199,3 +199,25 @@ fn only_a_guest_declaring_acknowledgements_acknowledges() {
     assert!(!older.acknowledges());
     assert!(!other.acknowledges());
 }
+
+#[test]
+fn a_machine_guest_declares_exactly_these_names_in_this_order() {
+    assert_eq!(
+        MACHINE,
+        [
+            "changes-v1",
+            "stop-report-v1",
+            "acknowledged-v1",
+            "machine-proof-v1",
+            "leftovers-v1",
+            "ended-v1",
+            "stage-v1",
+            "copies-v1",
+            "input-lanes-v1",
+            "mirrors-v1",
+            "jobs-v1",
+            "updates-v1",
+            "environment-v1",
+        ]
+    );
+}

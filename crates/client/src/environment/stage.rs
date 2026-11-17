@@ -21,7 +21,7 @@ pub(crate) fn settled(result: &Result<Value>, phase: Phase) -> bool {
 
 /// The exit status of a worker that refused before running anything; its
 /// error is its only output.
-pub const WORKER_REFUSED: u8 = 125;
+pub const WORKER_REFUSED: u8 = atlas_daemon::worker::REFUSED;
 
 /// A run whose worker refused (no profile, a changed session) as that error;
 /// any other reply is the command's own. A refusal names its private request

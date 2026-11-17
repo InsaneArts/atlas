@@ -7,6 +7,7 @@ fn invocation() -> Invocation {
         argv0: "echo".into(),
         program: "/bin/echo".into(),
         arguments: vec!["--".into(), "a b".into(), "".into()],
+        handed: false,
     }
 }
 
@@ -18,9 +19,25 @@ fn an_invocation_reads_back_from_its_words() {
 }
 
 #[test]
+fn a_handed_invocation_reads_back_from_its_words_and_says_so_first() {
+    let handed = Invocation {
+        handed: true,
+        ..invocation()
+    };
+
+    let words = handed.words();
+
+    assert_eq!(words[0], "handed");
+    assert_eq!(words[1..], invocation().words()[..]);
+    assert_eq!(Invocation::parse(&words), Some(handed));
+}
+
+#[test]
 fn words_that_are_not_an_invocation_are_refused() {
-    let refused: [&[&str]; 7] = [
+    let refused: [&[&str]; 9] = [
         &[],
+        &["handed"],
+        &["handed", "handed", "2000", "/p", "echo", "/bin/echo"],
         &["2000", "/p", "echo"],
         &["+2000", "/p", "echo", "/bin/echo"],
         &["0", "/p", "echo", "/bin/echo"],

@@ -24,6 +24,42 @@ impl Identity {
         }
     }
 
+    /// The identity a VM's packet names: its guest's session, its daemon as
+    /// what captures it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "packets for a VM are not made on this Mac yet")
+    )]
+    pub(crate) fn from_machine(epoch: &atlas_core::session::MachineEpoch) -> Self {
+        Self {
+            uid: epoch.uid,
+            capture_pid: epoch.capture_pid,
+            security_session_id: epoch.security_session_id,
+            display_id: epoch.display_id,
+            width: epoch.display.width,
+            height: epoch.display.height,
+        }
+    }
+
+    /// The identity a machine guest's own session shows in `proof`, on its
+    /// own screen, `daemon` the guest daemon its worker was started for:
+    /// the worker's parent is a supervisor, never the daemon itself.
+    pub(super) fn from_machine_proof(proof: &Value, daemon: u32) -> Result<Self> {
+        let epoch = atlas_core::session::InputEpoch::from_proof_kept(
+            proof,
+            daemon,
+            atlas_core::session::Console::Own,
+        )?;
+        Ok(Self {
+            uid: epoch.uid,
+            capture_pid: daemon,
+            security_session_id: epoch.security_session_id,
+            display_id: epoch.display_id,
+            width: epoch.width,
+            height: epoch.height,
+        })
+    }
+
     pub(super) fn from_proof(proof: &Value) -> Result<Self> {
         let epoch = atlas_core::session::InputEpoch::from_proof(proof, 1)?;
         Ok(Self {
@@ -47,6 +83,11 @@ pub(crate) struct Packet {
     pub(crate) version: u32,
     pub(crate) expected: Identity,
     pub(crate) request: Request,
+    /// The name a machine guest's worker gives its refusal: fresh for each
+    /// run, added by the guest's daemon and handed to the worker alone, so a
+    /// command it runs can never pass its own output off as that refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) refusal: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

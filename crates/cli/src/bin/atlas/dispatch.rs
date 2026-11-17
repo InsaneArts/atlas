@@ -367,6 +367,18 @@ fn note_outcome(
 
 /// [`execute`]'s work once the command is labelled: `client` gives its
 /// client, and `host` is its host session, if any. An arm that calls
+/// The packet a machine desktop's environment worker is handed: all its
+/// standard input, at most one request's line.
+fn handed_packet() -> Result<Vec<u8>> {
+    let limit = atlas_daemon::machine::supervise::HANDED as u64;
+    atlas_core::files::read_limited(std::io::stdin().lock(), limit).ok_or_else(|| {
+        Error::new(
+            Code::BadRequest,
+            "The environment worker's packet could not be read whole",
+        )
+    })
+}
+
 /// `client` makes the client first; an arm that passes it on refuses what
 /// it can before making one.
 async fn carry_out(
@@ -377,11 +389,28 @@ async fn carry_out(
     allow_disrupt: bool,
 ) -> Result<Value> {
     match command {
+        // Only a machine desktop's daemon runs it, under its supervisor,
+        // handed its packet on its standard input.
+        Command::EnvironmentWorker {
+            machine: true,
+            apply,
+            ..
+        } => {
+            let daemon =
+                tokio::task::spawn_blocking(atlas_daemon::worker::machine_environment_worker)
+                    .await
+                    .map_err(|_| atlas_daemon::worker::refusal())??;
+            let packet = tokio::task::spawn_blocking(handed_packet)
+                .await
+                .map_err(|_| atlas_daemon::worker::refusal())??;
+            environment::machine_worker(&packet, apply, daemon)
+        }
         // Only the helper daemon runs it, inside the helper.
-        Command::EnvironmentWorker { packet, apply } => {
+        Command::EnvironmentWorker { packet, apply, .. } => {
             tokio::task::spawn_blocking(atlas_daemon::user::worker::worker)
                 .await
                 .map_err(|_| atlas_daemon::worker::refusal())??;
+            let packet = packet.ok_or_else(atlas_daemon::worker::refusal)?;
             environment::worker(&packet, apply)
         }
         Command::AgentGuide(args) => Ok(guide(&args)),

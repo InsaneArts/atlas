@@ -23,13 +23,65 @@ pub(crate) const MISSING: &str =
 /// Partial filesystem effects remain recorded for recovery.
 pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     let packet: Packet = decode(&read_limited(path, MAX_RECORD)?)?;
+    carry_out(packet, apply, || {
+        Identity::from_proof(&atlas_native::native::session_info()?)
+    })
+}
+
+/// The words a machine guest's worker refuses an answer too long to keep in.
+pub(crate) const TOO_LONG: &str =
+    "The desktop's answer is too long to keep; select fewer files and try again";
+
+/// The worker a machine guest's daemon runs, as its own Atlas, `packet`
+/// handed to it on its standard input: `daemon`, the daemon it was started
+/// for, is what the packet must name as the session's, and its session is
+/// on its own screen. An answer too long to be kept whole with what its
+/// change came to is refused, uncertain for a request that may have
+/// changed the desktop. Every refusal once the packet is read carries the
+/// name its daemon gave the worker's refusal there.
+///
+/// # Errors
+///
+/// As [`worker`], and refuses a packet naming another daemon.
+pub fn machine_worker(packet: &[u8], apply: bool, daemon: u32) -> Result<Value> {
+    let packet: Packet = decode(packet)?;
+    let refusal = packet.refusal.clone();
+    let named = |error: Error| match &refusal {
+        Some(name) => error.with("refusal", json!(name)),
+        None => error,
+    };
+    if packet.expected.capture_pid != daemon {
+        return Err(named(problem(
+            "Expected desktop daemon changed; no further mutation is allowed",
+        )));
+    }
+    let mutating = packet.request.changes_helper();
+    carry_out(packet, apply, || {
+        Identity::from_machine_proof(&atlas_native::native::session_info()?, daemon)
+    })
+    .and_then(|answer| keepable(answer, mutating))
+    .map_err(named)
+}
+
+/// `answer`, when its line fits what a machine guest keeps whole.
+fn keepable(answer: Value, mutating: bool) -> Result<Value> {
+    if serde_json::to_vec(&answer)?.len() < atlas_daemon::worker::ANSWER {
+        return Ok(answer);
+    }
+    let error = problem(TOO_LONG);
+    Err(if mutating { error.uncertain() } else { error })
+}
+
+/// Carry out `packet`'s request, `apply` for one that may change the
+/// login, every step guarded by the session `current` reads now being the
+/// one the packet expects.
+fn carry_out(packet: Packet, apply: bool, current: impl Fn() -> Result<Identity>) -> Result<Value> {
     if packet.version != 1 {
         return Err(problem("Unsupported environment packet version"));
     }
 
     let guard = || {
-        let current = Identity::from_proof(&atlas_native::native::session_info()?)?;
-        if current != packet.expected {
+        if current()? != packet.expected {
             return Err(problem(
                 "Expected helper session or display changed; no further mutation is allowed",
             ));

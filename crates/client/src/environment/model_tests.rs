@@ -214,3 +214,59 @@ fn operations_keep_their_stored_names() {
     assert_eq!(stored["files"][0]["operation"], "create");
     assert_eq!(serde_json::from_value::<Plan>(stored).unwrap(), plan);
 }
+
+#[test]
+fn a_machine_guests_identity_is_its_own_screens_session_and_the_daemon_its_worker_was_started_for()
+{
+    let proof = json!({"ok": true, "uid": 501, "parentPID": 777, "securitySessionID": 456,
+        "displayID": 1, "width": 1920, "height": 1200, "scale": 2.0, "onConsole": true,
+        "hasGraphicAccess": true});
+    let epoch = atlas_core::session::MachineEpoch {
+        uid: 501,
+        boot: "B".into(),
+        capture_pid: 321,
+        display: atlas_core::session::Display {
+            width: 1920.0,
+            height: 1200.0,
+            scale: 2.0,
+        },
+        security_session_id: 456,
+        display_id: 1,
+        input_pid: 654,
+    };
+
+    let current = Identity::from_machine_proof(&proof, 321).unwrap();
+
+    assert_eq!(current, Identity::from_machine(&epoch));
+    assert_eq!(
+        current.capture_pid, 321,
+        "the daemon, never the supervisor above the worker"
+    );
+    assert_ne!(Identity::from_machine_proof(&proof, 322).unwrap(), current);
+    for (key, value) in [
+        ("uid", json!(502)),
+        ("securitySessionID", json!(457)),
+        ("displayID", json!(2)),
+        ("width", json!(1921)),
+        ("height", json!(1201)),
+    ] {
+        let mut changed = proof.clone();
+        changed[key] = value;
+        assert_ne!(
+            Identity::from_machine_proof(&changed, 321).unwrap(),
+            current,
+            "{key}"
+        );
+    }
+    for (key, value) in [
+        ("onConsole", json!(false)),
+        ("hasGraphicAccess", json!(false)),
+    ] {
+        let mut changed = proof.clone();
+        changed[key] = value;
+        assert!(
+            Identity::from_machine_proof(&changed, 321).is_err(),
+            "{key}"
+        );
+    }
+}

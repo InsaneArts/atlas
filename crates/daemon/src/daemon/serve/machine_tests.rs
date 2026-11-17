@@ -66,7 +66,23 @@ fn supervising(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Supervisi
             folder.join("processes.json"),
             vault.clone(),
         )),
+        worker: environment_worker(records.path()),
     }
+}
+
+/// A stand-in for the guest's own Atlas as an environment change runs it,
+/// in `folder`: it keeps the packet it is handed as `handed` and its words
+/// as `words` there, then does what `does` there says, as a shell would.
+fn environment_worker(folder: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let worker = folder.join("worker");
+    std::fs::write(
+        &worker,
+        "#!/bin/sh\nhere=$(/usr/bin/dirname \"$0\")\n/bin/cat > \"$here/handed\"\necho \"$@\" > \"$here/words\"\n. \"$here/does\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    worker
 }
 
 /// Connections the station makes, as the guest's listener hands them over.
@@ -5286,4 +5302,464 @@ async fn a_guests_read_hello_declares_what_its_control_hello_does() {
         "{:?}",
         controlling.declared
     );
+}
+
+/// The start of a stand-in worker's script that reads, as the real worker
+/// does, the name its packet gave its refusal into `$name`.
+const NAMED: &str =
+    "name=$(/usr/bin/sed -E 's/.*\"refusal\":\"([0-9a-f]+)\".*/\\1/' \"$here/handed\")\n";
+
+/// Have the guest's stand-in environment worker do `script`, as a shell
+/// would, the next time it runs.
+fn worker_does(served: &Served, script: &str) {
+    std::fs::write(served.records.path().join("does"), script).unwrap();
+}
+
+/// A packet for a request of `operation`, as the station hands it.
+fn packet(operation: &str) -> Value {
+    json!({"version": 1,
+        "expected": {"uid": 501, "capturePid": 321, "securitySessionId": 456, "displayId": 1,
+            "width": 1920.0, "height": 1200.0},
+        "request": {"operation": operation, "plan": {"id": "a1"}}})
+}
+
+/// The environment change `change` of `operation`, applying.
+fn environment(change: &Token, operation: &str) -> Value {
+    json!({"op": "environment", "apply": true, "packet": packet(operation), "change": change})
+}
+
+/// What `change` came to on the guest's disk.
+fn kept_reply(served: &Served, change: &Token) -> Value {
+    match served.changes.of(change).unwrap() {
+        Some(crate::machine::changes::State::Done { reply }) => reply,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The PID the stand-in worker wrote to `pid` in the records' folder.
+async fn worker_pid(served: &Served) -> i32 {
+    let file = served.records.path().join("pid");
+    for _ in 0..500 {
+        if let Some(pid) = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|said| said.trim().parse().ok())
+        {
+            return pid;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the worker never started");
+}
+
+#[tokio::test]
+async fn a_guest_runs_its_own_atlas_as_the_environment_worker_handed_the_packet_and_keeps_its_answer()
+ {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let answer = json!({"ok": true, "applied": true, "planId": "a1"});
+    worker_does(&served, &format!("printf '%s\\n' '{answer}'\n"));
+    let lane = || LaneKind::Change {
+        change: change.clone(),
+    };
+
+    let replies = ask(&desktop, lane(), &environment(&change, "apply")).await;
+
+    let reply = replies.last().unwrap();
+    assert_eq!(
+        *reply,
+        json!({"ok": true, "op": "environment", "exitCode": 0, "result": answer}),
+        "{replies:?}"
+    );
+    assert!(
+        replies.iter().all(|said| said["event"] != "output"),
+        "its answer goes only as what the change came to: {replies:?}"
+    );
+    let folder = served.records.path();
+    let mut handed: Value =
+        serde_json::from_slice(&std::fs::read(folder.join("handed")).unwrap()).unwrap();
+    let refusal = handed.as_object_mut().unwrap().remove("refusal").unwrap();
+    assert_eq!(
+        handed,
+        packet("apply"),
+        "the packet whole, and a name added"
+    );
+    assert!(
+        refusal.as_str().is_some_and(|name| name.len() >= 32),
+        "{refusal}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("words")).unwrap(),
+        "environment-worker --machine --apply\n"
+    );
+    assert_eq!(kept_reply(&served, &change), *reply);
+    let again = ask(&desktop, lane(), &environment(&change, "apply")).await;
+    assert_eq!(again, std::slice::from_ref(reply));
+}
+
+#[tokio::test]
+async fn a_read_of_the_environment_runs_its_worker_without_apply() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    worker_does(&served, "printf '{\"ok\":true,\"transactions\":[]}'\n");
+    let mut request = environment(&change, "transactions");
+    request["apply"] = json!(false);
+
+    let replies = ask(&desktop, LaneKind::Change { change }, &request).await;
+
+    assert_eq!(replies.last().unwrap()["result"]["ok"], true, "{replies:?}");
+    assert_eq!(
+        std::fs::read_to_string(served.records.path().join("words")).unwrap(),
+        "environment-worker --machine\n"
+    );
+}
+
+#[tokio::test]
+async fn an_environment_worker_killed_once_it_started_leaves_its_change_unknown_until_its_work_is_proven_ended()
+ {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    worker_does(&served, "echo $$ > \"$here/pid\"\nexec /bin/sleep 30\n");
+    let request = environment(&change, "apply");
+
+    let asking = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    );
+    let killing = async {
+        let pid = worker_pid(&served).await;
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGKILL).unwrap();
+    };
+    let (replies, ()) = tokio::join!(asking, killing);
+
+    let reply = replies.last().unwrap();
+    assert_eq!(reply["ok"], false, "{replies:?}");
+    assert_eq!(reply["uncertain"], true, "{replies:?}");
+    assert_eq!(kept_reply(&served, &change)["uncertain"], true);
+    let outcome = ended_outcome(&desktop, &change).await;
+    assert_eq!(outcome["outcome"], "done", "{outcome}");
+    assert_eq!(outcome["reply"]["uncertain"], true, "{outcome}");
+    assert_eq!(
+        outcome["reply"]["ended"], true,
+        "its supervisor is done: {outcome}"
+    );
+}
+
+/// What `change` came to once it is answered as ended, or after 5 s.
+async fn ended_outcome(desktop: &Desktop, change: &Token) -> Value {
+    let mut outcome = outcome_of(desktop, change).await;
+    for _ in 0..100 {
+        if outcome["reply"]["ended"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        outcome = outcome_of(desktop, change).await;
+    }
+    outcome
+}
+
+#[tokio::test]
+async fn an_environment_change_whose_station_went_with_its_worker_killed_is_never_answered_as_done()
+{
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    worker_does(&served, "echo $$ > \"$here/pid\"\nexec /bin/sleep 30\n");
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: change.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let mut line = serde_json::to_vec(&environment(&change, "apply")).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    stream.flush().await.unwrap();
+
+    let pid = worker_pid(&served).await;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGKILL).unwrap();
+    // The command that asked is gone: its reply is never read.
+    drop(stream);
+    let outcome = ended_outcome(&desktop, &change).await;
+
+    assert_ne!(outcome["reply"]["ok"], true, "{outcome}");
+    assert_eq!(outcome["reply"]["uncertain"], true, "{outcome}");
+    assert_eq!(outcome["reply"]["ended"], true, "{outcome}");
+}
+
+#[tokio::test]
+async fn an_environment_worker_with_no_whole_answer_leaves_its_change_unknown() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let past_bound = crate::worker::ANSWER + 1;
+    for script in [
+        String::from(":\n"),
+        String::from("echo applied\n"),
+        String::from("printf '{\"ok\":true'\n"),
+        String::from("printf '{\"ok\":true}'\nexit 1\n"),
+        format!(
+            "printf '{{\"ok\":true,\"pad\":\"'\n/usr/bin/head -c {past_bound} /dev/zero | /usr/bin/tr '\\000' a\nprintf '\"}}'\n"
+        ),
+    ] {
+        worker_does(&served, &script);
+        let change = Token::new();
+
+        let replies = ask(
+            &desktop,
+            LaneKind::Change {
+                change: change.clone(),
+            },
+            &environment(&change, "preview"),
+        )
+        .await;
+
+        let reply = replies.last().unwrap();
+        assert_eq!(reply["ok"], false, "{script}: {reply}");
+        assert_eq!(reply["uncertain"], true, "{script}: {reply}");
+        assert_eq!(kept_reply(&served, &change)["uncertain"], true, "{script}");
+    }
+}
+
+#[tokio::test]
+async fn an_environment_answer_is_kept_whole_when_what_commands_printed_has_no_room_left() {
+    let (folder, vault, _) = records();
+    let changes = Arc::new(Changes::printing_at_most(folder.path(), vault.clone(), 0));
+    let served = Served::on((folder, vault, changes)).await;
+    let (_controlling, desktop) = served.control().await;
+    let (ran, changed) = (Token::new(), Token::new());
+    let answer = json!({"ok": true, "applied": false, "planId": "a1", "files": ["x".repeat(4000)]});
+    worker_does(&served, &format!("printf '%s' '{answer}'\n"));
+
+    ask(
+        &desktop,
+        LaneKind::Change {
+            change: ran.clone(),
+        },
+        &json!({"op": "run", "argv": ["/usr/bin/printf", "hi"], "change": ran}),
+    )
+    .await;
+    ask(
+        &desktop,
+        LaneKind::Change {
+            change: changed.clone(),
+        },
+        &environment(&changed, "preview"),
+    )
+    .await;
+
+    assert!(
+        kept_reply(&served, &ran).get("events").is_none(),
+        "a command's output finds no room"
+    );
+    assert_eq!(kept_reply(&served, &changed)["result"], answer);
+}
+
+#[tokio::test]
+async fn a_command_the_environment_worker_runs_ends_as_any_command_whatever_it_prints() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    for (script, code, said) in [
+        (":\n", 0, ""),
+        ("echo made the build\nexit 3\n", 3, "made the build\n"),
+        (
+            "printf '{\"ok\":true,\"applied\":true}'\n",
+            0,
+            "{\"ok\":true,\"applied\":true}",
+        ),
+    ] {
+        worker_does(&served, script);
+        let change = Token::new();
+
+        let replies = ask(
+            &desktop,
+            LaneKind::Change {
+                change: change.clone(),
+            },
+            &environment(&change, "run"),
+        )
+        .await;
+
+        let reply = replies.last().unwrap();
+        assert_eq!(reply["ok"], true, "{script}: {replies:?}");
+        assert_eq!(reply["exitCode"], code, "{script}");
+        assert!(reply.get("result").is_none(), "{script}: {reply}");
+        let mut streamed = json!({"ok": true});
+        streamed["events"] = json!(replies[..replies.len() - 1]);
+        assert_eq!(printed(&streamed), said.as_bytes(), "{script}");
+        let kept = kept_reply(&served, &change);
+        assert_eq!(printed(&kept), said.as_bytes(), "{script}");
+        assert!(kept.get("uncertain").is_none(), "{script}: {kept}");
+    }
+}
+
+#[tokio::test]
+async fn a_command_the_environment_worker_runs_times_out_and_is_recovered_as_any_command() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let (timed, lost) = (Token::new(), Token::new());
+    worker_does(&served, "echo started\nexec /bin/sleep 30\n");
+    let mut request = environment(&timed, "run");
+    request["timeoutMs"] = json!(300);
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: timed.clone(),
+        },
+        &request,
+    )
+    .await;
+
+    let reply = replies.last().unwrap();
+    assert_eq!(reply["ok"], true, "{replies:?}");
+    assert_eq!(reply["timedOut"], true, "{replies:?}");
+    assert_eq!(printed(&kept_reply(&served, &timed)), b"started\n");
+
+    // A reply lost on its way is read back as it was kept.
+    worker_does(&served, "echo said\n");
+    let opened = desktop
+        .open(LaneKind::Change {
+            change: lost.clone(),
+        })
+        .await
+        .unwrap();
+    let mut stream = opened.stream;
+    let mut line = serde_json::to_vec(&environment(&lost, "run")).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    stream.flush().await.unwrap();
+    let mut outcome = outcome_of(&desktop, &lost).await;
+    for _ in 0..100 {
+        if outcome["outcome"] == "done" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        outcome = outcome_of(&desktop, &lost).await;
+    }
+    drop(stream);
+
+    assert_eq!(outcome["reply"]["exitCode"], 0, "{outcome}");
+    assert_eq!(printed(&outcome["reply"]), b"said\n", "{outcome}");
+}
+
+#[tokio::test]
+async fn a_command_the_environment_worker_refused_to_run_is_refused_for_certain_in_its_words() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    worker_does(
+        &served,
+        &format!(
+            "{NAMED}printf '{{\"ok\":false,\"code\":\"session-changed\",\"error\":\"The desktop changed\",\"refusal\":\"%s\"}}\\n' \"$name\" >&2\nexit 125\n"
+        ),
+    );
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &environment(&change, "run"),
+    )
+    .await;
+
+    let reply = replies.last().unwrap();
+    assert_eq!(reply["ok"], false, "{replies:?}");
+    assert_eq!(reply["uncertain"], false, "{replies:?}");
+    assert_eq!(reply["code"], "session-changed");
+    assert_eq!(reply["error"], "The desktop changed");
+}
+
+#[tokio::test]
+async fn only_a_machine_desktop_that_supervises_its_commands_runs_the_environment_worker() {
+    let served = Served::start().await;
+    let helper = Asker {
+        controller: true,
+        host: None,
+        gate: None,
+    };
+
+    let refused =
+        super::super::environment(&served.machine.daemon, &helper, &packet("apply"), true)
+            .err()
+            .unwrap();
+
+    assert_eq!(refused["code"], "platform", "{refused}");
+    assert_eq!(refused["uncertain"], false, "{refused}");
+}
+
+#[tokio::test]
+async fn a_command_that_prints_the_workers_refusal_and_exits_as_it_would_is_still_the_commands_end()
+{
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let said = r#"{"ok":false,"code":"denied","error":"example","refusal":"machine"}"#;
+    worker_does(&served, &format!("printf '%s' '{said}'\nexit 125\n"));
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &environment(&change, "run"),
+    )
+    .await;
+
+    let reply = replies.last().unwrap();
+    assert_eq!(reply["ok"], true, "{replies:?}");
+    assert_eq!(reply["exitCode"], 125, "{replies:?}");
+    let kept = kept_reply(&served, &change);
+    assert_eq!(printed(&kept), said.as_bytes());
+    assert!(kept.get("uncertain").is_none(), "{kept}");
+}
+
+#[tokio::test]
+async fn a_change_whose_worker_could_not_say_what_it_did_stays_unknown_until_its_work_is_proven_ended()
+ {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    // A rollback whose answer is too long to keep: the worker refuses it,
+    // uncertain, as `keepable` does for a change that may have been made.
+    worker_does(
+        &served,
+        &format!(
+            "{NAMED}printf '{{\"ok\":false,\"code\":\"environment\",\"error\":\"The desktop\\x27s answer is too long to keep; select fewer files and try again\",\"uncertain\":true,\"refusal\":\"%s\"}}\\n' \"$name\" >&2\nexit 125\n"
+        ),
+    );
+    let replies = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &environment(&change, "rollback"),
+    )
+    .await;
+
+    let reply = replies.last().unwrap();
+    assert_eq!(reply["ok"], false, "{replies:?}");
+    assert_eq!(
+        reply["uncertain"], true,
+        "never ok with its doubt under result: {reply}"
+    );
+    assert_eq!(reply["result"]["uncertain"], true, "{reply}");
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("too long to keep")),
+        "{reply}"
+    );
+    // What it came to, read again from what the guest kept, as recovery
+    // reads it: settled only once its supervisor is proven done.
+    let outcome = ended_outcome(&desktop, &change).await;
+    assert_eq!(outcome["outcome"], "done", "{outcome}");
+    assert_eq!(outcome["reply"]["uncertain"], true, "{outcome}");
+    assert_eq!(outcome["reply"]["ended"], true, "{outcome}");
 }

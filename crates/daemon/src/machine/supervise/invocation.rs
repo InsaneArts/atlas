@@ -22,23 +22,37 @@ pub struct Invocation {
     /// The program, by its full path.
     pub program: PathBuf,
     pub arguments: Vec<OsString>,
+    /// Whether the program is handed a packet: the supervisor reads one
+    /// [`PACKET`](super::PACKET) frame from its lifeline before its program
+    /// may start, and gives it to the program as its standard input.
+    pub handed: bool,
 }
+
+/// The word ahead of the rest that says an invocation is handed a packet.
+/// A supervisor that does not know it reads no invocation, and starts
+/// nothing.
+const HANDED: &str = "handed";
 
 impl Invocation {
     /// The words the supervisor is started with, after its own command.
     pub fn words(&self) -> Vec<OsString> {
-        let mut words = vec![
+        let mut words: Vec<OsString> = self.handed.then(|| HANDED.into()).into_iter().collect();
+        words.extend([
             OsString::from(self.lease.as_millis().to_string()),
             self.proofs.clone().into_os_string(),
             self.argv0.clone(),
             self.program.clone().into_os_string(),
-        ];
+        ]);
         words.extend(self.arguments.iter().cloned());
         words
     }
 
     /// The invocation `words` give; none when they are not one.
     pub fn parse(words: &[OsString]) -> Option<Self> {
+        let (handed, words) = match words {
+            [first, rest @ ..] if first == HANDED => (true, rest),
+            _ => (false, words),
+        };
         let [lease, proofs, argv0, program, arguments @ ..] = words else {
             return None;
         };
@@ -57,6 +71,7 @@ impl Invocation {
             argv0: argv0.clone(),
             program,
             arguments: arguments.to_vec(),
+            handed,
         })
     }
 }

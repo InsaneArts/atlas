@@ -635,6 +635,7 @@ pub(super) async fn dispatch_as(
         version: 1,
         expected: Identity::from_epoch(&client.identity().await?.epoch),
         request,
+        refusal: None,
     };
 
     let kind = if mutating { CHANGE } else { READ };

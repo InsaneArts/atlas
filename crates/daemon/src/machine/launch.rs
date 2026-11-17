@@ -157,14 +157,15 @@ pub async fn prove_parent() -> Result<()> {
     proved(std::os::unix::process::parent_id()).await
 }
 
-/// [`prove_parent`] on this thread, for a worker that starts before any
-/// runtime: a machine desktop's supervisor.
+/// Refuse unless process `pid` is the guest's genuine daemon, as launchd
+/// says now, asked on this thread: for a worker that starts before any
+/// runtime, a machine desktop's supervisor (`pid` its parent) or its
+/// environment worker (its parent's parent).
 ///
 /// # Errors
 ///
-/// Refuses as [`prove_parent`] does.
-pub(crate) fn prove_parent_now() -> Result<()> {
-    let pid = std::os::unix::process::parent_id();
+/// Refuses as [`judge`] does, or when launchd or the plist cannot be read.
+pub(crate) fn prove_pid_now(pid: u32) -> Result<()> {
     let uid = nix::unistd::getuid().as_raw();
     let printed = asked_now("/bin/launchctl", &["print", &format!("gui/{uid}/{LABEL}")])?;
     let json = asked_now("/usr/bin/plutil", &["-convert", "json", "-o", "-", PLIST])?;
