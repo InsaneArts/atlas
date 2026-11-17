@@ -40,7 +40,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 7] = [
+pub(super) const CAPABILITIES: [&str; 8] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
@@ -48,6 +48,7 @@ pub(super) const CAPABILITIES: [&str; 7] = [
     super::observe::CAPABILITY,
     super::change::CAPABILITY,
     super::recover::CAPABILITY,
+    super::stage::CAPABILITY,
 ];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
@@ -64,9 +65,12 @@ const LONGEST: Duration = Duration::from_secs(120);
 /// Resume, its own proof and recovery are the keeper's own; a job's reads
 /// are a list or one job (`show`) and its log, never a stop of every job;
 /// `leftovers` is the guest's word on what work of its may still run.
+/// `open`, `close` and a cleanup read the guest's apps, always in the
+/// session their proof pinned, and its copies.
 pub(crate) fn carries(request: &Value) -> bool {
     match request["op"].as_str() {
-        Some("hello" | "outcome" | "leftovers") => true,
+        Some("hello" | "outcome" | "leftovers" | "copies") => true,
+        Some("apps") => request["session"].is_object(),
         Some("job") => matches!(request["action"].as_str(), Some("show" | "log")),
         _ => false,
     }
@@ -205,6 +209,9 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
     let mut line = Vec::new();
     let mut reader = BufReader::new((&mut writing).take(REQUEST));
     let asked = tokio::time::timeout(ASKING, reader.read_until(b'\n', &mut line)).await;
+    // Whatever came after the request is read already: a stage's bytes may
+    // follow only once it is told to send them.
+    let early = !reader.buffer().is_empty();
     drop(reader);
     let Ok(Ok(1..)) = asked else {
         return;
@@ -278,6 +285,7 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             carried(keeper, &request["request"], pinned, deadline, &mut writing).await;
         }
         Some("change") => super::change::changed(keeper, &request, writing).await,
+        Some("stage") => super::stage::staged(keeper, &request, writing, early).await,
         Some("settle") => {
             let settled = super::change::settled(keeper, &request).await;
             let _ = say(&mut writing, &settled).await;

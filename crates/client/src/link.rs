@@ -252,13 +252,16 @@ fn lane_for(session: &Session, request: &Value) -> Result<LaneKind> {
     }
 }
 
-/// Which lane of a VM desktop's session a change goes on: only a change of
-/// the guest's daemon for now; input and stages are given theirs when they
-/// are carried.
+/// Which lane of a VM desktop's session a change goes on: a change of the
+/// guest's daemon, or a stage of a file or folder into it; input is given
+/// its own when it is carried.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     /// A change the guest's daemon carries out, named by its token.
     Change(Token),
+    /// A stage, named by its token, whose bytes follow its request once
+    /// the guest says it is ready for them.
+    Stage(Token),
 }
 
 /// A request whose final reply has not come. Dropped so, its lane's work

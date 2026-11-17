@@ -128,7 +128,7 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// and settles whatever it is asked to.
+/// runs no app and keeps no copy, and settles whatever it is asked to.
 #[must_use]
 pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let (station, guest) = (
@@ -285,6 +285,12 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
         Some("read") if request["request"]["op"] == "hello" => machine_hello(stop),
         Some("read") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)
+        }
+        Some("read") if request["request"]["op"] == "apps" => {
+            json!({"ok": true, "apps": [], "starts": null})
+        }
+        Some("read") if request["request"]["op"] == "copies" => {
+            json!({"ok": true, "op": "copies", "copies": [], "next": null, "unknown": []})
         }
         Some("read") => json!({"ok": true, "outcome": "unknown"}),
         Some("change") if request["request"]["op"] == "job" => {

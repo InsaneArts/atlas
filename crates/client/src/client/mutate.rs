@@ -38,6 +38,9 @@ const KEPT_OUTCOME_WAIT: Duration = Duration::from_secs(10);
 /// How long a VM's guest is given to start a job and say so: longer than
 /// it waits for the job's program to start.
 const JOB_START: Duration = Duration::from_secs(30);
+/// How long a VM's guest is given to remove a copy and say what it came to:
+/// it may first put right what an earlier change to it left.
+const REMOVE_COPY: Duration = Duration::from_secs(60);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -91,6 +94,11 @@ pub(crate) enum Mutation<'a> {
     Restart,
     Logout {
         force: bool,
+    },
+    /// A VM guest's copy removed, while it is still the folder `node` says.
+    RemoveCopy {
+        copy: &'a Token,
+        node: &'a str,
     },
 }
 
@@ -162,6 +170,9 @@ impl Mutation<'_> {
             }),
             Self::Restart => json!({"op": "restart"}),
             Self::Logout { force } => json!({"op": "logout", "force": force}),
+            Self::RemoveCopy { copy, node } => {
+                json!({"op": "remove-copy", "copy": copy, "node": node})
+            }
         }
     }
 
@@ -223,6 +234,12 @@ impl Mutation<'_> {
                                     .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
             }
             Self::Restart | Self::Logout { .. } => true,
+            // What a removal came to names the copy it was asked for.
+            Self::RemoveCopy { copy, .. } => {
+                reply["op"] == "remove-copy"
+                    && reply["copy"] == json!(copy)
+                    && reply["outcome"].is_string()
+            }
         };
 
         valid.then_some(()).ok_or_else(unconfirmed)
@@ -312,7 +329,10 @@ impl Client {
         let (agent_command, stop_before) = match mutation {
             Mutation::Run { .. } => (agent, agent),
             Mutation::JobStart { .. } | Mutation::JobStop { .. } => (false, agent),
-            Mutation::Input { .. } | Mutation::Restart | Mutation::Logout { .. } => (false, false),
+            Mutation::Input { .. }
+            | Mutation::Restart
+            | Mutation::Logout { .. }
+            | Mutation::RemoveCopy { .. } => (false, false),
         };
         if stop_before && self.stop_marked() {
             return Err(Error::stopped());
@@ -450,6 +470,9 @@ impl Client {
             | Mutation::JobStop { .. }
             | Mutation::Restart
             | Mutation::Logout { .. } => daemon.clone(),
+            // Only a VM's guest keeps copies of its own, removed through its
+            // keeper.
+            Mutation::RemoveCopy { .. } => return Err(self.unreachable()),
         })
     }
 
@@ -477,7 +500,10 @@ impl Client {
         let callers = match mutation {
             Mutation::Restart | Mutation::Logout { .. } => true,
             Mutation::Input { .. } => !leased,
-            Mutation::Run { .. } | Mutation::JobStart { .. } | Mutation::JobStop { .. } => false,
+            Mutation::Run { .. }
+            | Mutation::JobStart { .. }
+            | Mutation::JobStop { .. }
+            | Mutation::RemoveCopy { .. } => false,
         };
         if callers {
             return Ok(None);
@@ -593,9 +619,7 @@ impl Client {
     async fn remembered(&self, mutation: &Mutation<'_>, change: &Token) -> Option<Value> {
         let asking = json!({"op": "outcome", "change": change});
         if let Kind::Vm(_) = self.desktop().kind() {
-            // Asked in whatever generation is live: the guest's disk keeps it.
-            let link = self.link.clone().with_timeout(KEPT_OUTCOME_WAIT);
-            let mut reply = Outcome::remembered(&link.call(&asking).await.ok()?)?;
+            let mut reply = self.kept_on_vm(change).await?;
             if matches!(mutation, Mutation::Run { .. }) {
                 match reply["truncated"].as_bool() {
                     None => reply["output"] = json!("unavailable"),
@@ -612,12 +636,21 @@ impl Client {
             | Mutation::JobStart { .. }
             | Mutation::JobStop { .. }
             | Mutation::Restart
-            | Mutation::Logout { .. } => {}
+            | Mutation::Logout { .. }
+            | Mutation::RemoveCopy { .. } => {}
         }
         let mut transport = self.transport_for(mutation).ok()?;
         transport.timeout = OUTCOME_WAIT;
         let answer = transport.call(&asking).await.ok()?;
         Outcome::remembered(&answer)
+    }
+
+    /// The final reply a VM's guest kept for `change`, when it keeps one,
+    /// asked in whatever generation is live: the guest's disk keeps it.
+    pub(super) async fn kept_on_vm(&self, change: &Token) -> Option<Value> {
+        let asking = json!({"op": "outcome", "change": change});
+        let link = self.link.clone().with_timeout(KEPT_OUTCOME_WAIT);
+        Outcome::remembered(&link.call(&asking).await.ok()?)
     }
 
     /// The reply to an agent's sent command, `reply` to come, which is
@@ -669,7 +702,7 @@ impl Client {
     /// claim. A VM's guest is told once its claim is cleared, never before:
     /// what its command left is the guest's own to keep. What could not be
     /// cleared or recorded is said in warnings.
-    async fn settle(
+    pub(super) async fn settle(
         &self,
         request: &Value,
         mut reply: Value,
@@ -737,12 +770,12 @@ impl Client {
     }
 
     /// [`Client::mutate`] on a VM, in the generation `generation` of its
-    /// keeper's session its command's proof was taken in: a command, or a
-    /// job's start or stop, claimed as the guest's before anything goes,
-    /// said through its keeper, and settled with the guest once its claim
-    /// is cleared. An agent's change is cut short by the person's Stop, its
-    /// outcome left pending until the guest answers it. Anything else is
-    /// refused before it is claimed.
+    /// keeper's session its command's proof was taken in: a command, a job's
+    /// start or stop, or a copy's removal, claimed as the guest's before
+    /// anything goes, said through its keeper, and settled with the guest once
+    /// its claim is cleared. An agent's change is cut short by the person's
+    /// Stop, its outcome left pending until the guest answers it. Anything
+    /// else is refused before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
         mutation: &Mutation<'_>,
@@ -754,6 +787,7 @@ impl Client {
             (Kind::Vm(_), Mutation::Run { timeout, .. }) => *timeout + RUN_MARGIN,
             (Kind::Vm(_), Mutation::JobStart { .. }) => JOB_START,
             (Kind::Vm(_), Mutation::JobStop { .. }) => self.link.timeout(),
+            (Kind::Vm(_), Mutation::RemoveCopy { .. }) => REMOVE_COPY,
             _ => return Err(self.unreachable()),
         };
         debug_assert!(
@@ -803,8 +837,9 @@ impl Client {
                 .await
             }
             // The guest ends every job on the person's Stop: what this change
-            // came to is then the guest's to say.
-            _ if agent => {
+            // came to is then the guest's to say. A copy's removal is the
+            // guest's own to refuse under a Stop, and its answer is waited for.
+            Mutation::JobStart { .. } | Mutation::JobStop { .. } if agent => {
                 tokio::select! {
                     biased;
                     reply = self.answer_or_ask_for(through_keeper(sent), asked, started) => reply,
@@ -830,7 +865,7 @@ impl Client {
     /// `error`, of a change to this VM that may or may not have happened,
     /// with what an agent does about it there: the helper's own advice
     /// (a screenshot and a restart) is refused on a VM.
-    fn pending_on_vm(&self, error: Error) -> Error {
+    pub(super) fn pending_on_vm(&self, error: Error) -> Error {
         if !error.uncertain || error.details.contains_key("next") {
             return error;
         }

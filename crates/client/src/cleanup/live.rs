@@ -9,10 +9,10 @@ use super::{
 use crate::{
     agent::{self, Quitting},
     app_selection::Process,
-    client::{Actor, AppList, Client},
+    client::{Actor, AppList, Client, Verified},
     collect::{self, Intact},
     environment::{self, InstallState, PlanState, RemovalReply, Undone},
-    handoff::Copies,
+    handoff::{Copies, CopyRemoval},
     host_session::Key,
 };
 use atlas_control::Ownership;
@@ -29,21 +29,38 @@ pub(super) struct Live<'a> {
     /// only reads.
     ownership: Option<&'a Ownership>,
     copies: Copies,
+    /// A VM's proof, taken once: its apps are read and quit in its session
+    /// and generation alone.
+    verified: Option<Verified>,
     /// Whether an earlier outcome was unknown when control was taken.
     unknown: bool,
 }
 
 impl<'a> Live<'a> {
-    /// Hands that only read, for a preview.
+    /// Hands that only read, for a preview. A VM guest's copies are known
+    /// by its inventory, read once here: each one's folder, its identity
+    /// and what runs from it. One that cannot be read leaves them unlisted:
+    /// none is then proven to be the session's, and each counts as there.
     ///
     /// # Errors
     ///
-    /// Refuses a desktop whose copies this build does not know.
-    pub(super) fn reading(client: &'a Client) -> Result<Self> {
+    /// Refuses a desktop whose copies this build does not know, or cannot
+    /// reach.
+    pub(super) async fn reading(client: &'a Client) -> Result<Self> {
+        client.reachable()?;
+        let mut copies = Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
+        let mut verified = None;
+        if copies.in_a_guest() {
+            verified = Some(client.verify_vm().await?);
+            if let Ok(listed) = crate::vm::copies::inventory(client).await {
+                copies = copies.listed(listed, client.output_dir()?);
+            }
+        }
         Ok(Self {
             client,
             ownership: None,
-            copies: Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?,
+            copies,
+            verified,
             unknown: false,
         })
     }
@@ -53,7 +70,7 @@ impl<'a> Live<'a> {
     /// # Errors
     ///
     /// As [`Live::reading`].
-    pub(super) fn acting(
+    pub(super) async fn acting(
         client: &'a Client,
         ownership: &'a Ownership,
         unknown: bool,
@@ -61,7 +78,7 @@ impl<'a> Live<'a> {
         Ok(Self {
             ownership: Some(ownership),
             unknown,
-            ..Self::reading(client)?
+            ..Self::reading(client).await?
         })
     }
 
@@ -77,7 +94,18 @@ impl Hands for Live<'_> {
     }
 
     async fn apps(&self) -> Result<AppList> {
-        self.client.running_apps().await
+        agent::apps_in(self.client, self.verified.as_ref()).await
+    }
+
+    async fn remove_copy(&self, copy: &Token, session: &Key, running: &AppList) -> CopyRemoval {
+        self.copies
+            .remove_with(
+                self.client,
+                copy,
+                (session, self.verified.as_ref()),
+                running.rows(),
+            )
+            .await
     }
 
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>> {
@@ -107,8 +135,14 @@ impl Hands for Live<'_> {
                 })
                 .collect()
         };
-        let quitting =
-            agent::quit_until(self.client, ownership, processes, left, agent::QUIT_WAIT).await?;
+        let quitting = agent::quit_until(
+            self.client,
+            ownership,
+            (processes, self.verified.as_ref()),
+            left,
+            agent::QUIT_WAIT,
+        )
+        .await?;
         if let Quitting::TimedOut { still } = quitting {
             return Ok(Quitted::TimedOut(format!(
                 "{} did not quit within {} seconds",

@@ -260,3 +260,64 @@ fn the_provenance_attribute_in_a_manifest_is_refused() {
 
     assert!(snapshot_of(vec![root]).check().is_err());
 }
+
+#[test]
+fn a_held_snapshot_reads_from_what_it_read_and_refuses_once_a_file_or_its_path_changes() {
+    let folder = tempfile::tempdir().unwrap();
+    let tree = folder.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(tree.join("a.txt"), b"first").unwrap();
+    std::fs::write(tree.join("b.txt"), b"second").unwrap();
+
+    let held = Snapshot::held(&tree).unwrap();
+    assert_eq!(held.files().count(), 2);
+    held.still(&tree).unwrap();
+    std::fs::rename(tree.join("a.txt"), folder.path().join("a.old")).unwrap();
+    std::fs::write(tree.join("a.txt"), b"other").unwrap();
+
+    let (_, size, first) = held.files().next().unwrap();
+    assert_eq!(
+        first.chunk(0, size).unwrap(),
+        b"first",
+        "the file read, never what the path names now"
+    );
+    assert!(first.unchanged().is_err(), "renamed away since");
+    assert!(held.still(&tree).is_err());
+
+    let again = Snapshot::held(&tree).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(tree.join("b.txt"))
+        .unwrap();
+    again.still(&tree).unwrap();
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(tree.join("b.txt"))
+        .unwrap()
+        .write_all(b"!")
+        .unwrap();
+    assert!(again.still(&tree).is_err(), "grown since");
+}
+
+#[test]
+fn a_held_files_chunk_is_given_only_while_it_reads_as_it_did() {
+    use std::os::unix::fs::FileExt;
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("large.bin");
+    fs::write(&file, vec![7_u8; CHUNK * 2 + 10]).unwrap();
+    let held = Snapshot::held(&file).unwrap();
+    let (_, size, held_file) = held.files().next().unwrap();
+
+    assert_eq!(held_file.chunk(0, size).unwrap(), vec![7_u8; CHUNK]);
+    assert_eq!(held_file.chunk(2, size).unwrap(), vec![7_u8; 10]);
+    assert!(held_file.chunk(3, size).is_err(), "not one of its own");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .write_at(b"changed", CHUNK as u64 + 5)
+        .unwrap();
+    assert!(held_file.chunk(1, size).is_err(), "overwritten in place");
+    assert_eq!(held_file.chunk(0, size).unwrap(), vec![7_u8; CHUNK]);
+}

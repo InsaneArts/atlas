@@ -2,6 +2,7 @@
 //! clock, generations and records, reached only across a [`link::Link`]
 //! whose conditions a test sets. It is the start of the conformance kit
 //! every kind of desktop passes.
+pub mod copies;
 pub mod link;
 pub mod serve;
 
@@ -138,6 +139,20 @@ pub struct StandIn {
     pub holding: AtomicBool,
     /// How many replies to come it keeps and never sends, its lane cut.
     pub dropping: AtomicUsize,
+    /// The copies staged into it, by their change.
+    placed: Mutex<BTreeMap<Token, copies::Copy>>,
+    /// The next copy folder's number, which its node names.
+    nodes: AtomicUsize,
+    /// While set, a stage's bytes are read but their credit is kept back.
+    pub withholding: AtomicBool,
+    /// How many stages had all their bytes read.
+    pub received: AtomicUsize,
+    /// Every content byte each stage received, whatever it came to.
+    pub partial: Mutex<BTreeMap<Token, Vec<u8>>>,
+    /// The credit kept back, by lane.
+    withheld: Mutex<BTreeMap<LaneId, u64>>,
+    /// Where the live generation's control messages go, for credit.
+    outbox: Mutex<Option<Arc<Outbox>>>,
     /// Every generation that retired, and why.
     pub retired: Arc<Mutex<Vec<(Generation, Retired)>>>,
     /// The generation live now: a newer one retires it.
@@ -205,6 +220,13 @@ impl StandIn {
             changes: Mutex::default(),
             holding: AtomicBool::new(false),
             dropping: AtomicUsize::new(0),
+            placed: Mutex::default(),
+            nodes: AtomicUsize::new(0),
+            withholding: AtomicBool::new(false),
+            received: AtomicUsize::new(0),
+            partial: Mutex::default(),
+            withheld: Mutex::default(),
+            outbox: Mutex::new(None),
             retired: Arc::new(Mutex::new(Vec::new())),
             current: Mutex::new(None),
             dial_gate: Arc::new(tokio::sync::Semaphore::new(
@@ -272,6 +294,7 @@ impl StandIn {
             sending: Mutex::new(None),
             tasks: Tasks::default(),
         };
+        *self.outbox.lock().unwrap_or_else(PoisonError::into_inner) = Some(live.outbox.clone());
         let (reading, writing) = tokio::io::split(secure);
         let sending = tokio::spawn(control::send(writing, live.outbox.clone())).abort_handle();
         *live.sending.lock().unwrap_or_else(PoisonError::into_inner) = Some(sending.clone());

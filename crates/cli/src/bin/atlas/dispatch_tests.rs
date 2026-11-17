@@ -985,6 +985,45 @@ async fn a_command_on_a_vm_reaches_its_change_lane_through_dispatch_and_is_held_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_on_a_vm_reads_its_guests_apps_and_copies_through_dispatch_and_is_held_by_its_stop()
+{
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let close = || {
+        parse(&["close", "--app", "Probe"])
+            .unwrap()
+            .command
+            .unwrap()
+    };
+    let policy = Policy::of(&close());
+    assert!(policy.changes_helper());
+    client.doing = policy.doing.clone();
+    let factory = || Ok(client.clone());
+
+    let closed = execute_with(&config, close(), &policy, None, &factory, false)
+        .await
+        .unwrap();
+    *keeper.stop.lock().unwrap() = "stopped";
+    let held = execute_with(&config, close(), &policy, None, &factory, false).await;
+
+    assert_eq!(closed["ok"], true, "{closed}");
+    assert_eq!(closed["reason"], "Probe is not running", "{closed}");
+    assert_eq!(closed["removed"], json!([]));
+    let reads: Vec<Value> = keeper
+        .asked_for("read")
+        .into_iter()
+        .map(|read| read["request"]["op"].clone())
+        .collect();
+    assert!(reads.contains(&json!("apps")), "{reads:?}");
+    assert!(reads.contains(&json!("copies")), "{reads:?}");
+    assert!(keeper.asked_for("change").is_empty(), "nothing to change");
+    let held = held.unwrap_err();
+    assert_eq!(held.code, Code::Stopped, "{held:?}");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_keeper_is_asked_anything()
  {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
@@ -998,6 +1037,7 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         &["apps"],
         &["screenshot"],
         &["start-input"],
+        &["install-app", "/Applications/Probe.app"],
     ] {
         let command = parse(args).unwrap().command.unwrap();
         let policy = Policy::of(&command);

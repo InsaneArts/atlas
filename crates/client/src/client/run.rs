@@ -173,8 +173,10 @@ impl Client {
     pub(crate) async fn run(&self, argv: Vec<String>, run: Run<'_>) -> Result<Value> {
         check_run(&argv, run.timeout)?;
         let vm = matches!(self.desktop().kind(), Kind::Vm(_));
-        // On a VM, only an agent's own command for now.
-        if vm && !matches!(run.mode, Mode::Beside) {
+        // On a VM, an agent's own command, or a step of `open`, `close` or a
+        // cleanup under control its caller holds; never under the person's
+        // lease.
+        if vm && (!matches!(run.mode, Mode::Beside | Mode::Owned) || run.lease.is_some()) {
             return Err(self.unreachable());
         }
         let taken = match run.mode {
@@ -254,17 +256,25 @@ impl Client {
     }
 
     /// [`Client::run`] under `ownership`, refused unless the helper accepted
-    /// the command, keeping at most `limit` bytes of its output.
-    pub(crate) async fn run_finished(
+    /// the command, keeping at most `limit` bytes of its output; in the
+    /// desktop `verified` names, when it names one: a VM's in the very generation its proof was taken in, so
+    /// what was chosen there is never acted on in another.
+    pub(crate) async fn run_finished_in(
         &self,
         ownership: &Ownership,
+        verified: Option<&Verified>,
         argv: Vec<String>,
         limit: usize,
     ) -> Result<Finished> {
-        self.run_finished_under(ownership, None, argv, limit).await
+        let run = match verified {
+            Some(verified) => Run::owned(ownership).pinned(verified),
+            None => Run::owned(ownership),
+        };
+        let reply = accepted(self.run(argv, run).await?)?;
+        Ok(Finished::decode(&reply, limit))
     }
 
-    /// [`Client::run_finished`], sent only while `lease` still holds, when
+    /// [`Client::run_finished_in`], sent only while `lease` still holds, when
     /// it names the person's lease and its token.
     pub(crate) async fn run_finished_under(
         &self,

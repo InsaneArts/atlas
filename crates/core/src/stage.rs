@@ -9,8 +9,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod held;
 mod snapshot;
 
+pub use held::{CHUNK, Held, HeldFile};
 pub use snapshot::open_file;
 
 /// The most entries one snapshot holds.
@@ -19,6 +21,8 @@ pub const MOST_ENTRIES: usize = 200_000;
 pub const MOST_CONTENTS: u64 = 64 << 30;
 /// The longest manifest, as sent.
 pub const MOST_MANIFEST: usize = 64 << 20;
+/// The most files a snapshot held to be sent from holds open at once.
+pub const MOST_HELD: usize = 4096;
 /// The deepest an entry lies below the root.
 pub const DEEPEST: usize = 64;
 /// The longest one name in a path.

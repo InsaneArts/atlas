@@ -30,6 +30,9 @@ use std::{
 /// Rejects an invalid bundle, unsafe destination or changed helper identity, and returns
 /// copy or registration failures. Unknown installation retains its ownership record.
 pub async fn install(client: &Client, path: &Path) -> Result<Value> {
+    // Installing goes through the desktop's environment, which a VM does not
+    // take yet: refused before anything is asked or made.
+    client.second_login_only()?;
     let (bundle, name) = bundle(path)?;
     let task = client.task.clone().ok_or_else(|| {
         Error::new(
@@ -71,7 +74,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     };
     claims.claim(&install, State::Intent)?;
 
-    let handed = match handoff::hand_over(client, &ownership, vec![target], running).await {
+    let handed = match handoff::hand_over(client, &ownership, vec![target], (running, None)).await {
         Ok(handed) => handed,
         Err(error) => {
             let _ = claims.settle_all(&[(install, State::Gone)]);

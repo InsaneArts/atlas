@@ -130,6 +130,16 @@ where
                 "error": "This change was asked for before, and what it came to is unknown",
                 "uncertain": true}),
         },
+        LaneKind::Stage { change } => {
+            let staged =
+                super::copies::staged(stand_in, lanes, &header, change, &request, &mut secure)
+                    .await?;
+            let Some(reply) = staged else {
+                return Ok(());
+            };
+            reply
+        }
+        LaneKind::Read if request["op"] == "copies" => stand_in.inventory(&request),
         LaneKind::Read if request["op"] == "outcome" => {
             let kept = request["change"]
                 .as_str()
@@ -184,7 +194,12 @@ async fn carried_out(
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let reply = answer(header, request);
+    // A copy is removed by the guest's own code, as a change it keeps.
+    let reply = if request["op"] == "remove-copy" {
+        stand_in.remove_copy(&request)
+    } else {
+        answer(header, request)
+    };
     if reply.is_null() {
         return Some(reply);
     }

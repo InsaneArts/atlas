@@ -192,13 +192,36 @@ impl Client {
         older: impl FnOnce(&str) -> String,
     ) -> Result<Verified> {
         let verified = self.verify_vm().await?;
+        self.generation_offering(&verified, capability, older)?;
+        Ok(verified)
+    }
+
+    /// The generation `verified`, a VM's proof, was taken in, which every
+    /// change a command makes on that proof carries; refused when the guest
+    /// it proved does not offer `capability`, in `older`'s words, given the
+    /// VM's name, or when it proved no VM.
+    ///
+    /// # Errors
+    ///
+    /// Refuses as said; nothing is sent.
+    pub(crate) fn generation_offering(
+        &self,
+        verified: &Verified,
+        capability: &str,
+        older: impl FnOnce(&str) -> String,
+    ) -> Result<u64> {
+        let generation = verified
+            .machine
+            .as_ref()
+            .map(|machine| machine.generation)
+            .ok_or_else(|| self.unreachable())?;
         if !verified.observation.has_capability(capability) {
             return Err(Error::new(Code::Update, older(&self.selected.name)).with(
                 "next",
                 json!("Update Atlas so the VM's Atlas and this command are one build."),
             ));
         }
-        Ok(verified)
+        Ok(generation)
     }
 
     /// Whether work the VM's guest started may still run there, as the

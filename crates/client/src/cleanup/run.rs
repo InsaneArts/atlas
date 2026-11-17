@@ -72,6 +72,11 @@ pub(super) trait Hands {
     fn copies(&self) -> &Copies;
     /// The helper's running apps, from a list it gave.
     async fn apps(&self) -> Result<AppList>;
+    /// Remove the copy `copy` for a cleanup of `session`'s work, unless an
+    /// app in `running` may use it.
+    async fn remove_copy(&self, copy: &Token, session: &Key, running: &AppList) -> CopyRemoval {
+        self.copies().remove(copy, session, running.rows())
+    }
     /// How far each of `ids` got, read without control.
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>>;
     /// How each of `ids` stands in the helper, read without control: where
@@ -663,7 +668,7 @@ async fn remove_install(hands: &impl Hands, install: &Token) -> Result<Outcome> 
 
 async fn remove_copy(hands: &impl Hands, copy: &Token, session: &Key) -> Result<Outcome> {
     let running = hands.apps().await?;
-    Ok(match hands.copies().remove(copy, session, running.rows()) {
+    Ok(match hands.remove_copy(copy, session, &running).await {
         CopyRemoval::AlreadyGone => Outcome::gone(),
         CopyRemoval::Removed => Outcome::done(),
         CopyRemoval::AnotherSession => Outcome::kept(Reason::AnotherSession),

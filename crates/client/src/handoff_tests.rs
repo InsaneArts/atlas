@@ -73,3 +73,103 @@ fn only_a_scheme_at_the_start_makes_a_url() {
     assert!(!has_scheme("dir/notes.txt"));
     assert!(!has_scheme("2x:thing"));
 }
+
+#[test]
+fn a_vms_copies_are_its_guests_and_its_own_records_folder_names_them() {
+    let vm = DesktopId::parse(crate::test_support::VM_ID).unwrap();
+    let desktop = Desktop::from(atlas_core::vm::Vm { id: vm.clone() });
+    let output = Path::new("/tmp/atlas-output");
+
+    assert!(Copies::of(&desktop).unwrap().in_a_guest());
+    let records = output.join("desktops").join(RecordKey::vm(&vm).as_str());
+    assert!(Copies::kept_for(&records).in_a_guest());
+    assert!(!Copies::kept_for(output).in_a_guest(), "Second Login's");
+    assert!(
+        !Copies::kept_for(&output.join("desktops").join("user")).in_a_guest(),
+        "no VM's"
+    );
+    assert!(
+        !Copies::kept_for(&output.join("elsewhere").join(RecordKey::vm(&vm).as_str())).in_a_guest(),
+        "not beneath desktops"
+    );
+}
+
+#[test]
+fn a_guests_copy_is_known_here_only_by_its_inventory() {
+    let vm = DesktopId::parse(crate::test_support::VM_ID).unwrap();
+    let copies = Copies::of(&Desktop::from(atlas_core::vm::Vm { id: vm })).unwrap();
+    let (placed, staging) = (Token::new(), Token::new());
+    let root = "/Users/guest/Library/Application Support/Atlas/open";
+    let session = crate::host_session::Key::of(crate::host_session::Host::Codex, "one");
+
+    assert!(copies.exists(&placed), "not listed: counts as there");
+    assert_eq!(copies.identity(&placed, &session), None, "nothing proven");
+    assert_eq!(copies.app(&placed), None);
+    assert!(copies.location(&placed).ends_with(placed.as_str()));
+    assert!(!copies.holds(Path::new(root)), "no path here is a guest's");
+    assert!(copies.prune(&[]).is_empty(), "a guest's age is not known");
+    assert_eq!(
+        copies.token_of(&format!("{root}/{placed}/Probe.app")),
+        Some(placed.clone())
+    );
+    assert_eq!(
+        copies.token_of(&format!("{root}/{placed}")),
+        Some(placed.clone())
+    );
+    assert_eq!(copies.token_of(&format!("{root}/notes.txt")), None);
+
+    let records = tempfile::tempdir().unwrap();
+    let owners = crate::vm::copies::Owners::in_records(records.path());
+    for copy in [&placed, &staging] {
+        owners
+            .keep(&crate::vm::copies::Owner {
+                copy: copy.clone(),
+                session: Some(session.clone()),
+                task: None,
+            })
+            .unwrap();
+    }
+    let listed = copies.listed(
+        vec![
+            crate::vm::copies::GuestCopy {
+                copy: placed.clone(),
+                state: "placed".into(),
+                node: Some("1:100".into()),
+                processes: Some(Vec::new()),
+                path: Some(format!("{root}/{placed}/Probe.app")),
+            },
+            crate::vm::copies::GuestCopy {
+                copy: staging.clone(),
+                state: "staging".into(),
+                node: Some("1:101".into()),
+                processes: Some(Vec::new()),
+                path: None,
+            },
+        ],
+        records.path(),
+    );
+    assert!(listed.exists(&placed));
+    assert!(!listed.exists(&Token::new()), "listed and absent: gone");
+    assert_eq!(
+        listed.identity(&placed, &session),
+        Some(CopyIdentity {
+            folder: format!("{root}/{placed}"),
+            node: "1:100".into(),
+        })
+    );
+    assert_eq!(listed.identity(&staging, &session), None, "not placed yet");
+    let another = crate::host_session::Key::of(crate::host_session::Host::Codex, "two");
+    assert_eq!(
+        listed.identity(&placed, &another),
+        None,
+        "another session's"
+    );
+    owners.forget(&placed).unwrap();
+    assert_eq!(
+        listed.identity(&placed, &session),
+        None,
+        "no record: nobody's"
+    );
+    assert_eq!(listed.app(&placed).as_deref(), Some("Probe"));
+    assert_eq!(listed.location(&placed), format!("{root}/{placed}"));
+}

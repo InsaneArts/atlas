@@ -2,6 +2,7 @@
 //! read as nothing running. Output payloads retain field presence and extensions.
 use super::{Client, Verified};
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     process::Start,
     protocol::SessionPin,
@@ -177,6 +178,8 @@ impl Client {
     /// Returns helper identity, transport or refusal errors. Malformed app rows are a protocol
     /// failure, never evidence that no applications are running.
     pub async fn apps(&self) -> Result<Value> {
+        // On a VM only `open`, `close` and a cleanup read its apps for now.
+        self.second_login_only()?;
         self.running_apps().await.map(AppList::project)
     }
 
@@ -198,6 +201,14 @@ impl Client {
     /// when there is no pin. Only the read itself is made certain here.
     async fn read_apps(&self, pin: Option<SessionPin>) -> Result<AppList> {
         let mut request = json!({"op": "apps"});
+        // A VM's guest is proved afresh, and read in the session its proof
+        // pinned.
+        let pin = match pin {
+            None if matches!(self.desktop().kind(), Kind::Vm(_)) => {
+                Some(self.verify_vm().await?.pin()?)
+            }
+            pin => pin,
+        };
         if let Some(pin) = pin {
             request["session"] = json!(pin);
         } else {

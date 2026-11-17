@@ -382,10 +382,14 @@ impl Keeper {
     /// names, to the guest in the generation `generation` its command
     /// proved.
     pub(crate) fn change(&self, route: &Route, request: &Value, generation: u64) -> Value {
-        let Route::Change(change) = route;
-        json!({"op": "change", "lane": "change", "change": change,
-            "generation": generation, "request": request,
-            "deadline_ms": duration_ms(self.timeout)})
+        let deadline = duration_ms(self.timeout);
+        match route {
+            Route::Change(change) => json!({"op": "change", "lane": "change",
+                "change": change, "generation": generation, "request": request,
+                "deadline_ms": deadline}),
+            Route::Stage(change) => json!({"op": "stage", "change": change,
+                "generation": generation, "request": request, "deadline_ms": deadline}),
+        }
     }
 
     /// The keeper's one-line answer to `request`.

@@ -161,7 +161,8 @@ static RECENT: Mutex<Option<Cached<Seen>>> = Mutex::new(None);
 /// The records of one output folder.
 pub struct Store {
     folder: RecordFolder<Key>,
-    /// The copies `open` made, which its records name.
+    /// The copies `open` made, which its records name: those of the desktop
+    /// whose records these are, a VM guest's known by its identity there.
     copies: Copies,
 }
 
@@ -203,10 +204,11 @@ static SESSIONS: Records = Records {
 };
 
 impl Store {
+    /// The session records kept in `output`, a desktop's records folder.
     pub fn at(output: &Path) -> Self {
         Self {
             folder: RecordFolder::at(output, &SESSIONS),
-            copies: Copies::in_shared_folder(),
+            copies: Copies::kept_for(output),
         }
     }
 

@@ -28,10 +28,12 @@ mod clients;
 mod observe;
 mod program;
 mod recover;
+mod stage;
 
 pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{PROTOCOL, RESUME_KEY, carries};
 use program::Program;
+pub(crate) use stage::deadline as stage_deadline;
 
 use super::{
     Vms,

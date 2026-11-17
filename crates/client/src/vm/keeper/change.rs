@@ -41,7 +41,7 @@ const DEADLINE: Duration = Duration::from_secs(30);
 const LONGEST: Duration = Duration::from_secs(15 * 60);
 
 /// How long a lane has to open.
-const OPENING: Duration = Duration::from_secs(15);
+pub(super) const OPENING: Duration = Duration::from_secs(15);
 
 /// How long a client is given to take the keeper's own word.
 pub(super) const SAYING: Duration = Duration::from_secs(2);
@@ -404,12 +404,12 @@ impl Keeper {
 }
 
 /// `error`, said before anything of the change reached the guest.
-fn unsent(error: Error) -> Value {
+pub(super) fn unsent(error: Error) -> Value {
     serde_json::to_value(error.certain().with("sent", json!(false))).unwrap_or_default()
 }
 
 /// `error`, said once the change may have reached the guest.
-fn lost(error: Error) -> Value {
+pub(super) fn lost(error: Error) -> Value {
     serde_json::to_value(error.uncertain().with("sent", json!(true))).unwrap_or_default()
 }
 
@@ -417,7 +417,7 @@ fn refusal(code: Code, why: &str) -> Value {
     serde_json::to_value(Error::new(code, why)).unwrap_or_default()
 }
 
-fn lane_failed(error: &std::io::Error) -> Error {
+pub(super) fn lane_failed(error: &std::io::Error) -> Error {
     Error::new(
         Code::Transport,
         format!("The change's lane to the guest failed: {error}."),
@@ -426,7 +426,7 @@ fn lane_failed(error: &std::io::Error) -> Error {
 
 /// Say `said` to the client, given up after [`SAYING`]: one that stopped
 /// reading never holds the keeper.
-async fn say_within<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) {
+pub(super) async fn say_within<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) {
     let _ = tokio::time::timeout(SAYING, say(writing, said)).await;
 }
 
@@ -439,7 +439,7 @@ async fn say<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) -> std::io::R
 
 #[cfg(test)]
 #[path = "change_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "jobs_tests.rs"]

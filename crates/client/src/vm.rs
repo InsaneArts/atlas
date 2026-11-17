@@ -5,6 +5,7 @@
 pub mod add;
 mod agent;
 mod control;
+pub(crate) mod copies;
 mod evidence;
 pub mod handover;
 pub mod keeper;

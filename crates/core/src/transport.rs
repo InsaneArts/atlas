@@ -255,6 +255,13 @@ impl<S> Pending<S> {
         }
     }
 
+    /// Its stream, for an exchange of the caller's own that is more than one
+    /// request and its reply, and how much of its deadline is left.
+    pub fn into_stream(self) -> (S, Duration) {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        (self.stream, left)
+    }
+
     /// The same request on `stream` made into another type, keeping its
     /// deadline.
     pub fn map<T>(self, into: impl FnOnce(S) -> T) -> Pending<T> {

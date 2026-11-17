@@ -3,7 +3,7 @@
 //! or every app also removes the copies `open` made of them.
 use crate::{
     app_selection::{Closing, Process, atlas_bundle_in, selected},
-    client::{AppList, Client},
+    client::{AppList, Client, Verified},
     handoff, task,
 };
 use atlas_control::Ownership;
@@ -79,11 +79,13 @@ pub(crate) enum Quitting {
 /// list and the processes signalled) names none still running in a fresh,
 /// valid app list. A list that cannot be read after the signal ends the
 /// wait with its error, naming what was signalled: nothing is judged
-/// without proof the apps exited.
+/// without proof the apps exited. With `verified`, the proof `processes`
+/// were chosen under, the signal goes only in its session, and on a VM in
+/// its very generation: a guest started anew since is never signalled.
 pub(crate) async fn quit_until(
     client: &Client,
     ownership: &Ownership,
-    processes: &[Process],
+    (processes, verified): (&[Process], Option<&Verified>),
     left: impl Fn(&AppList, &[u64]) -> Vec<String>,
     limit: Duration,
 ) -> Result<Quitting> {
@@ -107,7 +109,9 @@ pub(crate) async fn quit_until(
         ]);
     }
 
-    let finished = client.run_finished(ownership, argv, 64 * 1024).await?;
+    let finished = client
+        .run_finished_in(ownership, verified, argv, 64 * 1024)
+        .await?;
     if finished.timed_out || !finished.succeeded {
         return Err(Error::new(
             Code::WaitFailed,
@@ -121,8 +125,7 @@ pub(crate) async fn quit_until(
     let deadline = Instant::now() + limit;
 
     loop {
-        let after = client
-            .running_apps()
+        let after = apps_in(client, verified)
             .await
             .map_err(|error| unconfirmed(error, &names_by_quit(processes, &signalled, true)))?;
         let still = left(&after, &signalled);
@@ -196,7 +199,14 @@ pub(super) async fn close_in(
     let ownership = client.controller.acquire_beside_commands()?;
     let started = Instant::now();
     let atlas = atlas_bundle_in(&client.desktop());
-    let apps = client.running_apps().await?;
+    // A VM is proved once: what is chosen in its guest is quit there only
+    // in the same generation.
+    let verified = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        Some(client.verify_vm().await?)
+    } else {
+        None
+    };
+    let apps = apps_in(client, verified.as_ref()).await?;
     let processes = selected(&apps, closing, atlas.as_deref());
     // Keep only identity, before the app disappears from the running list.
     let identity = match closing {
@@ -238,7 +248,8 @@ pub(super) async fn close_in(
                     .map(|process| process.name),
             )
         };
-        let quit = match quit_until(client, &ownership, &processes, left, QUIT_WAIT).await? {
+        let chosen = (processes.as_slice(), verified.as_ref());
+        let quit = match quit_until(client, &ownership, chosen, left, QUIT_WAIT).await? {
             Quitting::Gone(quit) => quit,
             Quitting::TimedOut { still } => {
                 return Err(Error::new(
@@ -258,7 +269,7 @@ pub(super) async fn close_in(
         Closing::App(app) => vec![app.to_owned()],
         Closing::All => names_by_quit(&processes, &quit, true),
     };
-    let removed = remove_copies(client, copies, &names, &after);
+    let removed = remove_copies(client, copies, &names, (&after, verified.as_ref())).await;
     let reply = closed(closing, &processes, &quit, names, removed);
 
     if let Some((name, bundle_id)) = identity {
@@ -269,12 +280,22 @@ pub(super) async fn close_in(
     Ok(reply)
 }
 
-/// Remove the copies of `names`, once `after` proved those apps gone.
-fn remove_copies(
+/// The apps running in the session `verified` names, when it names one;
+/// else as the desktop is proved now.
+pub(crate) async fn apps_in(client: &Client, verified: Option<&Verified>) -> Result<AppList> {
+    match verified {
+        Some(verified) => client.apps_in(verified).await.map_err(Error::certain),
+        None => client.running_apps().await,
+    }
+}
+
+/// Remove the copies of `names`, once `after` proved those apps gone, a
+/// VM's in the generation of `verified`, the proof they were chosen under.
+async fn remove_copies(
     client: &Client,
     copies: &handoff::Copies,
     names: &[String],
-    after: &AppList,
+    (after, verified): (&AppList, Option<&Verified>),
 ) -> handoff::Removed {
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it. An agent's close
@@ -282,7 +303,9 @@ fn remove_copies(
     let session = client.host_session.as_ref().map(|session| session.key());
     let mut removed = handoff::Removed::default();
     for name in names {
-        let gone = copies.remove_of_app(name, after.rows(), session);
+        let gone = copies
+            .remove_of_app(client, name, after.rows(), (session, verified))
+            .await;
         removed.folders.extend(gone.folders);
         removed.kept_others += gone.kept_others;
         removed.failed.extend(gone.failed);

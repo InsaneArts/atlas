@@ -3,8 +3,10 @@
 //! without following a link, and every open is non-blocking, so nothing
 //! raced into the tree is ever followed or waited on.
 use super::{
-    ATTRIBUTES, DEEPEST, Entry, Kind, LONGEST_TARGET, MOST_CONTENTS, MOST_ENTRIES, MOST_MANIFEST,
-    PROVENANCE, Snapshot, refused,
+    ATTRIBUTES, DEEPEST, Entry, Kind, LONGEST_TARGET, MOST_CONTENTS, MOST_ENTRIES, MOST_HELD,
+    MOST_MANIFEST, PROVENANCE, Snapshot,
+    held::{Chunks, Held, HeldFile, Identity},
+    refused,
 };
 use crate::{
     error::Result,
@@ -56,6 +58,9 @@ struct Walk {
     /// The manifest's size so far, as an estimate that never falls short.
     manifest: usize,
     deadline: Instant,
+    /// Each file opened, held open in order, when the snapshot is held to
+    /// be sent from: none for a snapshot only looked at.
+    held: Option<Vec<HeldFile>>,
 }
 
 impl Snapshot {
@@ -69,29 +74,53 @@ impl Snapshot {
     /// bits, a name that is not UTF-8, attributes on a link, anything past
     /// its bounds, or a file that changes while it is read.
     pub fn of(source: &Path) -> Result<Self> {
-        let (parent, name) = parent_and_name(source)?;
-        let parent = Dir::open(parent, parent_flags(), Mode::empty()).io()?;
-        let named = source
-            .file_name()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| refused("its name is not UTF-8"))?
-            .to_owned();
-        let mut walk = Walk {
-            entries: Vec::new(),
-            queued: 0,
-            contents: 0,
-            manifest: 0,
-            deadline: Instant::now() + WALK,
-        };
-        let stat = fstatat(&parent, name.as_c_str(), AtFlags::AT_SYMLINK_NOFOLLOW).io()?;
-        if kind(&stat) == SFlag::S_IFLNK {
-            return Err(refused("it is a link"));
-        }
-        walk.entry(&parent, &name, Vec::new())?;
-        let snapshot = Self::new(named, walk.entries)?;
-        snapshot.check()?;
-        Ok(snapshot)
+        walked(source, false).map(|(snapshot, _)| snapshot)
     }
+
+    /// The snapshot of `source`, as [`Snapshot::of`] takes it, with every
+    /// file it read held open to be sent from: never opened again by name.
+    ///
+    /// # Errors
+    ///
+    /// As [`Snapshot::of`], and refuses more than [`MOST_HELD`] files.
+    pub fn held(source: &Path) -> Result<Held> {
+        super::held::room_for(MOST_HELD);
+        let (snapshot, held) = walked(source, true)?;
+        let (files, root) = held.ok_or_else(|| refused("its files were not held"))?;
+        Ok(Held::new(snapshot, files, root))
+    }
+}
+
+/// A snapshot, and when it is held, each file held open and the root's
+/// identity.
+type Walked = (Snapshot, Option<(Vec<HeldFile>, Identity)>);
+
+/// The snapshot of `source`, each file held open when `hold`.
+fn walked(source: &Path, hold: bool) -> Result<Walked> {
+    let (parent, name) = parent_and_name(source)?;
+    let parent = Dir::open(parent, parent_flags(), Mode::empty()).io()?;
+    let named = source
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| refused("its name is not UTF-8"))?
+        .to_owned();
+    let mut walk = Walk {
+        entries: Vec::new(),
+        queued: 0,
+        contents: 0,
+        manifest: 0,
+        deadline: Instant::now() + WALK,
+        held: hold.then(Vec::new),
+    };
+    let stat = fstatat(&parent, name.as_c_str(), AtFlags::AT_SYMLINK_NOFOLLOW).io()?;
+    if kind(&stat) == SFlag::S_IFLNK {
+        return Err(refused("it is a link"));
+    }
+    walk.entry(&parent, &name, Vec::new())?;
+    let snapshot = Snapshot::new(named, walk.entries)?;
+    snapshot.check()?;
+    let root = Identity::of(&stat);
+    Ok((snapshot, walk.held.map(|files| (files, root))))
 }
 
 impl Walk {
@@ -210,6 +239,9 @@ impl Walk {
         let attributes = attributes(&file)?;
         let mut file = File::from(file);
         let mut hash = Sha256::new();
+        // A held file's every chunk is hashed too, so each is sent only as
+        // it was read here.
+        let mut chunks = self.held.as_ref().map(|_| Chunks::default());
         let mut buffer = vec![0_u8; 1 << 20];
         let mut read = 0_u64;
         // Never read past what it said it holds, nor past what is left.
@@ -227,6 +259,9 @@ impl Walk {
                 break;
             }
             hash.update(&buffer[..got]);
+            if let Some(chunks) = &mut chunks {
+                chunks.update(&buffer[..got]);
+            }
             read += got as u64;
             if read == most {
                 return Err(refused("a file changed while it was read"));
@@ -239,6 +274,16 @@ impl Walk {
             && (before.st_ctime, before.st_ctime_nsec) == (after.st_ctime, after.st_ctime_nsec);
         if !unchanged {
             return Err(refused("a file changed while it was read"));
+        }
+        if let Some(held) = &mut self.held {
+            if held.len() == MOST_HELD {
+                return Err(refused("it holds more files than Atlas sends at once"));
+            }
+            held.push(HeldFile::new(
+                file,
+                &after,
+                chunks.map(Chunks::finish).unwrap_or_default(),
+            ));
         }
         self.contents = self
             .contents

@@ -16,6 +16,7 @@ mod run;
 pub mod service;
 mod service_change;
 pub(crate) mod session;
+mod stage;
 mod stop;
 #[cfg(test)]
 #[path = "client_tests.rs"]
@@ -575,6 +576,17 @@ impl Client {
             observation,
             machine: None,
         })
+    }
+
+    /// The desktop proved for a command this build makes on either kind:
+    /// Second Login through [`Client::verify`], a VM afresh through its
+    /// keeper, its proof's generation kept for the changes that follow.
+    pub(crate) async fn verify_either(&self) -> Result<Verified> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            self.verify_vm().await
+        } else {
+            self.verify().await
+        }
     }
 
     /// [`Client::verify`], refusing a helper daemon that does not offer

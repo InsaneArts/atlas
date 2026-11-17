@@ -131,7 +131,9 @@ async fn launch_for_person(
     let mut finished = client
         .run_finished_under(ownership, leased, argv.clone(), OUTPUT)
         .await?;
-    if !finished.succeeded && cleared_stale_launch(client, ownership, leased, &finished).await? {
+    if !finished.succeeded
+        && cleared_stale_launch(client, ownership, (leased, None), &finished).await?
+    {
         finished = client
             .run_finished_under(ownership, leased, argv, OUTPUT)
             .await?;
@@ -171,12 +173,15 @@ pub(super) async fn open_in(
     // open, close or controller interleaves; only commands agents started
     // with `run` go on beside it.
     let ownership = Arc::new(client.controller.acquire_beside_commands()?);
-    let verified = client.verify().await?;
+    let verified = client.verify_either().await?;
     let listed = client.apps_in(&verified).await?;
     let running = listed.rows();
     task::settle_copies_gone(client, copies.prune(running));
 
-    let handed = handoff::hand_over(client, &ownership, wanted, running).await?;
+    // A VM's every change goes in the generation this proof was taken in:
+    // a guest started anew since refuses them.
+    let pin = verified.machine().is_some().then_some(&verified);
+    let handed = handoff::hand_over(client, &ownership, wanted, (running, pin)).await?;
     let copied = handed.copied;
     // Web pages for a browser already running get a window of their own:
     // the app as the helper opens it, by its name or the path handed over.
@@ -211,7 +216,7 @@ pub(super) async fn open_in(
         argv.extend(given);
     }
 
-    let (finished, from_install) = launch(client, &ownership, app, argv, named_at).await?;
+    let (finished, from_install) = launch(client, (&ownership, pin), app, argv, named_at).await?;
 
     let opened = finished.succeeded;
     // An app opened by name is only listed for its task: which of its
@@ -237,7 +242,7 @@ pub(super) async fn open_in(
         .doing
         .as_ref()
         .and_then(crate::doing::Doing::app_name)
-        && let Ok(current) = client.verify().await
+        && let Ok(current) = client.verify_either().await
         && current.session().epoch == verified.session().epoch
         && let Ok(apps) = client.apps_in(&verified).await
         && let Some(app) = super::target::named_app(&apps, name)
@@ -346,18 +351,25 @@ fn wanted(app: Option<&str>, targets: &[String]) -> Vec<handoff::Target> {
 /// Run `open`'s `argv`, again once a finished job launchd still held for
 /// the app is removed, and from the task's own install when LaunchServices
 /// does not know the app named at `named_at`. How the last run ended, and
-/// whether that launch was from the install.
+/// whether that launch was from the install. Each run goes in the session
+/// `pin` names, a VM's in its generation, when it names one.
 async fn launch(
     client: &Client,
-    ownership: &Ownership,
+    (ownership, pin): (&Ownership, Option<&Verified>),
     app: Option<&str>,
     mut argv: Vec<String>,
     named_at: Option<usize>,
 ) -> Result<(Finished, bool)> {
-    let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
+    let mut finished = client
+        .run_finished_in(ownership, pin, argv.clone(), OUTPUT)
+        .await?;
 
-    if !finished.succeeded && cleared_stale_launch(client, ownership, None, &finished).await? {
-        finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
+    if !finished.succeeded
+        && cleared_stale_launch(client, ownership, (None, pin), &finished).await?
+    {
+        finished = client
+            .run_finished_in(ownership, pin, argv.clone(), OUTPUT)
+            .await?;
     }
 
     // An app this task installed that LaunchServices does not know by its
@@ -368,7 +380,7 @@ async fn launch(
         && let Some(path) = crate::install_app::installed_path(client, app).await
     {
         argv[at] = path;
-        let finished = client.run_finished(ownership, argv, OUTPUT).await?;
+        let finished = client.run_finished_in(ownership, pin, argv, OUTPUT).await?;
         return Ok((finished, true));
     }
 
@@ -436,11 +448,12 @@ fn not_opened(finished: &Finished, copied: &[crate::handoff::Copied]) -> Error {
 /// After a failed `open`, remove the finished job launchd still holds for
 /// its app, when that is why it failed: an app opened again just as it quit
 /// can leave one, and every later launch fails until it is gone. Whether
-/// one was removed, so the launch is worth trying again.
+/// one was removed, so the launch is worth trying again. It runs under the
+/// person's `lease`, or in the session `pin` names, when either is given.
 async fn cleared_stale_launch(
     client: &Client,
     ownership: &Ownership,
-    lease: Option<(&SharedLease, &str)>,
+    (lease, pin): (Option<(&SharedLease, &str)>, Option<&Verified>),
     failed: &Finished,
 ) -> Result<bool> {
     let said = failed.said();
@@ -455,9 +468,14 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = client
-        .run_finished_under(ownership, lease, argv, OUTPUT)
-        .await?;
+    let cleared = match pin {
+        Some(_) => client.run_finished_in(ownership, pin, argv, OUTPUT).await?,
+        None => {
+            client
+                .run_finished_under(ownership, lease, argv, OUTPUT)
+                .await?
+        }
+    };
 
     Ok(!cleared.output().is_empty())
 }

@@ -220,7 +220,7 @@ async fn cleanup_sees_every_running_app_despite_public_filtering() {
         })
         .collect();
     let reply = json!({"ok": true, "apps": rows, "starts": null});
-    let live = crate::cleanup::live::Live::reading(&client).unwrap();
+    let live = crate::cleanup::live::Live::reading(&client).await.unwrap();
     let mut reads = 0;
     let apps = helper
         .serve(live.apps(), |request| {

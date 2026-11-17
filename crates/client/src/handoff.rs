@@ -2,14 +2,16 @@
 //! name files and which name apps or links, the refusal of the person's
 //! sign-ins and secrets, and the copies a desktop keeps of what it cannot
 //! read, through their owner [`Copies`]. The user desktop's copies, in a
-//! private folder of this disk, are [`crate::user::copies`].
+//! private folder of this disk, are [`crate::user::copies`]; a VM guest's,
+//! in a folder of its own, are [`crate::vm::copies`].
 use crate::{
-    client::{AppRow, Client},
+    client::{AppRow, Client, Verified},
     host_session::Key,
+    vm::copies::{GuestCopy, Owned, Owners},
 };
 use atlas_control::Ownership;
 use atlas_core::{
-    desktop::{Desktop, Kind},
+    desktop::{Desktop, DesktopId, Kind, RecordKey},
     error::{Code, Error, Result},
     files::Token,
 };
@@ -32,6 +34,14 @@ enum Place {
     /// A folder of this disk the desktop reads, as a second login does:
     /// ROOT, but in tests.
     SharedFolder(PathBuf),
+    /// A folder of a VM's guest, which only the guest reads: what is known
+    /// of them here is its inventory, when one was listed, and who each was
+    /// made for, when the VM's records are known.
+    Guest {
+        vm: DesktopId,
+        listed: Option<Vec<GuestCopy>>,
+        owners: Option<Owners>,
+    },
 }
 
 /// A copy folder's identity, as a cleanup of the session that made it
@@ -43,13 +53,33 @@ pub(crate) struct CopyIdentity {
 }
 
 impl Copies {
-    /// The copies `desktop` opens; none for a VM desktop, whose copies this
-    /// build does not make yet.
+    /// The copies `desktop` opens: a second login's in the shared folder, a
+    /// VM's in its guest.
     pub fn of(desktop: &Desktop) -> Option<Self> {
         match desktop.kind() {
             Kind::User(_) => Some(Self::in_shared_folder()),
-            Kind::Vm(_) => None,
+            Kind::Vm(vm) => Some(Self::in_guest(vm.id.clone())),
         }
+    }
+
+    /// The copies of the desktop whose records are kept in `records`: a
+    /// VM's own records folder is named by its record key beneath the
+    /// output folder's `desktops`; any other is Second Login's.
+    pub(crate) fn kept_for(records: &Path) -> Self {
+        let vm = records
+            .parent()
+            .filter(|parent| parent.file_name().is_some_and(|name| name == "desktops"))
+            .and(records.file_name())
+            .and_then(|name| name.to_str())
+            .and_then(RecordKey::parse)
+            .and_then(|key| key.vm_id());
+        vm.map_or_else(Self::in_shared_folder, |vm| {
+            Self(Place::Guest {
+                vm,
+                listed: None,
+                owners: Some(Owners::in_records(records)),
+            })
+        })
     }
 
     /// The copies in this disk's shared folder, which a second login opens
@@ -61,16 +91,57 @@ impl Copies {
         )))
     }
 
+    /// The copies `vm`'s guest keeps, none listed yet.
+    fn in_guest(vm: DesktopId) -> Self {
+        Self(Place::Guest {
+            vm,
+            listed: None,
+            owners: None,
+        })
+    }
+
+    /// These copies, a VM guest's known by `listed`, its inventory, and by
+    /// who each was made for, as the VM's records in `records` keep it.
+    pub(crate) fn listed(self, listed: Vec<GuestCopy>, records: &Path) -> Self {
+        match self.0 {
+            Place::Guest { vm, .. } => Self(Place::Guest {
+                vm,
+                listed: Some(listed),
+                owners: Some(Owners::in_records(records)),
+            }),
+            Place::SharedFolder(_) => self,
+        }
+    }
+
+    /// Whether these are a VM guest's copies.
+    pub(crate) fn in_a_guest(&self) -> bool {
+        matches!(self.0, Place::Guest { .. })
+    }
+
+    /// The copy `token` names in the guest's inventory, as listed.
+    fn guest_copy(&self, token: &Token) -> Option<&GuestCopy> {
+        match &self.0 {
+            Place::Guest {
+                listed: Some(listed),
+                ..
+            } => listed.iter().find(|copy| copy.copy == *token),
+            Place::Guest { listed: None, .. } | Place::SharedFolder(_) => None,
+        }
+    }
+
     /// The copies in the folder `root`, for tests.
     #[cfg(test)]
     pub(crate) fn in_folder(root: &Path) -> Self {
         Self(Place::SharedFolder(root.to_path_buf()))
     }
 
-    /// Whether the copy folder `token` names is still there.
+    /// Whether the copy folder `token` names is still there. A guest's copy
+    /// not listed yet counts as there.
     pub(crate) fn exists(&self, token: &Token) -> bool {
         match &self.0 {
             Place::SharedFolder(root) => crate::user::copies::copy_exists(root, token),
+            Place::Guest { listed: None, .. } => true,
+            Place::Guest { .. } => self.guest_copy(token).is_some(),
         }
     }
 
@@ -79,20 +150,28 @@ impl Copies {
     pub fn app(&self, token: &Token) -> Option<String> {
         match &self.0 {
             Place::SharedFolder(root) => crate::user::copies::copy_app(root, token),
+            Place::Guest { .. } => self.guest_copy(token)?.app(),
         }
     }
 
-    /// Where the copy folder `token` names is, as replies show it.
+    /// Where the copy folder `token` names is, as replies show it: a guest's
+    /// as listed, else by its token.
     pub(crate) fn location(&self, token: &Token) -> String {
         match &self.0 {
             Place::SharedFolder(root) => crate::user::copies::copy_folder(root, token)
                 .to_string_lossy()
                 .into_owned(),
+            Place::Guest { vm, .. } => self
+                .guest_copy(token)
+                .and_then(GuestCopy::folder)
+                .unwrap_or_else(|| format!("{}:{}", vm.as_str(), token.as_str())),
         }
     }
 
     /// The identity of the copy folder `token` names, when a cleanup of
-    /// `session`'s work may treat it as its own.
+    /// `session`'s work may treat it as its own. A guest's copy is the
+    /// session's only when its record here names that session; its identity
+    /// is the guest's word on its placed folder.
     pub(crate) fn identity(&self, token: &Token, session: &Key) -> Option<CopyIdentity> {
         match &self.0 {
             Place::SharedFolder(root) => {
@@ -103,55 +182,110 @@ impl Copies {
                     node,
                 })
             }
+            Place::Guest { owners, .. } => {
+                let owned = owners.as_ref().map(|owners| owners.of(token));
+                if !matches!(owned, Some(Owned::By(owner)) if owner.names(Some(session))) {
+                    return None;
+                }
+                let copy = self
+                    .guest_copy(token)
+                    .filter(|copy| copy.state == "placed")?;
+                Some(CopyIdentity {
+                    folder: copy.folder()?,
+                    node: copy.node.clone()?,
+                })
+            }
         }
     }
 
     /// The token of the copy folder `path` lies in, when it lies in one of
-    /// these copies: the folder's own name, never the copy's.
+    /// these copies: the folder's own name, never the copy's. A guest's
+    /// copies are where its replies said: the folder itself, or the item
+    /// staged into it.
     pub(crate) fn token_of(&self, path: &str) -> Option<Token> {
         match &self.0 {
             Place::SharedFolder(root) => crate::user::copies::token_of(path, root),
+            Place::Guest { .. } => {
+                let path = Path::new(path);
+                folder_token(path).or_else(|| folder_token(path.parent()?))
+            }
         }
     }
 
     /// Remove the copy folder `token` names for a cleanup of `session`'s
-    /// work, unless an app in `running` may use it: see [`crate::user::copies::remove_copy`].
+    /// work, unless an app in `running` may use it: see
+    /// [`crate::user::copies::remove_copy`]. A guest's copy is removed only
+    /// through its guest, with [`Copies::remove_with`]: here it is kept.
     pub(crate) fn remove(&self, token: &Token, session: &Key, running: &[AppRow]) -> CopyRemoval {
         match &self.0 {
             Place::SharedFolder(root) => {
                 crate::user::copies::remove_copy(root, token, session, running)
             }
+            Place::Guest { .. } => {
+                CopyRemoval::Failed("A VM's copy is removed only through its guest".to_owned())
+            }
+        }
+    }
+
+    /// [`Copies::remove`], a guest's copy through `client`'s guest by the
+    /// rule [`crate::vm::copies::removal`] follows, in the generation of
+    /// `verified`, the command's own proof; with none, a guest's is kept.
+    pub(crate) async fn remove_with(
+        &self,
+        client: &Client,
+        token: &Token,
+        (session, verified): (&Key, Option<&Verified>),
+        running: &[AppRow],
+    ) -> CopyRemoval {
+        match (&self.0, verified) {
+            (Place::SharedFolder(_), _) => self.remove(token, session, running),
+            (Place::Guest { .. }, Some(verified)) => {
+                crate::vm::copies::removal(client, token, (Some(session), verified), running).await
+            }
+            (Place::Guest { .. }, None) => self.remove(token, session, running),
         }
     }
 
     /// Remove the copies of `app` for host `session`'s command or none,
     /// unless an app in `running` may use them: see [`crate::user::copies::remove_copies_in`].
-    pub(crate) fn remove_of_app(
+    /// A guest's go through `client`'s guest, in the generation of
+    /// `verified`, the command's own proof: see
+    /// [`crate::vm::copies::remove_of_app`]; with none, none of them goes.
+    pub(crate) async fn remove_of_app(
         &self,
+        client: &Client,
         app: &str,
         running: &[AppRow],
-        session: Option<&Key>,
+        (session, verified): (Option<&Key>, Option<&Verified>),
     ) -> Removed {
-        match &self.0 {
-            Place::SharedFolder(root) => {
+        match (&self.0, verified) {
+            (Place::SharedFolder(root), _) => {
                 crate::user::copies::remove_copies_in(root, app, running, session)
             }
+            (Place::Guest { .. }, Some(verified)) => {
+                crate::vm::copies::remove_of_app(client, app, running, (session, verified)).await
+            }
+            (Place::Guest { .. }, None) => Removed::default(),
         }
     }
 
     /// Whether `path` lies in one of these copies: a path Atlas made, which
-    /// needs no check of the person's own files.
+    /// needs no check of the person's own files. No path here lies in a
+    /// guest's.
     pub(crate) fn holds(&self, path: &Path) -> bool {
         match &self.0 {
             Place::SharedFolder(root) => path.starts_with(root),
+            Place::Guest { .. } => false,
         }
     }
 
     /// Remove the copies older than a week that no app in `running` may
     /// use: see [`crate::user::copies::prune_in`]. The tokens of those removed come back.
+    /// A guest does not say how old its copies are, so none of them goes.
     pub(crate) fn prune(&self, running: &[AppRow]) -> Vec<Token> {
         match &self.0 {
             Place::SharedFolder(root) => crate::user::copies::prune_in(root, running),
+            Place::Guest { .. } => Vec::new(),
         }
     }
 }
@@ -290,12 +424,14 @@ pub(crate) struct Copied {
 /// copies already made for the others go. What is copied here is copied by
 /// a worker of its own that holds `ownership` until it is done, so a caller
 /// that stops waiting neither stalls other work nor lets another controller
-/// in before the copies are settled.
+/// in before the copies are settled. A VM's guest reads nothing here, so
+/// every path is staged into it, in the generation of `verified`, the
+/// command's own proof: see [`crate::vm::copies::hand_over_to`].
 pub(crate) async fn hand_over(
     client: &Client,
     ownership: &Arc<Ownership>,
     targets: Vec<Target>,
-    running: &[AppRow],
+    (running, verified): (&[AppRow], Option<&Verified>),
 ) -> Result<Handed> {
     let copies = Copies::of(&client.desktop()).ok_or_else(|| client.unreachable())?;
     refuse_targets(&targets, &copies)?;
@@ -303,7 +439,10 @@ pub(crate) async fn hand_over(
         Kind::User(login) => {
             crate::user::copies::hand_over_to(client, login, ownership, targets, running).await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => {
+            let verified = verified.ok_or_else(|| client.unreachable())?;
+            crate::vm::copies::hand_over_to(client, ownership, targets, verified).await
+        }
     }
 }
 

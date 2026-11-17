@@ -12,7 +12,7 @@ use std::sync::{Arc, atomic::Ordering::SeqCst};
 
 /// A keeper serving a guest that proves itself, its saying, and an agent's
 /// client of it.
-pub(super) async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir) {
+pub(in crate::vm::keeper) async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir) {
     let serving = serving(true).await;
     let saying = serving.fixture.guest.proving();
     let directory = tempfile::tempdir().unwrap();
@@ -21,7 +21,7 @@ pub(super) async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir
 }
 
 /// Every lane the guest admitted, in order.
-pub(super) fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
+pub(in crate::vm::keeper) fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
     serving
         .fixture
         .guest
@@ -34,7 +34,7 @@ pub(super) fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
 }
 
 /// The changes the station settled with the guest.
-pub(super) fn settled(serving: &Serving) -> Vec<Token> {
+pub(in crate::vm::keeper) fn settled(serving: &Serving) -> Vec<Token> {
     serving
         .fixture
         .guest
@@ -47,7 +47,7 @@ pub(super) fn settled(serving: &Serving) -> Vec<Token> {
 
 /// What the guest keeps of `change`: none when it keeps nothing of it,
 /// then none inside while it is carried out.
-pub(super) fn record(serving: &Serving, change: &Token) -> Option<Option<Value>> {
+pub(in crate::vm::keeper) fn record(serving: &Serving, change: &Token) -> Option<Option<Value>> {
     serving
         .fixture
         .guest
@@ -87,13 +87,13 @@ fn hi() -> Vec<String> {
 }
 
 /// The generation live now.
-pub(super) fn live(serving: &Serving) -> u64 {
+pub(in crate::vm::keeper) fn live(serving: &Serving) -> u64 {
     serving.fixture.keeper.shared.state().generation.unwrap().0
 }
 
 /// Cut the guest's control connection and wait for the keeper's next
 /// generation.
-pub(super) async fn restarted(serving: &Serving) {
+pub(in crate::vm::keeper) async fn restarted(serving: &Serving) {
     let first = live(serving);
     serving.fixture.guest.cut();
     until("a new generation", || {

@@ -271,11 +271,15 @@ async fn execute_with(
 }
 
 /// Whether `command` is a change this build makes on a VM desktop: a
-/// command, and a background job's start or stop.
+/// command, a background job's start or stop, `open` and `close`, and a
+/// cleanup of what they left.
 fn changes_on_vm(command: &Command) -> bool {
     matches!(
         command,
         Command::Run(_)
+            | Command::Open(_)
+            | Command::Close { .. }
+            | Command::Cleanup(_)
             | Command::Job {
                 command: JobCommand::Start { .. } | JobCommand::Stop { .. }
             }
