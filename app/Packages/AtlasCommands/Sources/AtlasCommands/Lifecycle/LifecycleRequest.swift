@@ -20,6 +20,9 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
   public let until: Date
   /// What the person answered already; nil while they have not.
   public let answered: LifecycleAnswered?
+  /// Whether it calls an uninstall under way off rather than uninstalling; for an uninstall, `name` lists the VMs it
+  /// removes, or, calling one off, the VMs left.
+  public let cancel: Bool
 
   private enum Key: String, CodingKey {
     case id
@@ -30,6 +33,7 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     case session
     case until
     case answered
+    case cancel
   }
 
   /// Creates a request, as a test or a preview builds one.
@@ -43,6 +47,7 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
   ///   - session: The session that asked.
   ///   - until: When it must be answered by.
   ///   - answered: What the person answered already, or nil.
+  ///   - cancel: Whether it calls an uninstall under way off.
   public init(
     id: String,
     kind: LifecycleKind,
@@ -51,7 +56,8 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     settings: String,
     session: String,
     until: Date,
-    answered: LifecycleAnswered? = nil
+    answered: LifecycleAnswered? = nil,
+    cancel: Bool = false
   ) {
     self.id = id
     self.kind = kind
@@ -61,6 +67,7 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     self.session = session
     self.until = until
     self.answered = answered
+    self.cancel = cancel
   }
 
   /// Read from the command's reply, its deadline in milliseconds since 1970.
@@ -78,5 +85,6 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     let milliseconds = try fields.decode(Int64.self, forKey: .until)
     until = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
     answered = try fields.decodeIfPresent(LifecycleAnswered.self, forKey: .answered)
+    cancel = try fields.decodeIfPresent(Bool.self, forKey: .cancel) ?? false
   }
 }

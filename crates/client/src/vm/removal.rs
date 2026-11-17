@@ -577,6 +577,52 @@ pub(super) struct Recorded {
     pub(super) enrolment: Option<String>,
 }
 
+impl Recorded {
+    /// Whether nothing of the VM is left: the removal done, no path it
+    /// kept still there (one that cannot be looked at may be), and no
+    /// password or enrolment left as the record says it now.
+    pub(super) fn finished(&self) -> bool {
+        self.done
+            && self.kept.iter().all(|path| {
+                std::fs::symlink_metadata(path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            })
+            && self.passwords.values().all(|became| became != LEFT)
+            && self.enrolment.as_deref() != Some(LEFT)
+    }
+}
+
+/// Every VM whose removal is recorded in `vms`, done or not, by
+/// identifier.
+///
+/// # Errors
+///
+/// Fails when the removal records cannot be listed.
+pub(super) fn every_recorded(vms: &Vms) -> Result<Vec<DesktopId>> {
+    let folder = vms.removals();
+    let entries = match std::fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(Error::writing(&folder, error)),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::writing(&folder, error))?;
+        // What Atlas VM's entry made of the passwords is named apart, and
+        // its stem is no identifier.
+        if let Some(id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(DesktopId::parse)
+        {
+            ids.push(id);
+        }
+    }
+    ids.sort_by(|one, other| one.as_str().cmp(other.as_str()));
+    Ok(ids)
+}
+
 /// The removal record of `desktop` in `vms`; none when there is none.
 ///
 /// # Errors

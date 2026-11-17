@@ -11,14 +11,17 @@
 //! A removal that kept paths, being another's, or left passwords it could
 //! not delete without asking keeps the record `removing` and its name
 //! taken, and says what and why; nothing later deletes a path it kept.
+//! Uninstall removes every VM the same way ([`uninstall`]), leaving the
+//! settings as they are.
 mod real;
+pub mod uninstall;
 
 use super::{
     StationHold,
     add::settings_at,
     lifecycle::{
         Lifecycle, Provenance,
-        barrier::Admitted,
+        barrier::Passed,
         grant,
         record::{Record, State},
     },
@@ -48,9 +51,9 @@ trait Means {
     fn grant(&self, operation: &grant::Operation) -> Result<Token>;
     /// This Atlas, for a record made by the removal itself.
     fn provenance(&self) -> Result<Provenance>;
-    /// The VM `vm`'s station-operation lock, past the barrier `admitted`;
+    /// The VM `vm`'s station-operation lock, past the barrier `passed`;
     /// none while another holds it.
-    fn hold<'a>(&self, vm: &DesktopId, admitted: &'a Admitted) -> Result<Option<StationHold<'a>>>;
+    fn hold<'a>(&self, vm: &DesktopId, passed: &'a impl Passed) -> Result<Option<StationHold<'a>>>;
     /// Remove the VM `hold` holds, as the removal `change`, or go on with
     /// it: what it came to.
     fn remove(&self, hold: &StationHold<'_>, change: &Token) -> Result<Value>;
@@ -119,6 +122,7 @@ fn remove_with(
         vm: target.id.clone(),
         name: target.name.clone(),
         settings: settings.clone(),
+        cancel: false,
     };
     say(&format!(
         "Asking you in Atlas.app to allow removing the VM \u{201c}{}\u{201d}.",
@@ -143,40 +147,45 @@ fn remove_with(
             ));
         }
         checked(lifecycle, &settings, &target)?;
-        begun(lifecycle, means, &target, &settings, granted)?
+        begun(
+            lifecycle,
+            means,
+            &target,
+            &settings,
+            granted,
+            Disposition::Desktop,
+        )?
     };
-    let mut removing = Removing {
+    Removing {
         lifecycle,
         means,
         hold: &hold,
         target: &target,
         record,
+        disposition: Disposition::Desktop,
         say,
-    };
-    match removing.steps(&change) {
-        Ok(done) => Ok(done),
-        Err(error) => {
-            removing.record.failed(&error);
-            // Its reason is kept when it can be; the failure is said either way.
-            let _ = lifecycle.keep_record(&removing.record);
-            Err(error)
-        }
     }
+    .run(&change)
 }
 
 /// The VM's record, made `removing` and kept with the removal's change
 /// before anything is removed: the change kept already, else the one an
-/// earlier removal of the VM is recorded under, else `granted`.
+/// earlier removal of the VM is recorded under, else `granted`. A desktop
+/// removed on its own must be removed through the settings it was added
+/// to; uninstall removes it whichever they are.
 fn begun(
     lifecycle: &Lifecycle,
     means: &impl Means,
     target: &Target,
     settings: &Path,
     granted: Token,
+    disposition: Disposition,
 ) -> Result<(Record, Token)> {
     let mut record = match lifecycle.record(&target.id)? {
         Some(record) => {
-            same_settings(&record, settings)?;
+            if disposition == Disposition::Desktop {
+                same_settings(&record, settings)?;
+            }
             record
         }
         None => Record {
@@ -385,6 +394,8 @@ struct Removing<'a, M> {
     hold: &'a StationHold<'a>,
     target: &'a Target,
     record: Record,
+    /// What becomes of the settings.
+    disposition: Disposition,
     say: &'a dyn Fn(&str),
 }
 
@@ -393,12 +404,42 @@ impl<M: Means> Removing<'_, M> {
         (self.say)(line);
     }
 
+    /// The steps, a failure kept in the VM's record when it can be.
+    fn run(mut self, change: &Token) -> Result<Value> {
+        match self.steps(change) {
+            Ok(done) => Ok(done),
+            Err(error) => {
+                self.record.failed(&error);
+                // Its reason is kept when it can be; the failure is said either way.
+                let _ = self.lifecycle.keep_record(&self.record);
+                Err(error)
+            }
+        }
+    }
+
+    /// The command that goes on with this removal.
+    fn again(&self) -> String {
+        match self.disposition {
+            Disposition::Desktop => format!(
+                "atlas desktop remove {} again (or atlas desktop remove --id {})",
+                self.target.name,
+                self.target.id.as_str()
+            ),
+            Disposition::Uninstall => "atlas uninstall again".to_owned(),
+        }
+    }
+
     fn steps(&mut self, change: &Token) -> Result<Value> {
         let name = self.target.name.clone();
         self.say(&format!("Removing the VM \u{201c}{name}\u{201d}."));
         let done = self.removed(change)?;
         let path = self.record.settings.clone();
-        let default = self.unlisted(&path)?;
+        // Uninstall leaves the settings as they are until its shared
+        // cleanup decides what becomes of the whole file.
+        let default = match self.disposition {
+            Disposition::Desktop => self.unlisted(&path)?,
+            Disposition::Uninstall => None,
+        };
         // A path kept stays named while it may be there; only one the
         // person moved or deleted since no longer holds the record.
         let mut kept = Vec::new();
@@ -430,10 +471,11 @@ impl<M: Means> Removing<'_, M> {
                 "The default desktop is now \u{201c}{default}\u{201d}."
             ));
         }
-        let again = format!(
-            "atlas desktop remove {name} again (or atlas desktop remove --id {})",
-            self.target.id.as_str()
-        );
+        let again = self.again();
+        let until = match self.disposition {
+            Disposition::Desktop => format!("the name {name} stays taken"),
+            Disposition::Uninstall => "nothing more of Atlas is removed".to_owned(),
+        };
         let mut result = json!({
             "ok": true,
             "removed": {"name": name, "id": self.target.id, "kind": "vm"},
@@ -446,7 +488,7 @@ impl<M: Means> Removing<'_, M> {
             result["keptWhy"] = json!(format!(
                 "These were not the VM's own when its removal began, so Atlas left them as they \
                  are and never deletes them. Move them aside or delete them yourself, then run \
-                 {again}; until then the name {name} stays taken."
+                 {again}; until then {until}."
             ));
         }
         if !left.is_empty() {
@@ -517,9 +559,8 @@ impl<M: Means> Removing<'_, M> {
         Err(Error::new(
             Code::NotReady,
             format!(
-                "The VM's removal is not done yet: {why} Run atlas desktop remove {} again to go \
-                 on.",
-                self.target.name
+                "The VM's removal is not done yet: {why} Run {} to go on.",
+                self.again()
             ),
         ))
     }

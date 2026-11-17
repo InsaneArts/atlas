@@ -778,7 +778,7 @@ fn an_update_whose_settings_omit_a_running_keepers_vm_still_finds_it_and_refuses
 fn an_update_and_a_handover_are_refused_while_an_uninstalls_vm_phase_is_under_way() {
     let folder = tempfile::tempdir().unwrap();
     let lifecycle = Lifecycle::under(folder.path());
-    let uninstalling = lifecycle.uninstalling(&Token::new()).unwrap();
+    let uninstalling = lifecycle.uninstalling(&Token::new(), &[]).unwrap();
     drop(uninstalling);
 
     let update = hold(

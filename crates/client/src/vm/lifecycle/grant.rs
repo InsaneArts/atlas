@@ -58,7 +58,8 @@ pub enum Kind {
 }
 
 /// The one operation a grant is for: its kind, the VM's identifier and
-/// name, and the settings file it changes, by its path.
+/// name (for an uninstall, every VM it removes, by name), the settings file
+/// it changes, by its path, and whether it calls an uninstall off.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Operation {
@@ -66,6 +67,9 @@ pub struct Operation {
     pub vm: DesktopId,
     pub name: String,
     pub settings: PathBuf,
+    /// Calls the uninstall under way off, rather than uninstalling.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancel: bool,
 }
 
 /// A request as kept.
@@ -115,6 +119,9 @@ pub struct Shown {
     pub until: u64,
     /// What the person answered already, when they did: nothing is left
     /// to answer then, whatever the time.
+    /// Whether it calls the uninstall under way off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cancel: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answered: Option<Answered>,
 }
@@ -167,15 +174,16 @@ impl Grant {
     }
 
     fn take_at(self, operation: &Operation, now: u64) -> Result<Token> {
-        let mismatch = if operation.kind != self.operation.kind {
-            Some("another kind of change")
-        } else if operation.vm != self.operation.vm {
-            Some("another VM")
-        } else if operation != &self.operation {
-            Some("another name or settings file")
-        } else {
-            None
-        };
+        let mismatch =
+            if operation.kind != self.operation.kind || operation.cancel != self.operation.cancel {
+                Some("another kind of change")
+            } else if operation.vm != self.operation.vm {
+                Some("another VM")
+            } else if operation != &self.operation {
+                Some("another name or settings file")
+            } else {
+                None
+            };
         if let Some(other) = mismatch {
             return Err(refusal(format!(
                 "The person's grant is for {other}; nothing was done."
@@ -380,6 +388,7 @@ fn request_at(lifecycle: &Lifecycle, id: &Token, now: u64) -> Result<Shown> {
         vm: request.operation.vm,
         settings: atlas_core::config::tilde(&request.operation.settings),
         session: request.session,
+        cancel: request.operation.cancel,
         until: request.until,
         answered,
     })

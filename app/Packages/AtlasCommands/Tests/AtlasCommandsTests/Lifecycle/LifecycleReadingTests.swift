@@ -52,6 +52,22 @@ struct LifecycleReadingTests {
     #expect(unanswered.answered == nil)
   }
 
+  @Test("a request to call an uninstall off reads as one, and any other as none")
+  func callingOff() {
+    let reply = Self.reply(kind: "uninstall")
+      .replacingOccurrences(of: "\"until\": 1700000600000", with: "\"until\": 1700000600000, \"cancel\": true")
+    guard case .request(let calling) = Self.reading(reply) else {
+      Issue.record("the request did not read")
+      return
+    }
+    #expect(calling.cancel)
+    guard case .request(let uninstalling) = Self.reading(Self.reply(kind: "uninstall")) else {
+      Issue.record("the request did not read")
+      return
+    }
+    #expect(!uninstalling.cancel)
+  }
+
   @Test("a refused read says the command line's own sentence")
   func refused() {
     let reply = #"{"ok": false, "error": "This request has expired."}"#

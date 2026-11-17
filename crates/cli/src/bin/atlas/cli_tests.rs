@@ -808,3 +808,18 @@ fn a_vm_is_added_named_or_not_removed_by_its_name_and_the_desktops_listed() {
         Some("work")
     );
 }
+
+#[test]
+fn uninstall_is_called_off_with_cancel_alone() {
+    assert!(matches!(
+        parse(&["uninstall", "--cancel"]).unwrap().command,
+        Some(Command::Uninstall(Uninstall { cancel: true, .. }))
+    ));
+    for other in ["--yes", "--keep-config", "--remove-helper"] {
+        assert!(parse(&["uninstall", "--cancel", other]).is_err(), "{other}");
+    }
+    assert!(matches!(
+        parse(&["uninstall", "--yes"]).unwrap().command,
+        Some(Command::Uninstall(Uninstall { cancel: false, .. }))
+    ));
+}

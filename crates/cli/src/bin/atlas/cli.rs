@@ -1072,6 +1072,10 @@ pub(super) struct Uninstall {
     /// Also delete the helper account and its files, once it is logged out.
     #[arg(long)]
     pub(super) remove_helper: bool,
+    /// Call off an uninstall cut short while it removed the VMs, once you
+    /// allow it in Atlas.app: nothing more is removed.
+    #[arg(long, hide = true, conflicts_with_all = ["keep_config", "yes", "remove_helper"])]
+    pub(super) cancel: bool,
 }
 
 #[derive(Subcommand)]

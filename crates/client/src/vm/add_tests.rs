@@ -578,6 +578,57 @@ fn nothing_is_reserved_recorded_or_made_without_the_persons_grant() {
 }
 
 #[test]
+fn an_add_is_refused_while_an_uninstalls_vm_phase_is_under_way_and_goes_on_once_it_commits() {
+    let world = World::new();
+    let change = atlas_core::files::Token::new();
+    // An uninstall cut short in its VM phase.
+    drop(world.lifecycle().uninstalling(&change, &[]).unwrap());
+
+    let (refused, _) = world.add(Some("work"), Kill::Never);
+
+    let refused = refused.unwrap_err();
+    assert_eq!(refused.code, Code::Busy);
+    assert!(refused.error.contains("being uninstalled"), "{refused:?}");
+    assert!(world.names().is_empty());
+    assert!(world.lifecycle().records().unwrap().is_empty());
+    assert!(!world.settings().exists());
+    assert!(!world.vm.borrow().agent);
+
+    world
+        .lifecycle()
+        .resuming(&change)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let (added, _) = world.add(Some("work"), Kill::Never);
+
+    assert_eq!(added.unwrap()["added"]["name"], "work");
+    added_once(&world);
+}
+
+#[test]
+fn an_add_is_refused_between_an_uninstalls_vm_phase_commit_and_its_end() {
+    let world = World::new();
+    let closed = world
+        .lifecycle()
+        .uninstalling(&atlas_core::files::Token::new(), &[])
+        .unwrap()
+        .commit()
+        .unwrap();
+
+    let (refused, _) = world.add(Some("work"), Kill::Never);
+
+    assert!(
+        refused.unwrap_err().error.contains("being uninstalled"),
+        "kept out while what Atlas shares goes"
+    );
+    assert!(world.names().is_empty());
+    drop(closed);
+    let (added, _) = world.add(Some("work"), Kill::Never);
+    assert_eq!(added.unwrap()["added"]["name"], "work");
+}
+
+#[test]
 fn a_station_key_another_atlas_made_stops_the_add_before_anything_is_made() {
     let world = World::new();
     world.foreign_key.set(true);

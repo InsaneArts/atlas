@@ -35,6 +35,23 @@ struct ApprovalStateTests {
     #expect(card.escape == .refuse)
   }
 
+  @Test("an uninstall names every VM it deletes")
+  func uninstallNamesVms() {
+    let card = ApprovalState(operation: .uninstall, desktop: "work and spare", session: "a terminal", phase: .asking)
+      .card
+    #expect(card.message.contains("deleted with everything in them: work and spare."))
+  }
+
+  @Test("calling an uninstall off asks as an action does, its default Call Off, and deletes nothing")
+  func callingOffAsks() {
+    let card = Self.state(.cancelUninstall).card
+    #expect(card.title == "Call off uninstalling Atlas?")
+    #expect(card.message.contains("nothing more is removed"))
+    #expect(card.buttons.map(\.id) == [.allow, .refuse])
+    #expect(card.buttons.map(\.role) == [.action, .cancel])
+    #expect(card.buttons.map(\.title) == ["Call Off", "Don't Allow"])
+  }
+
   @Test(
     "a request answered before it was opened again says so with Close alone, never asking again",
     arguments: [

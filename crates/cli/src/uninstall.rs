@@ -7,13 +7,16 @@ pub(crate) mod inspection;
 mod stand_in;
 use inspection::{Found, survey};
 
-use atlas_client::client::Client;
+use atlas_client::{
+    client::Client,
+    vm::{
+        lifecycle::barrier::Closed,
+        removing::uninstall::{self, Pending},
+    },
+};
 use atlas_control::{Controller, Ownership};
 use atlas_core::{
-    config::{
-        self, Config,
-        desktops::{Chosen, Selected, Settings},
-    },
+    config::{self, Config, desktops::Selected},
     desktop::Kind,
     error::{Code, Error, Result},
 };
@@ -41,48 +44,67 @@ pub(crate) fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Uninstall, message)
 }
 
-/// Refuse to uninstall while a VM is listed in the settings at
-/// `config_path` or `kept` on this disk, listed or not: removing Atlas's data
-/// takes each VM with it, and nothing here takes a VM down cleanly yet. A
-/// VMs folder that cannot be read may hold one.
-fn refuse_vms(config_path: &Path, kept: Result<Vec<atlas_core::desktop::DesktopId>>) -> Result<()> {
-    let listed: Vec<(String, atlas_core::desktop::DesktopId)> = Settings::load(config_path)
-        .map(|settings| {
-            settings
-                .desktops()
-                .iter()
-                .filter_map(|listed| match &listed.desktop {
-                    Chosen::Vm(vm) => Some((listed.name.clone(), vm.id.clone())),
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut vms: Vec<String> = listed.iter().map(|(name, _)| name.clone()).collect();
-    match kept {
-        // One kept but not listed is named by its identifier.
-        Ok(kept) => vms.extend(
-            kept.iter()
-                .filter(|id| !listed.iter().any(|(_, listed)| listed == *id))
-                .map(|id| id.as_str().to_owned()),
-        ),
-        Err(error) => {
-            return Err(problem(format!(
-                "{} Uninstall would take any VM kept there with it, so it stops here.",
-                error.error
-            )));
-        }
+/// Uninstall's VM phase, given apart so tests stand in: every VM this
+/// account keeps removed before anything Atlas shares goes.
+trait VmPhase {
+    /// What it has to do, nothing made or changed.
+    fn pending(&self) -> Result<Pending>;
+    /// Every VM removed, the person asked in Atlas.app first unless an
+    /// uninstall they allowed goes on; each step said to `say`. What each
+    /// removal came to; none when there was nothing to remove, and nobody
+    /// was asked.
+    fn remove_every(&self, say: &dyn Fn(&str)) -> Result<Option<Removal>>;
+}
+
+/// Every VM removed, and what keeps any add or removal out until the
+/// uninstall ends: held through the shared cleanup, let go when dropped.
+struct Removal {
+    vms: Vec<Value>,
+    closed: Option<Closed>,
+}
+
+/// The VMs of this account, as the settings at `settings` and the disk
+/// keep them.
+struct Vms<'a> {
+    settings: &'a Path,
+}
+
+impl VmPhase for Vms<'_> {
+    fn pending(&self) -> Result<Pending> {
+        uninstall::pending(self.settings)
     }
-    let (desktops, them) = match vms.len() {
-        0 => return Ok(()),
-        1 => ("desktop", "it"),
-        _ => ("desktops", "them"),
-    };
-    Err(problem(format!(
-        "This Mac keeps the VM {desktops} {}, which uninstall cannot remove yet; remove {them} \
-         first, then uninstall Atlas.",
-        atlas_core::name::listed(&vms)
-    )))
+
+    fn remove_every(&self, say: &dyn Fn(&str)) -> Result<Option<Removal>> {
+        // It waits on each VM's runner, for minutes at worst.
+        let removed = waiting(|| uninstall::remove_every(self.settings, say))?;
+        Ok(removed.map(|removed| Removal {
+            vms: removed.vms,
+            closed: Some(removed.closed),
+        }))
+    }
+}
+
+/// Run `work`, which waits on the person or a VM's runner, off the
+/// runtime's own threads when it has others.
+fn waiting<T>(work: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) if runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(work)
+        }
+        _ => work(),
+    }
+}
+
+/// Call off the uninstall whose VM phase is under way, for the settings at
+/// `config_path`, once the person allows it in Atlas.app: nothing more is
+/// removed, and VMs may be added and removed again.
+///
+/// # Errors
+///
+/// Refuses when no uninstall is under way, without the person's grant, and
+/// while an uninstall runs.
+pub fn cancel(config_path: &Path, progress: &dyn Fn(Progress<'_>)) -> Result<Value> {
+    waiting(|| uninstall::cancel(config_path, &|line| progress(Progress::Say(line))))
 }
 
 /// Remove `path` only if it is a link to the app's executable (or the app's
@@ -249,12 +271,14 @@ async fn execute(steps: &[Step], facts: &Facts, world: &mut impl Teardown) -> Re
 
 /// Undo install and init. `keep_config` keeps settings and logs;
 /// `remove_helper` deletes the helper account too, once it is logged out.
+/// Every VM goes first, once the person allows it in Atlas.app; then what
+/// Atlas shares, as without VMs.
 ///
 /// # Errors
 ///
-/// Returns confirmation, ownership, account-identity, executor or teardown failures.
-/// Earlier removals may be complete; unknown effects retain recovery state and are not
-/// reported as successful teardown.
+/// Returns confirmation, grant, VM removal, ownership, account-identity, executor or
+/// teardown failures. Earlier removals may be complete; unknown effects retain recovery
+/// state and are not reported as successful teardown.
 pub async fn run(
     config_path: &Path,
     keep_config: bool,
@@ -263,7 +287,6 @@ pub async fn run(
     ask: &dyn Fn(Question) -> Result<bool>,
     progress: &dyn Fn(Progress<'_>),
 ) -> Result<Value> {
-    refuse_vms(config_path, atlas_client::vm::kept())?;
     let found = survey(config_path)?;
     let uid = found
         .client
@@ -281,9 +304,22 @@ pub async fn run(
     };
     let steps = plan(&facts)?;
 
-    if !yes {
-        confirm(&found, config_path, keep_config, &facts, ask, progress)?;
-    }
+    // Held to the end: no VM is added or removed while what Atlas shares
+    // goes.
+    let removal = agreed(
+        &Consent {
+            found: &found,
+            config_path,
+            keep_config,
+            yes,
+            facts: &facts,
+        },
+        &Vms {
+            settings: config_path,
+        },
+        ask,
+        progress,
+    )?;
     if let Some(name) = &found.helper {
         for line in crate::user::uninstall::home_note(
             name,
@@ -358,7 +394,73 @@ pub async fn run(
         report["warnings"] = json!(warnings);
     }
 
+    if !removal.vms.is_empty() {
+        report["vms"] = json!(removal.vms);
+    }
+
     Ok(report)
+}
+
+/// What the person is asked to agree to, and how.
+struct Consent<'a> {
+    found: &'a Found,
+    config_path: &'a Path,
+    keep_config: bool,
+    yes: bool,
+    facts: &'a Facts,
+}
+
+/// The person's consent, then every VM removed, before anything Atlas
+/// shares goes. With VMs, the consent is the person's grant in Atlas.app,
+/// asked by the VM phase, which no flag or terminal stands in for, `--yes`
+/// included; a VM phase they allowed and was cut short goes on with no new
+/// one. Without, it is the question in the terminal, unless `yes`. Each VM
+/// removed, by its name and identifier, with the exclusion the VM phase
+/// left held.
+fn agreed(
+    consent: &Consent<'_>,
+    vms: &impl VmPhase,
+    ask: &dyn Fn(Question) -> Result<bool>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<Removal> {
+    let say = |line: &str| progress(Progress::Say(line));
+    let (removed, summarized) = match vms.pending()? {
+        Pending::Nothing => (None, false),
+        Pending::Ask => {
+            summarize(consent, true, progress);
+            (vms.remove_every(&say)?, true)
+        }
+        Pending::Resume(_) => (vms.remove_every(&say)?, true),
+    };
+    // Nothing to remove after all: nobody was asked in Atlas.app.
+    let Some(removed) = removed else {
+        if !consent.yes {
+            if !summarized {
+                summarize(consent, false, progress);
+            }
+            confirm(ask)?;
+        }
+        return Ok(Removal {
+            vms: Vec::new(),
+            closed: None,
+        });
+    };
+    let vms = removed
+        .vms
+        .iter()
+        .map(|done| {
+            let name = done["removed"]["name"].as_str().unwrap_or("a VM");
+            progress(Progress::Done(
+                &format!("VM \u{201c}{name}\u{201d}"),
+                "removed",
+            ));
+            json!({"name": name, "id": done["removed"]["id"]})
+        })
+        .collect();
+    Ok(Removal {
+        vms,
+        closed: removed.closed,
+    })
 }
 
 struct Live<'a> {
@@ -670,11 +772,12 @@ impl Live<'_> {
 
     /// The installed settings and the logs and records, unless kept.
     fn remove_settings(&mut self) -> Result<()> {
-        #[cfg(test)]
-        if stand_in::reached("settings") {
+        // Kept exactly as they are, whatever they list.
+        if self.keep_config {
             return Ok(());
         }
-        if self.keep_config {
+        #[cfg(test)]
+        if stand_in::reached("settings") {
             return Ok(());
         }
 
@@ -699,14 +802,24 @@ impl Live<'_> {
     }
 }
 
-fn confirm(
-    found: &Found,
-    config_path: &Path,
-    keep_config: bool,
-    facts: &Facts,
-    ask: &dyn Fn(Question) -> Result<bool>,
-    progress: &dyn Fn(Progress<'_>),
-) -> Result<()> {
+/// Ask the person in the terminal, once they were told what goes.
+fn confirm(ask: &dyn Fn(Question) -> Result<bool>) -> Result<()> {
+    if !ask(Question::Remove)? {
+        return Err(Error::new(Code::Cancelled, "Stopped."));
+    }
+
+    Ok(())
+}
+
+/// Say what uninstall removes from this Mac: every VM first when `vms`.
+fn summarize(consent: &Consent<'_>, vms: bool, progress: &dyn Fn(Progress<'_>)) {
+    let Consent {
+        found,
+        config_path,
+        keep_config,
+        facts,
+        ..
+    } = consent;
     let Found {
         app,
         client,
@@ -717,15 +830,17 @@ fn confirm(
         ..
     } = found;
 
+    let mut parts = Vec::new();
+    if vms {
+        parts.push("every VM on this Mac and everything in it".to_owned());
+    }
     // The helper's job is stopped only through settings that load.
-    let mut parts = vec![
-        if client.is_some() && !facts.other {
-            "the helper's background job, the menu bar and the agent plugins".to_owned()
-        } else {
-            "the menu bar and the agent plugins".to_owned()
-        },
-        format!("{} (to the Trash)", config::tilde(app)),
-    ];
+    parts.push(if client.is_some() && !facts.other {
+        "the helper's background job, the menu bar and the agent plugins".to_owned()
+    } else {
+        "the menu bar and the agent plugins".to_owned()
+    });
+    parts.push(format!("{} (to the Trash)", config::tilde(app)));
 
     if !leftovers.is_empty() {
         parts.push("apps and files Atlas copied for the helper to open".to_owned());
@@ -770,12 +885,6 @@ fn confirm(
             config::tilde(config_path)
         )));
     }
-
-    if !ask(Question::Remove)? {
-        return Err(Error::new(Code::Cancelled, "Stopped."));
-    }
-
-    Ok(())
 }
 
 /// Why the helper cannot settle an action whose outcome is unknown: its

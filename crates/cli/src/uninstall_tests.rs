@@ -380,7 +380,9 @@ fn a_linked_cache_is_refused_without_unlinking_control_state() {
 
 use super::*;
 use atlas_client::setup;
+use atlas_core::files::Token;
 use atlas_daemon::identity::Identity;
+use std::cell::{Cell, RefCell};
 fn silent(_: Progress<'_>) {}
 fn agree(_: Question) -> Result<bool> {
     Ok(true)
@@ -999,78 +1001,217 @@ fn only_a_choice_to_keep_it_off_survives_uninstall() {
     );
 }
 
-#[test]
-fn uninstall_is_refused_while_the_settings_list_a_vm_naming_each() {
+/// Uninstall's VM phase as a test scripts it: what it has to do, and what
+/// removing every VM comes to.
+struct StandIn {
+    pending: Pending,
+    outcome: RefCell<Option<Result<Option<Vec<Value>>>>>,
+    /// How many times it was asked to remove every VM.
+    removals: Cell<u32>,
+}
+
+impl StandIn {
+    fn new(pending: Pending, outcome: Result<Option<Vec<Value>>>) -> Self {
+        Self {
+            pending,
+            outcome: RefCell::new(Some(outcome)),
+            removals: Cell::new(0),
+        }
+    }
+}
+
+impl VmPhase for StandIn {
+    fn pending(&self) -> Result<Pending> {
+        Ok(self.pending.clone())
+    }
+
+    fn remove_every(&self, say: &dyn Fn(&str)) -> Result<Option<Removal>> {
+        self.removals.set(self.removals.get() + 1);
+        say("Removing the VM \u{201c}work\u{201d}.");
+        let outcome = self.outcome.borrow_mut().take().unwrap()?;
+        Ok(outcome.map(|vms| Removal { vms, closed: None }))
+    }
+}
+
+fn work_removed() -> Option<Vec<Value>> {
+    Some(vec![
+        json!({"ok": true, "removed": {"name": "work", "id": "a".repeat(24), "kind": "vm"}}),
+    ])
+}
+
+/// The person's consent to uninstall with `vms`, `yes` given or not: what
+/// it came to, the questions asked in the terminal and what was said.
+fn consented(
+    vms: &StandIn,
+    yes: bool,
+    answer: bool,
+) -> (Result<Vec<Value>>, Vec<String>, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("u.toml");
-    let vm = |name: &str, id: char| {
-        format!(
-            "\n[[desktops]]\nname = \"{name}\"\nkind = \"vm\"\nid = \"{}\"\n",
-            id.to_string().repeat(24)
-        )
-    };
-    std::fs::write(
-        &path,
-        format!(
-            "default = \"work\"\noutput_dir = \"out\"\n{}{}",
-            vm("work", 'a'),
-            vm("test", 'b')
-        ),
+    let found = removable(dir.path(), true);
+    let settings = dir.path().join("settings");
+    let facts = facts();
+    let asked = RefCell::new(Vec::new());
+    let said = RefCell::new(Vec::new());
+    let outcome = agreed(
+        &Consent {
+            found: &found,
+            config_path: &settings,
+            keep_config: false,
+            yes,
+            facts: &facts,
+        },
+        vms,
+        &|question| {
+            asked.borrow_mut().push(match question {
+                Question::Remove => "remove".to_owned(),
+                Question::ForceLogout => "force".to_owned(),
+            });
+            Ok(answer)
+        },
+        &|notice| {
+            said.borrow_mut().push(match notice {
+                Progress::Say(line) => line.to_owned(),
+                Progress::Done(label, detail) | Progress::Skipped(label, detail) => {
+                    format!("{label}: {detail}")
+                }
+            });
+        },
+    );
+    (
+        outcome.map(|removal| removal.vms),
+        asked.into_inner(),
+        said.into_inner(),
+    )
+}
+
+#[test]
+fn with_vms_the_persons_grant_comes_first_and_yes_alone_is_refused() {
+    for yes in [true, false] {
+        let vms = StandIn::new(
+            Pending::Ask,
+            Err(Error::new(
+                Code::Denied,
+                "The person did not allow it in Atlas.app; nothing was done.",
+            )),
+        );
+
+        let (refused, asked, said) = consented(&vms, yes, true);
+
+        assert_eq!(refused.unwrap_err().code, Code::Denied, "yes: {yes}");
+        assert!(asked.is_empty(), "no terminal question stands in for it");
+        assert_eq!(vms.removals.get(), 1);
+        assert!(
+            said.iter()
+                .any(|line| line.contains("every VM on this Mac")),
+            "{said:?}"
+        );
+    }
+}
+
+#[test]
+fn with_vms_allowed_every_vm_goes_before_anything_else_and_is_named() {
+    let vms = StandIn::new(Pending::Ask, Ok(work_removed()));
+
+    let (removed, asked, said) = consented(&vms, false, true);
+
+    assert_eq!(
+        removed.unwrap(),
+        [json!({"name": "work", "id": "a".repeat(24)})]
+    );
+    assert!(asked.is_empty());
+    assert!(
+        said.contains(&"VM \u{201c}work\u{201d}: removed".to_owned()),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn a_vm_phase_cut_short_goes_on_with_no_question_asked_again() {
+    let vms = StandIn::new(Pending::Resume(Token::new()), Ok(work_removed()));
+
+    let (removed, asked, said) = consented(&vms, false, false);
+
+    assert_eq!(removed.unwrap().len(), 1);
+    assert!(asked.is_empty());
+    assert!(
+        !said.iter().any(|line| line.contains("This removes")),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn without_vms_the_terminal_question_is_asked_as_before_unless_yes() {
+    let vms = StandIn::new(Pending::Nothing, Ok(None));
+    let (refused, asked, said) = consented(&vms, false, false);
+    assert_eq!(refused.unwrap_err().code, Code::Cancelled);
+    assert_eq!(asked, ["remove"]);
+    assert!(said.contains(&"This removes from this Mac:".to_owned()));
+    assert!(!said.iter().any(|line| line.contains("VM")), "{said:?}");
+
+    let (agreed, asked, said) = consented(&vms, true, false);
+    assert_eq!(agreed.unwrap(), Vec::<Value>::new());
+    assert!(asked.is_empty() && said.is_empty());
+    assert_eq!(vms.removals.get(), 0, "no VM phase, no grant");
+}
+
+#[test]
+fn keep_config_leaves_vm_only_settings_exactly_as_they_were() {
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), true);
+    let settings = dir.path().join("settings");
+    let listed = format!(
+        "default = \"work\"\n\n[[desktops]]\nname = \"work\"\nkind = \"vm\"\nid = \"{}\"\n",
+        "a".repeat(24)
+    );
+    fs::write(&settings, &listed).unwrap();
+    let facts = facts();
+    let vms = StandIn::new(Pending::Ask, Ok(work_removed()));
+    agreed(
+        &Consent {
+            found: &found,
+            config_path: &settings,
+            keep_config: true,
+            yes: true,
+            facts: &facts,
+        },
+        &vms,
+        &agree,
+        &silent,
     )
     .unwrap();
-    // Kept on disk too, as a listed VM is: named once, by its name.
-    let kept = vec![atlas_core::desktop::DesktopId::parse(&"a".repeat(24)).unwrap()];
-    let refused = refuse_vms(&path, Ok(kept)).unwrap_err();
-    assert_eq!(refused.code, Code::Uninstall);
-    assert_eq!(
-        refused.error,
-        "This Mac keeps the VM desktops work and test, which uninstall cannot remove yet; \
-         remove them first, then uninstall Atlas."
-    );
-    assert_eq!(
-        std::fs::read_dir(dir.path()).unwrap().count(),
-        1,
-        "nothing was touched"
-    );
+    let mut live = Live {
+        found: &found,
+        config_path: &settings,
+        keep_config: true,
+        yes: true,
+        removed: vec![],
+        warnings: vec![],
+        hint: None,
+        deleted: false,
+        exclusion: None,
+        progress: &silent,
+        ask: &agree,
+    };
 
-    std::fs::write(&path, atlas_core::test_support::SETTINGS).unwrap();
-    assert!(
-        refuse_vms(&path, Ok(Vec::new())).is_ok(),
-        "a Second Login alone goes on"
-    );
-    assert!(refuse_vms(&dir.path().join("missing.toml"), Ok(Vec::new())).is_ok());
+    let (outcome, reached) = stand_in::standing_in(|| live.remove_settings());
+
+    outcome.unwrap();
+    assert!(reached.is_empty(), "{reached:?}");
+    assert_eq!(fs::read_to_string(&settings).unwrap(), listed);
+    assert!(found.data.exists());
 }
 
 #[test]
-fn uninstall_is_refused_while_a_vm_is_kept_on_this_disk_though_no_settings_list_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("missing.toml");
-    let id = atlas_core::desktop::DesktopId::parse(&"c".repeat(24)).unwrap();
+fn vms_gone_before_the_person_was_asked_leave_the_terminal_question_to_ask() {
+    let vms = StandIn::new(Pending::Ask, Ok(None));
 
-    let refused = refuse_vms(&path, Ok(vec![id])).unwrap_err();
+    let (refused, asked, said) = consented(&vms, false, false);
 
-    assert_eq!(refused.code, Code::Uninstall);
-    assert!(refused.error.contains(&"c".repeat(24)), "{}", refused.error);
-}
-
-#[test]
-fn uninstall_is_refused_when_this_macs_vms_cannot_be_read() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("missing.toml");
-
-    let refused = refuse_vms(
-        &path,
-        Err(Error::new(Code::State, "This Mac's VMs cannot be read.")),
-    )
-    .unwrap_err();
-
-    assert_eq!(refused.code, Code::Uninstall);
-    assert!(refused.error.starts_with("This Mac's VMs cannot be read."));
-}
-
-#[test]
-fn uninstall_goes_on_with_no_vm_listed_or_kept() {
-    let dir = tempfile::tempdir().unwrap();
-
-    refuse_vms(&dir.path().join("missing.toml"), Ok(Vec::new())).unwrap();
+    assert_eq!(refused.unwrap_err().code, Code::Cancelled);
+    assert_eq!(asked, ["remove"], "never uninstalled unasked");
+    let told = said
+        .iter()
+        .filter(|line| *line == "This removes from this Mac:")
+        .count();
+    assert_eq!(told, 1, "{said:?}");
 }

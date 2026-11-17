@@ -85,6 +85,7 @@ extension ApprovalState {
     case .add: "Add the VM “\(desktop)”?"
     case .remove: "Remove the VM “\(desktop)”?"
     case .uninstall: "Uninstall Atlas and its VMs?"
+    case .cancelUninstall: "Call off uninstalling Atlas?"
     case nil: "Reading the request…"
     }
   }
@@ -96,7 +97,10 @@ extension ApprovalState {
     switch operation {
     case .add: return "\(asked) Atlas makes a new VM on this Mac. \(allow)"
     case .remove: return "\(asked) The VM and everything in it are deleted. \(allow)"
-    case .uninstall: return "\(asked) Every VM and everything in them are deleted. \(allow)"
+    case .uninstall:
+      return "\(asked) Atlas is removed, and these VMs are deleted with everything in them: \(desktop). \(allow)"
+    case .cancelUninstall:
+      return "\(asked) Atlas stays and nothing more is removed. VMs it removed stay removed. \(allow)"
     case nil: return asked
     }
   }
@@ -109,6 +113,7 @@ extension ApprovalState {
     case .add, nil: action = "Add VM"
     case .remove: action = "Remove VM"
     case .uninstall: action = "Uninstall"
+    case .cancelUninstall: action = "Call Off"
     }
     guard operation?.isDestructive == true else {
       return [
@@ -128,6 +133,7 @@ extension ApprovalState {
     case .add, nil: "Atlas goes on adding “\(desktop)”."
     case .remove: "Atlas goes on removing “\(desktop)”."
     case .uninstall: "Atlas goes on uninstalling."
+    case .cancelUninstall: "Atlas calls the uninstall off."
     }
   }
 }

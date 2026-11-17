@@ -137,7 +137,7 @@ fn the_wrapper_is_refused_by_an_uninstall_before_it_takes_the_vms_lock() {
     let fake = Fake::new();
     let lifecycle = crate::vm::lifecycle::Lifecycle::under(&vms.home);
     let uninstalling = lifecycle
-        .uninstalling(&atlas_core::files::Token::new())
+        .uninstalling(&atlas_core::files::Token::new(), &[])
         .unwrap();
 
     let refused = install_with(&vms, &fake, &desktop()).unwrap_err();

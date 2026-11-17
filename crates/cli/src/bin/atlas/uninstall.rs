@@ -10,6 +10,9 @@ use std::path::Path;
 
 pub(super) async fn run(config: &Path, args: Uninstall) -> Result<Value> {
     super::dispatch::as_yourself("uninstall")?;
+    if args.cancel {
+        return uninstall::cancel(config, &said);
+    }
     uninstall::run(
         config,
         args.keep_config,
@@ -27,11 +30,15 @@ pub(super) async fn run(config: &Path, args: Uninstall) -> Result<Value> {
                 "pass --yes",
             )
         },
-        &|notice| match notice {
-            Progress::Say(message) => say(message),
-            Progress::Done(label, detail) => done(label, detail),
-            Progress::Skipped(label, detail) => skipped(label, detail),
-        },
+        &said,
     )
     .await
+}
+
+fn said(notice: Progress<'_>) {
+    match notice {
+        Progress::Say(message) => say(message),
+        Progress::Done(label, detail) => done(label, detail),
+        Progress::Skipped(label, detail) => skipped(label, detail),
+    }
 }

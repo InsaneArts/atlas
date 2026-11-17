@@ -207,6 +207,26 @@ impl Lifecycle {
         Ok(held)
     }
 
+    /// Every name reserved, with the VM that reserved it, no folder made:
+    /// none when nothing was ever reserved.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the reservations cannot be read.
+    pub(in crate::vm) fn reserved_all(&self) -> Result<Vec<(String, DesktopId)>> {
+        let names = self.folder.join(NAMES);
+        match std::fs::symlink_metadata(&names) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::writing(&names, error)),
+            Ok(_) => {}
+        }
+        Ok(self
+            .reservations()?
+            .into_iter()
+            .map(|(name, held)| (name, held.id))
+            .collect())
+    }
+
     /// The VM that reserved `name`, and whether the person named it; none
     /// when none did.
     ///

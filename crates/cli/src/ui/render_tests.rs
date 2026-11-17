@@ -768,6 +768,17 @@ fn removal_and_login_read_as_sentences() {
             && removed.out.contains("(it's logged out, so this is safe).")
     );
 
+    let cancelled = show(
+        View::Uninstall,
+        json!({"ok": true, "cancelled": true, "kept": ["work"]}),
+    );
+    assert!(
+        cancelled.out.contains("The uninstall is called off")
+            && !cancelled.out.contains("removed\n"),
+        "{}",
+        cancelled.out
+    );
+
     let deleted = show(
         View::Uninstall,
         json!({"ok": true, "kept": {"helperAccount": null, "remove": null}}),

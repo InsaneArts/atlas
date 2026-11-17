@@ -2,7 +2,7 @@
 use super::Means;
 use crate::vm::{
     StationHold,
-    lifecycle::{Provenance, barrier::Admitted, grant},
+    lifecycle::{Provenance, barrier::Passed, grant},
 };
 use atlas_core::{desktop::DesktopId, error::Result, files::Token};
 use serde_json::Value;
@@ -20,8 +20,8 @@ impl Means for Real {
         Provenance::own()
     }
 
-    fn hold<'a>(&self, vm: &DesktopId, admitted: &'a Admitted) -> Result<Option<StationHold<'a>>> {
-        crate::vm::hold(vm, admitted)
+    fn hold<'a>(&self, vm: &DesktopId, passed: &'a impl Passed) -> Result<Option<StationHold<'a>>> {
+        crate::vm::hold(vm, passed)
     }
 
     fn remove(&self, hold: &StationHold<'_>, change: &Token) -> Result<Value> {

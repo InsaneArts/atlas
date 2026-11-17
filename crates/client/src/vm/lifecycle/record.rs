@@ -316,7 +316,7 @@ impl Lifecycle {
     ///
     /// Fails when the removal record cannot be read.
     pub(in crate::vm) fn recorded_removal(&self, id: &DesktopId) -> Result<Option<(Token, bool)>> {
-        let vms = crate::vm::Vms::under(&self.home, nix::unistd::getuid().as_raw());
+        let vms = self.vms();
         Ok(
             crate::vm::removal::recorded(&vms, id)?
                 .map(|recorded| (recorded.change, recorded.done)),
@@ -330,7 +330,7 @@ impl Lifecycle {
     ///
     /// Fails when the removal record cannot be read.
     pub fn removal(&self, record: &Record) -> Result<Removal> {
-        let vms = crate::vm::Vms::under(&self.home, nix::unistd::getuid().as_raw());
+        let vms = self.vms();
         let recorded = crate::vm::removal::recorded(&vms, &record.id)?;
         Ok(match (&record.removal, recorded) {
             (None, None) | (Some(_), None) => Removal::None,

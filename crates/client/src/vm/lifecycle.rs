@@ -7,12 +7,13 @@
 //! into place, or made only where none is.
 //!
 //! The station's locks are taken in one order: the uninstall barrier
-//! ([`barrier`]), then the VM's station-operation lock
-//! ([`super::StationHold`]), then its keeper's. The settings lock stands
-//! apart: a settings write holds it for that one write, waits for nothing
-//! under it and gives up in seconds, so it may be taken under any of them
-//! without a cycle. So may the lock that admits one removal at a time from a
-//! settings file, held only while that removal is counted and recorded.
+//! ([`barrier`]: its record's lock, then the live lock), then the VM's
+//! station-operation lock ([`super::StationHold`]), then its keeper's. The
+//! settings lock stands apart: a settings write holds it for that one
+//! write, waits for nothing under it and gives up in seconds, so it may be
+//! taken under any of them without a cycle. So may the lock that admits one
+//! removal at a time from a settings file, held only while that removal is
+//! counted and recorded.
 pub mod barrier;
 pub mod grant;
 mod names;
@@ -64,6 +65,11 @@ impl Lifecycle {
             home: home.to_owned(),
             folder: crate::station::Station::under(home).lifecycle_path(),
         }
+    }
+
+    /// The VMs this lifecycle is of: its account's, kept in its home.
+    pub(in crate::vm) fn vms(&self) -> super::Vms {
+        super::Vms::under(&self.home, nix::unistd::getuid().as_raw())
     }
 
     /// Whether anything was ever kept here: a read that finds nothing need

@@ -29,6 +29,27 @@ struct ApprovalPresenterTests {
     #expect(state == ApprovalState(operation: operation, desktop: "work", session: "a terminal", phase: .asking))
   }
 
+  @Test("an uninstall names the VMs it removes, and one calling an uninstall off asks to call it off")
+  func uninstallNamesItsVms() {
+    let request = { (cancel: Bool) in
+      LifecycleRequest(
+        id: "a",
+        kind: .uninstall,
+        name: "work and spare",
+        vm: "b",
+        settings: "~/.config/atlas.toml",
+        session: "a terminal",
+        until: Date(timeIntervalSince1970: 0),
+        cancel: cancel
+      )
+    }
+    let uninstalling = ApprovalPresenter.state(ApprovalSnapshot(request: request(false), phase: .asking))
+    let callingOff = ApprovalPresenter.state(ApprovalSnapshot(request: request(true), phase: .asking))
+    #expect(uninstalling.operation == .uninstall)
+    #expect(uninstalling.desktop == "work and spare")
+    #expect(callingOff.operation == .cancelUninstall)
+  }
+
   @Test("before a request is read the window names no VM")
   func unreadNamesNone() {
     let state = ApprovalPresenter.state(ApprovalSnapshot())

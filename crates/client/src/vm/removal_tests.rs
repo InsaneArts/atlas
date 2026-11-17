@@ -535,7 +535,7 @@ fn a_removal_under_the_callers_lock_never_takes_it_again_and_its_keeper_lock_com
     made(&vms, 41, Some(42));
     *fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
     let uninstalling = crate::vm::lifecycle::Lifecycle::under(&vms.home)
-        .uninstalling(&Token::new())
+        .uninstalling(&Token::new(), &[])
         .unwrap();
     let hold = crate::vm::hold_in(&vms, &desktop(), &uninstalling)
         .unwrap()

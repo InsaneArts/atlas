@@ -7,6 +7,7 @@
         PreviewState(name: "Add", value: approvalAdd),
         PreviewState(name: "Remove", value: approvalRemove),
         PreviewState(name: "Uninstall", value: approvalUninstall),
+        PreviewState(name: "Call off", value: approvalCancelUninstall),
         PreviewState(name: "Allowing", value: approvalAllowing),
         PreviewState(name: "Allowed", value: approvalAllowed),
         PreviewState(name: "Not allowed", value: approvalRefused),
@@ -35,7 +36,15 @@
     /// Uninstalling Atlas with its VMs.
     static let approvalUninstall = ApprovalState(
       operation: .uninstall,
-      desktop: "work",
+      desktop: "work and spare",
+      session: "a terminal",
+      phase: .asking
+    )
+
+    /// Calling off an uninstall cut short.
+    static let approvalCancelUninstall = ApprovalState(
+      operation: .cancelUninstall,
+      desktop: "spare",
       session: "a terminal",
       phase: .asking
     )

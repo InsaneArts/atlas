@@ -8,28 +8,28 @@ use std::{
     path::PathBuf,
 };
 
-const WORK: &str = "a7a5000000000000000000f1";
-const SPARE: &str = "b7b5000000000000000000f2";
-const THIRD: &str = "c7c5000000000000000000f3";
+pub(super) const WORK: &str = "a7a5000000000000000000f1";
+pub(super) const SPARE: &str = "b7b5000000000000000000f2";
+pub(super) const THIRD: &str = "c7c5000000000000000000f3";
 
-fn id(text: &str) -> DesktopId {
+pub(super) fn id(text: &str) -> DesktopId {
     DesktopId::parse(text).unwrap()
 }
 
 /// The change every grant here is for.
-fn change() -> Token {
+pub(super) fn change() -> Token {
     Token::parse(&"c".repeat(48)).unwrap()
 }
 
-const SECOND_LOGIN: &str = "[[desktops]]\nname = \"second-login\"\nkind = \"user\"\n\
+pub(super) const SECOND_LOGIN: &str = "[[desktops]]\nname = \"second-login\"\nkind = \"user\"\n\
                             helper_uid = 60001\nsocket_path = \"c.sock\"\n\
                             identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
 
-fn vm_entry(name: &str, vm: &str) -> String {
+pub(super) fn vm_entry(name: &str, vm: &str) -> String {
     format!("\n[[desktops]]\nname = \"{name}\"\nkind = \"vm\"\nid = \"{vm}\"\n")
 }
 
-fn provenance() -> Provenance {
+pub(super) fn provenance() -> Provenance {
     Provenance {
         program: PathBuf::from("/Applications/Atlas.app/Contents/MacOS/atlas"),
         requirement: "identifier \"com.insanearts.atlas\"".to_owned(),
@@ -37,30 +37,34 @@ fn provenance() -> Provenance {
 }
 
 /// What happens while a removal waits.
-type Meanwhile = Box<dyn FnOnce(&World)>;
+pub(super) type Meanwhile = Box<dyn FnOnce(&World)>;
 
 /// The Mac one removal meets: a home of its own, its VMs, Atlas VM and
 /// launchd as the station's stand-in gives them, and the person.
-struct World {
-    home: tempfile::TempDir,
-    vms: Vms,
-    fake: Fake,
-    allows: Cell<bool>,
-    grants: Cell<u32>,
-    removes: Cell<usize>,
+pub(super) struct World {
+    pub(super) home: tempfile::TempDir,
+    pub(super) vms: Vms,
+    pub(super) fake: Fake,
+    pub(super) allows: Cell<bool>,
+    pub(super) grants: Cell<u32>,
+    pub(super) removes: Cell<usize>,
     /// The removal call, counting from one, at which the command is
     /// killed, as `kill` would: every later call fails.
-    kill_at: Cell<Option<usize>>,
+    pub(super) kill_at: Cell<Option<usize>>,
     /// What happens while the command waits the first time.
-    meanwhile: RefCell<Option<Meanwhile>>,
+    pub(super) meanwhile: RefCell<Option<Meanwhile>>,
     /// The VM's lifecycle record as each removal call found it.
-    seen: RefCell<Vec<Option<Record>>>,
+    pub(super) seen: RefCell<Vec<Option<Record>>>,
     /// What the removal answers in place of the station's own, when given.
-    answer: RefCell<Option<Value>>,
+    pub(super) answer: RefCell<Option<Value>>,
+    /// Every operation the person was asked to allow.
+    pub(super) operations: RefCell<Vec<grant::Operation>>,
+    /// What happens while the person is asked.
+    pub(super) while_asked: RefCell<Option<Meanwhile>>,
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         let vms = Vms::under(home.path(), nix::unistd::getuid().as_raw());
         std::fs::create_dir_all(&vms.parent).unwrap();
@@ -75,28 +79,30 @@ impl World {
             meanwhile: RefCell::new(None),
             seen: RefCell::new(Vec::new()),
             answer: RefCell::new(None),
+            operations: RefCell::new(Vec::new()),
+            while_asked: RefCell::new(None),
         }
     }
 
-    fn lifecycle(&self) -> Lifecycle {
+    pub(super) fn lifecycle(&self) -> Lifecycle {
         Lifecycle::under(self.home.path())
     }
 
-    fn settings(&self) -> PathBuf {
+    pub(super) fn settings(&self) -> PathBuf {
         self.home.path().join("atlas.toml")
     }
 
-    fn write_settings(&self, text: &str) {
+    pub(super) fn write_settings(&self, text: &str) {
         std::fs::write(self.settings(), text).unwrap();
     }
 
-    fn read_settings(&self) -> String {
+    pub(super) fn read_settings(&self) -> String {
         std::fs::read_to_string(self.settings()).unwrap()
     }
 
     /// The VM `vm` as an add leaves it: named `name`, its record in
     /// `state`, and, when `made`, its folder and its station folder.
-    fn vm(&self, name: &str, vm: &str, state: State, made: bool) {
+    pub(super) fn vm(&self, name: &str, vm: &str, state: State, made: bool) {
         let reservation = Reservation {
             name: name.to_owned(),
             id: id(vm),
@@ -126,17 +132,17 @@ impl World {
         }
     }
 
-    fn station(&self, vm: &str) -> PathBuf {
+    pub(super) fn station(&self, vm: &str) -> PathBuf {
         Station::under(self.home.path()).path_of(&id(vm))
     }
 
     /// Its runner answering `forget` as done.
-    fn runner_forgets(&self) {
+    pub(super) fn runner_forgets(&self) {
         *self.fake.reply.lock().unwrap() = Some(json!({"ok": true, "outcome": {"state": "done"}}));
     }
 
     /// Atlas VM's deletion-only entry, when run, deleting `vm`'s passwords.
-    fn entry_deletes(&self, vm: &str) {
+    pub(super) fn entry_deletes(&self, vm: &str) {
         let result = json!({"change": change(), "passwords": {
             vm: "deleted", format!("{vm}.admin"): "deleted"}});
         *self.fake.entry.lock().unwrap() = Some((self.vms.forgotten(&id(vm)), result));
@@ -144,12 +150,12 @@ impl World {
 
     /// Ask for the removal of `name`, as the person would; what it said is
     /// kept.
-    fn remove(&self, name: &str) -> (Result<Value>, Vec<String>) {
+    pub(super) fn remove(&self, name: &str) -> (Result<Value>, Vec<String>) {
         self.remove_which(Which::Name(name))
     }
 
     /// Ask for the removal of the VM `which` names.
-    fn remove_which(&self, which: Which<'_>) -> (Result<Value>, Vec<String>) {
+    pub(super) fn remove_which(&self, which: Which<'_>) -> (Result<Value>, Vec<String>) {
         self.removes.set(0);
         let said = RefCell::new(Vec::new());
         let settings = self.settings();
@@ -163,11 +169,11 @@ impl World {
         (removed, said.into_inner())
     }
 
-    fn record(&self, vm: &str) -> Option<Record> {
+    pub(super) fn record(&self, vm: &str) -> Option<Record> {
         self.lifecycle().record(&id(vm)).unwrap()
     }
 
-    fn names(&self) -> Vec<String> {
+    pub(super) fn names(&self) -> Vec<String> {
         let folder = self
             .home
             .path()
@@ -183,7 +189,12 @@ impl World {
 }
 
 impl Means for World {
-    fn grant(&self, _operation: &grant::Operation) -> Result<Token> {
+    fn grant(&self, operation: &grant::Operation) -> Result<Token> {
+        self.operations.borrow_mut().push(operation.clone());
+        let meanwhile = self.while_asked.borrow_mut().take();
+        if let Some(meanwhile) = meanwhile {
+            meanwhile(self);
+        }
         if !self.allows.get() {
             return Err(Error::new(
                 Code::Denied,
@@ -198,8 +209,8 @@ impl Means for World {
         Ok(provenance())
     }
 
-    fn hold<'a>(&self, vm: &DesktopId, admitted: &'a Admitted) -> Result<Option<StationHold<'a>>> {
-        crate::vm::hold_in(&self.vms, vm, admitted)
+    fn hold<'a>(&self, vm: &DesktopId, passed: &'a impl Passed) -> Result<Option<StationHold<'a>>> {
+        crate::vm::hold_in(&self.vms, vm, passed)
     }
 
     fn remove(&self, hold: &StationHold<'_>, change: &Token) -> Result<Value> {
@@ -598,7 +609,7 @@ fn an_uninstall_under_way_refuses_the_removal_before_anything_is_touched() {
         vm_entry("work", WORK)
     ));
     world.vm("work", WORK, State::Created, true);
-    let uninstalling = world.lifecycle().uninstalling(&Token::new()).unwrap();
+    let uninstalling = world.lifecycle().uninstalling(&Token::new(), &[]).unwrap();
 
     let (refused, _) = world.remove("work");
 
@@ -614,7 +625,7 @@ fn an_uninstall_under_way_refuses_the_removal_before_anything_is_touched() {
 
 /// A removal of `vm` begun by the hidden repair command and cut short at
 /// its start, recorded under `change` with the VM's folder as it is now.
-fn begun_by_hand(world: &World, vm: &str, change: &str) {
+pub(super) fn begun_by_hand(world: &World, vm: &str, change: &str) {
     use std::os::unix::fs::MetadataExt;
     let folder = std::fs::symlink_metadata(world.vms.folder(&id(vm))).unwrap();
     let record = json!({

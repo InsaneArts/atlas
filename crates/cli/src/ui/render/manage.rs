@@ -262,6 +262,13 @@ pub(super) fn update(value: &Value) -> Rendered {
 }
 
 pub(super) fn uninstall(value: &Value) -> String {
+    if value["cancelled"] == true {
+        return format!(
+            "{} The uninstall is called off\n  {}",
+            style::ok(),
+            style::dim("Atlas stays. VMs it removed stay removed; the others are as they were.")
+        );
+    }
     let mut lines = vec![format!("{} Atlas is removed", style::ok())];
 
     if let (Some(_), Some(command)) = (

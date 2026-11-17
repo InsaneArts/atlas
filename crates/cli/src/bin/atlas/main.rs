@@ -798,6 +798,7 @@ fn lifecycle(asked: cli::Lifecycle, settings: &std::path::Path) -> ExitCode {
                     vm,
                     name,
                     settings,
+                    cancel: false,
                 };
                 let change = grant::ask(operation.clone())?.take(&operation)?;
                 Ok(json!({
