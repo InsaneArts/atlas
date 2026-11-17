@@ -7,6 +7,7 @@ use crate::machine::{
 };
 use atlas_core::error::{Code, Error, Result};
 use atlas_session::generation::Generation;
+use serde_json::Value;
 use std::{cell::Cell, sync::Arc};
 
 /// The supervisors kept, and where they leave their proofs.
@@ -50,6 +51,7 @@ fn intended(change: &Token, operation: &str) -> Intended {
         change: change.clone(),
         operation: operation.to_owned(),
         request: String::new(),
+        asked: None,
     }
 }
 
@@ -231,4 +233,135 @@ fn supervisors_whose_record_cannot_be_trusted_prove_nothing_gone() {
     .proven_gone(vec![intended(&Token::new(), "run")]);
 
     assert!(judged.is_empty());
+}
+
+/// A job's change `change` whose request `asked` was kept beside it.
+fn job_change(change: &Token, asked: Value) -> Intended {
+    Intended {
+        asked: Some(asked),
+        ..intended(change, "job")
+    }
+}
+
+/// A job's start, the change `change`.
+fn start_request(change: &Token) -> Value {
+    serde_json::json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "30"],
+        "lifetimeMs": 60_000, "uid": 501, "change": change})
+}
+
+/// A stop of job `id`, the change `change`.
+fn stop_request(change: &Token, id: &JobId) -> Value {
+    serde_json::json!({"op": "job", "action": "stop", "id": id,
+        "expect": {"boot": this_boot(), "pid": 10, "start": [1, 0], "pgid": 10},
+        "graceMs": 2000, "change": change})
+}
+
+/// A supervisor started in this boot for the job `id`, which the change
+/// `started` started.
+fn job_supervisor(pid: i32, started: &Token, id: &JobId) -> Supervised {
+    Supervised {
+        job: Some(JobRecord {
+            id: id.clone(),
+            name: "loop".into(),
+            task: None,
+            session: None,
+            started_at: 0,
+            ends_at: 1,
+            change: started.clone(),
+        }),
+        ..supervisor(pid, Some(started))
+    }
+}
+
+#[test]
+fn a_job_start_whose_request_was_kept_and_that_no_supervisor_names_is_judged_as_a_command_is() {
+    let guest = guest();
+    let (never, started) = (Token::new(), Token::new());
+    let kept = job_supervisor(10, &started, &JobId::new());
+    guest.kept.add(kept.clone()).unwrap();
+    let asked = || {
+        vec![
+            job_change(&never, start_request(&never)),
+            job_change(&started, start_request(&started)),
+        ]
+    };
+
+    // Never spawned, or its supervisor retired: gone, as a command's is.
+    assert_eq!(
+        gone(&guest, asked(), &[kept.supervisor]),
+        std::slice::from_ref(&never)
+    );
+    proof::leave(&guest.proofs, &kept.supervisor, ENDED).unwrap();
+    let mut judged = gone(&guest, asked(), &[]);
+    judged.sort();
+    let mut both = vec![never, started];
+    both.sort();
+    assert_eq!(judged, both);
+}
+
+#[test]
+fn a_job_stop_is_ended_only_once_its_target_is_proven_done_with() {
+    let guest = guest();
+    let (started, stop) = (Token::new(), Token::new());
+    let id = JobId::new();
+    let target = job_supervisor(10, &started, &id);
+    guest.kept.add(target.clone()).unwrap();
+    let asked = || vec![job_change(&stop, stop_request(&stop, &id))];
+
+    // No supervisor names the stop: that proves nothing while its target
+    // runs, or went with no proof its work ended.
+    assert!(gone(&guest, asked(), &[target.supervisor]).is_empty());
+    assert!(gone(&guest, asked(), &[]).is_empty());
+    proof::leave(&guest.proofs, &target.supervisor, 3).unwrap();
+    assert!(gone(&guest, asked(), &[]).is_empty(), "an unsure end");
+
+    proof::leave(&guest.proofs, &target.supervisor, ENDED).unwrap();
+    assert!(
+        gone(&guest, asked(), &[target.supervisor]).is_empty(),
+        "a proof beside a supervisor still running"
+    );
+    assert_eq!(gone(&guest, asked(), &[]), [stop]);
+}
+
+#[test]
+fn a_job_stop_whose_target_is_from_another_boot_or_no_longer_kept_is_ended() {
+    let guest = guest();
+    let (started, stop, unknown) = (Token::new(), Token::new(), Token::new());
+    let id = JobId::new();
+    let mut target = job_supervisor(10, &started, &id);
+    target.boot = "another boot".into();
+    guest.kept.add(target.clone()).unwrap();
+
+    let mut judged = gone(
+        &guest,
+        vec![
+            job_change(&stop, stop_request(&stop, &id)),
+            job_change(&unknown, stop_request(&unknown, &JobId::new())),
+        ],
+        &[target.supervisor],
+    );
+    judged.sort();
+    let mut both = vec![stop, unknown];
+    both.sort();
+
+    assert_eq!(judged, both);
+}
+
+#[test]
+fn a_job_change_an_earlier_guest_kept_without_its_request_is_judged_as_before() {
+    let guest = guest();
+    let (started, unnamed) = (Token::new(), Token::new());
+    let kept = job_supervisor(10, &started, &JobId::new());
+    guest.kept.add(kept.clone()).unwrap();
+    proof::leave(&guest.proofs, &kept.supervisor, DONE).unwrap();
+    // A request kept that is no job's tells nothing either.
+    let odd = Intended {
+        asked: Some(serde_json::json!({"op": "hello"})),
+        ..intended(&unnamed, "job")
+    };
+
+    assert_eq!(
+        gone(&guest, vec![intended(&started, "job"), odd], &[]),
+        [started]
+    );
 }

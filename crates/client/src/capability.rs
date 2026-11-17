@@ -88,7 +88,7 @@ impl Doctor {
                     .to_owned(),
             )
         } else {
-            VmMode::Unavailable(first.clone())
+            VmMode::Unavailable(with_work(&first, &status))
         };
         let mut doctor = Self::unreached(status, refusal);
         doctor.diagnosis.first_step = atlas_core::session::Guidance::Advice(first);
@@ -104,6 +104,22 @@ impl Doctor {
             self.vm = Some(VmMode::Unavailable(why));
         }
         self
+    }
+}
+
+/// `why` a VM whose status is `status` is not ready yet, and, once it is
+/// proven, what its guest says of work an agent started there that is
+/// still running or may be.
+fn with_work(why: &str, status: &Value) -> String {
+    if status["proven"] != true {
+        return why.to_owned();
+    }
+    match status["leftovers"].as_str() {
+        Some("running") => format!("{why} Work an agent started is still running there."),
+        Some("unknown") => {
+            format!("{why} Whether work an agent started still runs there is not known.")
+        }
+        _ => why.to_owned(),
     }
 }
 

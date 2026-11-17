@@ -1758,3 +1758,94 @@ fn a_vm_an_update_is_still_handing_over_says_so_as_its_reason() {
     let shown = super::overview(&doctor, false, unresolved(0), &[], NOW).value;
     assert_eq!(shown["mode"], "stopped", "none under way");
 }
+
+#[test]
+fn a_vms_overview_says_its_guests_work_and_whether_any_may_still_run_once_proven() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let status = |proven: bool, jobs: Value, leftovers: &str| {
+        json!({"ok": true, "proven": proven, "proof": {"input": true},
+            "keeper": {"live": true},
+            "guest": {"ok": true, "stop": {"state": "clear"},
+                "permissions": {"screenCapture": true}},
+            "stop": {"state": "clear"},
+            "work": {"state": "running", "jobs": jobs, "changes": 1, "supervisors": 0},
+            "leftovers": leftovers})
+    };
+    let shown = |status: Value| {
+        let doctor = crate::capability::Doctor::vm(status, client.unreachable());
+        super::overview(&doctor, false, unresolved(0), &[], NOW).value
+    };
+
+    let running = shown(status(true, json!(2), "running"));
+    let unknown = shown(status(true, json!("unknown"), "unknown"));
+    let none = shown(status(true, json!(0), "none"));
+    let unproven = shown(status(false, json!(2), "running"));
+
+    assert_eq!(running["guest"]["leftovers"], "running", "{running}");
+    assert_eq!(running["guest"]["work"]["jobs"], 2);
+    assert_eq!(running["guest"]["stop"]["state"], "clear");
+    assert_eq!(
+        running["jobs"],
+        json!({"running": 2, "launching": 0, "unresolved": 0})
+    );
+    let reason = running["reason"].as_str().unwrap();
+    assert!(
+        reason.ends_with("Work an agent started is still running there."),
+        "{reason}"
+    );
+    assert_eq!(unknown["jobs"]["incomplete"], true, "{unknown}");
+    assert!(
+        unknown["reason"]
+            .as_str()
+            .unwrap()
+            .ends_with("Whether work an agent started still runs there is not known."),
+        "{unknown}"
+    );
+    assert_eq!(none["reason"], json!(client.unreachable().error), "{none}");
+    assert_eq!(
+        unproven["reason"],
+        json!(client.unreachable().error),
+        "nothing said of work before its proof"
+    );
+}
+
+#[test]
+fn a_reached_vm_whose_work_may_still_run_offers_the_persons_stop_and_one_with_none_need_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let status = |live: bool, stop: &str, work: &str, leftovers: &str| {
+        json!({"ok": true, "proven": true, "proof": {"input": true},
+            "keeper": {"live": live, "why": "The guest fell silent."},
+            "guest": {"ok": true, "stop": {"state": stop},
+                "permissions": {"screenCapture": true}},
+            "stop": {"state": stop}, "work": {"state": work}, "leftovers": leftovers})
+    };
+    let offered = |status: Value| {
+        let doctor = crate::capability::Doctor::vm(status, client.unreachable());
+        let overview = super::overview(&doctor, false, unresolved(0), &[], NOW).value;
+        assert_eq!(overview["mode"], "unavailable", "never ready: {overview}");
+        overview["workMayRun"].clone()
+    };
+
+    assert_eq!(offered(status(true, "clear", "running", "running")), true);
+    assert_eq!(
+        offered(status(true, "clear", "none", "unknown")),
+        true,
+        "not known"
+    );
+    assert_eq!(offered(status(true, "clear", "unknown", "none")), true);
+    assert_eq!(offered(status(true, "clear", "none", "none")), false);
+    assert_eq!(
+        offered(status(false, "clear", "running", "running")),
+        false,
+        "not reached"
+    );
+    let stopped = crate::capability::Doctor::vm(
+        status(true, "stopped", "running", "running"),
+        client.unreachable(),
+    );
+    let stopped = super::overview(&stopped, false, unresolved(0), &[], NOW).value;
+    assert_eq!(stopped["mode"], "stopped", "Resume takes its place");
+    assert_eq!(stopped["workMayRun"], false);
+}

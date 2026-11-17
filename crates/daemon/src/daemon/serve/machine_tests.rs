@@ -4902,3 +4902,205 @@ async fn a_command_still_running_is_never_answered_as_ended() {
     };
     assert!(reply.get("ended").is_none(), "{reply}");
 }
+
+/// A guest's records with a job its daemon started, its supervisor's PID
+/// one no process can have and no proof of its end left yet, and a stop of
+/// it, `stop`, kept as intended by that daemon before it died: its request
+/// kept beside it unless `older`, as a guest from before keeps none.
+fn left_stopping(stop: &Token, older: bool) -> (Records, crate::machine::processes::Supervised) {
+    let records = records();
+    let (started, id) = (Token::new(), atlas_core::protocol::JobId::new());
+    let supervising = supervising(&records.0, &records.1);
+    let target = crate::machine::processes::Supervised {
+        boot: atlas_core::process::boot().unwrap(),
+        generation: atlas_session::generation::Generation(1),
+        supervisor: atlas_core::process::Instance::new(100_502, [1, 0]),
+        change: Some(started.clone()),
+        job: Some(crate::machine::processes::JobRecord {
+            id: id.clone(),
+            name: "loop".into(),
+            task: None,
+            session: None,
+            started_at: 0,
+            ends_at: u64::MAX,
+            change: started,
+        }),
+    };
+    supervising.kept.add(target.clone()).unwrap();
+    let request = json!({"op": "job", "action": "stop", "id": id,
+        "expect": {"boot": target.boot, "pid": 100_502, "start": [1, 0], "pgid": 100_502},
+        "graceMs": 2000, "change": stop});
+    records.2.ask(stop, "job", &request).unwrap();
+    if older {
+        std::fs::remove_file(records.0.path().join(format!("{stop}.asked"))).unwrap();
+    }
+    (records, target)
+}
+
+#[tokio::test]
+async fn a_job_stop_a_daemon_left_unresolved_is_ended_only_once_its_targets_work_is_proven_ended() {
+    let stop = Token::new();
+    let (records, target) = left_stopping(&stop, false);
+    let proofs = records.0.path().join("supervisors/proofs");
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+    let before = outcome_of(&desktop, &stop).await;
+    crate::machine::supervise::proof::leave(
+        &proofs,
+        &target.supervisor,
+        crate::machine::supervise::ENDED,
+    )
+    .unwrap();
+    let after = outcome_of(&desktop, &stop).await;
+
+    assert!(
+        controlling.unsettled.is_empty(),
+        "no supervisor names the stop, and that proves nothing"
+    );
+    assert_eq!(before["outcome"], "unknown", "{before}");
+    assert_eq!(after["outcome"], "done", "{after}");
+    assert_eq!(after["reply"]["ended"], true, "{after}");
+}
+
+#[tokio::test]
+async fn a_job_change_a_guest_from_before_kept_without_its_request_stays_unknown() {
+    let stop = Token::new();
+    let (records, target) = left_stopping(&stop, true);
+    let proofs = records.0.path().join("supervisors/proofs");
+    crate::machine::supervise::proof::leave(
+        &proofs,
+        &target.supervisor,
+        crate::machine::supervise::ENDED,
+    )
+    .unwrap();
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+    let answered = outcome_of(&desktop, &stop).await;
+
+    assert!(controlling.unsettled.is_empty());
+    assert_eq!(answered["outcome"], "unknown", "{answered}");
+}
+
+#[tokio::test]
+async fn a_job_start_cut_before_its_supervisor_is_named_is_ended_as_a_command_is() {
+    let records = records();
+    let start = Token::new();
+    let request = json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "30"],
+        "lifetimeMs": 60_000, "uid": nix::unistd::getuid().as_raw(), "change": start});
+    records.2.ask(&start, "job", &request).unwrap();
+
+    let served = Served::on(records).await;
+    let (controlling, desktop) = served.control().await;
+    let answered = outcome_of(&desktop, &start).await;
+
+    assert_eq!(controlling.unsettled, std::slice::from_ref(&start));
+    assert_eq!(answered["reply"]["ended"], true, "{answered}");
+}
+
+#[tokio::test]
+async fn a_job_change_keeps_its_request_beside_its_record() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+
+    let started = job_start(&desktop, &change, &["/bin/sleep", "30"], 60_000).await;
+
+    assert_eq!(started["job"]["state"], "running", "{started}");
+    let kept = served.records.path().join(format!("{change}.asked"));
+    let asked: Value = serde_json::from_slice(&std::fs::read(&kept).unwrap()).unwrap();
+    assert_eq!(asked["action"], "start");
+    assert_eq!(asked["change"], json!(change));
+}
+
+#[tokio::test]
+async fn a_job_stop_whose_target_said_its_stop_began_stays_unknown_until_its_target_is_proven_done()
+{
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let started = job_start(
+        &desktop,
+        &Token::new(),
+        &["/bin/sh", "-c", "trap '' TERM; sleep 30"],
+        60_000,
+    )
+    .await;
+    let job = started["job"].clone();
+    let id = job["id"].as_str().unwrap();
+    let expect =
+        json!({"boot": job["boot"], "pid": job["pid"], "start": job["start"], "pgid": job["pgid"]});
+    let stop = |change: &Token| {
+        json!({"op": "job", "action": "stop", "id": id, "expect": expect,
+            "graceMs": 3000, "change": change})
+    };
+    // A stop whose daemon kept its intent and no more, beside one carried
+    // out that the job's supervisor said began: the job ignores its TERM,
+    // so it runs on until its KILL.
+    let (unresolved, said) = (Token::new(), Token::new());
+    served
+        .changes
+        .ask(&unresolved, "job", &stop(&unresolved))
+        .unwrap();
+    let begun = ask(
+        &desktop,
+        LaneKind::Change {
+            change: said.clone(),
+        },
+        &stop(&said),
+    )
+    .await;
+
+    let before = outcome_of(&desktop, &unresolved).await;
+    let ended = job_ended(&desktop, id, Duration::from_secs(20)).await;
+    let after = outcome_of(&desktop, &unresolved).await;
+
+    assert_eq!(begun.last().unwrap()["signalled"], "SIGTERM", "{begun:?}");
+    assert_eq!(before["outcome"], "unknown", "its stop began: {before}");
+    assert_eq!(ended["state"], "ended", "{ended}");
+    assert_eq!(after["outcome"], "done", "{after}");
+    assert_eq!(after["reply"]["ended"], true, "{after}");
+}
+
+#[test]
+fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_order() {
+    let everything = Serving {
+        supervising: true,
+        stages: true,
+        input: true,
+        mirrors: true,
+        jobs: true,
+    };
+
+    assert_eq!(everything.declared(), atlas_session::compatibility::MACHINE);
+    assert_eq!(
+        Serving::default().declared(),
+        atlas_session::compatibility::MACHINE[..4]
+    );
+    assert!(
+        !everything.serves(atlas_core::protocol::JOBS),
+        "a helper's name"
+    );
+}
+
+#[tokio::test]
+async fn a_guests_read_hello_declares_what_its_control_hello_does() {
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+
+    let hello = ask(&desktop, LaneKind::Read, &json!({"op": "hello"})).await;
+
+    assert_eq!(
+        hello.last().unwrap()["daemon"]["capabilities"],
+        json!(controlling.declared.capabilities)
+    );
+    assert!(
+        controlling
+            .declared
+            .capabilities
+            .iter()
+            .all(|declared| atlas_session::compatibility::MACHINE.contains(&declared.as_str())),
+        "{:?}",
+        controlling.declared
+    );
+}

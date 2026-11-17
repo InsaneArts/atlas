@@ -44,6 +44,9 @@ extension ViewerStatus {
     public var moreSessions = 0
     /// The background jobs agents keep running in the helper.
     public var jobs = Jobs()
+    /// Whether work an agent started on a VM the service reaches may still run, as its guest says or cannot say,
+    /// while the VM is otherwise not ready; false when the service does not say.
+    public var workMayRun = false
     /// Whether the helper's apps can be heard, as its daemon last said; nil when it said nothing.
     public var sound: Sound?
     /// The accounts Atlas lists for the helper; nil when Atlas can't read its list, or the service didn't say.
@@ -64,13 +67,15 @@ extension ViewerStatus {
     static let stopStaysFor: Double = 60
 
     /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``, or a background job an agent
-    /// started may still run (running, starting, or of a record the helper cannot read), however long ago it started.
-    /// Stop also ends those jobs, so it stays the person's way to end them while the helper otherwise looks idle, and
-    /// while the person holds control, which ends no job.
+    /// started may still run (running, starting, or of a record the helper cannot read), however long ago it started,
+    /// or work an agent started on a VM may (``workMayRun``), though the VM is not ready. Stop also ends that work, so
+    /// it stays the person's way to end it while the desktop otherwise looks idle or unavailable, and while the person
+    /// holds control, which ends no job.
     public var offersStop: Bool {
       mode == .agent
         || (mode == .observing && agentActed(within: Self.stopStaysFor))
         || (jobs.mayRun && Self.jobsStop.contains(mode))
+        || workMayRun
     }
 
     /// The modes in which background jobs that may still run keep Stop offered: wherever the helper is reached and
@@ -83,7 +88,7 @@ extension ViewerStatus {
     /// - Parameter holdingControl: Whether the person holds control.
     /// - Returns: Whether Stop is offered.
     public func offersStop(holdingControl: Bool) -> Bool {
-      holdingControl ? jobs.mayRun : offersStop
+      holdingControl ? jobs.mayRun || workMayRun : offersStop
     }
 
     /// Whether Resume Agent is offered: the person stopped agents.
@@ -117,8 +122,8 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound, accounts, accountNote, asks,
-        allowed, signingIn, signInInterrupted
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, workMayRun, sound, accounts,
+        accountNote, asks, allowed, signingIn, signInInterrupted
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -146,6 +151,7 @@ extension ViewerStatus {
       hostSessions = container.lenientList(HostSession.self, forKey: .hostSessions)
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
       jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
+      workMayRun = (try? container.decodeIfPresent(Bool.self, forKey: .workMayRun)) == true
       sound = try? container.decodeIfPresent(Sound.self, forKey: .sound)
       // A list keeps each account that reads. One that is missing, null, not a list, or holds accounts none of which
       // read is unknown: never empty, which would say there are none.

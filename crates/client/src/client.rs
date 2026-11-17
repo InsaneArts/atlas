@@ -26,6 +26,7 @@ pub use apps::{AppList, AppRow};
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
 pub(crate) use input::require_looks;
+pub use keeper::Leftovers;
 pub(crate) use mutate::{Mutation, unconfirmed};
 pub use record::PersonInput;
 pub(crate) use record::{NOT_RECORDED, logged_at};

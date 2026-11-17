@@ -35,6 +35,9 @@ const OUTCOME_WAIT: Duration = Duration::from_secs(2);
 /// How long a VM's guest is given, through its keeper and a lane of its
 /// own, to say what a change came to once its reply was lost.
 const KEPT_OUTCOME_WAIT: Duration = Duration::from_secs(10);
+/// How long a VM's guest is given to start a job and say so: longer than
+/// it waits for the job's program to start.
+const JOB_START: Duration = Duration::from_secs(30);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -296,8 +299,8 @@ impl Client {
             release.is_none() || matches!(mutation, Mutation::Run { .. }),
             "only a command started with run lets go of control while it runs"
         );
-        // A VM's changes go through its keeper: only a command for now,
-        // which `mutate_vm` carries.
+        // A VM's changes go through its keeper: a command and a job's start
+        // or stop, which `mutate_vm` carries.
         if let Kind::Vm(_) = self.desktop().kind() {
             return Err(self.unreachable());
         }
@@ -734,10 +737,12 @@ impl Client {
     }
 
     /// [`Client::mutate`] on a VM, in the generation `generation` of its
-    /// keeper's session its command's proof was taken in: only a command
-    /// for now, claimed as the guest's before anything goes, said through
-    /// its keeper, and settled with the guest once its claim is cleared.
-    /// Anything else is refused before it is claimed.
+    /// keeper's session its command's proof was taken in: a command, or a
+    /// job's start or stop, claimed as the guest's before anything goes,
+    /// said through its keeper, and settled with the guest once its claim
+    /// is cleared. An agent's change is cut short by the person's Stop, its
+    /// outcome left pending until the guest answers it. Anything else is
+    /// refused before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
         mutation: &Mutation<'_>,
@@ -745,9 +750,16 @@ impl Client {
         release: Option<Ownership>,
     ) -> Result<Value> {
         self.reachable()?;
-        let (Kind::Vm(_), Mutation::Run { timeout, .. }) = (self.desktop().kind(), mutation) else {
-            return Err(self.unreachable());
+        let within = match (self.desktop().kind(), mutation) {
+            (Kind::Vm(_), Mutation::Run { timeout, .. }) => *timeout + RUN_MARGIN,
+            (Kind::Vm(_), Mutation::JobStart { .. }) => JOB_START,
+            (Kind::Vm(_), Mutation::JobStop { .. }) => self.link.timeout(),
+            _ => return Err(self.unreachable()),
         };
+        debug_assert!(
+            release.is_none() || matches!(mutation, Mutation::Run { .. }),
+            "only a command started with run lets go of control while it runs"
+        );
         let started = Instant::now();
         self.controller.interrupt().check()?;
         let command = release.is_some();
@@ -768,7 +780,7 @@ impl Client {
         let link = self
             .link
             .clone()
-            .with_timeout(self.link.timeout().max(*timeout + RUN_MARGIN));
+            .with_timeout(self.link.timeout().max(within));
         let sent = self
             .send_change(&link, &change, &request, generation, &claim)
             .await
@@ -778,19 +790,31 @@ impl Client {
 
         let mut claim = Some(claim);
         let asked = (mutation, &change);
-        let reply = if agent {
-            self.run_to_its_end(
-                through_keeper(sent),
-                asked,
-                &request,
-                command,
-                &mut claim,
-                started,
-            )
-            .await
-        } else {
-            self.answer_or_ask_for(through_keeper(sent), asked, started)
+        let reply = match mutation {
+            Mutation::Run { .. } if agent => {
+                self.run_to_its_end(
+                    through_keeper(sent),
+                    asked,
+                    &request,
+                    command,
+                    &mut claim,
+                    started,
+                )
                 .await
+            }
+            // The guest ends every job on the person's Stop: what this change
+            // came to is then the guest's to say.
+            _ if agent => {
+                tokio::select! {
+                    biased;
+                    reply = self.answer_or_ask_for(through_keeper(sent), asked, started) => reply,
+                    () = self.stopped_while_running() => Err(self.stopped().uncertain()),
+                }
+            }
+            _ => {
+                self.answer_or_ask_for(through_keeper(sent), asked, started)
+                    .await
+            }
         };
         let reply = reply.map_err(|error| self.pending_on_vm(error))?;
         mutation.validate(&reply)?;

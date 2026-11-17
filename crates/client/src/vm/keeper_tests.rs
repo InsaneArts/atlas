@@ -309,6 +309,8 @@ pub(super) struct Saying {
     /// What a command it runs replies, in place of one that printed
     /// `hi`.
     pub(super) ran: Mutex<Option<Value>>,
+    /// How it answers anything else, in place of an echo.
+    pub(super) otherwise: Mutex<Option<Answering>>,
 }
 
 /// The reply of a command a machine guest ran that printed `hi` and kept
@@ -355,7 +357,10 @@ impl Guest {
                         let answered = said.replaying.lock().unwrap().clone().unwrap_or(asked);
                         json!({"ok": true, "challenge": answered, "proof": screen()})
                     }
-                    _ => json!({"ok": true, "echo": request}),
+                    _ => match said.otherwise.lock().unwrap().clone() {
+                        Some(otherwise) => otherwise(header, request),
+                        None => json!({"ok": true, "echo": request}),
+                    },
                 },
             );
         *self.answering.lock().unwrap() = Some(answer);

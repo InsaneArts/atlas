@@ -49,9 +49,6 @@ pub(super) const CAPABILITIES: [&str; 7] = [
     super::change::CAPABILITY,
     super::recover::CAPABILITY,
 ];
-/// The reads a client may have carried to the guest, by their operation:
-/// what the commands this build runs on a VM need, and nothing more.
-pub(crate) const READS: [&str; 2] = ["hello", "outcome"];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
 /// The longest request.
@@ -61,6 +58,19 @@ const ASKING: Duration = Duration::from_secs(10);
 /// A request's deadline when it names none, and the longest it may name.
 const DEADLINE: Duration = Duration::from_secs(30);
 const LONGEST: Duration = Duration::from_secs(120);
+
+/// Whether a client may have `request` carried to the guest as a read: what
+/// the commands this build runs on a VM need, and nothing more. A Stop, a
+/// Resume, its own proof and recovery are the keeper's own; a job's reads
+/// are a list or one job (`show`) and its log, never a stop of every job;
+/// `leftovers` is the guest's word on what work of its may still run.
+pub(crate) fn carries(request: &Value) -> bool {
+    match request["op"].as_str() {
+        Some("hello" | "outcome" | "leftovers") => true,
+        Some("job") => matches!(request["action"].as_str(), Some("show" | "log")),
+        _ => false,
+    }
+}
 
 /// The keeper's Resume capability: a random token made at its start.
 pub(super) struct Grant(String);
@@ -253,10 +263,7 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             let telling = Telling::Resume(revision.flatten());
             let _ = say(&mut writing, &told(keeper, telling, deadline).await).await;
         }
-        Some("read")
-            if request["request"].is_object()
-                && !READS.contains(&request["request"]["op"].as_str().unwrap_or_default()) =>
-        {
+        Some("read") if request["request"].is_object() && !carries(&request["request"]) => {
             let refused = refusal(
                 Code::Denied,
                 "The keeper does not carry that read to the guest.",

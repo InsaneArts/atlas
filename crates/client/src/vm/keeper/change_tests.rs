@@ -12,7 +12,7 @@ use std::sync::{Arc, atomic::Ordering::SeqCst};
 
 /// A keeper serving a guest that proves itself, its saying, and an agent's
 /// client of it.
-async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir) {
+pub(super) async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir) {
     let serving = serving(true).await;
     let saying = serving.fixture.guest.proving();
     let directory = tempfile::tempdir().unwrap();
@@ -21,7 +21,7 @@ async fn proven() -> (Serving, Arc<Saying>, Client, tempfile::TempDir) {
 }
 
 /// Every lane the guest admitted, in order.
-fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
+pub(super) fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
     serving
         .fixture
         .guest
@@ -34,7 +34,7 @@ fn admitted(serving: &Serving) -> Vec<atlas_session::lane::Header> {
 }
 
 /// The changes the station settled with the guest.
-fn settled(serving: &Serving) -> Vec<Token> {
+pub(super) fn settled(serving: &Serving) -> Vec<Token> {
     serving
         .fixture
         .guest
@@ -47,7 +47,7 @@ fn settled(serving: &Serving) -> Vec<Token> {
 
 /// What the guest keeps of `change`: none when it keeps nothing of it,
 /// then none inside while it is carried out.
-fn record(serving: &Serving, change: &Token) -> Option<Option<Value>> {
+pub(super) fn record(serving: &Serving, change: &Token) -> Option<Option<Value>> {
     serving
         .fixture
         .guest
@@ -60,7 +60,7 @@ fn record(serving: &Serving, change: &Token) -> Option<Option<Value>> {
 }
 
 /// The one change the guest keeps, once it was asked for one.
-async fn asked_for(serving: &Serving) -> Token {
+pub(super) async fn asked_for(serving: &Serving) -> Token {
     let changes = || {
         serving
             .fixture
@@ -87,13 +87,13 @@ fn hi() -> Vec<String> {
 }
 
 /// The generation live now.
-fn live(serving: &Serving) -> u64 {
+pub(super) fn live(serving: &Serving) -> u64 {
     serving.fixture.keeper.shared.state().generation.unwrap().0
 }
 
 /// Cut the guest's control connection and wait for the keeper's next
 /// generation.
-async fn restarted(serving: &Serving) {
+pub(super) async fn restarted(serving: &Serving) {
     let first = live(serving);
     serving.fixture.guest.cut();
     until("a new generation", || {
@@ -537,7 +537,6 @@ async fn every_command_not_built_for_a_vm_is_refused_in_one_wording_before_anyth
             .await
             .unwrap_err(),
         client.restart().await.unwrap_err(),
-        crate::jobs::list(&client, false).await.unwrap_err(),
     ];
 
     for refused in refused {

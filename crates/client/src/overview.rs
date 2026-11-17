@@ -346,16 +346,11 @@ pub fn overview(
     // Records the daemon cannot read are counted apart: their jobs may
     // still run, so the person's Stop stays offered. A count that could not
     // read every record says so: more jobs than it counts may run.
-    let counted = &session["daemon"]["jobs"];
-    let mut jobs = json!({
-        "running": counted["running"].as_u64().unwrap_or(0),
-        "launching": counted["launching"].as_u64().unwrap_or(0),
-        "unresolved": counted["unresolved"].as_u64().unwrap_or(0),
-    });
-    if counted["incomplete"] == true {
-        jobs["incomplete"] = json!(true);
-    }
-    let value = json!({
+    let jobs = match &report.vm {
+        Some(_) => vm_jobs(&diagnosis.value["work"]),
+        None => helper_jobs(&session["daemon"]["jobs"]),
+    };
+    let mut value = json!({
         "mode": mode,
         "state": state,
         "label": label,
@@ -379,12 +374,57 @@ pub fn overview(
         "sound": session["sound"].is_object().then_some(&session["sound"]),
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     });
+    // A VM's guest says its own Stop, the work it carries, and whether any
+    // it started may still run: the person's Stop stays offered for that
+    // work while the VM is otherwise not ready.
+    value["workMayRun"] = json!(vm_work_may_run(report));
+    if report.vm.is_some() {
+        let status = &diagnosis.value;
+        value["guest"] = json!({"stop": status["stop"], "work": status["work"],
+            "leftovers": status["leftovers"]});
+    }
     Overview {
         mode,
         state,
         pending,
         agent_holds: observation.native.control_active == Some(true),
         value,
+    }
+}
+
+/// The helper's background jobs as its daemon counts them, `counted`.
+fn helper_jobs(counted: &Value) -> Value {
+    let mut jobs = json!({
+        "running": counted["running"].as_u64().unwrap_or(0),
+        "launching": counted["launching"].as_u64().unwrap_or(0),
+        "unresolved": counted["unresolved"].as_u64().unwrap_or(0),
+    });
+    if counted["incomplete"] == true {
+        jobs["incomplete"] = json!(true);
+    }
+    jobs
+}
+
+/// Whether work an agent started on the VM `report` is of may still run
+/// while its keeper reaches it and its agents are not stopped already: its
+/// guest says it runs, or cannot say. Never for Second Login, whose jobs
+/// keep Stop offered by their own count.
+fn vm_work_may_run(report: &crate::capability::Doctor) -> bool {
+    let status = &report.diagnosis.value;
+    let may_run = |said: &Value| matches!(said.as_str(), Some("running" | "unknown"));
+    matches!(report.vm, Some(crate::capability::VmMode::Unavailable(_)))
+        && status["ok"] == true
+        && status["keeper"]["live"] == true
+        && (may_run(&status["leftovers"]) || may_run(&status["work"]["state"]))
+}
+
+/// A VM's background jobs as its guest's `work` counts them: running,
+/// starting and being ended alike. A count it cannot tell may hide jobs
+/// still running, as an unread record does.
+fn vm_jobs(work: &Value) -> Value {
+    match work["jobs"].as_u64() {
+        Some(running) => json!({"running": running, "launching": 0, "unresolved": 0}),
+        None => json!({"running": 0, "launching": 0, "unresolved": 0, "incomplete": true}),
     }
 }
 

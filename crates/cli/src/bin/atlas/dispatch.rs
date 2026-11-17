@@ -270,9 +270,16 @@ async fn execute_with(
     host_session::explain::reply(result, || client().ok(), host)
 }
 
-/// Whether `command` is a change this build makes on a VM desktop.
+/// Whether `command` is a change this build makes on a VM desktop: a
+/// command, and a background job's start or stop.
 fn changes_on_vm(command: &Command) -> bool {
-    matches!(command, Command::Run(_))
+    matches!(
+        command,
+        Command::Run(_)
+            | Command::Job {
+                command: JobCommand::Start { .. } | JobCommand::Stop { .. }
+            }
+    )
 }
 
 /// Note what a command of `kind`, doing `doing`, left for its session to

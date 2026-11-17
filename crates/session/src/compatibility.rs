@@ -43,6 +43,24 @@ pub const MACHINE_PROOF: &str = "machine-proof-v1";
 /// `uncertain: true` in what it came to.
 pub const ENDED: &str = "ended-v1";
 
+/// Every capability a machine guest declares when it serves all it can, in
+/// the order it declares them: what it serves is named from this list
+/// alone, and the station reads these names, never a helper's.
+pub const MACHINE: [&str; 12] = [
+    CHANGES,
+    STOP_REPORT,
+    ACKNOWLEDGED,
+    MACHINE_PROOF,
+    LEFTOVERS,
+    ENDED,
+    STAGE,
+    COPIES,
+    INPUT_LANES,
+    MIRRORS,
+    JOBS,
+    UPDATES,
+];
+
 /// What a guest declares in its hello.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

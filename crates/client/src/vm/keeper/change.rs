@@ -440,3 +440,7 @@ async fn say<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) -> std::io::R
 #[cfg(test)]
 #[path = "change_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod jobs_tests;

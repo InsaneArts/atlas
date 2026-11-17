@@ -667,6 +667,48 @@ fn end_proven(
     }
 }
 
+/// What a machine guest was made with, which decides what it declares.
+#[derive(Clone, Copy, Debug, Default)]
+struct Serving {
+    supervising: bool,
+    stages: bool,
+    input: bool,
+    mirrors: bool,
+    jobs: bool,
+}
+
+impl Serving {
+    /// Whether it serves `capability`: one it does not know it never does.
+    fn serves(self, capability: &str) -> bool {
+        use atlas_session::compatibility::{
+            ACKNOWLEDGED, CHANGES, COPIES, ENDED, INPUT_LANES, JOBS, LEFTOVERS, MACHINE_PROOF,
+            MIRRORS, STAGE, STOP_REPORT, UPDATES,
+        };
+        match capability {
+            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF => true,
+            // What a change whose outcome is unknown came to is proven by its
+            // supervisors.
+            LEFTOVERS | ENDED => self.supervising,
+            // An update's bundle comes as a stage.
+            STAGE | COPIES | UPDATES => self.stages,
+            INPUT_LANES => self.input,
+            MIRRORS => self.mirrors,
+            JOBS => self.jobs,
+            _ => false,
+        }
+    }
+
+    /// The capabilities it declares, in the order a machine guest declares
+    /// them.
+    fn declared(self) -> Vec<String> {
+        atlas_session::compatibility::MACHINE
+            .iter()
+            .filter(|capability| self.serves(capability))
+            .map(|capability| (*capability).to_owned())
+            .collect()
+    }
+}
+
 /// The generation live now, and the tasks that keep it.
 struct Live {
     authority: Authority,
@@ -851,40 +893,17 @@ impl Machine {
     }
 
     /// What this guest declares it serves: what it was made with, so it
-    /// never declares a service it does not have.
+    /// never declares a service it does not have, each by its name in
+    /// [`atlas_session::compatibility::MACHINE`].
     fn declared(&self) -> atlas_session::compatibility::Declared {
-        use atlas_session::compatibility::{
-            ACKNOWLEDGED, CHANGES, COPIES, Declared, ENDED, INPUT_LANES, LEFTOVERS, MACHINE_PROOF,
-            STAGE, STOP_REPORT,
+        let serving = Serving {
+            supervising: self.daemon.supervising.is_some(),
+            stages: self.daemon.stages.is_some(),
+            input: self.daemon.input.is_some(),
+            mirrors: self.mirrors.is_some(),
+            jobs: self.jobs.is_some(),
         };
-        let mut capabilities = vec![
-            CHANGES.to_owned(),
-            STOP_REPORT.to_owned(),
-            ACKNOWLEDGED.to_owned(),
-            MACHINE_PROOF.to_owned(),
-        ];
-        // What a change whose outcome is unknown came to is proven by its
-        // supervisors.
-        if self.daemon.supervising.is_some() {
-            capabilities.extend([LEFTOVERS.to_owned(), ENDED.to_owned()]);
-        }
-        if self.daemon.stages.is_some() {
-            capabilities.extend([STAGE.to_owned(), COPIES.to_owned()]);
-        }
-        if self.daemon.input.is_some() {
-            capabilities.push(INPUT_LANES.to_owned());
-        }
-        if self.mirrors.is_some() {
-            capabilities.push(atlas_session::compatibility::MIRRORS.to_owned());
-        }
-        if self.jobs.is_some() {
-            capabilities.push(atlas_session::compatibility::JOBS.to_owned());
-        }
-        // An update's bundle comes as a stage.
-        if self.daemon.stages.is_some() {
-            capabilities.push(atlas_session::compatibility::UPDATES.to_owned());
-        }
-        Declared::ours(capabilities)
+        atlas_session::compatibility::Declared::ours(serving.declared())
     }
 
     /// Serve every connection `listener` gives, until it fails.

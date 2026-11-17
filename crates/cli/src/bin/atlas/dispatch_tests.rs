@@ -998,7 +998,6 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         &["apps"],
         &["screenshot"],
         &["start-input"],
-        &["job", "list"],
     ] {
         let command = parse(args).unwrap().command.unwrap();
         let policy = Policy::of(&command);
@@ -1018,4 +1017,74 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         keeper.asked.lock().unwrap()
     );
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_job_on_a_vm_starts_and_stops_on_change_lanes_through_dispatch_its_list_read_through_the_keeper()
+ {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    let start = || command(&["job", "start", "--", "/bin/sleep", "30"]);
+    let stop = || {
+        command(&[
+            "job",
+            "stop",
+            atlas_client::test_support::JOB,
+            "--grace",
+            "1",
+        ])
+    };
+    let started = executed(&config, start(), &client).await.unwrap();
+    let listed = executed(&config, command(&["job", "list", "--all"]), &client)
+        .await
+        .unwrap();
+    let stopped = executed(&config, stop(), &client).await.unwrap();
+    client.controller.note_stop(true).unwrap();
+    let station = executed(&config, start(), &client).await;
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+    *keeper.stop.lock().unwrap() = "stopped";
+    let guest = executed(&config, start(), &client).await;
+
+    assert_eq!(started["state"], "running", "{started}");
+    assert_eq!(
+        listed["jobs"][0]["id"],
+        atlas_client::test_support::JOB,
+        "{listed}"
+    );
+    assert_eq!(stopped["how"], "stopped", "{stopped}");
+    let changes = keeper.asked_for("change");
+    assert_eq!(changes.len(), 2, "only a start and a stop: {changes:?}");
+    for (change, action) in changes.iter().zip(["start", "stop"]) {
+        assert_eq!(change["lane"], "change");
+        assert_eq!(change["generation"], atlas_client::test_support::GENERATION);
+        assert_eq!(change["request"]["op"], "job");
+        assert_eq!(change["request"]["action"], action, "{change}");
+        assert_eq!(change["request"]["change"], change["change"]);
+    }
+    assert_eq!(changes[0]["request"]["uid"], 502);
+    assert!(
+        keeper
+            .asked_for("read")
+            .iter()
+            .any(|read| read["request"]["op"] == "job" && read["request"]["action"] == "show")
+    );
+    for held in [station, guest] {
+        let held = held.unwrap_err();
+        assert_eq!(held.code, Code::Stopped, "{held:?}");
+        assert!(held.error.contains("work"), "{held:?}");
+    }
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+/// `command` carried out through dispatch by an agent's `client`, its
+/// settings at `config`.
+async fn executed(config: &Path, command: Command, client: &Client) -> Result<Value> {
+    let policy = Policy::of(&command);
+    let mut acting = client.clone();
+    acting.doing = policy.doing.clone();
+    let factory = || Ok(acting.clone());
+    execute_with(config, command, &policy, None, &factory, false).await
 }

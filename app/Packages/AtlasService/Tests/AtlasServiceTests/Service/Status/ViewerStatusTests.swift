@@ -199,6 +199,25 @@ struct ViewerStatusTests {
     #expect(try !overview("unavailable", running: 1).offersStop, "the helper is not reached")
   }
 
+  @Test("a VM not ready keeps Stop offered while the service says its work may still run")
+  func stopStaysWhileAVMsWorkMayRun() throws {
+    func overview(_ workMayRun: Any?) throws -> ViewerStatus.Overview {
+      var fields: [String: Any] = ["mode": "unavailable"]
+      if let workMayRun {
+        fields["workMayRun"] = workMayRun
+      }
+      return try status(["overview": fields]).overview
+    }
+    let running = try overview(true)
+    #expect(running.workMayRun)
+    #expect(running.offersStop)
+    #expect(running.offersStop(holdingControl: true), "control ends no work")
+    #expect(!running.offersResume)
+    #expect(try !overview(false).offersStop)
+    #expect(try !overview(nil).offersStop, "unsaid reads as none")
+    #expect(try !overview("yes").offersStop, "a mistyped word reads as none")
+  }
+
   @Test("a job still starting, or one whose record the helper cannot read, keeps Stop offered too")
   func stopStaysWhileJobsStartOrCannotBeRead() throws {
     func overview(_ jobs: [String: Any]) throws -> ViewerStatus.Overview {

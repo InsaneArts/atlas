@@ -30,7 +30,7 @@ mod program;
 mod recover;
 
 pub use agent::{install_keeper, install_keeper_held};
-pub(crate) use clients::{PROTOCOL, READS, RESUME_KEY};
+pub(crate) use clients::{PROTOCOL, RESUME_KEY, carries};
 use program::Program;
 
 use super::{

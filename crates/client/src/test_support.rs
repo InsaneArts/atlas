@@ -16,7 +16,7 @@ pub use executor::{
 };
 pub use helper::{Helper, Pictures, completed, exited};
 pub use keeper::{
-    GENERATION, ScriptedKeeper, input_hello, machine_hello, screen, vm_through_keeper,
+    GENERATION, JOB, ScriptedKeeper, input_hello, machine_hello, screen, vm_through_keeper,
 };
 pub use requester::{Requester, WATCHDOG};
 

@@ -3,13 +3,19 @@
 //! a durable link before any effect: the change's intent, then the record
 //! of the supervisor started for it, and only then its program. So one
 //! this daemon no longer carries out, whose every supervisor is done with,
-//! has nothing of it running, whether it ran or not. A kind with no such
-//! evidence here is never judged: what it came to stays unknown.
+//! has nothing of it running, whether it ran or not. A job's stop is
+//! bound to its target, the job's own supervisor: its work is gone only
+//! once that supervisor is done with. A kind with no such evidence here is
+//! never judged: what it came to stays unknown.
 use super::{
     changes::Intended,
     processes::{Remembered, Supervised, done_with},
 };
-use atlas_core::{files::Token, process::Instance};
+use atlas_core::{
+    files::Token,
+    process::Instance,
+    protocol::{self, JobId, JobRequest, Request},
+};
 use std::path::Path;
 
 /// A command's operation.
@@ -29,6 +35,26 @@ pub(crate) struct Evidence<'a> {
     pub(crate) owned: &'a dyn Fn(&Instance) -> bool,
     /// Whether a supervisor's process still runs.
     pub(crate) running: &'a dyn Fn(&Instance) -> bool,
+}
+
+/// What a job's change was asked to do, as its kept request says.
+enum Asked {
+    Start,
+    /// A stop, and the job it stops.
+    Stop(JobId),
+}
+
+impl Asked {
+    /// What `intended` asked, when its request was kept: none for one a
+    /// guest from before kept, which says no more than its operation.
+    fn of(intended: &Intended) -> Option<Self> {
+        let line = serde_json::to_vec(intended.asked.as_ref()?).ok()?;
+        match protocol::parse(&line).ok()?.request {
+            Request::Job(JobRequest::Start { .. }) => Some(Self::Start),
+            Request::Job(JobRequest::Stop { id, .. }) => Some(Self::Stop(id)),
+            _ => None,
+        }
+    }
 }
 
 impl Evidence<'_> {
@@ -74,11 +100,20 @@ impl Evidence<'_> {
             .filter(|supervised| supervised.change.is_none())
             .all(|supervised| done(&supervised));
         let named_done = named.iter().all(done);
-        match intended.operation.as_str() {
-            RUN => unnamed_done && named_done,
-            // A stop names no supervisor, nor does a start whose one was
-            // retired: with none, which it was is not told.
-            JOB => !named.is_empty() && unnamed_done && named_done,
+        match (intended.operation.as_str(), Asked::of(intended)) {
+            (RUN, _) | (JOB, Some(Asked::Start)) => unnamed_done && named_done,
+            // Its target is the supervisor running that job, whichever build
+            // kept it: a stop that began proves nothing while the job may
+            // still run. None kept means none ran it, or it was retired once
+            // proven done with.
+            (JOB, Some(Asked::Stop(id))) => work
+                .iter()
+                .filter(|supervised| supervised.job.as_ref().is_some_and(|job| job.id == id))
+                .all(|supervised| done(&supervised)),
+            // Its request not kept: a stop names no supervisor, nor does a
+            // start whose one was retired, so with none which it was is not
+            // told.
+            (JOB, None) => !named.is_empty() && unnamed_done && named_done,
             _ => false,
         }
     }

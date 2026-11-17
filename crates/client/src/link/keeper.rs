@@ -370,8 +370,7 @@ impl Keeper {
     /// do on a VM, before anything is said; fails when the keeper cannot be
     /// reached or told.
     pub(crate) async fn send_read(&self, request: &Value) -> Result<Pending<Stream>> {
-        let op = request["op"].as_str().unwrap_or_default();
-        if !crate::vm::keeper::READS.contains(&op) {
+        if !crate::vm::keeper::carries(request) {
             return Err(self.selected.unreachable());
         }
         let asked = json!({"op": "read", "request": request,

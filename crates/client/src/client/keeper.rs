@@ -1,8 +1,9 @@
 //! What a client asks of a VM desktop through its session keeper: its status
 //! with a fresh proof of it, never ready yet; the proof a command acts in,
-//! and its guest's own Stop; the person's Stop and Resume; and the recovery
-//! of changes whose command ended without an answer. Everything else stays
-//! refused in the one wording for what this build cannot do on a VM.
+//! and its guest's own Stop; the guest's word on work it started that may
+//! still run; the person's Stop and Resume; and the recovery of changes
+//! whose command ended without an answer. Everything else stays refused in
+//! the one wording for what this build cannot do on a VM.
 use super::{Actor, Client, Pinned, Verified};
 use crate::{
     link::{Keeper, Link},
@@ -23,6 +24,28 @@ const PENDING_READ: std::time::Duration = std::time::Duration::from_millis(500);
 /// moment of it left for the keeper's own answer.
 const RECOVERY: std::time::Duration = std::time::Duration::from_secs(60);
 const RECOVERY_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a status waits for the guest's word on its leftover work.
+const LEFTOVERS_READ: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether work a VM's guest started may still run there, as the guest
+/// itself says: what the station asks before it takes the desktop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Leftovers {
+    Running,
+    None,
+    /// Not known: held as running is.
+    Unknown,
+}
+
+impl Leftovers {
+    /// Whether work may still run: unless the guest said none does.
+    #[must_use]
+    pub fn may_run(self) -> bool {
+        self != Self::None
+    }
+}
 
 /// A VM's proof as one command took it: what its keeper observed, and the
 /// session that proves or why it does not.
@@ -109,18 +132,18 @@ impl Client {
     }
 
     /// A VM verified now for one of the commands this build runs on it (an
-    /// agent's `run`): proved afresh in one generation of
-    /// its keeper's session, its guest's own Stop clear, its agents not
-    /// stopped, open to no one but Atlas, and no update handing its session
-    /// over. The command keeps the proof's
-    /// generation for every change it makes.
+    /// agent's `run`, a job's start or stop): proved afresh in one
+    /// generation of its keeper's session, its guest's own Stop clear, its
+    /// agents not stopped, open to no one but Atlas, and no update handing
+    /// its session over. The command keeps the proof's generation for every
+    /// change it makes.
     ///
     /// # Errors
     ///
     /// Refuses a VM that does not prove, or proves but is held as above:
     /// stopped while its guest, or the update handing it over, holds
     /// agents.
-    pub(super) async fn verify_vm(&self) -> Result<Verified> {
+    pub(crate) async fn verify_vm(&self) -> Result<Verified> {
         if let Some(why) = self.handover_unfinished() {
             return Err(Error::new(Code::Stopped, why));
         }
@@ -157,6 +180,55 @@ impl Client {
                 epoch: machine.epoch,
                 generation: proved.observed.generation,
             }),
+        })
+    }
+
+    /// [`Client::verify_vm`], refusing a guest whose daemon does not offer
+    /// `capability` in `older`'s words, given the VM's name: nothing is sent
+    /// to it.
+    pub(crate) async fn verify_vm_offering(
+        &self,
+        capability: &str,
+        older: impl FnOnce(&str) -> String,
+    ) -> Result<Verified> {
+        let verified = self.verify_vm().await?;
+        if !verified.observation.has_capability(capability) {
+            return Err(Error::new(Code::Update, older(&self.selected.name)).with(
+                "next",
+                json!("Update Atlas so the VM's Atlas and this command are one build."),
+            ));
+        }
+        Ok(verified)
+    }
+
+    /// Whether work the VM's guest started may still run there, as the
+    /// guest says when asked through its keeper. Second Login keeps its own
+    /// ledger on this Mac (the controller's run groups and the helper's
+    /// jobs), so it is never asked this.
+    ///
+    /// # Errors
+    ///
+    /// Refuses Second Login and a VM still being added in the one wording;
+    /// fails when the keeper cannot be reached or does not carry the read.
+    /// A guest that answers anything but `running` or `none` is unknown.
+    pub async fn leftovers(&self) -> Result<Leftovers> {
+        if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_))
+            || self.admission() != Admission::Open
+        {
+            return Err(self.unreachable());
+        }
+        let mut keeper = self.keeper().await?;
+        keeper.timeout = keeper.timeout.min(LEFTOVERS_READ);
+        let read = json!({"op": "read", "request": {"op": "leftovers"},
+            "deadline_ms": keeper.timeout.as_millis()});
+        let answer = keeper.one(&read).await?;
+        if answer["ok"] != true {
+            return Err(atlas_core::transport::refusal(&answer));
+        }
+        Ok(match answer["leftovers"].as_str() {
+            Some("running") => Leftovers::Running,
+            Some("none") => Leftovers::None,
+            _ => Leftovers::Unknown,
         })
     }
 
@@ -285,6 +357,9 @@ impl Client {
             .map_or(json!("unknown"), |pending| {
                 pending.map_or(json!("unknown"), |pending| json!(pending))
             });
+        // The guest's own word on the work it started, which may outlive its
+        // commands: unknown when it cannot be asked.
+        let leftovers = self.leftovers().await.unwrap_or(Leftovers::Unknown);
         let generation = observed.as_ref().map(|observed| observed.generation);
         let mid_update = !session.as_ref().is_ok_and(|session| session.input)
             && crate::vm::proof::mid_update(&guest);
@@ -317,6 +392,9 @@ impl Client {
             "notReady": not_ready,
             "desktop": {"kind": "vm", "name": self.selected.name},
             "keeper": hello,
+            "stop": guest_stop(&guest),
+            "work": guest_work(&guest),
+            "leftovers": leftovers,
             "guest": guest,
             "runner": observed.as_ref().map(|observed| json!(observed.runner)),
             "station": {"stop": station, "handover": self.handover_unfinished(),
@@ -465,6 +543,26 @@ fn guest_held(name: &str, hello: &Value) -> Option<Error> {
         _ => format!("{name}'s own Stop cannot be read, so agents wait {resume}."),
     };
     Some(Error::new(Code::Stopped, why))
+}
+
+/// The guest's own Stop, as its hello `guest` says it: unknown when it
+/// says none.
+fn guest_stop(guest: &Value) -> Value {
+    if guest["stop"]["state"].is_string() {
+        guest["stop"].clone()
+    } else {
+        json!({"state": "unknown"})
+    }
+}
+
+/// The work the guest's daemon says it carries now, as its hello `guest`
+/// says it: unknown when it says none.
+fn guest_work(guest: &Value) -> Value {
+    if guest["work"]["state"].is_string() {
+        guest["work"].clone()
+    } else {
+        json!({"state": "unknown"})
+    }
 }
 
 fn late(client: &Client) -> Error {

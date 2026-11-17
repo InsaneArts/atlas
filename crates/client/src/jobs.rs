@@ -2,12 +2,19 @@
 //! stopped under control like any change, each held only until the helper
 //! acknowledges it, and listed and read without control.
 //!
+//! On a VM desktop the guest keeps them: each start and stop is a change
+//! on a lane of its own through the VM's keeper, in the generation its
+//! proof was taken in, and a job outlives the command that started it as
+//! the keeper holds that generation; it ends with it. Lists, a job and its
+//! log are reads the keeper carries, and whether anything may still run
+//! is the guest's own word.
+//!
 //! The helper daemon's record of a job is the truth about its process; the
 //! task's record holds the person's side's copy of its identity, which a
 //! stop must agree with. A job of another task is stopped only when that
 //! task is named.
 use crate::{
-    client::{Client, Mutation, unconfirmed},
+    client::{Client, Mutation, Pinned, Verified, unconfirmed},
     task::{
         Task,
         record::{JobEntry, Noted},
@@ -33,6 +40,10 @@ use std::time::{Duration, Instant};
 
 /// What an older helper daemon is told it cannot do.
 const OLDER: &str = "The helper is running an older Atlas that cannot keep background jobs; run atlas restart, then try again";
+/// What a VM whose guest is from an older Atlas is told it cannot do.
+fn older_guest(name: &str) -> String {
+    format!("{name} is running an older Atlas that cannot keep background jobs")
+}
 /// How often a stop looks at the job while it waits for it to end.
 const POLL: Duration = Duration::from_millis(200);
 /// How long a stop waits beyond its grace for the job to end.
@@ -81,13 +92,30 @@ pub async fn start(
     // The helper ends every job while agents are stopped, the person's
     // own included, so none is started then.
     if client.stop_marked() {
-        return Err(Error::stopped());
+        return Err(client.stopped());
     }
     let ownership = client.controller.acquire_beside_commands()?;
-    let verified = client.verify_offering(JOBS, OLDER).await?;
-    let started = started(client, verified.pin()?, argv, lifetime, name).await;
+    let verified = verified(client).await?;
+    let pin = verified.pin()?;
+    let started = match verified.machine() {
+        Some(machine) => started_in(client, (pin, Some(machine)), argv, lifetime, name).await,
+        None => started(client, pin, argv, lifetime, name).await,
+    };
     drop(ownership);
     started
+}
+
+/// The desktop as a job's change is verified in: the helper offering jobs,
+/// or a VM proved afresh with its guest offering them, by the name a
+/// machine guest declares them by, whose proof's generation its change
+/// goes in.
+async fn verified(client: &Client) -> Result<Verified> {
+    if let Kind::Vm(_) = client.desktop().kind() {
+        return client
+            .verify_vm_offering(atlas_session::compatibility::JOBS, older_guest)
+            .await;
+    }
+    client.verify_offering(JOBS, OLDER).await
 }
 
 /// [`start`] once the helper is verified, under control the caller holds:
@@ -100,6 +128,19 @@ async fn started(
     lifetime: Duration,
     name: Option<String>,
 ) -> Result<Value> {
+    started_in(client, (pin, None), argv, lifetime, name).await
+}
+
+/// [`started`] in the session `pin` names, and on a VM in the session its
+/// proof pinned, `machine`, which names the account the job runs as and the
+/// generation its change goes in.
+async fn started_in(
+    client: &Client,
+    (pin, machine): (SessionPin, Option<&Pinned>),
+    argv: Vec<String>,
+    lifetime: Duration,
+    name: Option<String>,
+) -> Result<Value> {
     let mutation = Mutation::JobStart {
         start: JobStart {
             argv,
@@ -108,13 +149,14 @@ async fn started(
             task: client.task.as_ref().map(|task| task.key().clone()),
             session: client.task.as_ref().map(|task| task.session().clone()),
         },
-        uid: match client.desktop().kind() {
-            Kind::User(login) => login.uid,
-            Kind::Vm(_) => return Err(client.unreachable()),
+        uid: match (client.desktop().kind(), machine) {
+            (Kind::User(login), _) => login.uid,
+            (Kind::Vm(_), Some(machine)) => machine.epoch.uid,
+            (Kind::Vm(_), None) => return Err(client.unreachable()),
         },
         pin,
     };
-    let reply = mutate(client, mutation).await?;
+    let reply = mutate(client, mutation, machine).await?;
     let Ok(JobReply::Start { job }) = JobReply::deserialize(&reply) else {
         return Err(unconfirmed());
     };
@@ -166,12 +208,12 @@ pub async fn stop(
     grace: Duration,
     task: Option<&Key>,
 ) -> Result<Value> {
-    client.verify_offering(JOBS, OLDER).await?;
+    verified(client).await?;
     let found = expected_for(client, id, task).await?;
 
     let ownership = client.controller.acquire_beside_commands()?;
-    client.verify_offering(JOBS, OLDER).await?;
-    let acknowledged = stop_held(client, id, &found.expected, grace).await?;
+    let verified = verified(client).await?;
+    let acknowledged = stopped_in(client, id, &found.expected, grace, verified.machine()).await?;
     drop(ownership);
 
     Ok(waited_for(client, id, grace, &acknowledged, found).await)
@@ -357,16 +399,55 @@ pub(crate) async fn stop_held(
         expected,
         grace,
     };
-    let reply = mutate(client, mutation).await?;
-    match JobReply::deserialize(&reply) {
+    acknowledged(&accepted(client.mutate(mutation, None, None, None).await?)?)
+}
+
+/// [`stop_held`], on a VM in the session its proof pinned, `machine`,
+/// whose generation its change goes in.
+async fn stopped_in(
+    client: &Client,
+    id: &JobId,
+    expected: &Expected,
+    grace: Duration,
+    machine: Option<&Pinned>,
+) -> Result<Stopped> {
+    let mutation = Mutation::JobStop {
+        id,
+        expected,
+        grace,
+    };
+    acknowledged(&mutate(client, mutation, machine).await?)
+}
+
+/// What a stop's `reply` acknowledged.
+fn acknowledged(reply: &Value) -> Result<Stopped> {
+    match JobReply::deserialize(reply) {
         Ok(JobReply::Stop(stopped)) => Ok(stopped),
         _ => Err(unconfirmed()),
     }
 }
 
-/// Send a job `mutation`: the helper's reply, unless it refused.
-async fn mutate(client: &Client, mutation: Mutation<'_>) -> Result<Value> {
-    let reply = client.mutate(mutation, None, None, None).await?;
+/// Send a job `mutation`: the reply, unless it refused. On a VM it goes
+/// through its keeper in the generation of the session its proof pinned,
+/// `machine`.
+async fn mutate(
+    client: &Client,
+    mutation: Mutation<'_>,
+    machine: Option<&Pinned>,
+) -> Result<Value> {
+    let reply = match machine {
+        Some(machine) => {
+            client
+                .mutate_vm(&mutation, machine.generation, None)
+                .await?
+        }
+        None => client.mutate(mutation, None, None, None).await?,
+    };
+    accepted(reply)
+}
+
+/// `reply`, unless it refused.
+fn accepted(reply: Value) -> Result<Value> {
     if reply["ok"] == true {
         Ok(reply)
     } else {
@@ -436,8 +517,9 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
 /// Returns helper or job-list decoding failures. Unreadable supervision state is not
 /// reported as an empty list.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
-    // A desktop this build cannot reach has none it can tell.
-    client.second_login_only()?;
+    // A desktop this build cannot reach has none it can tell; a VM's guest
+    // tells its own through its keeper.
+    client.reachable()?;
     let mine = client.task.as_ref().map(|task| task.key().clone());
     let store = client.output_dir().ok().map(Store::at);
     let recorded: Vec<JobEntry> = mine
@@ -513,30 +595,50 @@ pub const JOB_RUNNING: &str =
 ///
 /// Returns `busy`, held by an agent with `running` `job`, while a job may
 /// still run, and `job` when the helper's list can't be read.
+///
+/// On a VM the guest's own word comes first: work it says may still run,
+/// or cannot say, refuses as a job running does, and one it cannot be
+/// asked refuses as an unread list does.
 pub async fn require_none(client: &Client) -> Result<()> {
-    let jobs = shown_all(client).await.map_err(|cause| {
-        Error::new(
-            Code::Job,
-            "Atlas couldn't read the helper's background jobs. Try again.",
-        )
-        .with_source(cause)
-    })?;
-    if jobs.iter().any(|job| may_run(job, &client.desktop())) {
-        return Err(Error::new(Code::Busy, JOB_RUNNING)
+    let vm = matches!(client.desktop().kind(), Kind::Vm(_));
+    let unread = |cause: Error| {
+        let said = if vm {
+            format!(
+                "Atlas couldn't read what work may still run on {}. Try again.",
+                client.selected.name
+            )
+        } else {
+            "Atlas couldn't read the helper's background jobs. Try again.".to_owned()
+        };
+        Error::new(Code::Job, said).with_source(cause)
+    };
+    let running = || {
+        Error::new(Code::Busy, JOB_RUNNING)
             .held_by(atlas_core::error::Holder::Agent)
-            .with("running", json!("job")));
+            .with("running", json!("job"))
+    };
+    if vm && client.leftovers().await.map_err(unread)?.may_run() {
+        return Err(running());
+    }
+    let jobs = shown_all(client).await.map_err(unread)?;
+    if jobs.iter().any(|job| may_run(job, &client.desktop())) {
+        return Err(running());
     }
     Ok(())
 }
 
 /// Whether the job `shown` may still have processes in `desktop`. Only a
 /// job that ended, with every process it left gone or no longer the
-/// desktop's, has none.
+/// desktop's, has none. A VM's guest shows a job ended only once its work
+/// is proven ended, and lists what it left: its word stands, as what runs
+/// there is not this Mac's to look at.
 fn may_run(shown: &Shown, desktop: &Desktop) -> bool {
     let Some(job) = shown.job() else {
         return true;
     };
+    let vm = matches!(desktop.kind(), Kind::Vm(_));
     match (job.state, job.ended()) {
+        (JobState::Ended, Some(ended)) if vm => !ended.left.is_empty(),
         (JobState::Ended, Some(ended)) => desktop.left_may_run(&ended.left, job.pgid),
         _ => true,
     }

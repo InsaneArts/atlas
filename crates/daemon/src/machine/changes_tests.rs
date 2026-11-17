@@ -336,6 +336,7 @@ fn only_changes_still_intended_are_listed_as_intended_with_their_operation() {
             change: open,
             operation: "stage".into(),
             request: request_digest(&json!({"op": "stage"})).unwrap(),
+            asked: None,
         }]
     );
 }
@@ -430,4 +431,107 @@ fn only_an_intent_or_an_uncertain_reply_is_unresolved_and_kept_as_ended_once_its
         3,
         "each named at a hello"
     );
+}
+
+/// A job's stop, the change `change`.
+fn job_stop(change: &Token) -> Value {
+    json!({"op": "job", "action": "stop", "id": "0123456789ab",
+        "expect": {"boot": "b", "pid": 10, "start": [1, 0], "pgid": 10},
+        "graceMs": 2000, "change": change})
+}
+
+/// The names of every file in `folder`.
+fn files(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_job_changes_request_is_kept_beside_its_record_and_read_back_only_as_the_one_its_digest_names()
+{
+    let (folder, _vault, changes) = paired();
+    let (stop, command) = (Token::new(), Token::new());
+    changes.ask(&stop, "job", &job_stop(&stop)).unwrap();
+    changes.ask(&command, "run", &run("true")).unwrap();
+    let asked = |change: &Token| {
+        changes
+            .unresolved()
+            .unwrap()
+            .into_iter()
+            .find(|intended| intended.change == *change)
+            .unwrap()
+            .asked
+    };
+
+    assert_eq!(asked(&stop), Some(job_stop(&stop)));
+    assert_eq!(asked(&command), None, "a command keeps none");
+    assert!(!folder.path().join(format!("{command}.asked")).exists());
+
+    // Another request in its place is not the one its record is bound to.
+    let kept = folder.path().join(format!("{stop}.asked"));
+    std::fs::write(&kept, serde_json::to_vec(&job_stop(&Token::new())).unwrap()).unwrap();
+    assert_eq!(asked(&stop), None);
+    // None at all, as a guest from before keeps: the record is still read.
+    std::fs::remove_file(&kept).unwrap();
+    assert_eq!(asked(&stop), None);
+    assert_eq!(changes.of(&stop).unwrap(), Some(State::Intended));
+}
+
+#[test]
+fn a_kept_request_goes_once_its_change_is_settled_and_one_no_record_names_is_swept() {
+    let (folder, _vault, changes) = paired();
+    let (stop, other) = (Token::new(), Token::new());
+    changes.ask(&stop, "job", &job_stop(&stop)).unwrap();
+    let stray = folder.path().join(format!("{}.asked", Token::new()));
+    std::fs::write(&stray, b"{}").unwrap();
+
+    changes.done(&stop, &json!({"ok": true})).unwrap();
+    assert!(!stray.exists(), "swept with the next write");
+    assert!(folder.path().join(format!("{stop}.asked")).exists());
+    changes.settled(std::slice::from_ref(&stop)).unwrap();
+    changes.ask(&other, "run", &run("true")).unwrap();
+
+    assert!(
+        files(folder.path())
+            .iter()
+            .all(|name| !name.ends_with(".asked")),
+        "{:?}",
+        files(folder.path())
+    );
+}
+
+#[test]
+fn a_job_changes_record_and_manifest_keep_only_what_a_guest_from_before_reads() {
+    let (folder, _vault, changes) = paired();
+    let stop = Token::new();
+    changes.ask(&stop, "job", &job_stop(&stop)).unwrap();
+    let keys = |path: &Path| {
+        let read: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut keys: Vec<String> = read.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+    let names = files(folder.path());
+    let record = names
+        .iter()
+        .find(|name| name.starts_with(stop.as_str()) && name.ends_with(".json"))
+        .unwrap();
+
+    assert_eq!(
+        keys(&folder.path().join(MANIFEST)),
+        ["number", "records", "version"]
+    );
+    assert_eq!(
+        keys(&folder.path().join(record)),
+        ["change", "operation", "request", "state"]
+    );
+    // Never a record's name, nor a file a sweep from before takes for one
+    // left by a write cut short.
+    let kept = format!("{stop}.asked");
+    assert!(names.contains(&kept));
+    assert!(!kept.ends_with(".json") && !kept.starts_with('.'));
 }

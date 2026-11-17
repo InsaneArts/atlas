@@ -1424,7 +1424,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/jobs.rs",
-        &["daemon_listens", "started"],
+        &["daemon_listens", "started_in"],
         "owner: whether the daemon listens, and that a started job is the one asked for",
     ),
     (

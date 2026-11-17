@@ -65,4 +65,18 @@ struct ModeAgentButtonTests {
     #expect(try button(["launching": 1]) == .stop)
     #expect(try button(["unresolved": 1]) == .stop, "a job Atlas cannot read may still run")
   }
+
+  @Test("a VM not ready offers Stop while work an agent started there may still run")
+  func aVMNotReadyOffersStopWhileItsWorkMayRun() throws {
+    func button(_ workMayRun: Bool) throws -> ViewerAgentButton? {
+      let fields: [String: Any] = [
+        "mode": "unavailable", "state": "notReady", "jobs": ["running": 1], "workMayRun": workMayRun,
+      ]
+      let overview = try status(["overview": fields]).overview
+      let mode = Mode.seen(by: overview, holdingControl: false)
+      return mode.agentButton(overview, holdingControl: false, isBusy: false)
+    }
+    #expect(try button(true) == .stop)
+    #expect(try button(false) == nil, "its job count alone keeps no Stop where the desktop is unavailable")
+  }
 }

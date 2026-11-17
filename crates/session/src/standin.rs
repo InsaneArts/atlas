@@ -254,22 +254,18 @@ impl StandIn {
             outbox: Arc::new(Outbox::hello(
                 generation,
                 self.unsettled(),
-                // Its Stop report, input lanes and what it is proved by are
-                // a test's own lanes' to give.
+                // What a real machine guest serving everything declares, by
+                // the very names it declares them by: what it serves past
+                // changes is a test's own lanes' to give.
                 crate::compatibility::Declared::ours(if self.plain.load(SeqCst) {
                     vec![crate::compatibility::STOP_REPORT.to_owned()]
                 } else {
-                    let mut declared = vec![
-                        crate::compatibility::CHANGES.to_owned(),
-                        crate::compatibility::ACKNOWLEDGED.to_owned(),
-                        crate::compatibility::STOP_REPORT.to_owned(),
-                        crate::compatibility::INPUT_LANES.to_owned(),
-                        crate::compatibility::MACHINE_PROOF.to_owned(),
-                    ];
-                    if !self.unended.load(SeqCst) {
-                        declared.push(crate::compatibility::ENDED.to_owned());
-                    }
-                    declared
+                    let unended = self.unended.load(SeqCst);
+                    crate::compatibility::MACHINE
+                        .iter()
+                        .filter(|declared| !unended || **declared != crate::compatibility::ENDED)
+                        .map(|declared| (*declared).to_owned())
+                        .collect()
                 }),
             )),
             credit: Arc::new(Credit::default()),

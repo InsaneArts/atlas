@@ -16,6 +16,12 @@
 //! A record's file is named for its change and its content's digest, and
 //! written whole beside its name before it is renamed into place: no
 //! version the current manifest names is ever written over.
+//!
+//! A change whose recovery must know what was asked (a job's start or
+//! stop) keeps its request beside its record, in a file of its own whose
+//! digest is the one its record is bound to: never part of the record or
+//! the manifest, whose every field a guest from before reads strictly, and
+//! named so such a guest neither reads it nor sweeps it away.
 use super::{
     commitment::{Commitment, Judged, Revision},
     vault::Vault,
@@ -67,6 +73,17 @@ const MANIFEST_LIMIT: u64 = 1 << 20;
 /// The longest a record may be: a reply kept whole, and its request.
 const RECORD_LIMIT: u64 = 2 * REPLY as u64;
 
+/// The operations whose request is kept beside their record: a job's
+/// start and stop, which recovery tells apart, and a stop's target.
+const ASKED_KEPT: [&str; 1] = ["job"];
+
+/// The ending of the file a change's request is kept in.
+const ASKED: &str = "asked";
+
+/// The longest a kept request may be: a request the guest takes, written
+/// again.
+const ASKED_LIMIT: u64 = 2 * atlas_core::protocol::MAX_REQUEST as u64;
+
 /// Records by change, each shared rather than copied.
 type Records = BTreeMap<String, Arc<Record>>;
 
@@ -110,6 +127,10 @@ pub struct Intended {
     pub change: Token,
     pub operation: String,
     pub request: String,
+    /// The request itself, when it was kept beside the record and is the
+    /// very one its digest names; none for one a guest from before kept,
+    /// and for every operation that keeps none.
+    pub asked: Option<Value>,
 }
 
 /// The digest a change is bound to: of its request, as JSON.
@@ -185,6 +206,34 @@ impl<V: Vault> Changes<V> {
     /// A record's file.
     fn record_path(&self, change: &str, digest: &str) -> PathBuf {
         self.folder.join(format!("{change}.{digest}.json"))
+    }
+
+    /// The file a change's request is kept in.
+    fn asked_path(&self, change: &str) -> PathBuf {
+        self.folder.join(format!("{change}.{ASKED}"))
+    }
+
+    /// The request `record` was asked with, as kept beside it: none when
+    /// none was kept, or what is there is not the request its digest names.
+    fn asked_of(&self, record: &Record) -> Option<Value> {
+        let bytes = read_regular(&self.asked_path(record.change.as_str()), ASKED_LIMIT).ok()??;
+        if bytes_sha256(&bytes) != record.request {
+            return None;
+        }
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// `record` as recovery looks at it, with its request when kept.
+    fn intended_of(&self, record: &Record) -> Intended {
+        Intended {
+            change: record.change.clone(),
+            operation: record.operation.clone(),
+            request: record.request.clone(),
+            asked: ASKED_KEPT
+                .contains(&record.operation.as_str())
+                .then(|| self.asked_of(record))
+                .flatten(),
+        }
     }
 
     /// The manifest and records on disk, once the commitment vouches for
@@ -320,8 +369,9 @@ impl<V: Vault> Changes<V> {
         Ok(())
     }
 
-    /// Remove every record file the current manifest does not name: left
-    /// by settled or replaced versions, and by writes a crash cut short.
+    /// Remove every record file the current manifest does not name, and
+    /// every kept request of a change it does not name: left by settled or
+    /// replaced versions, and by writes a crash cut short.
     fn sweep(&self, manifest: &Manifest) {
         let named: std::collections::HashSet<PathBuf> = manifest
             .records
@@ -337,7 +387,10 @@ impl<V: Vault> Changes<V> {
             let name = name.to_string_lossy();
             let record = name.ends_with(".json") && name != MANIFEST;
             let left = name.starts_with('.');
-            if (record || left) && !named.contains(&path) {
+            let asked = name
+                .strip_suffix(&format!(".{ASKED}"))
+                .is_some_and(|change| !manifest.records.contains_key(change));
+            if asked || (record || left) && !named.contains(&path) {
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -373,6 +426,15 @@ impl<V: Vault> Changes<V> {
                 Code::Busy,
                 "The desktop keeps too many changes the station has not settled.",
             ));
+        }
+        // Kept for good before the intent names it; one a crash leaves
+        // unnamed is swept with the next write.
+        if ASKED_KEPT.contains(&operation) {
+            write_atomic(
+                &self.asked_path(change.as_str()),
+                &serde_json::to_vec(request)?,
+                0o600,
+            )?;
         }
         records.insert(
             change.as_str().to_owned(),
@@ -492,11 +554,7 @@ impl<V: Vault> Changes<V> {
         Ok(records
             .values()
             .filter(|record| record.state == State::Intended)
-            .map(|record| Intended {
-                change: record.change.clone(),
-                operation: record.operation.clone(),
-                request: record.request.clone(),
-            })
+            .map(|record| self.intended_of(record))
             .collect())
     }
 
@@ -513,11 +571,7 @@ impl<V: Vault> Changes<V> {
         Ok(records
             .values()
             .filter(|record| unresolved(&record.state))
-            .map(|record| Intended {
-                change: record.change.clone(),
-                operation: record.operation.clone(),
-                request: record.request.clone(),
-            })
+            .map(|record| self.intended_of(record))
             .collect())
     }
 
