@@ -41,6 +41,8 @@ fn ended(serving: &Serving) {
     maintenance.ended = Some(Ended {
         by: "run-1".to_owned(),
         close: Token::new(),
+        earlier: None,
+        earlier_gone: None,
     });
     keeper.lifecycle.keep_record(&record).unwrap();
 }

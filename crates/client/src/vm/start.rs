@@ -179,6 +179,32 @@ pub(crate) async fn stopped_now(client: &Client) -> Option<Error> {
     })
 }
 
+/// Why an agent waits on `client`'s VM while Atlas VM says it starts or
+/// runs and its guest has not answered yet, as while it boots: certain, and
+/// nothing sent. None when Atlas VM says otherwise, or cannot say.
+pub(crate) async fn starting_now(client: &Client) -> Option<Error> {
+    let Chosen::Vm(config) = &client.selected.desktop else {
+        return None;
+    };
+    let runner = Runner::in_vms(&client.lifecycle.as_ref()?.vms(), &config.id);
+    let reply =
+        tokio::task::spawn_blocking(move || runner.read_within(&Operation::State, STATUS_READ))
+            .await
+            .ok()?
+            .ok()?;
+    let starts = matches!(reply.power, Some(Power::Starting | Power::Running));
+    (reply.ok && reply.confirmed == Some(true) && starts).then(|| {
+        Error::new(
+            Code::NotReady,
+            format!(
+                "{} is starting; try again in a moment.",
+                client.selected.name
+            ),
+        )
+        .with("next", json!("Run it again in a moment; nothing was sent."))
+    })
+}
+
 /// Wait, until `deadline`, for `client`'s VM, now running, to be held by its
 /// keeper and proved, `every` apart.
 async fn session_proven(client: &Client, deadline: Instant, every: Duration) -> Result<()> {

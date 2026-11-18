@@ -18,6 +18,9 @@ public struct ControlReply: Codable, Equatable, Sendable {
   /// Its picture fence, for a state: read before its window, so a window
   /// opened since shows as open there or as a fence moved on in the next.
   public var fence: UInt64?
+  /// Whether every earlier run's VM is gone, for a state: true only once
+  /// this run recovered under its lock and sees each gone.
+  public var earlierGone: Bool?
   /// The change answered.
   public var change: ChangeID?
   /// The run that began the change answered, as its record keeps it: the

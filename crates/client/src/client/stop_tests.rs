@@ -285,3 +285,34 @@ async fn a_resume_without_the_input_service_that_finds_a_newer_stop_says_agents_
     assert!(warnings.contains("still holds agents"), "{warnings}");
     assert!(person.controller.stop_noted());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_whose_guest_has_not_answered_since_it_started_is_said_starting_and_never_held_by_a_stop()
+ {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = crate::test_support::vm_through_keeper(dir.path());
+    // Started, and its guest still booting: no hello reaches it yet.
+    *keeper.away.lock().unwrap() = true;
+
+    let starting = client.require_going().await.unwrap_err();
+    keeper.runner.set_power("stopped");
+    let unknown = client.require_going().await.unwrap_err();
+    *keeper.away.lock().unwrap() = false;
+    *keeper.stop.lock().unwrap() = "stopped";
+    let held = client.require_going().await.unwrap_err();
+
+    assert_eq!(starting.code, Code::NotReady, "{starting:?}");
+    assert_eq!(starting.error, "work is starting; try again in a moment.");
+    assert!(!starting.uncertain, "certain: nothing was sent");
+    assert_eq!(
+        starting.details["next"],
+        "Run it again in a moment; nothing was sent."
+    );
+    assert_eq!(unknown.code, Code::Stopped, "{unknown:?}");
+    assert!(
+        unknown.error.starts_with("work's own Stop cannot be read"),
+        "{unknown:?}"
+    );
+    assert_eq!(held.code, Code::Stopped, "{held:?}");
+    assert!(held.error.starts_with("work holds agents"), "{held:?}");
+}

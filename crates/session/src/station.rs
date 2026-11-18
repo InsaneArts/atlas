@@ -116,13 +116,11 @@ impl Desktop {
     /// Fails when the dial, the handshake or the header does.
     pub async fn open(&self, kind: LaneKind) -> Result<Opened> {
         let lane = LaneId(self.next.fetch_add(1, SeqCst));
-        let raw = self.dial.dial().await.map_err(|error| {
-            Error::new(
-                Code::Transport,
-                format!("Could not reach desktop {}.", self.desktop.as_str()),
-            )
-            .with_source(error)
-        })?;
+        // The dial says why in the desktop's own name, which only it knows.
+        let raw =
+            self.dial.dial().await.map_err(|error| {
+                Error::new(Code::Transport, error.to_string()).with_source(error)
+            })?;
         let mut stream =
             connect_as_station(raw, &self.own, self.key, &self.desktop, Purpose::Lane).await?;
         let header = Header {

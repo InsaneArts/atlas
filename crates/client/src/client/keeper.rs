@@ -393,11 +393,17 @@ impl Client {
 
     /// Why the VM's guest holds agents now, as its own hello read through
     /// the keeper says; none when its Stop is clear and its agents go on.
-    /// A hello that cannot be read holds them as a Stop not known.
+    /// A hello that cannot be read holds them as a Stop not known, unless
+    /// Atlas VM says the VM starts or runs: its guest is still starting.
     pub(super) async fn guest_stopped(&self) -> Option<Error> {
         let hello = match self.link.call(&json!({"op": "hello"})).await {
             Ok(hello) if hello["ok"] == true => hello,
-            Ok(_) | Err(_) => json!({"stop": {"state": "unknown"}}),
+            Ok(_) | Err(_) => {
+                if let Some(starting) = crate::vm::start::starting_now(self).await {
+                    return Some(starting);
+                }
+                json!({"stop": {"state": "unknown"}})
+            }
         };
         guest_held(&self.selected.name, &hello)
     }

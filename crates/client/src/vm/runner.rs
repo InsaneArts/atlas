@@ -282,6 +282,11 @@ pub struct Reply {
     /// window is. None from a runner of a build before it kept one.
     #[serde(default)]
     pub fence: Option<u64>,
+    /// Whether every earlier run's VM is gone, for a state: true only once
+    /// this run recovered under its lock and saw each gone. None from a
+    /// runner of a build before it said so, which cannot tell.
+    #[serde(default, rename = "earlierGone")]
+    pub earlier_gone: Option<bool>,
     /// The change answered.
     pub change: Option<Token>,
     /// The run of Atlas VM that began the change answered, as its ledger

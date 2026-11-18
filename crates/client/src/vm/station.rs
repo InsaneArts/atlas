@@ -63,11 +63,9 @@ impl fmt::Display for Untrusted {
 }
 
 impl Untrusted {
-    fn refusal(self, vm: &DesktopId) -> Error {
-        Error::new(
-            Code::Identity,
-            format!("VM {} was not dialled: {self}.", vm.as_str()),
-        )
+    /// Why the VM `name` was not dialled.
+    fn refusal(self, name: &str) -> Error {
+        Error::new(Code::Identity, format!("{name} was not dialled: {self}."))
     }
 }
 
@@ -169,11 +167,11 @@ pub enum Refused {
 }
 
 impl Refused {
-    /// The refusal as Atlas reports it, for `vm`.
+    /// The refusal as Atlas reports it, for the VM `name`.
     #[must_use]
-    pub fn into_error(self, vm: &DesktopId) -> Error {
+    pub fn into_error(self, name: &str) -> Error {
         match self {
-            Self::Untrusted { why, .. } => why.refusal(vm),
+            Self::Untrusted { why, .. } => why.refusal(name),
             Self::Failed(error) => error,
         }
     }
@@ -211,20 +209,22 @@ fn place(path: &Path) -> Option<(u64, u64)> {
         .map(|metadata| (metadata.dev(), metadata.ino()))
 }
 
-/// A connection to `vm`'s station socket, trusted: checked before it is
-/// dialled and after. It waits on launchd, so it runs off any runtime.
+/// A connection to `vm`'s station socket, the VM named `name`, trusted:
+/// checked before it is dialled and after. It waits on launchd, so it runs
+/// off any runtime.
 ///
 /// # Errors
 ///
 /// Refuses, with why and the facts it was judged on, a socket that is not
 /// trusted; fails when the socket cannot be dialled or launchd cannot be
 /// asked.
-pub fn trusted(vm: &DesktopId) -> std::result::Result<UnixStream, Refused> {
+pub fn trusted(vm: &DesktopId, name: &str) -> std::result::Result<UnixStream, Refused> {
     trusted_with(
         &Vms::own().map_err(Refused::Failed)?,
         &super::Real,
         signed_vm,
         vm,
+        name,
     )
 }
 
@@ -243,6 +243,7 @@ fn trusted_with(
     system: &impl System,
     listening: Listening,
     vm: &DesktopId,
+    name: &str,
 ) -> std::result::Result<UnixStream, Refused> {
     let facts = facts_with(vms, system, vm).map_err(Refused::Failed)?;
     if let Err(why) = judge_path(facts.folder, facts.station, vms.uid) {
@@ -250,11 +251,7 @@ fn trusted_with(
     }
     let stream = UnixStream::connect(vms.folder(vm).join("station")).map_err(|error| {
         Refused::Failed(
-            Error::new(
-                Code::Transport,
-                format!("Could not reach VM {}.", vm.as_str()),
-            )
-            .with_source(error),
+            Error::new(Code::Transport, format!("Could not reach {name}.")).with_source(error),
         )
     })?;
     if let Err(why) = judge_peer(listening(&stream), facts.launchd, vms.uid) {
@@ -268,32 +265,39 @@ fn trusted_with(
 #[derive(Clone, Debug)]
 pub struct StationSocket {
     pub vm: DesktopId,
+    /// The VM's name, as the settings list it.
+    pub name: String,
     pub purpose: Purpose,
 }
 
 impl Dial for StationSocket {
     fn dial(&self) -> Dialing<'_> {
         Box::pin(async move {
-            dial(&self.vm, self.purpose)
+            dial(&self.vm, &self.name, self.purpose)
                 .await
-                .map_err(|refused| std::io::Error::other(refused.into_error(&self.vm)))
+                .map_err(|refused| std::io::Error::other(refused.into_error(&self.name)))
         })
     }
 }
 
-/// A new trusted connection to `vm`'s guest for `purpose`, opened with the
-/// purpose's byte.
+/// A new trusted connection to `vm`'s guest, the VM named `name`, for
+/// `purpose`, opened with the purpose's byte.
 ///
 /// # Errors
 ///
 /// As [`trusted`]; fails when the byte cannot be said.
-pub(super) async fn dial(vm: &DesktopId, purpose: Purpose) -> std::result::Result<Raw, Refused> {
+pub(super) async fn dial(
+    vm: &DesktopId,
+    name: &str,
+    purpose: Purpose,
+) -> std::result::Result<Raw, Refused> {
     let vms = Vms::own().map_err(Refused::Failed)?;
     dial_with(
         vms,
         std::sync::Arc::new(super::Real),
         signed_vm,
         vm,
+        name,
         purpose,
     )
     .await
@@ -305,22 +309,20 @@ pub(super) async fn dial_with<S: System + Send + Sync + 'static>(
     system: std::sync::Arc<S>,
     listening: Listening,
     vm: &DesktopId,
+    name: &str,
     purpose: Purpose,
 ) -> std::result::Result<Raw, Refused> {
     let failed = |error: std::io::Error| {
         Refused::Failed(
-            Error::new(
-                Code::Transport,
-                format!("Could not reach VM {}.", vm.as_str()),
-            )
-            .with_source(error),
+            Error::new(Code::Transport, format!("Could not reach {name}.")).with_source(error),
         )
     };
-    let named = vm.clone();
-    let stream =
-        tokio::task::spawn_blocking(move || trusted_with(&vms, &*system, listening, &named))
-            .await
-            .map_err(|error| failed(std::io::Error::other(error)))??;
+    let (dialled, named) = (vm.clone(), name.to_owned());
+    let stream = tokio::task::spawn_blocking(move || {
+        trusted_with(&vms, &*system, listening, &dialled, &named)
+    })
+    .await
+    .map_err(|error| failed(std::io::Error::other(error)))??;
     stream.set_nonblocking(true).map_err(failed)?;
     let mut stream = tokio::net::UnixStream::from_std(stream).map_err(failed)?;
     stream.write_all(&[purpose.byte()]).await.map_err(failed)?;

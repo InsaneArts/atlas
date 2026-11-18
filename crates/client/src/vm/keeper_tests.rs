@@ -450,6 +450,7 @@ pub(super) fn fixture() -> Fixture {
     );
     let keeper = Arc::new(Keeper {
         vm,
+        name: "work".to_owned(),
         own,
         reach: guest.clone(),
         records: kept.clone(),
@@ -490,6 +491,7 @@ pub(super) fn next(keeper: &Keeper) -> Arc<Keeper> {
 fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
     Arc::new(Keeper {
         vm: keeper.vm.clone(),
+        name: keeper.name.clone(),
         own: keeper.own.clone(),
         reach: keeper.reach.clone(),
         records: keeper.records.clone(),
@@ -785,7 +787,8 @@ fn a_keeper_serves_only_a_vm_its_settings_list_by_that_key() {
 
     assert_eq!(
         listed(&format!("vm-{}", vm.as_str()), &settings).unwrap(),
-        vm
+        (vm.clone(), "work".to_owned()),
+        "the VM, and the name the settings list it by"
     );
     let other = DesktopId::parse("ffffffffffffffffffffffff").unwrap();
     assert!(listed(&format!("vm-{}", other.as_str()), &settings).is_err());
@@ -908,10 +911,11 @@ impl Dial for Through {
                 self.system.clone(),
                 |_| Some((std::process::id(), nix::unistd::getuid().as_raw())),
                 &self.vm,
+                "work",
                 Purpose::Lane,
             )
             .await
-            .map_err(|refused| std::io::Error::other(refused.into_error(&self.vm)))
+            .map_err(|refused| std::io::Error::other(refused.into_error("work")))
         })
     }
 }

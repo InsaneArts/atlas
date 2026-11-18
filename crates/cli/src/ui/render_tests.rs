@@ -1738,6 +1738,23 @@ fn a_vms_maintenance_says_whether_its_window_takes_your_input_and_how_it_ends() 
 }
 
 #[test]
+fn a_restarts_maintenance_says_a_change_still_pending_on_its_vm() {
+    let on = show(
+        View::DesktopMaintain,
+        json!({"ok": true, "desktop": "work", "maintenance": "on", "window": "open",
+               "already": false, "next": "End it with atlas desktop maintain work --end.",
+               "pending": "A change on work is still pending; Atlas settles it once work answers."}),
+    );
+
+    assert_eq!(
+        on.out,
+        "✓ The window of the VM \u{201c}work\u{201d} takes your keyboard and mouse; agents \
+         wait.\n  A change on work is still pending; Atlas settles it once work answers.\n  End \
+         it with atlas desktop maintain work --end."
+    );
+}
+
+#[test]
 fn a_vm_removed_says_the_new_default_and_names_what_it_kept_and_left() {
     let clean = show(
         View::DesktopRemove,

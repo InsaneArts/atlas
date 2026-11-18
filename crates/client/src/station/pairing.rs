@@ -25,6 +25,8 @@ const ATTEMPT: Duration = Duration::from_secs(10);
 /// where the enrolment is kept and where its record goes.
 pub struct Pairing<'a> {
     pub vm: &'a DesktopId,
+    /// The VM's name, as the settings list it.
+    pub name: &'a str,
     /// A new connection to the guest for pairing on each dial.
     pub dial: &'a dyn Dial,
     pub own: &'a Keypair,
@@ -112,7 +114,7 @@ async fn dialled(pairing: &Pairing<'_>) -> Result<atlas_session::station::Raw> {
     pairing.dial.dial().await.map_err(|error| {
         Error::new(
             Code::Transport,
-            format!("Could not reach VM {} to pair it.", pairing.vm.as_str()),
+            format!("Could not reach {} to pair it.", pairing.name),
         )
         .with_source(error)
     })

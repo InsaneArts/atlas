@@ -8,6 +8,8 @@ fn maintenance(phase: Phase) -> Maintenance {
         phase,
         restart: false,
         since_ms: 1,
+        stop: None,
+        start: None,
         open: None,
         close: None,
         opened_by: None,
@@ -58,9 +60,42 @@ fn a_kept_maintenance_is_read_with_the_vms_name_and_one_asked_off_or_ended_is_en
     ended.ended = Some(Ended {
         by: "run-1".to_owned(),
         close: Token::new(),
+        earlier: None,
+        earlier_gone: None,
     });
     assert!(matches!(Kept::of(Some(ended)), Kept::Ending(_)));
     assert_eq!(Kept::of(None), Kept::None);
+}
+
+#[test]
+fn a_maintenance_stopping_or_starting_its_vm_holds_agents_and_a_record_without_either_reads_as_before()
+ {
+    for phase in [Phase::Stopping, Phase::Starting] {
+        let kept = Kept::of(Some(maintenance(phase)));
+        assert!(matches!(kept, Kept::On(_)), "{kept:?}");
+        assert!(kept.held("work").is_some());
+        assert_eq!(kept.said("work")["state"], "on");
+    }
+    let mut ended = maintenance(Phase::Closing);
+    ended.ended = Some(Ended {
+        by: "run-1".to_owned(),
+        close: Token::new(),
+        earlier: None,
+        earlier_gone: None,
+    });
+
+    let written = serde_json::to_value(&ended).unwrap();
+
+    for absent in ["stop", "start"] {
+        assert!(written.get(absent).is_none(), "{written}");
+    }
+    assert_eq!(
+        written["ended"].as_object().unwrap().len(),
+        2,
+        "by and close alone: {written}"
+    );
+    let read: Maintenance = serde_json::from_value(written).unwrap();
+    assert_eq!(read, ended);
 }
 
 #[test]

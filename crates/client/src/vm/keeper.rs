@@ -152,13 +152,14 @@ pub(crate) fn socket_of(vm: &DesktopId) -> Result<PathBuf> {
     Ok(sockets()?.join(format!("{}.keeper", vm.as_str())))
 }
 
-/// The VM keyed `key` (`vm-<id>`), which the settings at `settings` list.
+/// The VM keyed `key` (`vm-<id>`), which the settings at `settings` list,
+/// and the name they list it by.
 ///
 /// # Errors
 ///
 /// Refuses a key that names no VM, or one the settings do not list as a VM
 /// of that identifier; fails when the settings cannot be read.
-pub fn listed(key: &str, settings: &Path) -> Result<DesktopId> {
+pub fn listed(key: &str, settings: &Path) -> Result<(DesktopId, String)> {
     let vm = vm_of(key)?;
     let settings = Settings::load(settings)?;
     let listed = settings.resolve(&Selection {
@@ -166,7 +167,7 @@ pub fn listed(key: &str, settings: &Path) -> Result<DesktopId> {
         ..Selection::default()
     })?;
     match &listed.desktop {
-        Chosen::Vm(config) if config.id == vm => Ok(vm),
+        Chosen::Vm(config) if config.id == vm => Ok((vm, listed.name.clone())),
         _ => Err(Error::new(
             Code::ConfigInvalid,
             "The settings list no VM by that key; its keeper does not start.",
@@ -204,10 +205,10 @@ pub async fn keep(key: &str, settings: &Path) -> Result<()> {
             "The keeper's own signing cannot be read; it does not start.",
         )));
     }
-    let vm = listed(key, settings).map_err(remember)?;
+    let (vm, name) = listed(key, settings).map_err(remember)?;
     let vms = Vms::own()?;
     let _held = hold(&vms, &vm)?;
-    let (keeper, listener, capability) = started(vm, program).await.map_err(remember)?;
+    let (keeper, listener, capability) = started(vm, name, program).await.map_err(remember)?;
     forget_failure(&keeper.folder);
     let serving = clients::serve(
         listener,
@@ -222,11 +223,12 @@ pub async fn keep(key: &str, settings: &Path) -> Result<()> {
     }
 }
 
-/// The keeper of `vm`, whose program is `program`, made under its lock: its
-/// folder, key and Resume capability, a handover cut short finished, and its
-/// socket bound.
+/// The keeper of `vm`, listed as `name`, whose program is `program`, made
+/// under its lock: its folder, key and Resume capability, a handover cut
+/// short finished, and its socket bound.
 async fn started(
     vm: DesktopId,
+    name: String,
     program: Program,
 ) -> Result<(Arc<Keeper>, tokio::net::UnixListener, String)> {
     let station = Station::own()?;
@@ -240,7 +242,11 @@ async fn started(
     let keeper = Arc::new(Keeper {
         records: Arc::new(station.pairing(&vm)?),
         enrolments: Arc::new(crate::station::enrolment::Keychain),
-        reach: Arc::new(Socket { vm: vm.clone() }),
+        reach: Arc::new(Socket {
+            vm: vm.clone(),
+            name: name.clone(),
+        }),
+        name,
         stop: Controller::new(&atlas_core::desktop::Desktop::from(atlas_core::vm::Vm {
             id: vm.clone(),
         }))?,
@@ -333,14 +339,15 @@ trait Reach: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<super::runner::Reply>> + Send + '_>>;
 }
 
-/// The VM's station socket, as Atlas VM serves it.
+/// The VM's station socket, as Atlas VM serves it, and the VM's name.
 struct Socket {
     vm: DesktopId,
+    name: String,
 }
 
 impl Reach for Socket {
     fn reach(&self, purpose: Purpose) -> Reaching<'_> {
-        Box::pin(super::station::dial(&self.vm, purpose))
+        Box::pin(super::station::dial(&self.vm, &self.name, purpose))
     }
 
     fn facts(&self) -> Pin<Box<dyn Future<Output = Option<Facts>> + Send + '_>> {
@@ -367,7 +374,7 @@ impl Reach for Socket {
 struct Dialled {
     reach: Arc<dyn Reach>,
     purpose: Purpose,
-    vm: DesktopId,
+    name: String,
     untrusted: Mutex<Option<(super::Untrusted, Facts)>>,
 }
 
@@ -376,7 +383,7 @@ impl Dialled {
         Self {
             reach: keeper.reach.clone(),
             purpose,
-            vm: keeper.vm.clone(),
+            name: keeper.name.clone(),
             untrusted: Mutex::new(None),
         }
     }
@@ -399,7 +406,7 @@ impl Dial for Dialled {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner) = Some((*why, facts.clone()));
                 }
-                std::io::Error::other(refused.into_error(&self.vm))
+                std::io::Error::other(refused.into_error(&self.name))
             })
         })
     }
@@ -408,6 +415,8 @@ impl Dial for Dialled {
 /// The keeper of one VM.
 struct Keeper {
     vm: DesktopId,
+    /// The VM's name, as the settings list it, for what is said of it.
+    name: String,
     own: Arc<Keypair>,
     reach: Arc<dyn Reach>,
     records: Arc<dyn StationRecords>,
@@ -681,6 +690,7 @@ impl Keeper {
         let dial = Dialled::new(self, Purpose::Pairing);
         let pairing = Pairing {
             vm: &self.vm,
+            name: &self.name,
             dial: &dial,
             own: &self.own,
             enrolments: self.enrolments.clone(),
@@ -702,10 +712,9 @@ impl Keeper {
 
     fn refused(&self, refused: Refused) -> Ended {
         match refused {
-            Refused::Untrusted { why, facts } => Ended::Untrusted(
-                format!("VM {} was not dialled: {why}.", self.vm.as_str()),
-                facts,
-            ),
+            Refused::Untrusted { why, facts } => {
+                Ended::Untrusted(format!("{} was not dialled: {why}.", self.name), facts)
+            }
             Refused::Failed(error) => Ended::Failed(error.error),
         }
     }

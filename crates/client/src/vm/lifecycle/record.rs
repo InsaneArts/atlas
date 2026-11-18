@@ -84,6 +84,11 @@ pub struct RefusedStart {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Phase {
+    /// Kept: Atlas VM is being asked to stop the VM, which is started again
+    /// before its window opens.
+    Stopping,
+    /// Atlas VM is being asked to start the VM, confirmed stopped.
+    Starting,
     /// Kept: its keeper is being asked to hold every agent's lane, and
     /// Atlas VM is asked nothing until it has.
     Holding,
@@ -96,12 +101,18 @@ pub enum Phase {
 }
 
 /// The proof that ended a maintenance: the run of Atlas VM that confirmed
-/// the window takes no input, and the change it confirmed it for.
+/// the window takes no input, and the change it confirmed it for. When
+/// another run opened the window, that earlier run, and that the run
+/// confirming said every earlier run's VM is gone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Ended {
     pub by: String,
     pub close: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earlier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earlier_gone: Option<bool>,
 }
 
 /// The person's maintenance of a VM, its window taking their input.
@@ -116,6 +127,14 @@ pub struct Maintenance {
     pub restart: bool,
     /// When it was kept, in milliseconds since 1970.
     pub since_ms: u64,
+    /// The change that stops the VM before it is started again, once one
+    /// is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Token>,
+    /// The change that starts the VM before its window opens, once one is
+    /// kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<Token>,
     /// The change that opens its window with input, once one is kept.
     #[serde(default)]
     pub open: Option<Token>,
@@ -258,11 +277,14 @@ impl Record {
     }
 
     /// Forget the person's maintenance once it ended, each change of it
-    /// settled: it, and every window change sent, which only a maintenance
-    /// asks.
+    /// settled: it, its stop and start, and every window change sent, which
+    /// only a maintenance asks.
     pub(in crate::vm) fn maintenance_settled(&mut self) {
-        if self.maintenance.take().is_some() {
-            self.operations.retain(|sent| sent.op != "window");
+        if let Some(maintenance) = self.maintenance.take() {
+            let own = [maintenance.stop, maintenance.start];
+            self.operations.retain(|sent| {
+                sent.op != "window" && !own.iter().flatten().any(|change| *change == sent.change)
+            });
         }
     }
 

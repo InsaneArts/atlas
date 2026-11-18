@@ -632,7 +632,7 @@ impl Held {
 /// does not serve in time. The handover stays recorded then, for the next
 /// keeper and the next run.
 pub fn hand_over(key: &str, settings: &Path, allow_disrupt: bool) -> Result<Value> {
-    let vm = keeper::listed(key, settings)?;
+    let (vm, _) = keeper::listed(key, settings)?;
     let read = Settings::load(settings)?;
     let listed = read
         .desktops()

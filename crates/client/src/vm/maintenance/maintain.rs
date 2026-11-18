@@ -1,10 +1,18 @@
-//! `atlas desktop maintain <name> [--end]`: the person's maintenance of a VM
-//! desktop begun and ended, each once the person allows it in Atlas.app.
+//! `atlas desktop maintain <name> [--restart] [--end]`: the person's
+//! maintenance of a VM desktop begun and ended, each once the person allows
+//! it in Atlas.app.
 //!
 //! Begun on a running VM whose guest says no work agents started runs
-//! there, under its station-operation lock and then its exclusion, both
-//! held to the last step. The maintenance is kept first, at `holding`, so
-//! every agent's admission refuses from then; its keeper is asked to hold
+//! there, or on one confirmed stopped, which runs none, under its
+//! station-operation lock and then its exclusion, both held to the last
+//! step. With `--restart`, a running VM is stopped and started again first,
+//! whatever its guest says, ending any work there; its exclusion is then
+//! taken whatever is pending, and no claim of the guest's is ever cleared.
+//! The maintenance is kept first, so every agent's admission refuses from
+//! then: at `stopping` for a restart, `starting` for a stopped VM, else
+//! `holding`. Each stop and start is a change of its own, kept, claimed as
+//! Atlas VM's and asked, and the next phase begins only once Atlas VM
+//! confirms the VM stopped, or running. Then its keeper is asked to hold
 //! every agent's lane, and Atlas VM is asked to open the window with input
 //! only once the keeper said each lane ended. The window's change is kept,
 //! claimed as Atlas VM's and asked; its claim is cleared only on Atlas VM's
@@ -15,16 +23,21 @@
 //! only for the very maintenance the person allowed ending, or one already
 //! ending. Its window-on is settled first for good: Atlas VM answers what it
 //! came to, or, never having seen it, voids it, so a request of it still on
-//! its way is never done. Only then is Atlas VM asked to turn the window's
-//! input off, under a change kept after that settlement, and the
-//! maintenance ends only on the word of the run that opened the window, or
-//! of any run when none did. That proof is kept first; the keeper is told
-//! to let agents in again, and the maintenance is forgotten only once it
-//! did, or no keeper is there to hold them.
+//! its way is never done; so are its stop and start. Only then is Atlas VM
+//! asked to turn the window's input off, under a change kept after that
+//! settlement, and the maintenance ends only on the word of the run that
+//! opened the window, of any run when none did, or of a later run that
+//! turned its own window's input off and says every earlier run's VM, the
+//! opener's among them, is gone. That proof is kept first; the keeper is
+//! told to let agents in again, and the maintenance is forgotten only once
+//! it did, or no keeper is there to hold them.
 //!
 //! Every phase goes on from its record when asked again: a change kept and
 //! not answered is sent again under the same ID, which Atlas VM's ledger
 //! answers from its record, so no window is opened twice.
+mod power;
+mod proof;
+
 use super::Kept;
 use crate::{
     client::{Client, Leftovers},
@@ -56,6 +69,9 @@ use std::{
 /// How long Atlas VM is given to answer a window change, the outcome it
 /// is followed by included.
 const ANSWERING: Duration = Duration::from_secs(60);
+/// How long Atlas VM is given to stop or start the VM and confirm it: it
+/// gives the guest a minute to shut down before it stops it outright.
+const POWERING: Duration = Duration::from_secs(180);
 /// How often a change whose reply was lost is looked at again.
 const EVERY: Duration = Duration::from_secs(1);
 /// How long Atlas VM is given to answer a read.
@@ -83,13 +99,16 @@ pub struct Maintain {
 ///
 /// # Errors
 ///
-/// Refuses another desktop, a restart, a VM not added, being removed or
-/// handed over, and without the person's grant; a begin on a VM that is
-/// not running, whose guest runs or cannot say whether it runs work agents
-/// started, beside a pending change, or whose window Atlas VM refused to
-/// open; an end whose window Atlas VM did not confirm takes no input, or
-/// confirmed only by another run than the one that opened it. Fails when
-/// a record cannot be kept. Each says what is kept and what to run.
+/// Refuses another desktop, a VM not added, being removed or handed over,
+/// and without the person's grant; a begin on a VM neither confirmed
+/// running nor stopped, whose guest runs or cannot say whether it runs work
+/// agents started without a restart, beside a pending change without a
+/// restart, not confirmed stopped or running after Atlas VM stopped or
+/// started it, or whose stop, start or window Atlas VM refused; an end
+/// whose window Atlas VM did not confirm takes no input, or confirmed only
+/// by another run than the one that opened it while that run's VM is not
+/// said gone. Fails when a record cannot be kept. Each says what is kept
+/// and what to run.
 pub fn maintain(client: &Client, asked: Maintain, say: &dyn Fn(&str)) -> Result<Value> {
     Maintainer::of(client, Patience::REAL)?.run(asked, &person, say)
 }
@@ -106,21 +125,25 @@ pub(in crate::vm) fn maintained_by(
 ) -> Result<Value> {
     let patience = Patience {
         within,
+        powering: within,
         every: Duration::from_millis(50),
     };
     Maintainer::of(client, patience)?.run(asked, grants, say)
 }
 
-/// How long a window change is waited for, and how often it is looked at.
+/// How long a window change, and a stop or start of the VM, is waited
+/// for, and how often each is looked at.
 #[derive(Clone, Copy, Debug)]
 struct Patience {
     within: Duration,
+    powering: Duration,
     every: Duration,
 }
 
 impl Patience {
     const REAL: Self = Self {
         within: ANSWERING,
+        powering: POWERING,
         every: EVERY,
     };
 }
@@ -133,16 +156,30 @@ fn person(operation: &grant::Operation) -> Result<Token> {
 
 /// What a window change asked of Atlas VM came to.
 enum Asked {
-    /// Atlas VM's own word, with the run that did it.
+    /// Atlas VM's own word, with the run that did it and the run that
+    /// answered.
     Came {
         outcome: Outcome,
         by: Option<String>,
+        answering: Option<String>,
     },
     /// Its only submission was not taken, for this reason: nothing was
     /// begun.
     NotTaken(String),
     /// Not known yet.
     Unknown,
+}
+
+impl Asked {
+    /// What Atlas VM's `reply` says the change came to, naming the runs;
+    /// none while it does not say.
+    fn came(reply: Reply) -> Option<Self> {
+        Some(Self::Came {
+            outcome: reply.outcome?,
+            by: reply.by,
+            answering: reply.incarnation.map(|incarnation| incarnation.id),
+        })
+    }
 }
 
 /// How the VM's keeper is reached.
@@ -232,65 +269,63 @@ impl Maintainer {
         grants: &impl Fn(&grant::Operation) -> Result<Token>,
         say: &dyn Fn(&str),
     ) -> Result<Value> {
-        if asked.restart {
-            return Err(Error::new(
-                Code::Usage,
-                format!(
-                    "Restarting {} for maintenance comes in a later Atlas. Wait for the work \
-                     there to end, then run atlas desktop maintain {} again.",
-                    self.name, self.name
-                ),
-            ));
-        }
         if asked.end {
             self.end(grants, say)
         } else {
-            self.begin(grants, say)
+            self.begin(asked.restart, grants, say)
         }
     }
 
-    /// Begin the maintenance, or go on with one begun and not yet open.
+    /// Begin the maintenance, the VM stopped and started again first when
+    /// `restart`, or go on with one begun and not yet open.
     fn begin(
         &self,
+        restart: bool,
         grants: &impl Fn(&grant::Operation) -> Result<Token>,
         say: &dyn Fn(&str),
     ) -> Result<Value> {
         let record = self.created()?;
-        let going_on = match Kept::of(record.maintenance.clone()) {
+        // The maintenance the person is asked to go on with, if any: the
+        // grant holds for that one alone, with its restart as the card said.
+        let (first, restart) = match Kept::of(record.maintenance.clone()) {
             Kept::On(maintenance) if maintenance.phase == Phase::Open => {
                 return Ok(self.opened(&maintenance, true));
             }
-            Kept::On(_) => true,
+            Kept::On(maintenance) => (Some(maintenance.change), maintenance.restart),
             Kept::Ending(_) => return Err(self.ending()),
-            Kept::None | Kept::Unreadable => false,
+            Kept::None | Kept::Unreadable => (None, restart),
         };
+        let going_on = first.is_some();
         // Refused before the person is asked, and judged again once held.
         if !going_on {
-            self.quiet()?;
-            self.controller
-                .require_known()
-                .map_err(|error| self.beside(error))?;
+            self.first_phase(restart)?;
+            if !restart {
+                self.controller
+                    .require_known()
+                    .map_err(|error| self.beside(error))?;
+            }
         }
         say(&format!(
             "Asking you in Atlas.app to allow opening the window of the VM \u{201c}{}\u{201d} \
              for maintenance.",
             self.name
         ));
-        let change = grants(&self.operation(&record, false))?;
+        let change = grants(&self.operation(&record, false, restart))?;
         let admitted = self.lifecycle.admit()?;
         let _hold = hold_in(&self.vms, &self.vm, &admitted)?.ok_or_else(|| self.busy(false))?;
-        let _exclusion = self.exclusion(going_on)?;
+        let _exclusion = self.exclusion(going_on || restart, false)?;
         // Looked at again under both: a removal, a handover or another
         // maintenance begun meanwhile is seen now.
         let mut record = self.created()?;
         let mut maintenance = match (record.maintenance.clone(), going_on) {
             (None, false) => {
-                self.quiet()?;
                 let maintenance = Maintenance {
                     change,
-                    phase: Phase::Holding,
-                    restart: false,
+                    phase: self.first_phase(restart)?,
+                    restart,
                     since_ms: atlas_core::time::now_ms(),
+                    stop: None,
+                    start: None,
                     open: None,
                     close: None,
                     opened_by: None,
@@ -301,12 +336,21 @@ impl Maintainer {
                 self.lifecycle.keep_record(&record)?;
                 maintenance
             }
+            (Some(kept), true)
+                if Some(&kept.change) != first.as_ref() || kept.restart != restart =>
+            {
+                return Err(self.changed_meanwhile(false));
+            }
             (Some(maintenance), true) if maintenance.phase == Phase::Open => {
                 return Ok(self.opened(&maintenance, true));
             }
             (Some(maintenance), true) if !maintenance.ending() => maintenance,
+            (None, true) => return Err(self.changed_meanwhile(false)),
             _ => return Err(self.busy(false)),
         };
+        if matches!(maintenance.phase, Phase::Stopping | Phase::Starting) {
+            self.powered(&mut record, &mut maintenance, say)?;
+        }
         say(&format!(
             "Holding every agent's work on {} until you end it.",
             self.name
@@ -328,6 +372,7 @@ impl Maintainer {
             Asked::Came {
                 outcome: Outcome::Done,
                 by,
+                ..
             } => {
                 maintenance.phase = Phase::Open;
                 maintenance.opened_by = by;
@@ -389,16 +434,16 @@ impl Maintainer {
                 "Asking you in Atlas.app to allow ending maintenance of the VM \u{201c}{}\u{201d}.",
                 self.name
             ));
-            grants(&self.operation(&record, true))?;
+            grants(&self.operation(&record, true, false))?;
         }
         let admitted = self.lifecycle.admit()?;
         let _hold = hold_in(&self.vms, &self.vm, &admitted)?.ok_or_else(|| self.busy(true))?;
-        let _exclusion = self.exclusion(true)?;
+        let _exclusion = self.exclusion(true, true)?;
         let mut record = self.recorded()?;
         let mut maintenance = match record.maintenance.clone() {
             Some(kept) if kept.change == first.change && (!going_on || kept.ending()) => kept,
             None if !going_on => return self.none_kept(),
-            _ => return Err(self.changed_meanwhile()),
+            _ => return Err(self.changed_meanwhile(true)),
         };
         if maintenance.ended.is_none() {
             let settled = maintenance.settled;
@@ -409,71 +454,20 @@ impl Maintainer {
             if !settled {
                 self.settle(&mut record, &mut maintenance)?;
             }
-            let close = maintenance.close.clone().unwrap_or_else(Token::new);
-            maintenance.close = Some(close.clone());
+            let ended = self.closed(&mut record, &mut maintenance, say)?;
+            // Kept before anything of the maintenance goes.
+            maintenance.ended = Some(ended);
             record.maintenance = Some(maintenance.clone());
             self.lifecycle.keep_record(&record)?;
-            say(&format!(
-                "Asking Atlas VM to turn off {}'s window.",
-                self.name
-            ));
-            let claim = self.claim(&close)?;
-            let window = Operation::Window {
-                change: close.clone(),
-                input: false,
-            };
-            let uncertain = record.sent(&close).is_some();
-            match self.ask(&mut record, &window, uncertain)? {
-                Asked::Came {
-                    outcome: Outcome::Done,
-                    by,
-                } => {
-                    self.clear(&close, claim)?;
-                    let by = match (&maintenance.opened_by, by) {
-                        (Some(opened), Some(by)) if *opened == by => by,
-                        (None, Some(by)) => by,
-                        _ => return Err(self.another_run()),
-                    };
-                    maintenance.ended = Some(Ended { by, close });
-                    record.maintenance = Some(maintenance.clone());
-                    self.lifecycle.keep_record(&record)?;
-                }
-                Asked::Came {
-                    outcome: Outcome::Refused { reason },
-                    ..
-                }
-                | Asked::NotTaken(reason) => {
-                    self.clear(&close, claim)?;
-                    // The next end asks under a change of its own.
-                    maintenance.close = None;
-                    record.maintenance = Some(maintenance);
-                    self.lifecycle.keep_record(&record)?;
-                    return Err(Error::new(
-                        Code::State,
-                        format!(
-                            "Atlas VM could not turn off {}'s window: {reason}",
-                            self.name
-                        ),
-                    )
-                    .with("next", json!(self.again(true))));
-                }
-                // Left pending, its claim kept, for the next end.
-                Asked::Unknown => {
-                    return Err(Error::new(
-                        Code::NotReady,
-                        format!(
-                            "Atlas VM, which runs {}, is not answering, so its window may still \
-                             take your input; agents wait. {}",
-                            self.name,
-                            self.again(true)
-                        ),
-                    ));
-                }
-            }
         }
-        for change in [&maintenance.open, &maintenance.close]
-            .into_iter()
-            .flatten()
+        for change in [
+            &maintenance.stop,
+            &maintenance.start,
+            &maintenance.open,
+            &maintenance.close,
+        ]
+        .into_iter()
+        .flatten()
         {
             self.controller
                 .clear_known_within(change.as_str(), CLEARING)
@@ -509,27 +503,114 @@ impl Maintainer {
         self.lifecycle.keep_record(&record)?;
         Ok(
             json!({"ok": true, "desktop": self.name, "maintenance": "none",
-            "input": "off", "change": maintenance.change}),
+            "input": "off", "change": maintenance.change, "ended": maintenance.ended}),
         )
     }
 
-    /// Settle `maintenance`'s window-on for good, under Closing: Atlas VM
-    /// answers what it came to, and voids it when it never saw it, so one
-    /// still on its way is never done. Its opener is then known, or there
-    /// is none, and a window-off kept before is never its end's proof.
+    /// Ask Atlas VM to turn off the window's input under the change kept
+    /// for it, or a new one, until a run whose word ends `maintenance`
+    /// confirmed it: that proof. A window-off done by a run gone since is
+    /// asked once more, of the run answering now, under a change of its own.
+    fn closed(
+        &self,
+        record: &mut Record,
+        maintenance: &mut Maintenance,
+        say: &dyn Fn(&str),
+    ) -> Result<Ended> {
+        for _ in 0..2 {
+            let close = maintenance.close.get_or_insert_with(Token::new).clone();
+            self.keep(record, maintenance)?;
+            say(&format!(
+                "Asking Atlas VM to turn off {}'s window.",
+                self.name
+            ));
+            let claim = self.claim(&close)?;
+            let window = Operation::Window {
+                change: close.clone(),
+                input: false,
+            };
+            let uncertain = record.sent(&close).is_some();
+            match self.ask(record, &window, uncertain)? {
+                Asked::Came {
+                    outcome: Outcome::Done,
+                    by,
+                    answering,
+                } => {
+                    self.clear(&close, claim)?;
+                    if let Some(ended) =
+                        self.proof(maintenance, &close, by, answering.as_deref())?
+                    {
+                        return Ok(ended);
+                    }
+                    maintenance.close = None;
+                }
+                Asked::Came {
+                    outcome: Outcome::Refused { reason },
+                    ..
+                }
+                | Asked::NotTaken(reason) => {
+                    self.clear(&close, claim)?;
+                    // The next end asks under a change of its own.
+                    maintenance.close = None;
+                    self.keep(record, maintenance)?;
+                    return Err(Error::new(
+                        Code::State,
+                        format!(
+                            "Atlas VM could not turn off {}'s window: {reason}",
+                            self.name
+                        ),
+                    )
+                    .with("next", json!(self.again(true))));
+                }
+                // Left pending, its claim kept, for the next end.
+                Asked::Unknown => return Err(self.not_answering()),
+            }
+        }
+        self.keep(record, maintenance)?;
+        Err(self.another_run())
+    }
+
+    /// Why an end waits on an Atlas VM that does not answer.
+    fn not_answering(&self) -> Error {
+        Error::new(
+            Code::NotReady,
+            format!(
+                "Atlas VM, which runs {}, is not answering, so its window may still take your \
+                 input; agents wait. {}",
+                self.name,
+                self.again(true)
+            ),
+        )
+    }
+
+    /// Settle every change of `maintenance` for good, under Closing: Atlas
+    /// VM answers what each came to, and voids each it never saw, so one
+    /// still on its way is never done. Its stop and start are then Atlas
+    /// VM's no more, and its window-on's opener is known, or there is none,
+    /// so a window-off kept before is never its end's proof.
     fn settle(&self, record: &mut Record, maintenance: &mut Maintenance) -> Result<()> {
-        if let Some(open) = maintenance.open.clone() {
+        let kept = [&maintenance.stop, &maintenance.start, &maintenance.open];
+        if kept.iter().any(|change| change.is_some()) {
             let hello = self.runner().read_within(&Operation::Hello, READING);
             match hello {
                 Ok(reply) if reply.hello.as_ref().is_some_and(|hello| hello.can("void")) => {}
                 Ok(reply) if reply.ok => return Err(self.older()),
-                Ok(_) | Err(_) => return Err(self.not_settled()),
+                Ok(_) | Err(_) => return Err(self.not_answering()),
             }
-            let voided = self.voided(&open)?;
+        }
+        if let Some(stop) = &maintenance.stop {
+            self.voided(stop, &format!("the request to stop {}", self.name))?;
+        }
+        if let Some(start) = &maintenance.start {
+            self.voided(start, &format!("the request to start {}", self.name))?;
+        }
+        if let Some(open) = maintenance.open.clone() {
+            let request = format!("the request to open {}'s window", self.name);
+            let voided = self.voided(&open, &request)?;
             maintenance.opened_by = match (voided.outcome, voided.by) {
                 (Some(Outcome::Done), Some(by)) => Some(by),
                 (Some(Outcome::Refused { .. }), _) => None,
-                _ => return Err(self.not_settled()),
+                _ => return Err(self.not_settled(&request)),
             };
         }
         maintenance.settled = true;
@@ -538,22 +619,22 @@ impl Maintainer {
         self.lifecycle.keep_record(record)
     }
 
-    /// Atlas VM's answer to a void of `open`, asked until it says what
-    /// `open` came to, or the patience runs out.
-    fn voided(&self, open: &Token) -> Result<Reply> {
+    /// Atlas VM's answer to a void of `change`, `request` in words, asked
+    /// until it says what `change` came to, or the patience runs out.
+    fn voided(&self, change: &Token, request: &str) -> Result<Reply> {
         let runner = self.runner();
         let deadline = Instant::now() + self.patience.within;
         loop {
             self.controller.interrupt().check()?;
-            if let Ok(reply) = runner.read_within(&Operation::Void(open.clone()), READING)
+            if let Ok(reply) = runner.read_within(&Operation::Void(change.clone()), READING)
                 && reply.ok
-                && reply.change.as_ref() == Some(open)
+                && reply.change.as_ref() == Some(change)
                 && reply.outcome.is_some()
             {
                 return Ok(reply);
             }
             if Instant::now() + self.patience.every > deadline {
-                return Err(self.not_settled());
+                return Err(self.not_settled(request));
             }
             std::thread::sleep(self.patience.every);
         }
@@ -615,41 +696,40 @@ impl Maintainer {
         })
     }
 
-    /// The grant a begin, or with `end` an end, asks of the person.
-    fn operation(&self, record: &Record, end: bool) -> grant::Operation {
+    /// The grant a begin, or with `end` an end, asks of the person, the VM
+    /// stopped and started again first when `restart`.
+    fn operation(&self, record: &Record, end: bool, restart: bool) -> grant::Operation {
         grant::Operation {
             kind: Kind::Maintain,
             vm: self.vm.clone(),
             name: self.name.clone(),
             settings: record.settings.clone(),
             cancel: false,
-            restart: false,
+            restart,
             end,
         }
     }
 
-    /// Refuse a begin unless the VM is confirmed running and its guest says
-    /// no work agents started runs there.
-    fn quiet(&self) -> Result<()> {
+    /// The phase a new begin starts at, the VM stopped and started again
+    /// first when `restart`: a VM confirmed stopped runs nothing and is
+    /// started; a running one is stopped first when `restart`, else only
+    /// while its guest says no work agents started runs there.
+    fn first_phase(&self, restart: bool) -> Result<Phase> {
         let power = self.runner().read_within(&Operation::State, READING);
         match power {
             Ok(reply) if reply.ok && reply.confirmed == Some(true) => match reply.power {
-                Some(Power::Running) => {}
-                Some(Power::Stopped) => {
-                    return Err(Error::new(
-                        Code::NotReady,
-                        format!(
-                            "{name} is stopped, so its window cannot open yet. Start it with a \
-                             command that needs it, such as atlas --desktop {name} run -- \
-                             /usr/bin/true, then run atlas desktop maintain {name} again.",
-                            name = self.name
-                        ),
-                    ));
-                }
-                _ => return Err(self.not_running_yet()),
+                Some(Power::Running) if restart => Ok(Phase::Stopping),
+                Some(Power::Running) => self.quiet().map(|()| Phase::Holding),
+                Some(Power::Stopped) => Ok(Phase::Starting),
+                _ => Err(self.not_running_yet()),
             },
-            Ok(_) | Err(_) => return Err(self.not_running_yet()),
+            Ok(_) | Err(_) => Err(self.not_running_yet()),
         }
+    }
+
+    /// Refuse a begin unless the running VM's guest says no work agents
+    /// started runs there.
+    fn quiet(&self) -> Result<()> {
         let read = json!({"op": "read", "request": {"op": "leftovers"},
             "deadline_ms": ASKING.as_millis()});
         let keeper = match &self.keeper {
@@ -689,8 +769,8 @@ impl Maintainer {
         Error::new(
             Code::NotReady,
             format!(
-                "Atlas VM cannot tell yet whether {} runs, so its window is not opened. Run \
-                 atlas desktop maintain {} again in a moment.",
+                "Atlas VM cannot tell yet whether {} runs or is stopped, so its window is not \
+                 opened. Run atlas desktop maintain {} again in a moment.",
                 self.name, self.name
             ),
         )
@@ -753,13 +833,15 @@ impl Maintainer {
     }
 
     /// The VM's exclusion: for a new begin beside nothing pending, else
-    /// whatever is, as Atlas VM's own claims stay pending until it answers.
-    fn exclusion(&self, any: bool) -> Result<Ownership> {
+    /// whatever is, as Atlas VM's own claims stay pending until it answers,
+    /// and so do the guest's on a restart. Refused busy in the words of an
+    /// end when `end`, else of a begin.
+    fn exclusion(&self, any: bool, end: bool) -> Result<Ownership> {
         let controller = self.controller.clone().waiting(Duration::ZERO);
         if any {
             return controller.acquire_for_executor().map_err(|error| {
                 if error.code == Code::Busy {
-                    self.busy(true)
+                    self.busy(end)
                 } else {
                     error
                 }
@@ -813,8 +895,7 @@ impl Maintainer {
             })
     }
 
-    /// Clear the claim on the window change `change`, which Atlas VM
-    /// answered.
+    /// Clear the claim on the change `change`, which Atlas VM answered.
     fn clear(&self, change: &Token, claim: Pending) -> Result<()> {
         self.controller
             .clear_known_within(change.as_str(), CLEARING)
@@ -822,8 +903,8 @@ impl Maintainer {
                 Error::new(
                     Code::State,
                     format!(
-                        "Atlas VM answered {}'s window change, but its pending claim could not \
-                         be cleared, so it is kept: {}",
+                        "Atlas VM answered a change of {}, but its pending claim could not be \
+                         cleared, so it is kept: {}",
                         self.name, error.error
                     ),
                 )
@@ -832,20 +913,31 @@ impl Maintainer {
         Ok(())
     }
 
-    /// Ask Atlas VM for the window change `operation`, kept in `record`
-    /// before it is sent, and follow it until Atlas VM keeps an outcome for
-    /// it or the patience runs out. `uncertain` when it may have been sent
+    /// Ask Atlas VM for the change `operation`, kept in `record` before it
+    /// is sent, and follow it until Atlas VM keeps an outcome for it or the
+    /// patience for a window change runs out. `uncertain` when it may have been sent
     /// before. A lost reply is followed by what Atlas VM says it came to,
     /// and the very same change is sent again when Atlas VM never heard of
     /// it. A refusal unkept is taken as the change's only while nothing
     /// else may have sent it.
     fn ask(&self, record: &mut Record, operation: &Operation, uncertain: bool) -> Result<Asked> {
+        self.ask_within(record, operation, uncertain, self.patience.within)
+    }
+
+    /// [`Self::ask`], followed for `within`.
+    fn ask_within(
+        &self,
+        record: &mut Record,
+        operation: &Operation,
+        uncertain: bool,
+        within: Duration,
+    ) -> Result<Asked> {
         let change = operation
             .change()
             .cloned()
-            .ok_or_else(|| Error::new(Code::BadRequest, "A read is not a window change."))?;
+            .ok_or_else(|| Error::new(Code::BadRequest, "A read is not a change of the VM."))?;
         let runner = self.runner();
-        let deadline = Instant::now() + self.patience.within;
+        let deadline = Instant::now() + within;
         let mut uncertain = uncertain;
         let mut asking = true;
         loop {
@@ -861,11 +953,8 @@ impl Maintainer {
                 );
                 match answer {
                     Ok(reply) if reply.ok => {
-                        if let Some(outcome) = reply.outcome {
-                            return Ok(Asked::Came {
-                                outcome,
-                                by: reply.by,
-                            });
+                        if let Some(came) = Asked::came(reply) {
+                            return Ok(came);
                         }
                         uncertain = true;
                     }
@@ -885,13 +974,9 @@ impl Maintainer {
             std::thread::sleep(self.patience.every);
             match runner.read_within(&Operation::Outcome(change.clone()), READING) {
                 Ok(reply) if reply.ok && reply.change.as_ref() == Some(&change) => {
-                    match (reply.outcome, reply.pending) {
-                        (Some(outcome), _) => {
-                            return Ok(Asked::Came {
-                                outcome,
-                                by: reply.by,
-                            });
-                        }
+                    let pending = reply.pending;
+                    match (Asked::came(reply), pending) {
+                        (Some(came), _) => return Ok(came),
                         (None, Some(true)) => {}
                         (None, _) => asking = true,
                     }
@@ -905,11 +990,30 @@ impl Maintainer {
         Runner::in_vms(&self.vms, &self.vm)
     }
 
+    /// Keep `maintenance` in `record`.
+    fn keep(&self, record: &mut Record, maintenance: &Maintenance) -> Result<()> {
+        record.maintenance = Some(maintenance.clone());
+        self.lifecycle.keep_record(record)
+    }
+
     /// What a begin answers once the window takes the person's input.
+    /// A restart's says too when a change it left alone is still pending:
+    /// the guest's own, which maintenance never clears.
     fn opened(&self, maintenance: &Maintenance, already: bool) -> Value {
-        json!({"ok": true, "desktop": self.name, "maintenance": "on", "window": "open",
-            "change": maintenance.change, "already": already,
-            "next": format!("End it with atlas desktop maintain {} --end.", self.name)})
+        let mut opened = json!({"ok": true, "desktop": self.name, "maintenance": "on",
+            "window": "open", "change": maintenance.change, "already": already,
+            "next": format!("End it with atlas desktop maintain {} --end.", self.name)});
+        let left = self
+            .controller
+            .pending()
+            .is_ok_and(|pending| !pending.is_empty());
+        if maintenance.restart && left {
+            opened["pending"] = json!(format!(
+                "A change on {} is still pending; Atlas settles it once {} answers.",
+                self.name, self.name
+            ));
+        }
+        opened
     }
 
     /// Why a begin is refused while the maintenance ends.
@@ -937,15 +1041,21 @@ impl Maintainer {
         )
     }
 
-    /// Why an end goes on with no maintenance the person allowed ending.
-    fn changed_meanwhile(&self) -> Error {
+    /// Why a begin, or with `end` an end, goes on with no maintenance the
+    /// person allowed it for.
+    fn changed_meanwhile(&self, end: bool) -> Error {
+        let (waited, needs) = if end {
+            ("end", "ending it")
+        } else {
+            ("begin", "opening its window")
+        };
         Error::new(
             Code::Denied,
             format!(
-                "{}'s maintenance changed while this end waited, so ending it needs your grant \
-                 again; nothing was asked of it. {}",
+                "{}'s maintenance changed while this {waited} waited, so {needs} needs your \
+                 grant again; nothing was asked of it. {}",
                 self.name,
-                self.again(true)
+                self.again(end)
             ),
         )
     }
@@ -963,13 +1073,14 @@ impl Maintainer {
         )
     }
 
-    /// Why an end waits on a window-on whose outcome is not known yet.
-    fn not_settled(&self) -> Error {
+    /// Why an end waits on `request`, a change of the maintenance whose
+    /// outcome is not known yet.
+    fn not_settled(&self, request: &str) -> Error {
         Error::new(
             Code::NotReady,
             format!(
-                "Atlas VM has not said what the request to open {}'s window came to, so it may \
-                 still take your input; agents wait. {}",
+                "Atlas VM has not said what {request} came to, so {}'s window may still take \
+                 your input; agents wait. {}",
                 self.name,
                 self.again(true)
             ),

@@ -297,12 +297,19 @@ pub(super) fn desktop_added(value: &Value) -> String {
 pub(super) fn desktop_maintained(value: &Value) -> String {
     let name = text::printable(value["desktop"].as_str().unwrap_or("the VM")).into_owned();
     if value["maintenance"] == "on" {
-        return format!(
+        let mut lines = vec![format!(
             "{} The window of the VM \u{201c}{name}\u{201d} takes your keyboard and mouse; \
-             agents wait.\n  {}",
-            style::ok(),
+             agents wait.",
+            style::ok()
+        )];
+        if let Some(pending) = value["pending"].as_str() {
+            lines.push(format!("  {}", text::printable(pending)));
+        }
+        lines.push(format!(
+            "  {}",
             style::dim(text::printable(value["next"].as_str().unwrap_or_default()))
-        );
+        ));
+        return lines.join("\n");
     }
     if value["already"] == true {
         return format!(

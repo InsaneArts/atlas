@@ -383,6 +383,8 @@ pub fn under_maintenance(
         phase,
         restart: false,
         since_ms: atlas_core::time::now_ms(),
+        stop: None,
+        start: None,
         open: None,
         close: None,
         opened_by: None,

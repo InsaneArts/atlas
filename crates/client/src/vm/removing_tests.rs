@@ -888,3 +888,41 @@ fn a_kept_path_that_cannot_be_looked_at_keeps_the_record_and_only_one_truly_gone
     assert_eq!(record.kept, [inside]);
     assert_eq!(world.names(), ["work"]);
 }
+
+#[test]
+fn a_removal_of_a_vm_under_maintenance_closes_its_window_with_the_vm() {
+    let world = World::new();
+    world.write_settings(&format!(
+        "default = \"second-login\"\n{SECOND_LOGIN}{}",
+        vm_entry("work", WORK)
+    ));
+    world.vm("work", WORK, State::Created, true);
+    crate::test_support::under_maintenance(
+        world.home.path(),
+        &id(WORK),
+        crate::vm::lifecycle::record::Phase::Open,
+    );
+    world.runner_forgets();
+
+    let (removed, _) = world.remove("work");
+
+    assert_eq!(removed.unwrap()["removed"]["id"], WORK);
+    let seen = world.seen.borrow();
+    assert!(
+        seen[0]
+            .as_ref()
+            .is_some_and(|record| record.maintenance.is_some()),
+        "removed as it was, under maintenance"
+    );
+    let asked = world.fake.asked.lock().unwrap().clone();
+    assert!(
+        asked.iter().any(|asked| asked["op"] == "forget"),
+        "Atlas VM stops the VM, its window with it: {asked:?}"
+    );
+    assert!(
+        asked.iter().all(|asked| asked["op"] != "window"),
+        "no window change of its own: {asked:?}"
+    );
+    assert_eq!(world.record(WORK), None, "no maintenance left behind");
+    assert!(!world.vms.folder(&id(WORK)).exists());
+}

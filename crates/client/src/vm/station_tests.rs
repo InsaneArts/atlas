@@ -141,7 +141,7 @@ fn a_socket_this_test_listens_on_is_not_atlas_vm_and_is_never_trusted() {
         ..atlas_core::launchd::Loaded::default()
     });
 
-    let refused = trusted_with(&vms, &system, signed_vm, &desktop()).unwrap_err();
+    let refused = trusted_with(&vms, &system, signed_vm, &desktop(), "work").unwrap_err();
 
     assert!(
         matches!(
@@ -153,8 +153,13 @@ fn a_socket_this_test_listens_on_is_not_atlas_vm_and_is_never_trusted() {
         ),
         "{refused:?}"
     );
-    let error = refused.into_error(&desktop());
+    let error = refused.into_error("work");
     assert_eq!(error.code, Code::Identity);
+    assert!(
+        error.error.starts_with("work was not dialled: "),
+        "named by its name: {}",
+        error.error
+    );
     assert!(
         error.error.contains(&Untrusted::NotAtlasVm.to_string()),
         "{}",
@@ -170,7 +175,8 @@ fn a_vm_folder_made_shared_is_refused_and_stays_refused_until_its_facts_change()
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
     let system = Fake::new();
 
-    let Err(Refused::Untrusted { why, facts }) = trusted_with(&vms, &system, signed_vm, &desktop())
+    let Err(Refused::Untrusted { why, facts }) =
+        trusted_with(&vms, &system, signed_vm, &desktop(), "work")
     else {
         panic!("a shared folder was trusted");
     };
@@ -201,4 +207,26 @@ fn a_socket_made_again_or_another_runner_is_a_change_of_facts() {
 
     assert_ne!(before, remade);
     assert_ne!(remade, restarted);
+}
+
+#[test]
+fn a_station_socket_nothing_answers_on_is_said_unreached_by_the_vms_name() {
+    let (_home, vms) = short_home();
+    let station = vms.folder(&desktop()).join("station");
+    // Bound and gone: the socket is there, and nothing listens on it.
+    drop(std::os::unix::net::UnixListener::bind(&station).unwrap());
+    let system = Fake::new();
+    *system.job.lock().unwrap() = Some(atlas_core::launchd::Loaded {
+        pid: Some(std::process::id()),
+        ..atlas_core::launchd::Loaded::default()
+    });
+
+    let refused = trusted_with(&vms, &system, signed_vm, &desktop(), "work").unwrap_err();
+
+    let Refused::Failed(error) = refused else {
+        panic!("not a failure to reach it: {refused:?}");
+    };
+    assert_eq!(error.code, Code::Transport);
+    assert_eq!(error.error, "Could not reach work.");
+    assert!(!error.error.contains(desktop().as_str()));
 }

@@ -158,11 +158,11 @@ fn read<T: DeserializeOwned>(path: &Path, what: &str) -> Result<Option<T>> {
         .map_err(|error| unreadable().with_source(error))
 }
 
-/// Keep `value` at `path`, written whole beside it, renamed, and its
-/// folder written through.
+/// Keep `value` at `path`, in the lifecycle's own folder: written whole
+/// beside it, renamed, and its folder written through, so it never reads as
+/// missing once kept.
 fn keep<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    atlas_core::files::save_private(path, &serde_json::to_vec(value)?)?;
-    sync_parent(path)
+    atlas_core::files::write_durable(path, &serde_json::to_vec(value)?, 0o600)
 }
 
 /// Make `value` at `path` only while nothing is there: whether it was made.

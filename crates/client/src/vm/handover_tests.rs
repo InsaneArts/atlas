@@ -805,3 +805,31 @@ fn an_update_and_a_handover_are_refused_while_an_uninstalls_vm_phase_is_under_wa
     }
     assert!(alone.is_ok(), "an update with no VM touches none");
 }
+
+#[test]
+fn a_handover_leaves_a_vms_maintenance_as_it_is() {
+    let folder = tempfile::tempdir().unwrap();
+    let desk = desk(folder.path());
+    let standing = Standing::new(&desk.folder);
+    let lifecycle = Lifecycle::under(folder.path());
+    crate::test_support::under_maintenance(
+        folder.path(),
+        &vm(),
+        crate::vm::lifecycle::record::Phase::Open,
+    );
+    let before = lifecycle.record(&vm()).unwrap().unwrap();
+
+    let handed = handed(
+        &standing,
+        &desk,
+        &admitted(folder.path()),
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+
+    assert_eq!(handed["handed"], true, "{handed}");
+    let after = lifecycle.record(&vm()).unwrap().unwrap();
+    assert_eq!(after.maintenance, before.maintenance);
+    assert_eq!(after, before, "nothing of the VM's lifecycle touched");
+}

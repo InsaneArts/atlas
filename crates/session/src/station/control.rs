@@ -228,10 +228,7 @@ where
         tokio::time::timeout(OPENING, opening).await.map_err(|_| {
             Error::new(
                 Code::Transport,
-                format!(
-                    "Desktop {} did not open its control connection in time.",
-                    desktop.as_str()
-                ),
+                "The desktop did not open its control connection in time.",
             )
         })??;
     let control::Hello {

@@ -187,6 +187,7 @@ impl Fixture {
     async fn pair(&self) -> Result<Paired> {
         pair(&Pairing {
             vm: &self.guest.standin.desktop,
+            name: "work",
             dial: &self.guest,
             own: &self.own,
             enrolments: self.enrolments.clone(),

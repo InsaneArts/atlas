@@ -9,24 +9,24 @@ use std::{
 };
 
 /// How long a test gives a window change.
-const WITHIN: Duration = Duration::from_secs(10);
+pub(super) const WITHIN: Duration = Duration::from_secs(10);
 
-const BEGIN: Maintain = Maintain {
+pub(super) const BEGIN: Maintain = Maintain {
     end: false,
     restart: false,
 };
-const END: Maintain = Maintain {
+pub(super) const END: Maintain = Maintain {
     end: true,
     restart: false,
 };
 
-fn tempdir() -> tempfile::TempDir {
+pub(super) fn tempdir() -> tempfile::TempDir {
     tempfile::Builder::new().tempdir_in("/tmp").unwrap()
 }
 
 /// A VM client, its keeper and Atlas VM stood in for in `directory`: the VM
 /// runs, and its guest says no work agents started runs there.
-fn quiet_vm(directory: &Path) -> (Client, ScriptedKeeper) {
+pub(super) fn quiet_vm(directory: &Path) -> (Client, ScriptedKeeper) {
     let (client, keeper) = vm_through_keeper(directory);
     *keeper.leftovers.lock().unwrap() = "none";
     (client, keeper)
@@ -34,11 +34,11 @@ fn quiet_vm(directory: &Path) -> (Client, ScriptedKeeper) {
 
 /// The person as a test has them: every grant asked of them, kept.
 #[derive(Clone, Default)]
-struct Person(Arc<Mutex<Vec<grant::Operation>>>);
+pub(super) struct Person(Arc<Mutex<Vec<grant::Operation>>>);
 
 impl Person {
     /// Allowing whatever is asked.
-    fn allowing(&self) -> impl Fn(&grant::Operation) -> Result<Token> + Send + 'static {
+    pub(super) fn allowing(&self) -> impl Fn(&grant::Operation) -> Result<Token> + Send + 'static {
         let asked = self.0.clone();
         move |operation| {
             asked.lock().unwrap().push(operation.clone());
@@ -47,7 +47,7 @@ impl Person {
     }
 
     /// Refusing whatever is asked.
-    fn refusing(&self) -> impl Fn(&grant::Operation) -> Result<Token> + Send + 'static {
+    pub(super) fn refusing(&self) -> impl Fn(&grant::Operation) -> Result<Token> + Send + 'static {
         let asked = self.0.clone();
         move |operation| {
             asked.lock().unwrap().push(operation.clone());
@@ -58,14 +58,14 @@ impl Person {
         }
     }
 
-    fn asked(&self) -> Vec<grant::Operation> {
+    pub(super) fn asked(&self) -> Vec<grant::Operation> {
         self.0.lock().unwrap().clone()
     }
 }
 
 /// What `client`'s maintenance came to, as the person `asked`, each
 /// window change waited for `within`, each step said to `say`.
-async fn asked_saying(
+pub(super) async fn asked_saying(
     client: &Client,
     asked: Maintain,
     within: Duration,
@@ -78,7 +78,7 @@ async fn asked_saying(
         .unwrap()
 }
 
-async fn asked_within(
+pub(super) async fn asked_within(
     client: &Client,
     asked: Maintain,
     within: Duration,
@@ -87,7 +87,7 @@ async fn asked_within(
     asked_saying(client, asked, within, grants, |_| {}).await
 }
 
-async fn asked(
+pub(super) async fn asked(
     client: &Client,
     asked: Maintain,
     grants: impl Fn(&grant::Operation) -> Result<Token> + Send + 'static,
@@ -95,23 +95,23 @@ async fn asked(
     asked_within(client, asked, WITHIN, grants).await
 }
 
-fn lifecycle(client: &Client) -> &Lifecycle {
+pub(super) fn lifecycle(client: &Client) -> &Lifecycle {
     client.lifecycle.as_ref().unwrap()
 }
 
-fn record(client: &Client) -> Record {
+pub(super) fn record(client: &Client) -> Record {
     lifecycle(client)
         .record(&client.desktop().id())
         .unwrap()
         .unwrap()
 }
 
-fn maintenance(client: &Client) -> Option<Maintenance> {
+pub(super) fn maintenance(client: &Client) -> Option<Maintenance> {
     record(client).maintenance
 }
 
 /// Every window change kept as sent in `client`'s VM's record.
-fn windows_sent(client: &Client) -> Vec<Token> {
+pub(super) fn windows_sent(client: &Client) -> Vec<Token> {
     record(client)
         .operations
         .into_iter()
@@ -120,12 +120,12 @@ fn windows_sent(client: &Client) -> Vec<Token> {
         .collect()
 }
 
-fn pending(client: &Client) -> Vec<String> {
+pub(super) fn pending(client: &Client) -> Vec<String> {
     client.controller.pending().unwrap()
 }
 
 /// Wait, within ten seconds, until `holds`.
-async fn until(what: &str, holds: impl Fn() -> bool) {
+pub(super) async fn until(what: &str, holds: impl Fn() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !holds() {
         assert!(tokio::time::Instant::now() < deadline, "never {what}");
@@ -240,22 +240,6 @@ async fn maintenance_is_refused_while_the_guest_cannot_say_whether_work_runs_wit
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stopped_vm_is_not_opened_for_maintenance_and_the_person_is_told_how_to_start_it() {
-    let dir = tempdir();
-    let (client, keeper) = quiet_vm(dir.path());
-    keeper.runner.set_power("stopped");
-    let person = Person::default();
-
-    let refused = asked(&client, BEGIN, person.allowing()).await.unwrap_err();
-
-    assert_eq!(refused.code, Code::NotReady, "{refused:?}");
-    assert!(refused.error.starts_with("work is stopped"), "{refused:?}");
-    assert!(person.asked().is_empty());
-    assert!(keeper.runner.asked_for("start").is_empty(), "never started");
-    assert!(maintenance(&client).is_none());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn maintenance_is_refused_beside_a_change_whose_outcome_is_unknown() {
     let dir = tempdir();
     let (client, keeper) = quiet_vm(dir.path());
@@ -285,27 +269,6 @@ async fn maintenance_is_refused_beside_a_change_whose_outcome_is_unknown() {
         vec![unknown.to_string()],
         "left as it was"
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_restart_is_refused_until_a_later_atlas_and_asks_nothing() {
-    let dir = tempdir();
-    let (client, keeper) = quiet_vm(dir.path());
-    let person = Person::default();
-    let restart = Maintain {
-        end: false,
-        restart: true,
-    };
-
-    let refused = asked(&client, restart, person.allowing())
-        .await
-        .unwrap_err();
-
-    assert_eq!(refused.code, Code::Usage, "{refused:?}");
-    assert!(refused.error.contains("later Atlas"), "{refused:?}");
-    assert!(person.asked().is_empty());
-    assert!(keeper.asked.lock().unwrap().is_empty());
-    assert!(keeper.runner.asked_for("state").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -495,7 +458,7 @@ async fn a_keeper_that_does_not_say_every_agent_stopped_leaves_the_maintenance_h
 
 /// Where a begin or an end was cut short.
 #[derive(Clone, Copy, Debug)]
-enum Boundary {
+pub(super) enum Boundary {
     /// Its window change kept, not yet claimed.
     Kept,
     /// Claimed as Atlas VM's, not yet sent.
@@ -506,7 +469,7 @@ enum Boundary {
     Answered,
 }
 
-const BOUNDARIES: [Boundary; 4] = [
+pub(super) const BOUNDARIES: [Boundary; 4] = [
     Boundary::Kept,
     Boundary::Claimed,
     Boundary::Sent,
@@ -516,7 +479,7 @@ const BOUNDARIES: [Boundary; 4] = [
 /// Leave `client`'s VM's maintenance at `phase` as one cut short at
 /// `boundary` in its window change, `input` on or off, left it: that
 /// change.
-fn cut_short(client: &Client, boundary: Boundary, phase: Phase, input: bool) -> Token {
+pub(super) fn cut_short(client: &Client, boundary: Boundary, phase: Phase, input: bool) -> Token {
     let lifecycle = lifecycle(client);
     let id = client.desktop().id();
     let mut record = record(client);
@@ -815,15 +778,15 @@ async fn a_window_on_never_sent_needs_a_window_off_from_any_run_to_end() {
 
 /// Every line `say` was told, kept.
 #[derive(Clone, Default)]
-struct Said(Arc<Mutex<Vec<String>>>);
+pub(super) struct Said(Arc<Mutex<Vec<String>>>);
 
 impl Said {
-    fn saying(&self) -> impl Fn(&str) + Send + 'static {
+    pub(super) fn saying(&self) -> impl Fn(&str) + Send + 'static {
         let said = self.0.clone();
         move |line| said.lock().unwrap().push(line.to_owned())
     }
 
-    fn lines(&self) -> Vec<String> {
+    pub(super) fn lines(&self) -> Vec<String> {
         self.0.lock().unwrap().clone()
     }
 }

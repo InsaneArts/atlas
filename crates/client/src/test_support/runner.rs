@@ -5,9 +5,11 @@
 //! asked came to is answered with neither an outcome nor a pending. A test
 //! sets the VM's power, and how a start goes: how long it takes, whether it
 //! is refused and why, and whether its reply is lost after it is done. Its
-//! window opens and closes as a window change asks, each reply naming the
-//! run that began the change, and a test runs Atlas VM again as another
-//! run, its window gone with the earlier one.
+//! window opens and closes as a window change asks, and goes with the VM
+//! as it stops or starts, each reply naming the run that began the change.
+//! A test runs Atlas VM again as another run, its window gone with the
+//! earlier one, and says whether that run sees every earlier run's VM gone:
+//! an earlier run's window change it left is settled only once it does.
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -79,6 +81,14 @@ struct Known {
     on_window: Option<Looking>,
     /// Whether it is of a build before it could void a change.
     older: bool,
+    /// What a state says of whether every earlier run's VM is gone; none
+    /// from a build before it said so.
+    earlier_gone: Option<bool>,
+    /// Whether a state says the VM's power is not seen just now.
+    blind: bool,
+    /// Whether a stop leaves the VM stopping, its outcome pending until the
+    /// VM's power tells.
+    stalls_stop: bool,
 }
 
 /// Atlas VM, stood in for on a socket.
@@ -104,6 +114,7 @@ impl StandInRunner {
         let known = Arc::new(Mutex::new(Known {
             power: power.to_owned(),
             run: FIRST_RUN.to_owned(),
+            earlier_gone: Some(true),
             ..Known::default()
         }));
         let done = Arc::new(AtomicBool::new(false));
@@ -212,11 +223,30 @@ impl StandInRunner {
     }
 
     /// Run Atlas VM again as the run `run`: its earlier run's window goes
-    /// with it, and what that run kept stays kept as that run's.
+    /// with it, and what that run kept stays kept as that run's. It cannot
+    /// yet tell that earlier run's VM gone.
     pub fn runs_again_as(&self, run: &str) {
         let mut known = self.known();
         run.clone_into(&mut known.run);
         known.window = false;
+        known.earlier_gone = Some(false);
+    }
+
+    /// Say in each state whether every earlier run's VM is gone, or, with
+    /// none, nothing of it, as a build before it said so.
+    pub fn saying_earlier_gone(&self, gone: Option<bool>) {
+        self.known().earlier_gone = gone;
+    }
+
+    /// Say each power as not seen just now, or as seen again.
+    pub fn blind(&self, blind: bool) {
+        self.known().blind = blind;
+    }
+
+    /// Leave the VM stopping at each stop, its outcome pending until the
+    /// VM's power tells.
+    pub fn stalling_stop(&self) {
+        self.known().stalls_stop = true;
     }
 
     /// Every change begun, by its ID, in order: each was done once.
@@ -238,6 +268,16 @@ impl StandInRunner {
                 outcome,
             },
         );
+    }
+
+    /// The operation of every request it was asked, in order.
+    #[must_use]
+    pub fn ops(&self) -> Vec<String> {
+        self.known()
+            .asked
+            .iter()
+            .map(|asked| asked["op"].as_str().unwrap_or_default().to_owned())
+            .collect()
     }
 
     /// Every request of operation `op` it was asked, in order.
@@ -350,8 +390,11 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
             let mut reply = served("state", &run);
             let known = lock();
             reply["power"] = json!(known.power);
-            reply["confirmed"] = json!(true);
+            reply["confirmed"] = json!(!known.blind);
             reply["window"] = json!(if known.window { "open" } else { "closed" });
+            if let Some(gone) = known.earlier_gone {
+                reply["earlierGone"] = json!(gone);
+            }
             reply
         }
         "outcome" => {
@@ -395,11 +438,17 @@ fn voided(known: &mut Known, change: &str, run: &str) -> Value {
 
 /// `reply`, answering for `kept`: one left pending is looked at again first
 /// and settled when the VM's power tells, unless a change is being done.
+/// An earlier run's window change is settled only once this run sees every
+/// earlier run's VM gone: no window of theirs is left, so on is refused and
+/// off holds.
 fn answered(known: &mut Known, change: &str, kept: &Kept, reply: &mut Value) {
     let mut outcome = kept.outcome.clone();
     reply["by"] = json!(kept.run);
     if outcome.is_none() && !known.busy {
-        outcome = seen(&kept.op, known);
+        outcome = match kept.op.as_str() {
+            "window-on" | "window-off" if kept.run != known.run => recovered(&kept.op, known),
+            op => seen(op, known),
+        };
         if let Some(entry) = known.ledger.get_mut(change) {
             entry.outcome.clone_from(&outcome);
         }
@@ -408,6 +457,19 @@ fn answered(known: &mut Known, change: &str, kept: &Kept, reply: &mut Value) {
     if let Some(outcome) = outcome {
         reply["outcome"] = outcome;
     }
+}
+
+/// What an earlier run's window change `op` came to, as Atlas VM's
+/// recovery tells it: none until every earlier run's VM is seen gone.
+fn recovered(op: &str, known: &Known) -> Option<Value> {
+    if known.earlier_gone != Some(true) {
+        return None;
+    }
+    Some(if op == "window-on" {
+        json!({"state": "refused", "reason": "Its runner went; its window is closed."})
+    } else {
+        json!({"state": "done"})
+    })
 }
 
 /// What the change `op` came to as `known` has the VM now; none while that
@@ -465,8 +527,18 @@ fn change_asked(known: &Mutex<Known>, request: &Value, change: &str) -> Option<V
             },
         );
         reply["by"] = json!(run);
+        if op == "start" || op == "stop" {
+            // Its window goes as the VM starts or stops.
+            known.window = false;
+        }
         if op == "start" {
             known.power = "starting".to_owned();
+        }
+        if op == "stop" && known.stalls_stop {
+            known.power = "stopping".to_owned();
+            known.busy = false;
+            reply["pending"] = json!(true);
+            return Some(reply);
         }
         known.takes
     };

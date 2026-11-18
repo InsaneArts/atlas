@@ -170,6 +170,20 @@ fn a_state_says_its_window_and_one_this_build_does_not_know_is_unknown() {
 }
 
 #[test]
+fn a_state_says_whether_every_earlier_runs_vm_is_gone_and_one_from_an_older_build_cannot_tell() {
+    let gone = |said: Value| {
+        serde_json::from_value::<Reply>(json!({"ok": true, "op": "state", "earlierGone": said}))
+            .unwrap()
+            .earlier_gone
+    };
+
+    assert_eq!(gone(json!(true)), Some(true));
+    assert_eq!(gone(json!(false)), Some(false));
+    let older: Reply = serde_json::from_value(json!({"ok": true, "op": "state"})).unwrap();
+    assert_eq!(older.earlier_gone, None, "a runner from before it said so");
+}
+
+#[test]
 fn a_change_is_kept_in_the_record_before_it_is_sent() {
     let (home_folder, vms) = home();
     let fake = Fake::new();

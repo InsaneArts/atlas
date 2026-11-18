@@ -23,6 +23,8 @@ public actor ControlService {
   /// The lock this run serves under, once it recovered: its proof that
   /// every earlier run has ended.
   private var lock: RunnerLock?
+  /// Whether this run settled what earlier runs left, holding its lock.
+  private var hasRecovered = false
   /// What tells the station whether the window was opened between two of
   /// its states.
   private var fence = PictureFence()
@@ -67,6 +69,9 @@ public actor ControlService {
       let shown = await host.windowOpen()
       reply.window = shown || fence.mayHaveOpened(since: reading) ? .open : .closed
       reply.fence = reading.value
+      // Only a run that recovered holding the lock knows every earlier run
+      // ended, so only it can say their VMs, and windows, are gone.
+      reply.earlierGone = hasRecovered ? await host.earlierGone() : false
       return reply
     case .outcome(let change):
       let record: ChangeRecord?
@@ -189,6 +194,7 @@ public actor ControlService {
       guard let outcome = await recovered(record.operation, vmGone: vmGone) else { continue }
       try? ledger.settle(record, as: outcome)
     }
+    hasRecovered = true
   }
 
   private func change(_ operation: ControlOperation) async -> ControlReply {
