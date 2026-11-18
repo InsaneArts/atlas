@@ -32,6 +32,10 @@ const ASKING: Duration = Duration::from_secs(10);
 /// The most changes one recovery asks after; the rest wait for the next.
 const ROUND: usize = 64;
 
+/// The longest an asked recovery waits to read the station's pending
+/// changes, which another process may hold for a moment.
+const READING: Duration = Duration::from_secs(2);
+
 /// What one recovery came to: the changes whose claims it cleared, and
 /// the claims it left pending.
 #[derive(Debug, Default)]
@@ -42,12 +46,13 @@ pub(super) struct Recovered {
 
 impl Keeper {
     /// Recover in `session` the changes its guest carries out whose claim
-    /// no live process holds: none when the station's pending changes
-    /// cannot be read now, which recovers nothing.
-    pub(super) async fn recovered(&self, session: &Session) -> Option<Recovered> {
+    /// no live process holds, waiting at most `wait` to read the station's
+    /// pending changes: none when they cannot be read by then, which
+    /// recovers nothing.
+    pub(super) async fn recovered(&self, session: &Session, wait: Duration) -> Option<Recovered> {
         let _one = self.recovering.lock().await;
         let stop = self.stop.clone();
-        let unheld = super::blocking(move || stop.unheld_by(Executor::Guest, Duration::ZERO))
+        let unheld = super::blocking(move || stop.unheld_by(Executor::Guest, wait))
             .await
             .ok()?;
         let declared = session.control.declared();
@@ -83,7 +88,8 @@ impl Keeper {
     /// Recover in `session` now, then every [`RECOVERING`], for its life.
     pub(super) async fn recovering(&self, session: &Session) {
         loop {
-            let _ = self.recovered(session).await;
+            // Never waiting: a busy round leaves it to the next.
+            let _ = self.recovered(session, Duration::ZERO).await;
             tokio::time::sleep(RECOVERING).await;
         }
     }
@@ -130,7 +136,7 @@ pub(super) async fn asked(keeper: &Keeper, generation: u64, deadline: Duration) 
         Err(error) => return serde_json::to_value(&error).unwrap_or_default(),
     };
     let refused = |code, why: &str| serde_json::to_value(Error::new(code, why)).unwrap_or_default();
-    match tokio::time::timeout(deadline, keeper.recovered(&session)).await {
+    match tokio::time::timeout(deadline, keeper.recovered(&session, READING)).await {
         Ok(Some(recovered)) => json!({
             "ok": true,
             "op": "recover",

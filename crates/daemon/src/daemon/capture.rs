@@ -2,13 +2,36 @@ use super::{crop, facts};
 use atlas_core::screen::windows::{Dock, Window};
 use atlas_core::{
     error::{Code, Error, Result},
-    protocol::{Crop, Policy, Region, Request, failure, refused},
+    protocol::{Crop, Policy, Region, Request, SessionPin, failure, refused},
     session::{Console, InputEpoch},
 };
 use atlas_native::native::capture;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde_json::{Map, Value, json};
+
+/// Whether one picture's capture has begun or was cancelled: it begins only
+/// by claiming its start before the handler observes cancellation or
+/// departure, and once either happened it never begins.
+#[derive(Default)]
+pub(super) struct Start(std::sync::atomic::AtomicBool);
+
+impl Start {
+    /// Whether the capture may begin now; it is then begun.
+    pub(super) fn claim(&self) -> bool {
+        self.decide()
+    }
+
+    /// Cancel it: whether it had not begun, and now never will.
+    pub(super) fn cancel(&self) -> bool {
+        self.decide()
+    }
+
+    /// Whether this call came first, claim or cancel: only the first decides.
+    fn decide(&self) -> bool {
+        !self.0.swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+}
 
 /// Real display capture in the daemon, synthetic pixels in contract tests.
 pub(super) type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
@@ -29,6 +52,9 @@ pub(super) struct Screen {
     /// login, on it for a machine of its own.
     pub(super) console: Console,
     pub(super) session: fn() -> Result<Value>,
+    /// Whether this process may record the screen: what a machine
+    /// desktop's pictures wait for.
+    pub(super) recording: fn() -> bool,
 }
 
 impl Screen {
@@ -115,33 +141,69 @@ fn crop_keys(
     keys
 }
 
+/// What ends a picture's work at once: a machine's lane cancelled or its
+/// generation retired; never, for the helper's socket.
+pub(super) type Ending = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
 /// A screenshot as its reply, taken through `source`: never while a live
-/// source's stop is unconfirmed, and with no change of the live source
-/// between that check and the capture.
+/// source's stop is unconfirmed, with no change of the live source between
+/// that check and the capture, and only of the session and display `pin`
+/// names, when it names one, as the capture sees them. Once `ended`, one
+/// not begun never begins, and one begun is waited for.
 pub(super) async fn screenshot(
     screen: &Screen,
     source: std::sync::Arc<capture::source::Source>,
     max_dimension: Option<u32>,
     per_point: bool,
     crop: Option<Crop>,
+    pin: Option<SessionPin>,
+    ended: Ending,
 ) -> Value {
     let screen = *screen;
     let epoch = match screen.epoch() {
         Ok(epoch) => epoch,
         Err(error) => return refused(error),
     };
+    // The session admitted is the one captured: one seen otherwise now is
+    // never taken in its place.
+    if pin.is_some_and(|pin| {
+        pin.security_session_id != epoch.security_session_id || pin.display_id != epoch.display_id
+    }) {
+        return refused(Error::session_changed());
+    }
     let policy = Request::Screenshot {
         max_dimension,
         per_point,
         crop,
+        pin,
     }
     .policy();
-    let taken = tokio::task::spawn_blocking(move || {
+    let start = std::sync::Arc::new(Start::default());
+    let claim = start.clone();
+    let mut taking = tokio::task::spawn_blocking(move || {
         source
-            .one_shot(|| take(screen, &epoch, policy, max_dimension, per_point, crop))
+            .one_shot(|| {
+                take(
+                    screen,
+                    &epoch,
+                    policy,
+                    max_dimension,
+                    per_point,
+                    crop,
+                    &claim,
+                )
+            })
             .unwrap_or_else(|error| Err(refused(error)))
-    })
-    .await;
+    });
+    let taken = tokio::select! {
+        taken = &mut taking => taken,
+        () = ended => {
+            if !start.cancel() {
+                let _ = taking.await;
+            }
+            return failure(Code::Cancelled, "The picture was no longer wanted");
+        }
+    };
     match taken {
         Ok(Ok((shot, off_display, cropped))) => {
             let mut reply = json!({
@@ -167,7 +229,7 @@ pub(super) async fn screenshot(
 type Taken = (capture::Shot, Vec<Value>, Option<Map<String, Value>>);
 
 /// Take the screenshot, with the console, session and display checked
-/// before and after.
+/// before and after, once it claims its `start`.
 fn take(
     screen: Screen,
     epoch: &InputEpoch,
@@ -175,9 +237,13 @@ fn take(
     max_dimension: Option<u32>,
     per_point: bool,
     crop: Option<Crop>,
+    start: &Start,
 ) -> std::result::Result<Taken, Value> {
     let validate = || screen.guard(epoch, policy);
     validate()?;
+    if !start.claim() {
+        return Err(failure(Code::Cancelled, "The picture was no longer wanted"));
+    }
 
     // One read of the window list serves the crop and the report of
     // windows off the display.

@@ -52,6 +52,10 @@ pub enum Why {
     Revoked,
     /// A daemon started after one that may have left work running.
     Restarted,
+    /// The daemon restarted to take Screen Recording, which only a new
+    /// process gets: saved before any agent is admitted again, so the
+    /// person, at the VM to grant it, resumes agents.
+    Recording,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

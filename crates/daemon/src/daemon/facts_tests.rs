@@ -241,6 +241,7 @@ fn itself() -> Itself {
         boot: Some("boot-1".to_owned()),
         virtual_machine: Some(true),
         build: Some("b1".to_owned()),
+        recording: true,
     }
 }
 
@@ -281,7 +282,7 @@ fn the_machine_hello_says_what_the_station_proves_it_by() {
 
 #[test]
 fn a_machine_finds_itself_in_this_boot_as_its_kernel_says() {
-    let found = Itself::now(Some("b1".to_owned()));
+    let found = Itself::now(Some("b1".to_owned()), false);
 
     assert_eq!(found.boot, atlas_core::process::boot().ok());
     assert_eq!(
@@ -289,6 +290,43 @@ fn a_machine_finds_itself_in_this_boot_as_its_kernel_says() {
         atlas_core::process::in_virtual_machine()
     );
     assert_eq!(found.build.as_deref(), Some("b1"));
+    assert!(!found.recording);
+}
+
+#[test]
+fn a_machine_that_may_not_record_says_why_its_pictures_wait_in_its_own_words() {
+    let declared = atlas_session::compatibility::Declared::ours(Vec::new());
+    let ready = || Input {
+        standing: Some("ready"),
+        failure: None,
+    };
+    let unrecorded = Itself {
+        recording: false,
+        ..itself()
+    };
+    let say = |itself: &Itself| {
+        machine_hello(
+            "Aqua",
+            &declared,
+            itself,
+            Posture::CLOSED,
+            ready(),
+            &clear(),
+            idle(),
+        )
+    };
+
+    let held = say(&unrecorded);
+    let recording = say(&itself());
+
+    assert_eq!(
+        held["capture"]["held"],
+        "Allow Atlas in Privacy & Security, Screen & System Audio Recording, in the VM's \
+         window: agents' pictures wait for it."
+    );
+    assert_eq!(held["permissions"]["screenCapture"], false);
+    assert_eq!(recording["capture"], json!({}), "nothing held");
+    assert_eq!(recording["permissions"]["screenCapture"], true);
 }
 
 /// A machine hello in every respect closed and ready, but `stop` and `work`.

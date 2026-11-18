@@ -31,7 +31,8 @@ pub struct LaneId(pub u64);
 pub enum LaneKind {
     /// A request that changes nothing.
     Read,
-    /// The pictures of the desktop's screen.
+    /// A picture of the desktop's screen, or a file read there: what sends
+    /// a lot, paced by the bulk credit.
     Picture,
     /// One mirrored connection, the guest's `connection` accepted on
     /// `endpoint`, carried both ways.

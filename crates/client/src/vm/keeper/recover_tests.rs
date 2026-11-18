@@ -304,3 +304,45 @@ async fn a_marker_held_once_the_outcome_is_asked_keeps_the_claim_and_leaves_noth
     assert_eq!(again["cleared"], json!([change]), "the next round: {again}");
     assert!(client.controller.pending().unwrap().is_empty());
 }
+
+/// Hold the station's marker lock of `serving` from now for `held`.
+fn marker_held_for(serving: &Serving, held: Duration) -> std::thread::JoinHandle<()> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(stop(serving).marker_lock_path())
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&file).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(held);
+        drop(file);
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_asked_recovery_waits_out_a_marker_held_for_a_moment_and_clears_what_its_guest_answered()
+{
+    let (serving, _saying, client, _directory) = proven().await;
+    let change = left_by_a_killed_command(&serving, Some(certain()));
+    let held = marker_held_for(&serving, Duration::from_millis(500));
+
+    let recovered = recover(&serving).await;
+
+    held.join().unwrap();
+    assert_eq!(recovered["ok"], true, "{recovered}");
+    assert_eq!(recovered["cleared"], json!([change]), "{recovered}");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_asked_recovery_whose_marker_stays_held_is_refused_busy_and_clears_nothing() {
+    let (serving, _saying, client, _directory) = proven().await;
+    let change = left_by_a_killed_command(&serving, Some(certain()));
+    let held = marker_held_for(&serving, Duration::from_secs(4));
+
+    let recovered = recover(&serving).await;
+
+    assert_eq!(recovered["code"], "busy", "{recovered}");
+    held.join().unwrap();
+    assert_eq!(client.controller.pending().unwrap(), [change.as_str()]);
+}

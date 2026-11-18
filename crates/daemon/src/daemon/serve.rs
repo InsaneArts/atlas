@@ -91,6 +91,9 @@ impl Outgoing for tokio::net::unix::OwnedWriteHalf {
 /// A lane of a session: its bulk credit, not a buffer, paces what it sends.
 impl<S: tokio::io::AsyncWrite + Unpin + Send> Outgoing for tokio::io::WriteHalf<S> {}
 
+/// A bulk lane's paced writer: its pump, not a buffer, paces what it sends.
+impl Outgoing for tokio::io::DuplexStream {}
+
 type Connections = HashMap<Id, watch::Receiver<ConnectionPhase>>;
 
 fn connection_outcome(
@@ -317,6 +320,7 @@ impl Daemon {
                 on_console,
                 console: Console::kept(),
                 session,
+                recording: capture::permitted,
             },
             restarting: Notify::new(),
             stopping: watch::Sender::new(false),
@@ -955,6 +959,56 @@ impl Gate {
 }
 
 impl Asker {
+    /// How long one picture's write may take: on a machine's lane, its
+    /// bulk credit paces it.
+    fn picture_write(&self) -> Duration {
+        if self.gate.is_some() {
+            stream::LANE_WRITE
+        } else {
+            stream::WRITE
+        }
+    }
+
+    /// What ends a picture's work at once: on a machine's lane, the lane
+    /// cancelled or its generation retired; never on the helper's socket.
+    fn ended(&self) -> super::capture::Ending {
+        match &self.gate {
+            Some(gate) => {
+                let (lanes, lane) = (gate.lanes.clone(), gate.lane);
+                Box::pin(async move { lanes.ended(lane).await })
+            }
+            None => Box::pin(std::future::pending()),
+        }
+    }
+
+    /// How a live or one-off frame goes on this connection.
+    fn picture_bound(&self) -> stream::Bound {
+        stream::Bound {
+            write: self.picture_write(),
+            ended: self.ended(),
+        }
+    }
+
+    /// The longest side of a live or one-off frame asked at `asked`: capped
+    /// on a machine's lane.
+    fn picture_side(&self, asked: u32) -> u32 {
+        if self.gate.is_some() {
+            asked.min(stream::LANE_SIDE)
+        } else {
+            asked
+        }
+    }
+
+    /// The longest side of a screenshot asked at `asked`, none for its
+    /// display's own: capped on a machine's lane, whatever was asked.
+    fn screenshot_side(&self, asked: Option<u32>) -> Option<u32> {
+        if self.gate.is_some() {
+            Some(asked.map_or(stream::LANE_SIDE, |asked| asked.min(stream::LANE_SIDE)))
+        } else {
+            asked
+        }
+    }
+
     /// The refusal of a change now, when its lane was cancelled or the
     /// generation it came in is over.
     fn refused_now(&self) -> Option<Value> {
@@ -988,7 +1042,9 @@ pub(super) async fn answer(
     );
     let (request, policy, remembering) = match admitted {
         Ok(admitted) => admitted,
-        Err((refusal, true)) => return stream::write_header(&mut writer, &refusal).await,
+        Err((refusal, true)) => {
+            return stream::write_header(&mut writer, &refusal, asker.picture_write()).await;
+        }
         Err((refusal, false)) => return write(&mut writer, &refusal).await,
     };
 
@@ -1008,9 +1064,13 @@ pub(super) async fn answer(
             max_dimension,
             pin,
             backend,
-        } => return stream::serve(daemon, reader, writer, max_dimension, pin, backend).await,
+        } => {
+            let (side, bound) = (asker.picture_side(max_dimension), asker.picture_bound());
+            return stream::serve(daemon, reader, writer, side, pin, backend, bound).await;
+        }
         Request::Frame { max_dimension, pin } => {
-            return stream::one(daemon, reader, writer, max_dimension, pin).await;
+            let (side, bound) = (asker.picture_side(max_dimension), asker.picture_bound());
+            return stream::one(daemon, reader, writer, side, pin, bound).await;
         }
         Request::SessionProof { challenge } => {
             proof::query(&daemon.proof_worker, &daemon.proof_starter, &challenge)
@@ -1065,13 +1125,16 @@ pub(super) async fn answer(
             max_dimension,
             per_point,
             crop,
+            pin,
         } => {
             screenshot(
                 &daemon.screen,
                 daemon.source.clone(),
-                max_dimension,
+                asker.screenshot_side(max_dimension),
                 per_point,
                 crop,
+                pin,
+                asker.ended(),
             )
             .await
         }
@@ -1741,6 +1804,13 @@ async fn serve_read(
         Ok(epoch) => epoch,
         Err(error) => return write(&mut writer, &refused(error)).await,
     };
+    // The session admitted is the one read in: one seen otherwise now is
+    // never read under in its place.
+    if request.pin.is_some_and(|pin| {
+        pin.security_session_id != epoch.security_session_id || pin.display_id != epoch.display_id
+    }) {
+        return write(&mut writer, &refused(Error::session_changed())).await;
+    }
 
     // Off screen, and in the session and display it was in when the
     // request came: asked by the worker before it reads and by the writer

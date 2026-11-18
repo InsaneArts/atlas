@@ -170,6 +170,25 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     )
 }
 
+/// [`write_atomic`], then the folder that holds `path` synced, so its new
+/// name, not only its contents, outlives a crash: a record that must never
+/// read as missing once it was kept.
+///
+/// # Errors
+///
+/// Returns the failure to write or place the file, or to sync its folder;
+/// the file may then be in place, or not.
+pub fn write_durable(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_atomic(path, bytes, mode)?;
+    let folder = path
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    File::open(folder)
+        .and_then(|folder| folder.sync_all())
+        .map_err(context("Sync the folder of", path))
+}
+
 /// [`write_atomic`] for a file only this account may read, making its
 /// missing folders private (0700) first.
 ///

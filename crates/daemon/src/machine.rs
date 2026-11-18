@@ -62,6 +62,7 @@ pub async fn open(desktop: DesktopId, secret: PathBuf, records: PathBuf) -> Resu
             changes: Arc::new(changes::Changes::new(changes, vault.clone())),
             stop: Arc::new(stop::Stop::new(records.join("stop.json"), vault.clone())),
             updates: Arc::new(update::Updates::new(records.join("updates.json"), vault)),
+            recording: records.join("recording.json"),
         })
     })
     .await

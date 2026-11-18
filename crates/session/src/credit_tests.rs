@@ -222,3 +222,31 @@ async fn many_lanes_each_sending_less_than_a_chunk_never_stall_each_other() {
             .unwrap();
     }
 }
+
+#[tokio::test]
+async fn a_wait_for_room_on_a_lane_ends_once_it_owes_no_more_than_asked() {
+    let credit = Arc::new(Credit::default());
+    let (mut near, _far) = duplex(4 * CHUNK);
+    credit
+        .send(LANE, &mut near, &vec![0; 2 * CHUNK])
+        .await
+        .unwrap();
+    let waiting = {
+        let credit = credit.clone();
+        tokio::spawn(async move { credit.owing_at_most(LANE, CHUNK as u64).await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!waiting.is_finished(), "two chunks are owed");
+
+    assert_eq!(credit.owing(LANE), 2 * CHUNK as u64);
+
+    credit.returned(LANE, CHUNK as u64);
+
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("room once one chunk came back")
+        .unwrap();
+    assert_eq!(credit.owing(LANE), CHUNK as u64);
+    assert_eq!(credit.owing(LaneId(9)), 0);
+    credit.owing_at_most(LaneId(9), 0).await;
+}

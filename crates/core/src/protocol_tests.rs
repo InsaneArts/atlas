@@ -95,7 +95,8 @@ fn requests_parse_into_operations() {
         Ok(Request::Screenshot {
             max_dimension: Some(320),
             per_point: false,
-            crop: None
+            crop: None,
+            pin: None
         })
     );
     assert_eq!(
@@ -103,7 +104,8 @@ fn requests_parse_into_operations() {
         Ok(Request::Screenshot {
             max_dimension: None,
             per_point: false,
-            crop: None
+            crop: None,
+            pin: None
         })
     );
     assert_eq!(
@@ -156,6 +158,36 @@ fn a_read_may_name_the_session_it_is_for() {
             assert_eq!(refused(&line)["code"], "bad-request", "{session}");
         }
     }
+}
+
+#[test]
+fn a_screenshot_may_name_the_session_it_is_for_and_its_policy_pins_it() {
+    let pin = SessionPin {
+        security_session_id: 42,
+        display_id: 7,
+    };
+    let pinned =
+        parse(br#"{"op":"screenshot","session":{"securitySessionId":42,"displayId":7}}"#).unwrap();
+
+    assert_eq!(
+        pinned,
+        Request::Screenshot {
+            max_dimension: None,
+            per_point: false,
+            crop: None,
+            pin: Some(pin),
+        }
+    );
+    assert_eq!(pinned.policy().pin, Some(pin));
+    assert_eq!(
+        parse(br#"{"op":"screenshot"}"#).unwrap().policy().pin,
+        None,
+        "the helper's screenshot names none"
+    );
+    assert_eq!(
+        refused(r#"{"op":"screenshot","session":{"securitySessionId":42}}"#)["code"],
+        "bad-request"
+    );
 }
 
 #[test]
@@ -239,13 +271,7 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
         (json!({"op": "hello"}), false, false, false, "hello"),
         (json!({"op": "apps"}), false, true, false, "apps"),
         (json!({"op": "windows"}), true, true, false, "windows"),
-        (
-            json!({"op": "screenshot"}),
-            true,
-            false,
-            false,
-            "screenshot",
-        ),
+        (json!({"op": "screenshot"}), true, true, false, "screenshot"),
         (
             json!({"op": "read", "path": "x", "maxSize": 1}),
             true,
@@ -353,6 +379,7 @@ fn screenshots_parse_an_app_or_a_region() {
             max_dimension: None,
             per_point: false,
             crop,
+            pin: None,
         })
     };
 
@@ -378,7 +405,8 @@ fn screenshots_parse_an_app_or_a_region() {
         Ok(Request::Screenshot {
             max_dimension: Some(400),
             per_point: false,
-            crop: Some(Crop::App { pid: 7 })
+            crop: Some(Crop::App { pid: 7 }),
+            pin: None
         })
     );
     assert_eq!(
@@ -402,7 +430,8 @@ fn a_screenshot_may_ask_for_at_most_one_pixel_per_point() {
         Ok(Request::Screenshot {
             max_dimension: Some(1456),
             per_point: true,
-            crop: None
+            crop: None,
+            pin: None
         })
     );
     assert_eq!(
@@ -410,7 +439,8 @@ fn a_screenshot_may_ask_for_at_most_one_pixel_per_point() {
         Ok(Request::Screenshot {
             max_dimension: None,
             per_point: false,
-            crop: Some(Crop::App { pid: 7 })
+            crop: Some(Crop::App { pid: 7 }),
+            pin: None
         })
     );
     assert_eq!(
@@ -418,7 +448,8 @@ fn a_screenshot_may_ask_for_at_most_one_pixel_per_point() {
         Ok(Request::Screenshot {
             max_dimension: None,
             per_point: false,
-            crop: None
+            crop: None,
+            pin: None
         })
     );
     for line in [
@@ -715,6 +746,7 @@ fn screenshots_parse_one_window_or_an_apps_part_of_a_region_only_with_the_app() 
             max_dimension: None,
             per_point: false,
             crop: Some(crop),
+            pin: None,
         })
     };
     assert_eq!(

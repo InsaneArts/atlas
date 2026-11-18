@@ -1,6 +1,7 @@
 //! Readiness-driven RGB frames. There is no frame queue: a capture starts
 //! only after the controller has checked its independent session proof and
 //! sent READY. The next capture cannot start until delivery has completed.
+use super::super::capture::{Ending, Start};
 use super::Daemon;
 use super::{Reader, Writer};
 use atlas_core::{
@@ -13,17 +14,26 @@ use atlas_native::native::capture::{
     source::{Drain, Owner, Source},
 };
 use serde_json::{Value, json};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// A stalled terminal must not hold raw pixels waiting for later playback.
-const WRITE: Duration = Duration::from_millis(200);
+pub(super) const WRITE: Duration = Duration::from_millis(200);
+/// How long a picture's write may take on a machine's lane: its bytes wait
+/// for the session's bulk credit, a chunk at a time, not for a socket's
+/// buffer. The station's clock still judges how fresh a picture is.
+pub(super) const LANE_WRITE: Duration = Duration::from_secs(2);
+/// The longest side of a picture taken on a machine's lane, whose every
+/// byte crosses its session.
+pub(super) const LANE_SIDE: u32 = 1600;
+
+/// How a picture goes on the connection that asked for it: each write
+/// given up past `write`, and its work ended once `ended` completes, a
+/// capture not yet begun never beginning and one begun waited for.
+pub(super) struct Bound {
+    pub(super) write: Duration,
+    pub(super) ended: Ending,
+}
 /// The most send buffer one picture's frame asks for: the largest frame it
 /// can be, 1280 by 1280 pixels of three bytes, rounded up.
 const FRAME_ROOM: usize = 5 << 20;
@@ -140,10 +150,14 @@ fn stopped() -> Error {
 
 /// Header length, JSON header, then exactly width*height*3 bytes for a
 /// successful frame; failures have no pixel body. No image codec or base64.
-/// A header with nothing after it goes at once, sent on a connection that
-/// holds what it is given, as a session's lane does.
-pub(super) async fn write_header(out: &mut (impl AsyncWrite + Unpin), value: &Value) -> Result<()> {
-    tokio::time::timeout(WRITE, async {
+/// A header with nothing after it goes at once, within `write`, sent on a
+/// connection that holds what it is given, as a session's lane does.
+pub(super) async fn write_header(
+    out: &mut (impl AsyncWrite + Unpin),
+    value: &Value,
+    write: Duration,
+) -> Result<()> {
+    tokio::time::timeout(write, async {
         start_frame(out, value).await?;
         out.flush().await.map_err(Error::from)
     })
@@ -186,29 +200,6 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
         ));
     }
     Ok(proof)
-}
-
-/// Whether one frame's capture has begun or was cancelled: it begins only
-/// by claiming its start before the handler observes cancellation or departure, and once
-/// either happened it never begins.
-#[derive(Default)]
-struct Start(AtomicBool);
-
-impl Start {
-    /// Whether the capture may begin now; it is then begun.
-    fn claim(&self) -> bool {
-        self.decide()
-    }
-
-    /// Cancel it: whether it had not begun, and now never will.
-    fn cancel(&self) -> bool {
-        self.decide()
-    }
-
-    /// Whether this call came first, claim or cancel: only the first decides.
-    fn decide(&self) -> bool {
-        !self.0.swap(true, Ordering::SeqCst)
-    }
 }
 
 fn no_longer_wanted() -> Error {
@@ -271,14 +262,17 @@ fn capture(
 /// The client sends one byte to cancel it when its action will not wait
 /// longer, or leaves. Once the handler observes it, no capture begins; the cancel is
 /// answered only once none can, a capture already begun having ended, so
-/// the action goes on only after every capture for it.
+/// the action goes on only after every capture for it. Its connection's
+/// end, as `bound` says it, ends it the same way, unanswered.
 pub(super) async fn one(
     daemon: Arc<Daemon>,
     mut reader: Reader,
     mut writer: Writer,
     side: u32,
     pin: SessionPin,
+    bound: Bound,
 ) -> Result<()> {
+    let Bound { write, mut ended } = bound;
     let expected = match daemon.screen.epoch() {
         Ok(epoch)
             if epoch.security_session_id == pin.security_session_id
@@ -286,8 +280,8 @@ pub(super) async fn one(
         {
             epoch
         }
-        Ok(_) => return write_header(&mut writer, &refused(Error::session_changed())).await,
-        Err(error) => return write_header(&mut writer, &refused(error)).await,
+        Ok(_) => return write_header(&mut writer, &refused(Error::session_changed()), write).await,
+        Err(error) => return write_header(&mut writer, &refused(error), write).await,
     };
     let start = Arc::new(Start::default());
     let asked = std::time::Instant::now();
@@ -315,7 +309,13 @@ pub(super) async fn one(
             if !matches!(read, Ok(1)) {
                 return Ok(());
             }
-            return write_header(&mut writer, &refused(no_longer_wanted())).await;
+            return write_header(&mut writer, &refused(no_longer_wanted()), write).await;
+        }
+        () = &mut ended => {
+            if !start.cancel() {
+                let _ = capturing.await;
+            }
+            return Ok(());
         }
     }
     .unwrap_or_else(|_| Err(Error::new(Code::Capture, "The capture failed")));
@@ -323,22 +323,27 @@ pub(super) async fn one(
     let checked = captured.and_then(|captured| guard(&daemon, &expected).map(|_| captured));
     let (shot, proof, _, _) = match checked {
         Ok(captured) => captured,
-        Err(error) => return write_header(&mut writer, &refused(error)).await,
+        Err(error) => return write_header(&mut writer, &refused(error), write).await,
     };
     let header = json!({"ok": true, "width": shot.width, "height": shot.height,
         "scale": shot.scale, "session": proof, "daemonPID": std::process::id()});
     // Room for the whole frame at once: its action waits for it.
     writer.make_room(shot.rgb.len().saturating_add(MAX_HEADER).min(FRAME_ROOM));
-    tokio::time::timeout(WRITE, async {
+    let delivered = tokio::time::timeout(write, async {
         start_frame(&mut writer, &header).await?;
         writer.write_all(&shot.rgb).await?;
         writer.flush().await?;
         Ok::<_, Error>(())
-    })
-    .await
-    .map_err(|_| stopped())?
+    });
+    tokio::select! {
+        delivery = delivered => delivery.map_err(|_| stopped())?,
+        () = ended => Ok(()),
+    }
 }
 
+/// Live frames, each captured once the client sends READY and written
+/// within `bound`'s deadline, header and pixels together, until the client
+/// leaves or `bound` says the connection ended.
 pub(super) async fn serve(
     daemon: Arc<Daemon>,
     mut reader: Reader,
@@ -346,7 +351,9 @@ pub(super) async fn serve(
     side: u32,
     pin: SessionPin,
     backend: CaptureBackend,
+    bound: Bound,
 ) -> Result<()> {
+    let Bound { write, mut ended } = bound;
     // Admission may first confirm an earlier native stop, which blocks. The
     // guard is made there, so an abandoned admission still gives the source
     // back.
@@ -361,10 +368,10 @@ pub(super) async fn serve(
     // once no capture of this connection can still be running.
     let producer = match admitted.await {
         Ok(Ok(producer)) => Arc::new(producer),
-        Ok(Err(error)) => return write_header(&mut writer, &refused(error)).await,
+        Ok(Err(error)) => return write_header(&mut writer, &refused(error), write).await,
         Err(_) => {
             let error = Error::new(Code::Capture, "The live capture could not start");
-            return write_header(&mut writer, &refused(error)).await;
+            return write_header(&mut writer, &refused(error), write).await;
         }
     };
     let initial = daemon.screen.epoch();
@@ -382,10 +389,11 @@ pub(super) async fn serve(
                     Code::SessionChanged,
                     "The helper changed before live capture",
                 )),
+                write,
             )
             .await;
         }
-        Err(error) => return write_header(&mut writer, &refused(error)).await,
+        Err(error) => return write_header(&mut writer, &refused(error), write).await,
     };
     // The controller waits for this before READY. Its request line and
     // readiness byte therefore cannot be coalesced and consumed together
@@ -394,6 +402,7 @@ pub(super) async fn serve(
         &mut writer,
         &json!({"ok": true, "stream": "rgb-stream-v1", "daemonPID": std::process::id(),
             "producerGeneration": producer.generation()}),
+        write,
     )
     .await?;
     let mut sequence = 0_u64;
@@ -402,6 +411,7 @@ pub(super) async fn serve(
         let mut ready = [0_u8; 1];
         tokio::select! {
             () = daemon.stopped() => return Ok(()),
+            () = &mut ended => return Ok(()),
             read = tokio::time::timeout(IDLE, reader.read_exact(&mut ready)) => {
                 if !matches!(read, Ok(Ok(_))) { return Ok(()); }
             }
@@ -433,18 +443,20 @@ pub(super) async fn serve(
                         "drained": true}),
                     Err(error) => refused(error),
                 };
-                return write_header(&mut writer, &reply).await;
+                return write_header(&mut writer, &reply, write).await;
             }
             _ => {
                 return write_header(
                     &mut writer,
                     &refused(Error::new(Code::BadRequest, "A live frame requires READY")),
+                    write,
                 )
                 .await;
             }
         }
         tokio::select! {
             () = daemon.stopped() => return Ok(()),
+            () = &mut ended => return Ok(()),
             _ = tokio::time::sleep_until(next) => {}
         }
         let capture_started = tokio::time::Instant::now();
@@ -452,31 +464,56 @@ pub(super) async fn serve(
         let worker_expected = expected.clone();
         let held = producer.clone();
         let asked = std::time::Instant::now();
+        let start = Arc::new(Start::default());
+        let claim = start.clone();
         // The frame holds the source's fence, so nothing that must run
         // between captures starts under it.
         let mut worker = tokio::task::spawn_blocking(move || {
             let _held = held;
             worker_daemon
                 .source
-                .frame(|| capture(&worker_daemon, &worker_expected, side, backend, None, asked))
+                .frame(|| {
+                    capture(
+                        &worker_daemon,
+                        &worker_expected,
+                        side,
+                        backend,
+                        Some(&claim),
+                        asked,
+                    )
+                })
                 .and_then(std::convert::identity)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is
-        // joined while still holding the source: no orphan producer.
+        // joined while still holding the source: no orphan producer. One
+        // not begun never begins, however the connection leaves.
         let mut extra = [0_u8; 1];
         let captured = tokio::select! {
-            () = daemon.stopped() => { let _ = worker.await; return Ok(()); }
-            _ = reader.read(&mut extra) => { let _ = worker.await; return Ok(()); }
+            () = daemon.stopped() => {
+                start.cancel();
+                let _ = worker.await;
+                return Ok(());
+            }
+            _ = reader.read(&mut extra) => {
+                start.cancel();
+                let _ = worker.await;
+                return Ok(());
+            }
+            () = &mut ended => {
+                start.cancel();
+                let _ = worker.await;
+                return Ok(());
+            }
             result = &mut worker => result.map_err(|_| Error::new(Code::Capture, "The live capture worker stopped"))?,
         };
         let (shot, _, source, capture_ms) = match captured {
             Ok(captured) => captured,
-            Err(error) => return write_header(&mut writer, &refused(error)).await,
+            Err(error) => return write_header(&mut writer, &refused(error), write).await,
         };
         let proof = match guard(&daemon, &expected) {
             Ok(proof) => proof,
-            Err(error) => return write_header(&mut writer, &refused(error)).await,
+            Err(error) => return write_header(&mut writer, &refused(error), write).await,
         };
         sequence = sequence
             .checked_add(1)
@@ -489,7 +526,7 @@ pub(super) async fn serve(
         }
         // One deadline covers both header and pixels. The next READY is
         // required before the producer creates another frame.
-        let delivered = tokio::time::timeout(WRITE, async {
+        let delivered = tokio::time::timeout(write, async {
             start_frame(&mut writer, &header).await?;
             writer.write_all(&shot.rgb).await?;
             writer.flush().await?;
@@ -497,6 +534,7 @@ pub(super) async fn serve(
         });
         tokio::select! {
             () = daemon.stopped() => return Ok(()),
+            () = &mut ended => return Ok(()),
             delivery = delivered => { delivery.map_err(|_| stopped())??; }
         }
         next = capture_started

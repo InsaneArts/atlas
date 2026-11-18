@@ -781,6 +781,10 @@ fn stopped_by_a_lost_session(hello: &mut Value) {
     hello["stop"] = json!({"state": "stopped", "why": "control-lost"});
 }
 
+fn stopped_to_take_screen_recording(hello: &mut Value) {
+    hello["stop"] = json!({"state": "stopped", "why": "recording"});
+}
+
 fn stop_not_known(hello: &mut Value) {
     hello["stop"] = json!({"state": "unknown"});
 }
@@ -788,11 +792,16 @@ fn stop_not_known(hello: &mut Value) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_vm_holding_agents_says_why_in_its_own_words_never_the_helpers() {
     let (serving, saying, client, _directory) = proven().await;
-    let cases: [(StopSaid, &str); 3] = [
+    let cases: [(StopSaid, &str); 4] = [
         (stopped_by_the_person, "The person stopped agents on work."),
         (
             stopped_by_a_lost_session,
             "work lost its session with this Mac, so it holds agents until the person resumes them",
+        ),
+        (
+            stopped_to_take_screen_recording,
+            "work's Atlas restarted to take Screen Recording, so it holds agents until the person \
+             resumes them",
         ),
         (stop_not_known, "work's own Stop cannot be read"),
     ];

@@ -24,7 +24,7 @@ use tokio::{
 /// The most bulk bytes on their way at once, across every lane.
 pub const BULK: u32 = 1 << 20;
 /// The most sent at once on one lane before credit is asked for again.
-const CHUNK: usize = 64 * 1024;
+pub const CHUNK: usize = 64 * 1024;
 
 /// The sending end's credit.
 #[derive(Debug)]
@@ -132,9 +132,20 @@ impl Credit {
     /// Completes once `lane` owes nothing: everything it sent was read. A
     /// wait dropped changes nothing.
     pub async fn repaid(&self, lane: LaneId) {
+        self.owing_at_most(lane, 0).await;
+    }
+
+    /// What `lane` owes now: sent and not yet read back.
+    pub fn owing(&self, lane: LaneId) -> u64 {
+        self.owed().get(&lane).copied().unwrap_or(0)
+    }
+
+    /// Completes once `lane` owes at most `bytes`: what keeps one lane from
+    /// having more than that on its way. A wait dropped changes nothing.
+    pub async fn owing_at_most(&self, lane: LaneId, bytes: u64) {
         loop {
             let repaying = self.repaying.notified();
-            if self.owed().get(&lane).is_none_or(|owing| *owing == 0) {
+            if self.owed().get(&lane).is_none_or(|owing| *owing <= bytes) {
                 return;
             }
             repaying.await;

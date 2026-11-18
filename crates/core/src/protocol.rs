@@ -306,6 +306,9 @@ requests! { request =>
         /// At most one pixel per display point of the area captured, too.
         per_point: bool,
         crop: Option<Crop>,
+        /// The session it was asked for: a machine desktop's is always
+        /// pinned, so a picture of another session is never given.
+        pin: Option<SessionPin>,
     } = Ok(Request::Screenshot {
         max_dimension: optional(&request["maxDimension"], |value| {
             whole(value, 1..=MAX_DIMENSION, "\"maxDimension\" must be 1–8192")
@@ -313,6 +316,7 @@ requests! { request =>
         .map(|dimension| dimension as u32),
         per_point: boolean(request, "perPoint")?,
         crop: crop(request)?,
+        pin: pin(request)?,
     }),
     "run" Run {
         argv: Vec<String>,
@@ -443,7 +447,7 @@ impl Request {
             Self::StreamDrainStatus { .. } => (Any, None, Read("stream-drain-status")),
             Self::Apps { pin } => (Any, *pin, Read("apps")),
             Self::Windows { pin, .. } => (Hidden, *pin, Read("windows")),
-            Self::Screenshot { .. } => (Hidden, None, Read("screenshot")),
+            Self::Screenshot { pin, .. } => (Hidden, *pin, Read("screenshot")),
             Self::Read(ReadRequest { pin, .. }) => (Hidden, *pin, Read("read")),
             Self::Run { pin, .. } => (Hidden, *pin, Mutation("run")),
             Self::Environment { pin, .. } => (Hidden, *pin, Mutation("environment")),

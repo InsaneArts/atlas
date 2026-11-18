@@ -107,6 +107,10 @@ fn connection_from(
             side,
             pin(),
             backend,
+            Bound {
+                write: WRITE,
+                ended: Box::pin(std::future::pending()),
+            },
         )),
     )
 }

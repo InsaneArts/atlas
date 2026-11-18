@@ -218,6 +218,7 @@ fn a_machine_guest_declares_exactly_these_names_in_this_order() {
             "jobs-v1",
             "updates-v1",
             "environment-v1",
+            "pictures-v1",
         ]
     );
 }

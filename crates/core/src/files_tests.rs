@@ -98,3 +98,28 @@ fn a_held_lock_is_refused_once_its_patience_runs_out() {
     fs2::FileExt::unlock(&first.0).unwrap();
     lock_within(&second, Lock::Exclusive, Duration::ZERO).expect("a free lock is taken at once");
 }
+
+#[test]
+fn a_durable_write_replaces_the_file_whole_with_its_mode_and_syncs_its_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("record.json");
+    std::fs::write(&path, b"before").unwrap();
+
+    super::write_durable(&path, b"after", 0o600).unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"after");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let left: Vec<_> = std::fs::read_dir(folder.path()).unwrap().collect();
+    assert_eq!(left.len(), 1, "no replacement left beside it");
+}
+
+#[test]
+fn a_durable_write_into_a_missing_folder_is_refused() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("missing").join("record.json");
+
+    assert!(super::write_durable(&path, b"kept", 0o600).is_err());
+    assert!(!path.exists());
+}

@@ -597,6 +597,9 @@ fn guest_held(name: &str, hello: &Value) -> Option<Error> {
             "{name}'s Atlas started again after work it began may have run on, so it holds agents \
              {resume}."
         ),
+        (Some("stopped"), Some("recording")) => format!(
+            "{name}'s Atlas restarted to take Screen Recording, so it holds agents {resume}."
+        ),
         (Some("stopped"), Some("revoked")) => {
             format!("{name}'s pairing with this Mac was revoked, so it holds agents.")
         }

@@ -918,7 +918,8 @@ fn nothing_is_captured_if_the_helper_comes_on_screen_while_the_worker_waits() {
                 (Request::Screenshot {
                     max_dimension: None,
                     per_point: false,
-                    crop: None
+                    crop: None,
+                    pin: None
                 })
                 .policy()
                 .allowed(Console::Off, true)
@@ -978,6 +979,81 @@ async fn a_capture_is_refused_when_the_display_epoch_changes() {
 }
 
 #[tokio::test]
+async fn a_pinned_screenshot_of_a_session_seen_otherwise_at_capture_is_refused_with_nothing_captured()
+ {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static READS: AtomicUsize = AtomicUsize::new(0);
+    static CAPTURES: AtomicUsize = AtomicUsize::new(0);
+    let daemon = Daemon::new(
+        "Aqua".into(),
+        |display, area, limit| {
+            CAPTURES.fetch_add(1, Ordering::SeqCst);
+            synthetic(display, area, limit)
+        },
+        || false,
+        || {
+            let mut proof = session()?;
+            // Admission sees the pinned display; the capture another.
+            if READS.fetch_add(1, Ordering::SeqCst) >= 1 {
+                proof["displayID"] = json!(8);
+            }
+            Ok(proof)
+        },
+    );
+
+    let reply = exchange(
+        Arc::new(daemon),
+        r#"{"op":"screenshot","session":{"securitySessionId":42,"displayId":7}}"#,
+    )
+    .await;
+
+    assert_eq!(
+        READS.load(Ordering::SeqCst),
+        2,
+        "admitted, then looked at once"
+    );
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 0);
+    assert_eq!(reply.len(), 1);
+    assert_eq!(reply[0]["code"], "session-changed", "{reply:?}");
+}
+
+#[tokio::test]
+async fn a_pinned_read_of_a_session_seen_otherwise_once_it_starts_is_refused_before_any_file_is_opened()
+ {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static READS: AtomicUsize = AtomicUsize::new(0);
+    let daemon = Daemon::new(
+        "Aqua".into(),
+        synthetic,
+        || false,
+        || {
+            let mut proof = session()?;
+            // Admission sees the pinned display; the read another.
+            if READS.fetch_add(1, Ordering::SeqCst) >= 1 {
+                proof["displayID"] = json!(8);
+            }
+            Ok(proof)
+        },
+    );
+
+    let reply = exchange(
+        Arc::new(daemon),
+        r#"{"op":"read","path":".zshrc","maxSize":1024,"session":{"securitySessionId":42,"displayId":7}}"#,
+    )
+    .await;
+
+    assert_eq!(
+        READS.load(Ordering::SeqCst),
+        2,
+        "admitted, then looked at once"
+    );
+    assert_eq!(reply.len(), 1, "no part was sent: {reply:?}");
+    assert_eq!(reply[0]["code"], "session-changed", "{reply:?}");
+}
+
+#[tokio::test]
 async fn pixels_are_discarded_if_the_helper_comes_on_screen_during_capture() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -999,7 +1075,8 @@ async fn pixels_are_discarded_if_the_helper_comes_on_screen_during_capture() {
             (Request::Screenshot {
                 max_dimension: None,
                 per_point: false,
-                crop: None
+                crop: None,
+                pin: None
             })
             .policy()
             .allowed(Console::Off, true)
@@ -1176,7 +1253,15 @@ async fn anonymous_captures_skip_routing_but_app_crops_still_read_the_dock() {
         DOCKS.store(0, Ordering::SeqCst);
         let reply = tokio::time::timeout(
             Duration::from_secs(5),
-            screenshot(&daemon.screen, daemon.source.clone(), None, false, crop),
+            screenshot(
+                &daemon.screen,
+                daemon.source.clone(),
+                None,
+                false,
+                crop,
+                None,
+                Box::pin(std::future::pending()),
+            ),
         )
         .await
         .unwrap();

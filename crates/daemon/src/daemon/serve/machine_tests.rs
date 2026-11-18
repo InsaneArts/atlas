@@ -34,6 +34,14 @@ fn records() -> Records {
     (folder, vault, changes)
 }
 
+/// Where a guest notes its Screen Recording, in a folder beside its change
+/// records, as its records folder holds them: never among them.
+fn recording_at(records: &tempfile::TempDir) -> std::path::PathBuf {
+    let folder = records.path().join("machine");
+    std::fs::create_dir_all(&folder).unwrap();
+    folder.join("recording.json")
+}
+
 /// A guest's Stop as pairing leaves it, beside its change records.
 fn stopping(records: &tempfile::TempDir, vault: &Arc<dyn Vault>) -> Arc<Stop<Arc<dyn Vault>>> {
     crate::machine::commitment::create(vault, crate::machine::stop::STORE).unwrap();
@@ -152,9 +160,28 @@ impl Served {
         input: Option<crate::machine::input::Input>,
         staging: bool,
     ) -> Self {
+        Self::built(records, input, staging, |_| {}).await
+    }
+
+    /// A guest serving with `records`, its screen as `seeing` makes it.
+    async fn seeing(records: Records, seeing: fn(&mut Daemon)) -> Self {
+        Self::built(records, None, true, seeing).await
+    }
+
+    /// A guest serving with `records`, its input service `input` if any,
+    /// stages if `staging`, and its screen, which may be recorded, as
+    /// `seeing` makes it.
+    async fn built(
+        records: Records,
+        input: Option<crate::machine::input::Input>,
+        staging: bool,
+        seeing: fn(&mut Daemon),
+    ) -> Self {
         let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
         daemon.screen.console = Console::Own;
+        daemon.screen.recording = || true;
+        seeing(&mut daemon);
         let (station, guest) = (Keypair::generate().unwrap(), Keypair::generate().unwrap());
         let desktop = atlas_core::desktop::Desktop::from(atlas_core::user::User { uid: 502 }).id();
         let guest_key = guest.public();
@@ -172,6 +199,7 @@ impl Served {
             changes: changes.clone(),
             stop: stopping(&records, &vault),
             updates: updating(&records, &vault),
+            recording: recording_at(&records),
         };
         let machine = Machine::new(
             daemon,
@@ -206,7 +234,19 @@ impl Served {
     /// The station's control connection to the guest, in a new generation,
     /// and the station's way to its lanes in it.
     async fn control(&self) -> (Controlling, Desktop) {
-        let (station_end, guest_end, _cut) = self.link.connect();
+        let (controlling, desktop, _connection) = self.control_cut().await;
+        (controlling, desktop)
+    }
+
+    /// [`Served::control`], and the control connection, to cut.
+    async fn control_cut(
+        &self,
+    ) -> (
+        Controlling,
+        Desktop,
+        atlas_session::standin::link::Connection,
+    ) {
+        let (station_end, guest_end, connection) = self.link.connect();
         self.connections
             .send(framed(Purpose::Control, Box::new(guest_end)))
             .unwrap();
@@ -225,7 +265,7 @@ impl Served {
             controlling.outbox.clone(),
             Box::new(Lanes(self.link.clone(), self.connections.clone())),
         );
-        (controlling, desktop)
+        (controlling, desktop, connection)
     }
 
     fn retired(&self) -> Vec<(Generation, Retired)> {
@@ -289,7 +329,7 @@ async fn a_request_that_is_not_what_its_lane_was_opened_for_is_refused_before_it
         ),
         (LaneKind::Picture, json!({"op": "hello"})),
         (
-            LaneKind::Picture,
+            LaneKind::Read,
             json!({"op": "frame", "maxDimension": 320,
                 "session": {"securitySessionId": 42, "displayId": 7}}),
         ),
@@ -586,6 +626,7 @@ async fn be_the_guest(spec: &str) {
         generations: Arc::new(Counted::default()),
         stop: stopping(&_records, &_vault),
         updates: updating(&_records, &_vault),
+        recording: recording_at(&_records),
         changes,
     };
     let listener = socket_listener(std::path::Path::new(socket));
@@ -5269,6 +5310,7 @@ fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_o
         input: true,
         mirrors: true,
         jobs: true,
+        pictures: true,
     };
 
     assert_eq!(everything.declared(), atlas_session::compatibility::MACHINE);
@@ -5763,3 +5805,6 @@ async fn a_change_whose_worker_could_not_say_what_it_did_stays_unknown_until_its
     assert_eq!(outcome["reply"]["uncertain"], true, "{outcome}");
     assert_eq!(outcome["reply"]["ended"], true, "{outcome}");
 }
+
+#[path = "machine/pictures_tests.rs"]
+mod pictures;

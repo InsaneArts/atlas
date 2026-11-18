@@ -151,11 +151,17 @@ pub(super) fn hello(
     hello
 }
 
+/// Why a machine desktop gives agents no pictures, in the person's words,
+/// while it may not record its screen.
+pub(super) const CAPTURE_HELD: &str = "Allow Atlas in Privacy & Security, Screen & System Audio \
+     Recording, in the VM's window: agents' pictures wait for it.";
+
 /// A machine desktop's hello: who and where it is, on which display, with
 /// which permissions, in which boot of which machine, and what it declares
 /// (`declared`), never the hidden login's capabilities; whether agents are
-/// admitted now, apart from the Stop its disk keeps; and what work may still
-/// run there. What the station proves it by is all here, beside its proof.
+/// admitted now, apart from the Stop its disk keeps, and why their pictures
+/// wait; and what work may still run there. What the station proves it by
+/// is all here, beside its proof.
 pub(super) fn machine_hello(
     manager: &str,
     declared: &atlas_session::compatibility::Declared,
@@ -166,6 +172,11 @@ pub(super) fn machine_hello(
     work: Work,
 ) -> Value {
     let held = posture.held();
+    let capture = if itself.recording {
+        json!({})
+    } else {
+        json!({"held": CAPTURE_HELD})
+    };
     json!({
         "ok": true,
         "op": "hello",
@@ -175,8 +186,9 @@ pub(super) fn machine_hello(
         "permissions": {
             "accessibility": accessibility(),
             "postEvents": objc2_core_graphics::CGPreflightPostEventAccess(),
-            "screenCapture": capture::permitted(),
+            "screenCapture": itself.recording,
         },
+        "capture": capture,
         "machine": {"mode": "machine", "boot": itself.boot, "virtual": itself.virtual_machine},
         "daemon": {"protocol": declared.protocol, "pid": std::process::id(),
             "version": declared.version, "capabilities": declared.capabilities,
@@ -211,21 +223,25 @@ pub(super) fn machine_hello(
 
 /// What a machine desktop's daemon says of the machine it runs on and of
 /// itself: the boot, whether the machine is a virtual one, each none when
-/// it cannot be told, and the digest of the executable it started from.
+/// it cannot be told, the digest of the executable it started from, and
+/// whether it may record its screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Itself {
     pub(super) boot: Option<String>,
     pub(super) virtual_machine: Option<bool>,
     pub(super) build: Option<String>,
+    pub(super) recording: bool,
 }
 
 impl Itself {
-    /// As this daemon, started from `build`, finds itself now.
-    pub(super) fn now(build: Option<String>) -> Self {
+    /// As this daemon, started from `build`, finds itself now, `recording`
+    /// or not.
+    pub(super) fn now(build: Option<String>, recording: bool) -> Self {
         Self {
             boot: atlas_core::process::boot().ok(),
             virtual_machine: atlas_core::process::in_virtual_machine(),
             build,
+            recording,
         }
     }
 }

@@ -1,10 +1,10 @@
 //! A machine desktop's daemon as its installed job starts it: enrolling
 //! until a station is committed, then serving that station on the guest's
-//! vsock port.
+//! vsock port, and asking for Screen Recording in the VM's window.
 use super::{
     FRAMING, Listener, Machine, OPENING, PAIRINGS,
     bounded::{BLOCKING, Bounded},
-    listen,
+    listen, recording,
 };
 use crate::{
     daemon::{facts, serve::Daemon},
@@ -116,6 +116,11 @@ async fn serve(named: Named) -> Result<()> {
         Some(Stages::new(records.join("open"))),
         Some(Mirrors::default()),
     );
+    // Screen Recording, noted held and asked for in the VM's window, and
+    // taken by restarting.
+    let recording = recording::Own(machine.clone());
+    let record = recording::Record::at(machine.paired.recording.clone());
+    tokio::spawn(async move { recording::watch(&recording, &record).await });
     machine.serve(&listener).await
 }
 

@@ -94,6 +94,9 @@ pub struct Paired {
     pub stop: Arc<Stop<Arc<dyn Vault>>>,
     /// The updates of its own Atlas, on its disk.
     pub updates: Arc<crate::machine::update::Updates<Arc<dyn Vault>>>,
+    /// Where it notes that Screen Recording was held and asked for, on its
+    /// disk.
+    pub recording: std::path::PathBuf,
 }
 
 impl std::fmt::Debug for Paired {
@@ -149,23 +152,34 @@ enum Transition {
 /// shows the work still being ended.
 const ENDING: Duration = Duration::from_secs(10);
 
-/// Where a numbered Stop or Resume is answered: on the control of the
-/// generation it came in, only while that generation is live, so one lost
-/// first leaves it unanswered.
-struct Answer {
-    seq: u64,
-    authority: Authority,
-    outbox: Arc<Outbox>,
+/// Where a Stop or Resume is answered once carried out.
+enum Answer {
+    /// A numbered one, on the control of the generation it came in, only
+    /// while that generation is live, so one lost first leaves it
+    /// unanswered.
+    Station {
+        seq: u64,
+        authority: Authority,
+        outbox: Arc<Outbox>,
+    },
+    /// The daemon's own, which waits for it before it restarts.
+    Own(tokio::sync::oneshot::Sender<Outcome>),
 }
 
 impl Answer {
     fn give(self, outcome: Outcome) {
-        let Self {
-            seq,
-            authority,
-            outbox,
-        } = self;
-        let _ = authority.if_live(|| outbox.say(control::Said::Applied { seq, outcome }));
+        match self {
+            Self::Station {
+                seq,
+                authority,
+                outbox,
+            } => {
+                let _ = authority.if_live(|| outbox.say(control::Said::Applied { seq, outcome }));
+            }
+            Self::Own(waiting) => {
+                let _ = waiting.send(outcome);
+            }
+        }
     }
 }
 
@@ -471,7 +485,7 @@ struct Hand {
 impl Hand {
     /// Where the Stop or Resume numbered `seq` is answered.
     fn answer(&self, seq: u64) -> Answer {
-        Answer {
+        Answer::Station {
             seq,
             authority: self.authority.clone(),
             outbox: self.outbox.clone(),
@@ -534,14 +548,18 @@ impl Drop for Tasks {
     }
 }
 
-/// How a machine's daemon starts, off the runtime: work an earlier daemon
-/// may have left running stops agents, saved first, and what it left is then
-/// recovered, never forgotten without that saved Stop. Agents stay stopped
-/// when the Stop says so or cannot be told.
+/// How a machine's daemon starts, off the runtime: a daemon that may now
+/// record a screen an earlier one could not started again to take Screen
+/// Recording, as `recording` notes it, and stops agents, saved first; work
+/// an earlier daemon may have left running stops agents too, and what it
+/// left is then recovered, never forgotten without that saved Stop. Agents
+/// stay stopped when the Stop says so, cannot be told, or could not be
+/// saved.
 async fn start(
     daemon: Arc<Daemon>,
     stop: Arc<Stop<Arc<dyn Vault>>>,
     changes: Arc<Changes<Arc<dyn Vault>>>,
+    recording: recording::Record,
 ) {
     // What an earlier daemon staged is put right before any lane is served;
     // stages are refused when it cannot be.
@@ -551,11 +569,18 @@ async fn start(
     let reading = (daemon.clone(), stop);
     let (left, saved, clear) = tokio::task::spawn_blocking(move || {
         let (daemon, stop) = reading;
+        let recorded = recording.reconcile((daemon.screen.recording)(), || {
+            stop.stop(Why::Recording).is_ok()
+        });
         let left = daemon.supervising.as_ref().is_some_and(
             |supervising| !matches!(supervising.kept.kept(), Ok(work) if work.is_empty()),
         );
         let saved = left && stop.stop(Why::Restarted).is_ok();
-        (left, saved, matches!(stop.kept(), Ok(StopKept::Clear)))
+        (
+            left,
+            saved,
+            recorded && matches!(stop.kept(), Ok(StopKept::Clear)),
+        )
     })
     .await
     .unwrap_or((true, false, false));
@@ -730,6 +755,8 @@ struct Serving {
     input: bool,
     mirrors: bool,
     jobs: bool,
+    /// Whether the screen it pictures is its own.
+    pictures: bool,
 }
 
 impl Serving {
@@ -737,7 +764,7 @@ impl Serving {
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
             ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, JOBS, LEFTOVERS,
-            MACHINE_PROOF, MIRRORS, STAGE, STOP_REPORT, UPDATES,
+            MACHINE_PROOF, MIRRORS, PICTURES, STAGE, STOP_REPORT, UPDATES,
         };
         match capability {
             CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF => true,
@@ -749,6 +776,7 @@ impl Serving {
             INPUT_LANES => self.input,
             MIRRORS => self.mirrors,
             JOBS => self.jobs,
+            PICTURES => self.pictures,
             _ => false,
         }
     }
@@ -806,6 +834,9 @@ pub struct Machine {
     /// The digest of the executable it started from, read once at its start,
     /// so a file replaced while it runs never changes what it says.
     build: Option<String>,
+    /// How long a bulk lane's send, or its wait for credit back, may go
+    /// without progress.
+    progress: Held<Duration>,
     pub said: Arc<Said>,
 }
 
@@ -921,6 +952,7 @@ impl Machine {
             daemon.clone(),
             paired.stop.clone(),
             paired.changes.clone(),
+            recording::Record::at(paired.recording.clone()),
         ));
         Arc::new(Self {
             daemon,
@@ -937,6 +969,7 @@ impl Machine {
             serving,
             blocking,
             build: atlas_native::native::service::own_build(),
+            progress: Held::new(paced::BULK_PROGRESS),
             said: Arc::default(),
         })
     }
@@ -945,6 +978,34 @@ impl Machine {
     #[cfg(test)]
     pub(in crate::daemon) fn seen_as(&self, posture: super::super::facts::Posture) {
         self.posture.keep(posture);
+    }
+
+    /// Give a bulk lane `progress` to make progress in, in place of
+    /// [`paced::BULK_PROGRESS`].
+    #[cfg(test)]
+    fn progressing_within(&self, progress: Duration) {
+        *self.progress.lock().unwrap_or_else(PoisonError::into_inner) = progress;
+    }
+
+    /// Stop agents to take Screen Recording, through the same transition as
+    /// any Stop, idle or not, before anything may end this daemon for it:
+    /// the daemon that starts again holds agents until the person resumes
+    /// them. Whether the Stop was saved.
+    async fn stop_for_recording(&self) -> bool {
+        let (told, outcome) = tokio::sync::oneshot::channel();
+        self.halting.halt(Why::Recording, Some(Answer::Own(told)));
+        matches!(outcome.await, Ok(Outcome::Stopped))
+    }
+
+    /// Restart this daemon for a Screen Recording grant, which only a new
+    /// process takes, its Stop saved first. Whether it restarts: never
+    /// while that Stop could not be saved.
+    async fn restart_for_recording(&self) -> bool {
+        let saved = self.stop_for_recording().await;
+        if saved {
+            self.daemon.restarting.notify_one();
+        }
+        saved
     }
 
     /// What this guest declares it serves: what it was made with, so it
@@ -957,15 +1018,18 @@ impl Machine {
             input: self.daemon.input.is_some(),
             mirrors: self.mirrors.is_some(),
             jobs: self.jobs.is_some(),
+            pictures: self.daemon.screen.console == atlas_core::session::Console::Own,
         };
         atlas_session::compatibility::Declared::ours(serving.declared())
     }
 
-    /// Serve every connection `listener` gives, until it fails.
+    /// Serve every connection `listener` gives, until it fails or the
+    /// daemon restarts.
     ///
     /// # Errors
     ///
-    /// Returns the listener's failure.
+    /// Returns the listener's failure, or the restart, which its job's
+    /// launchd starts again.
     pub async fn serve(self: Arc<Self>, listener: &dyn Listener) -> Result<()> {
         // Connections wait until the daemon knows how it started.
         let starting = self
@@ -1002,7 +1066,16 @@ impl Machine {
         self.reconciler.wake();
         loop {
             while connections.try_join_next().is_some() {}
-            let framed = listener.accept().await.map_err(|error| {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                () = self.daemon.restarting.notified() => {
+                    return Err(Error::new(
+                        Code::Restart,
+                        "The guest's daemon restarts to take Screen Recording.",
+                    ));
+                }
+            };
+            let framed = accepted.map_err(|error| {
                 Error::new(Code::Transport, "The guest stopped taking connections.")
                     .with_source(error)
             })?;
@@ -1318,6 +1391,7 @@ impl Machine {
                 self.jobs.clone(),
                 self.paired.stop.clone(),
             );
+            let recording = self.daemon.screen.recording;
             let saying = bounded::off_runtime(&self.blocking, move || {
                 let posture = READ_POSTURE();
                 let work = work(&daemon, jobs.as_deref());
@@ -1342,7 +1416,7 @@ impl Machine {
                     }),
                     failure,
                 };
-                let itself = super::super::facts::Itself::now(build);
+                let itself = super::super::facts::Itself::now(build, recording());
                 let hello = super::super::facts::machine_hello(
                     &manager, &declared, &itself, posture, input, &stop, work,
                 );
@@ -1434,6 +1508,24 @@ impl Machine {
         if let Err(refusal) = bound(&header, &line) {
             return write(&mut writer, &refusal).await;
         }
+        // Pictures and files go on a bulk lane, paced by the generation's
+        // bulk credit.
+        if matches!(header.kind, LaneKind::Picture) {
+            let asked = protocol::parse(&line).ok().map(|asked| asked.request);
+            line.push(b'\n');
+            let reader: Reader = Box::new(std::io::Cursor::new(line).chain(reader));
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+                held: true,
+            };
+            return self
+                .bulk_lane(asked.as_ref(), reader, writer, gate, credit)
+                .await;
+        }
         // An update is kept by its own lane, which answers one asked before
         // from its record: it outlives the daemon that asked the installer.
         if let LaneKind::Change { change } = &header.kind
@@ -1517,6 +1609,105 @@ impl Machine {
             () = ended(&lanes, header.lane) => Ok(()),
         }
     }
+}
+
+impl Machine {
+    /// Serve the one picture or read on a bulk lane, admitted by `gate`, as
+    /// `asked`: what it writes is paced by the generation's `credit`. No
+    /// picture is taken while this process may not record its screen: it is
+    /// refused before any capture, in the person's words. A read reads
+    /// files, not the screen, so it needs no Screen Recording. Looking
+    /// changes nothing, so a Stop never ends it; it ends once its lane is
+    /// cancelled, its generation retires however it does, or its pump makes
+    /// no progress in time, which ends the lane.
+    async fn bulk_lane(
+        &self,
+        asked: Option<&Request>,
+        reader: Reader,
+        writer: Writer,
+        gate: Gate,
+        credit: Arc<Credit>,
+    ) -> Result<()> {
+        let (lane, lanes) = (gate.lane, gate.lanes.clone());
+        let progress = *self.progress.lock().unwrap_or_else(PoisonError::into_inner);
+        let (paced, pump) = paced::paced(lane, lanes.clone(), credit, writer, progress);
+        // What the station sends reaches the request through a relay of the
+        // lane's own, so the lane's connection ends with the lane, whatever
+        // its request still waits on.
+        let (relayed, mut relaying) = tokio::io::duplex(RELAYED);
+        let mut from_station = reader;
+        let relay = tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut from_station, &mut relaying).await;
+        });
+        let relaying = Tasks(vec![relay.abort_handle()]);
+        let reader: Reader = Box::new(relayed);
+        let mut paced: Writer = Box::new(paced);
+        let refusal = asked
+            .filter(|asked| pictured(asked) && !(self.daemon.screen.recording)())
+            .map(|asked| {
+                let refusal = failure(Code::Permission, super::super::facts::CAPTURE_HELD);
+                (refusal, in_frames(asked))
+            });
+        let asker = Asker {
+            controller: true,
+            host: None,
+            gate: Some(gate),
+        };
+        let daemon = self.daemon.clone();
+        let serving = async move {
+            match refusal {
+                Some((refusal, true)) => {
+                    super::stream::write_header(&mut paced, &refusal, super::stream::LANE_WRITE)
+                        .await
+                }
+                Some((refusal, false)) => write(&mut paced, &refusal).await,
+                None => {
+                    let phase = watch::channel(ConnectionPhase::Refusal).0;
+                    answer(reader, paced, daemon, asker, phase).await
+                }
+            }
+        };
+        // Never dropped part way: a capture it started, or has queued, is
+        // its own to end, which it does once the lane ends, as a pump that
+        // fails ends it too.
+        let mut serving = tokio::spawn(serving);
+        let served = tokio::select! {
+            served = &mut serving => Some(served),
+            () = lanes.ended(lane) => None,
+        };
+        // The lane's connection closed, then its pump joined: everything
+        // written sent and read, or the pump ended with the lane. Only then
+        // is its credit given back, whatever the request still waits on.
+        drop(relaying);
+        let _ = relay.await;
+        let pumped = pump.finished().await;
+        // The request is waited for to its end: capture work it began is
+        // owned until it finishes.
+        let served = match served {
+            Some(served) => served,
+            None => serving.await,
+        };
+        served
+            .unwrap_or_else(|_| Err(Error::new(Code::Capture, "The picture's work stopped.")))
+            .and(pumped)
+    }
+}
+
+/// The most of what the station sends on a bulk lane held between it and
+/// the request: a readiness byte, a stop and its ID, or a cancel.
+const RELAYED: usize = 1024;
+
+/// Whether `request` takes a picture of the screen.
+fn pictured(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Stream { .. } | Request::Frame { .. } | Request::Screenshot { .. }
+    )
+}
+
+/// Whether `request`'s reply is framed as a live frame is.
+fn in_frames(request: &Request) -> bool {
+    matches!(request, Request::Stream { .. } | Request::Frame { .. })
 }
 
 impl Machine {
@@ -1772,25 +1963,26 @@ async fn watchdog(authority: Authority) {
 }
 
 /// Whether the request `line` is what the lane `header` names: a read on a
-/// lane that reads, and a change on the lane of that very change. Pictures,
-/// screenshots and files are refused until their lanes are paced by the
-/// session's bulk credit, which keeps them from crowding out control. A
+/// lane that reads, a change on the lane of that very change, and a
+/// picture, a screenshot or a file on a bulk lane, whose credit keeps it
+/// from crowding out control, pinned to the session it was asked for. A
 /// request that does not parse is left for the daemon to refuse as it would
 /// anywhere.
 fn bound(header: &Header, line: &[u8]) -> std::result::Result<(), Value> {
     let Ok(asked) = protocol::parse(line) else {
         return Ok(());
     };
-    // What sends a lot: pictures, screenshots and files.
-    let bulk = matches!(
-        asked.request,
-        Request::Stream { .. }
-            | Request::Frame { .. }
-            | Request::Screenshot { .. }
-            | Request::Read(_)
-    );
+    // What sends a lot, and whether it names the session it is for.
+    let bulk = match &asked.request {
+        Request::Stream { .. } | Request::Frame { .. } => Some(true),
+        Request::Screenshot { pin, .. } | Request::Read(protocol::ReadRequest { pin, .. }) => {
+            Some(pin.is_some())
+        }
+        _ => None,
+    };
     let fits = match (&header.kind, asked.request.policy().phase) {
-        (LaneKind::Read, ConnectionPhase::Read(_)) => !bulk,
+        (LaneKind::Read, ConnectionPhase::Read(_)) => bulk.is_none(),
+        (LaneKind::Picture, ConnectionPhase::Read(_)) => bulk == Some(true),
         (LaneKind::Change { change }, ConnectionPhase::Mutation(_)) => {
             asked.change.as_ref() == Some(change)
         }
@@ -1810,6 +2002,8 @@ mod bounded;
 pub mod entry;
 mod jobs;
 mod listen;
+mod paced;
+mod recording;
 mod stage;
 mod update;
 

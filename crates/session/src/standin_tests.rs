@@ -794,3 +794,23 @@ async fn a_change_the_stand_in_carried_out_is_named_at_each_hello_until_the_stat
     assert_eq!(*seen.lock().unwrap(), [done]);
     assert!(standin.unsettled().is_empty());
 }
+
+#[tokio::test]
+async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_pictures_last() {
+    let link = Link::new(Conditions::default());
+    let (standin, station) = (
+        StandIn::new(desktop(), Duration::ZERO),
+        Keypair::generate().unwrap(),
+    );
+
+    let (_live, controlling, _connection) = connected(&link, &standin, &station).await;
+
+    assert_eq!(
+        controlling.declared.capabilities,
+        crate::compatibility::MACHINE
+    );
+    assert_eq!(
+        controlling.declared.capabilities.last().map(String::as_str),
+        Some(crate::compatibility::PICTURES)
+    );
+}

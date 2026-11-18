@@ -412,9 +412,14 @@ async fn recording_granted(shown: &impl Fn() -> bool) -> bool {
 /// Whether Screen Recording is allowed now, as a fresh Atlas process sees it
 /// (never waiting more than a few seconds for it).
 async fn screen_recording_now() -> bool {
-    let Ok(executable) = std::env::current_exe() else {
-        return false;
-    };
+    screen_recording_seen().await == Some(true)
+}
+
+/// Whether a fresh Atlas process may use Screen Recording, as it says
+/// within a few seconds: none when it could not be started, did not answer
+/// in time, or answered with anything but its permission.
+pub(super) async fn screen_recording_seen() -> Option<bool> {
+    let executable = std::env::current_exe().ok()?;
 
     let run = atlas_core::spawn::output_async(
         tokio::process::Command::new(executable)
@@ -425,8 +430,9 @@ async fn screen_recording_now() -> bool {
     );
     match tokio::time::timeout(Duration::from_secs(5), run).await {
         Ok(Ok(output)) => serde_json::from_slice::<Value>(&output.stdout)
-            .is_ok_and(|reply| reply["screenCapture"] == true),
-        _ => false,
+            .ok()
+            .and_then(|reply| reply["screenCapture"].as_bool()),
+        _ => None,
     }
 }
 

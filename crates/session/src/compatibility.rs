@@ -46,11 +46,15 @@ pub const ENDED: &str = "ended-v1";
 /// with the packet handed on a socket, never from a path, and keeps the
 /// worker's answer as what the change came to.
 pub const ENVIRONMENT: &str = "environment-v1";
+/// Pictures of the guest's screen, its files read, on picture lanes paced
+/// by the bulk credit: a screenshot, a frame and a stream, each pinned to
+/// the session it was asked for, and a pinned read.
+pub const PICTURES: &str = "pictures-v1";
 
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 13] = [
+pub const MACHINE: [&str; 14] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
@@ -64,6 +68,7 @@ pub const MACHINE: [&str; 13] = [
     JOBS,
     UPDATES,
     ENVIRONMENT,
+    PICTURES,
 ];
 
 /// What a guest declares in its hello.
