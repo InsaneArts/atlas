@@ -424,47 +424,53 @@ impl Client {
         }
         request["session"] = json!(verified.pin()?);
 
-        let reply = self
-            .link
-            .send_bulk(&request, generation)
-            .await?
-            .finish()
-            .await?;
-        if reply["ok"] != true {
-            if reply["code"].is_string() {
-                return Err(atlas_core::transport::refusal(&reply));
+        // Which windows it saw is remembered, as a helper's capture
+        // remembers them, read in its generation on either side of it.
+        self.look(verified, async {
+            let reply = self
+                .link
+                .send_bulk(&request, generation)
+                .await?
+                .finish()
+                .await?;
+            let reply = crate::vm::guest_words::reply_said_of(reply, &self.selected.name);
+            if reply["ok"] != true {
+                if reply["code"].is_string() {
+                    return Err(atlas_core::transport::refusal(&reply));
+                }
+                return Err(Error::new(
+                    Code::Capture,
+                    reply["error"].as_str().unwrap_or("Capture failed"),
+                ));
             }
-            return Err(Error::new(
-                Code::Capture,
-                reply["error"].as_str().unwrap_or("Capture failed"),
-            ));
-        }
-        let shows = cropped_from(&reply, crop, display, Sender::Vm)?;
-        let at = Instant::now();
-        let (png, width, height) = png_of(&reply)?;
-        if width > VM_SIDE || height > VM_SIDE {
-            return Err(Error::new(
-                Code::Protocol,
-                "The VM sent a picture larger than was asked for",
-            ));
-        }
-        if shows.is_none() && !shaped_as(display, width, height) {
-            return Err(Error::new(
-                Code::Protocol,
-                "The VM sent a picture of another shape than its display",
-            ));
-        }
-        self.reproved(pinned).await?;
-        Ok((
-            Frame {
-                png: png.into(),
-                width,
-                height,
-                epoch: before.epoch.clone(),
-                at,
-            },
-            shows,
-        ))
+            let shows = cropped_from(&reply, crop, display, Sender::Vm)?;
+            let at = Instant::now();
+            let (png, width, height) = png_of(&reply)?;
+            if width > VM_SIDE || height > VM_SIDE {
+                return Err(Error::new(
+                    Code::Protocol,
+                    "The VM sent a picture larger than was asked for",
+                ));
+            }
+            if shows.is_none() && !shaped_as(display, width, height) {
+                return Err(Error::new(
+                    Code::Protocol,
+                    "The VM sent a picture of another shape than its display",
+                ));
+            }
+            self.reproved(pinned).await?;
+            Ok((
+                Frame {
+                    png: png.into(),
+                    width,
+                    height,
+                    epoch: before.epoch.clone(),
+                    at,
+                },
+                shows,
+            ))
+        })
+        .await
     }
 
     /// Save a screenshot of the whole display, or of `crop`, and say where

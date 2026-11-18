@@ -6,7 +6,6 @@ use crate::client::Client;
 use atlas_control::interrupt::Interrupt;
 use atlas_core::{
     actions::Button,
-    desktop::Kind,
     error::{Code, Error, Holder, Result},
 };
 use serde_json::{Value, json};
@@ -133,7 +132,7 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
         crate::asking::after_asking(client, async || type_once(client, &batches, expected).await)
             .await;
     client.set_typing(None);
-    typed
+    client.advised_on_vm_for(typed, "Accessibility")
 }
 
 /// [`type_text`] once. While the person lists any account, the input
@@ -149,11 +148,8 @@ async fn type_once(
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
-    // On a VM, typing into an app or a field it names is not built: refused
-    // before the VM is read. Every part goes in the one proof taken here.
-    if expected.is_some() && matches!(client.desktop().kind(), Kind::Vm(_)) {
-        return Err(client.unreachable());
-    }
+    // Every part goes in the one proof taken here, and where it must land
+    // is found in it.
     let verified = client.verify_either().await?;
     let check = match expected {
         Some(expected) => Some(expected.resolve(client, &verified).await?),

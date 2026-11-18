@@ -19,6 +19,9 @@ pub struct AppList {
     /// map, while target resolution must refuse it.
     starts: std::result::Result<BTreeMap<i64, Start>, Arc<serde_json::Error>>,
     projection: Map<String, Value>,
+    /// Whose apps they are, as its refusals say it: "The helper's", or a
+    /// VM's by its name.
+    whose: String,
 }
 
 /// Validated decision fields and the original row for output only.
@@ -42,13 +45,22 @@ impl AppList {
     ///
     /// Returns the helper's refusal, or an error for rows that are malformed.
     pub fn decode(reply: Value) -> Result<Self> {
+        Self::decode_of(reply, "The helper's")
+    }
+
+    /// [`AppList::decode`] of the apps of the desktop `whose` names, as its
+    /// refusals say it.
+    pub(crate) fn decode_of(reply: Value, whose: &str) -> Result<Self> {
         if reply["ok"] == false {
             return Err(refusal(&reply));
         }
         let malformed = || {
             Error::new(
                 Code::Protocol,
-                "The helper's list of running apps was malformed, so Atlas cannot tell what is running",
+                format!(
+                    "{whose} list of running apps was malformed, so Atlas cannot tell what is \
+                     running"
+                ),
             )
         };
         if reply["ok"] != true {
@@ -71,6 +83,7 @@ impl AppList {
             rows,
             starts,
             projection,
+            whose: whose.to_owned(),
         })
     }
 
@@ -80,6 +93,7 @@ impl AppList {
             rows: Vec::new(),
             starts: Ok(BTreeMap::new()),
             projection: Map::from_iter([("ok".to_owned(), Value::Bool(true))]),
+            whose: "The helper's".to_owned(),
         }
     }
 
@@ -91,7 +105,7 @@ impl AppList {
         self.starts.as_ref().map_err(|cause| {
             Error::new(
                 Code::Protocol,
-                "The helper's process identities were malformed",
+                format!("{} process identities were malformed", self.whose),
             )
             .with_source(cause.clone())
         })
@@ -224,7 +238,10 @@ impl Client {
                 None
             }
         };
-        let read = async { AppList::decode(self.link.call_in(&request, generation).await?) };
+        // A VM's refusals name the VM.
+        let whose = self.owner();
+        let read =
+            async { AppList::decode_of(self.link.call_in(&request, generation).await?, &whose) };
         read.await.map_err(Error::certain)
     }
 }

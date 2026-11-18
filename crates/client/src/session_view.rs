@@ -313,7 +313,7 @@ impl Scene<'_> {
     /// A row as a session's latest action: what it did in words and how
     /// long ago.
     fn latest(&self, row: &Row) -> Value {
-        let shown = crate::overview::shown(row, self.now);
+        let shown = crate::overview::listed(row, self.now);
         json!({
             "says": shown.says,
             "verb": shown.verb,

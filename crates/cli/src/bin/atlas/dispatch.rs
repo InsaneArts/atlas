@@ -258,14 +258,20 @@ async fn execute_with(
     let (changes, starts) = (policy.changes_helper(), starts_vm(&command));
     if changes || starts {
         let client = client()?;
-        if changes && !changes_on_vm(&command) {
-            client.second_login_only()?;
-        }
-        if starts {
-            started = atlas_client::vm::start::ensure_running(&client).await?;
-        }
-        if changes && let Err(held) = client.require_going().await {
-            return Err(said_started(held, started.as_ref()));
+        let admitted = async {
+            if changes && !changes_on_vm(&command) {
+                client.second_login_only()?;
+            }
+            if starts {
+                started = atlas_client::vm::start::ensure_running(&client).await?;
+            }
+            if changes && let Err(held) = client.require_going().await {
+                return Err(said_started(held, started.as_ref()));
+            }
+            Ok(())
+        };
+        if let Err(refused) = admitted.await {
+            return client.said_on_vm(Err(refused));
         }
     }
 
@@ -279,6 +285,10 @@ async fn execute_with(
             Ok(reply) => Ok(reply),
             Err(error) => Err(started.onto(error)),
         };
+    }
+    // A VM's outcome is said of the VM, whatever named the helper.
+    if let Ok(client) = client() {
+        result = client.said_on_vm(result);
     }
 
     if kind.recorded(doing)
@@ -295,9 +305,9 @@ async fn execute_with(
 /// Whether `command` is a change this build makes on a VM desktop: a
 /// command, a background job's start or stop, `open` and `close`, an app's
 /// install, a cleanup of what they left, an environment's plans and their
-/// commands (never a discovery), and an agent's input at a point or of keys
-/// and text. Input checked against an app, a window or a field, and a click
-/// on an element, are not built for a VM.
+/// commands (never a discovery), and an agent's input: at a point or of keys
+/// and text, checked against the app, window or field it names, and on an
+/// element found by its name or a look.
 fn changes_on_vm(command: &Command) -> bool {
     match command {
         Command::Environment(environment) => !matches!(
@@ -312,22 +322,14 @@ fn changes_on_vm(command: &Command) -> bool {
         | Command::Job {
             command: JobCommand::Start { .. } | JobCommand::Stop { .. },
         }
-        | Command::Move { .. } => true,
-        Command::Click(click) => {
-            click.x.is_some()
-                && click.reference.is_none()
-                && click.window.is_none()
-                && click.target.names_none()
-        }
-        Command::Drag(drag) => drag.window.is_none() && drag.target.names_none(),
-        Command::Scroll(scroll) => scroll.window.is_none() && scroll.target.names_none(),
-        Command::Type(typed) => {
-            typed.window.is_none() && typed.field.is_none() && typed.target.names_none()
-        }
-        Command::Key(keys) => {
-            keys.window.is_none() && keys.field.is_none() && keys.target.names_none()
-        }
-        Command::Input { target, .. } => target.names_none(),
+        | Command::Move { .. }
+        | Command::Click(_)
+        | Command::Element(_)
+        | Command::Drag(_)
+        | Command::Scroll(_)
+        | Command::Type(_)
+        | Command::Key(_)
+        | Command::Input { .. } => true,
         _ => false,
     }
 }

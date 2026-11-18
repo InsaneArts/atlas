@@ -1467,7 +1467,9 @@ impl Machine {
                 () = ended(&lanes, header.lane) => return Ok(()),
             }
         }
-        // Passed to the input service as it is, once judged here.
+        // Passed to the input service as it is, once judged here. A read, a
+        // look at an app's elements, changes nothing, so a Stop never cuts
+        // it short: only its lane or its generation ending does.
         if let LaneKind::Input { change } = &header.kind {
             let gate = Gate {
                 authority,
@@ -1475,7 +1477,7 @@ impl Machine {
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
-                held: true,
+                held: change.is_some(),
             };
             let mut hanging_up = [0; 1];
             let reply = tokio::select! {
@@ -1807,14 +1809,15 @@ impl Machine {
                 return self.came_to(change.clone(), refusal).await;
             }
         }
-        // A Stop, or the generation ending, while it runs ends it too.
+        // A Stop, or the generation ending, while a change runs ends it too;
+        // a read ends only with its generation.
         let reply = tokio::select! {
             reply = forward(input, gate.authority.generation().0, line) => reply,
-            () = gate.over() => Err(Error::new(
-                Code::Stopped,
-                "Agents were stopped while the change ran",
-            )
-            .uncertain()),
+            () = gate.over() => Err(if change.is_some() {
+                Error::new(Code::Stopped, "Agents were stopped while the change ran").uncertain()
+            } else {
+                Error::new(Code::SessionChanged, "The session ended while it was read")
+            }),
         };
         let Some(change) = change else {
             return reply.unwrap_or_else(|error| failure(error.code, error.error));

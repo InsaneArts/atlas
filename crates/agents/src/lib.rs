@@ -830,6 +830,25 @@ pub fn refresh() -> Value {
     json!({"agents": refreshed})
 }
 
+/// The desktop `selected` names, as a session-start line says it within a
+/// sentence: Second Login's "the helper", or the VM by its name.
+fn within(selected: &Selected) -> String {
+    if matches!(selected.desktop().kind(), Kind::Vm(_)) {
+        selected.name.clone()
+    } else {
+        "the helper".to_owned()
+    }
+}
+
+/// The session-start line of Atlas `version` when the desktop `selected`
+/// names did not answer in time.
+fn unanswered(version: &str, selected: &Selected) -> String {
+    format!(
+        "Atlas {version}: {} is not answering; run atlas doctor.",
+        within(selected)
+    )
+}
+
 /// One line for an agent's session start: local, bounded, never failing.
 /// For host `session`, it says what that session left in the helper, and
 /// lets it recover an unknown action that is all its own.
@@ -872,12 +891,13 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
     else {
-        return format!("Atlas {version}: the helper is not answering; run atlas doctor.");
+        return unanswered(version, &selected);
     };
 
     if status["inputService"]["held"] == true {
         return format!(
-            "Atlas {version}: the person stopped agents in the helper; ask them before using it."
+            "Atlas {version}: the person stopped agents in {}; ask them before using it.",
+            within(&selected)
         );
     }
 

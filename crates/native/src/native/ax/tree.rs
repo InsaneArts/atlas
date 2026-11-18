@@ -563,7 +563,7 @@ pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -
     if !trusted || error == Some(AXError::APIDisabled) {
         return Error::new(
             Code::Permission,
-            "The app's accessibility tree is unavailable; check Accessibility for the helper",
+            "The app's accessibility tree is unavailable; check Accessibility for Atlas",
         );
     }
 

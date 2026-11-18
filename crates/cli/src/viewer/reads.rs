@@ -227,7 +227,7 @@ impl Viewer {
             status.value["overview"]["activity"] = json!(
                 activity
                     .iter()
-                    .map(|row| atlas_client::overview::shown_to_person(row, now))
+                    .map(|row| atlas_client::overview::shown_to_person(row, now, client.called()))
                     .collect::<Vec<_>>()
             );
         }
@@ -545,7 +545,7 @@ impl Viewer {
             ),
         )
         .await
-        .map_err(|_| late())?
+        .map_err(|_| late(&client))?
     }
 }
 
@@ -659,7 +659,7 @@ pub(crate) async fn activity_of(
         .iter()
         .zip(pictures)
         .map(|(row, picture)| {
-            let mut shown = activity_row(row, now, person);
+            let mut shown = activity_row(row, now, person, client.called());
             let (after, facts) = picture.unwrap_or_default();
             let (after, after_at) = after.unzip();
             shown["after"] = json!(after);
@@ -684,7 +684,7 @@ pub(crate) async fn activity_of(
 /// the app, control and keys its words name, and the picture taken before
 /// it. Only these fields go, through [`atlas_client::overview::shown`]:
 /// never typed text, argv, coordinates or titles, which the log never keeps
-/// either.
+/// either. Its reason names the desktop as `called` does.
 ///
 /// For the person's own app (`person`), it names the listed account it
 /// acted in and what let it, and a browser's action is said on its site;
@@ -693,11 +693,12 @@ pub(super) fn activity_row(
     row: &atlas_client::activity_log::Row,
     now: u128,
     person: bool,
+    called: atlas_client::overview::Called<'_>,
 ) -> Value {
     let shown = if person {
-        atlas_client::overview::shown_to_person(row, now)
+        atlas_client::overview::shown_to_person(row, now, called)
     } else {
-        atlas_client::overview::shown(row, now)
+        atlas_client::overview::shown(row, now, called)
     };
     let keys = shown.keys();
     let mut fields = json!(shown);

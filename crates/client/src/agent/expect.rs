@@ -1,6 +1,6 @@
 //! Where an agent's input must land, and sending a batch there: an app, or
 //! a window and so its app, and the field with keyboard focus, found once
-//! control is held, brought forward and checked by the helper before input.
+//! control is held, brought forward and checked by the desktop before input.
 use super::target::{Target, snapshot_expect, target_among, target_expect};
 use crate::{
     client::{Client, Verified, WINDOW_LOOKUP},
@@ -28,7 +28,10 @@ use serde_json::{Value, json};
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     // Control is taken again for each attempt, so none is held while the
     // person is asked.
-    crate::asking::after_asking(client, async || act_once(client, expected, actions).await).await
+    let acted =
+        crate::asking::after_asking(client, async || act_once(client, expected, actions).await)
+            .await;
+    client.advised_on_vm_for(acted, "Accessibility")
 }
 
 /// [`act`] once: a refusal to ask the person comes back as it is.
@@ -55,11 +58,11 @@ async fn act_once(client: &Client, expected: Option<&Expected>, actions: &Value)
         (None, Some(expected)) => expected,
     };
     let ownership = client.controller.acquire_beside_commands()?;
-    let verified = client.verify().await?;
+    let verified = client.verify_either().await?;
     if let Some((_, epoch)) = &remembered
         && *epoch != json!(verified.session().epoch)
     {
-        return Err(Error::session_changed());
+        return Err(client.session_changed());
     }
     let expect = expected
         .resolve(client, &verified)
@@ -78,12 +81,7 @@ async fn act_once(client: &Client, expected: Option<&Expected>, actions: &Value)
         return Err(Error::new(Code::Windows, "Window changed; look again"));
     }
     client
-        .input_owned(
-            &ownership,
-            decoded,
-            Some((&verified.session().epoch, std::time::Instant::now())),
-            Some(expect),
-        )
+        .input_owned_in(&ownership, decoded, &verified, Some(expect))
         .await
 }
 

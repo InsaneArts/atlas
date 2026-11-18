@@ -8,6 +8,7 @@ mod control;
 pub(crate) mod copies;
 pub(crate) mod environment;
 mod evidence;
+pub(crate) mod guest_words;
 pub mod handover;
 pub mod keeper;
 pub mod lifecycle;

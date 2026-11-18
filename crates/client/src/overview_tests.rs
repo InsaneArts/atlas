@@ -35,7 +35,7 @@ fn logged(value: Value) -> Row {
 
 /// The logged row `row` as every app shows it, at `now`.
 fn shown(row: &Value, now: u128) -> Value {
-    json!(super::shown(&logged(row.clone()), now))
+    json!(super::shown(&logged(row.clone()), now, Called::Helper))
 }
 
 #[test]
@@ -1079,7 +1079,7 @@ fn older_and_partial_rows_keep_their_values_when_ordered_by_time() {
     let rows = activity_log::recent(dir.path(), 10);
     let shown: Vec<String> = rows
         .iter()
-        .map(|row| json!(super::shown(row, NOW)).to_string())
+        .map(|row| json!(super::shown(row, NOW, Called::Helper)).to_string())
         .collect();
     assert_eq!(
         shown,
@@ -1126,9 +1126,15 @@ fn the_overview_counts_running_jobs() {
         json!({"running": 3, "launching": 1, "unresolved": 2})
     );
     let refused = logged(json!({"ok": false, "code": "job", "operation": "job"}));
-    assert_eq!(reason(&refused), Some("A background job was refused"));
+    assert_eq!(
+        reason(&refused, Called::Helper).as_deref(),
+        Some("A background job was refused")
+    );
     let refused = logged(json!({"ok": false, "code": "collect", "operation": "collect"}));
-    assert_eq!(reason(&refused), Some("A file could not be collected"));
+    assert_eq!(
+        reason(&refused, Called::Helper).as_deref(),
+        Some("A file could not be collected")
+    );
 }
 
 #[test]
@@ -1623,11 +1629,11 @@ fn only_the_persons_rows_name_the_account_and_say_a_browsers_action_on_its_site(
         "allowed": "task"}))
     .unwrap();
 
-    let anyone = serde_json::to_value(activity::shown(&row, 1)).unwrap();
+    let anyone = serde_json::to_value(activity::shown(&row, 1, Called::Helper)).unwrap();
     assert!(anyone.get("account").is_none() && anyone.get("allowed").is_none());
     assert_eq!(anyone["says"], "clicked Merge in Google Chrome");
 
-    let person = serde_json::to_value(shown_to_person(&row, 1)).unwrap();
+    let person = serde_json::to_value(shown_to_person(&row, 1, Called::Helper)).unwrap();
     assert_eq!(person["says"], "clicked Merge on github.com");
     assert_eq!(person["app"], "Google Chrome");
     assert_eq!(person["allowed"], "task");
@@ -1643,7 +1649,7 @@ fn only_the_persons_rows_name_the_account_and_say_a_browsers_action_on_its_site(
         "account": {"name": "Slack", "key": {"kind": "app", "id": "com.tinyspeck.slackmacgap"}},
         "allowed": "trusted"}))
     .unwrap();
-    let person = serde_json::to_value(shown_to_person(&slack, 1)).unwrap();
+    let person = serde_json::to_value(shown_to_person(&slack, 1, Called::Helper)).unwrap();
     assert_eq!(person["says"], "clicked Send in Slack");
     assert_eq!(person["allowed"], "trusted");
 }
@@ -1655,19 +1661,25 @@ fn typing_in_a_listed_site_is_said_on_the_site_to_the_person_alone() {
     let typed = Row::parse(&json!({"at": "1", "operation": "input", "ok": true,
         "verb": "type", "app": "Google Chrome", "account": site}))
     .unwrap();
-    assert_eq!(shown_to_person(&typed, 1).says, "typed on github.com");
-    assert_eq!(activity::shown(&typed, 1).says, "typed in Google Chrome");
+    assert_eq!(
+        shown_to_person(&typed, 1, Called::Helper).says,
+        "typed on github.com"
+    );
+    assert_eq!(
+        activity::shown(&typed, 1, Called::Helper).says,
+        "typed in Google Chrome"
+    );
 
     let stopped = Row::parse(&json!({"at": "1", "operation": "input", "ok": false,
         "code": "focus-changed", "partial": true, "verb": "type",
         "app": "Google Chrome", "account": site}))
     .unwrap();
     assert_eq!(
-        shown_to_person(&stopped, 1).says,
+        shown_to_person(&stopped, 1, Called::Helper).says,
         "stopped typing on github.com"
     );
     assert_eq!(
-        activity::shown(&stopped, 1).says,
+        activity::shown(&stopped, 1, Called::Helper).says,
         "stopped typing in Google Chrome"
     );
 }
@@ -1848,4 +1860,76 @@ fn a_reached_vm_whose_work_may_still_run_offers_the_persons_stop_and_one_with_no
     let stopped = super::overview(&stopped, false, unresolved(0), &[], NOW).value;
     assert_eq!(stopped["mode"], "stopped", "Resume takes its place");
     assert_eq!(stopped["workMayRun"], false);
+}
+
+#[test]
+fn a_vms_activity_names_the_vm_where_a_helpers_names_the_helper() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(directory.path(), None);
+    let rows = [
+        json!({"operation": "input", "ok": false, "code": "permission"}),
+        json!({"operation": "screenshot", "ok": false, "code": "permission"}),
+        json!({"operation": "run", "ok": false, "code": "permission"}),
+        json!({"operation": "input", "ok": false, "code": "session-changed"}),
+        json!({"operation": "input", "ok": false, "code": "transport"}),
+    ];
+    for (row, said) in rows.iter().zip([
+        "work can't use the mouse and keyboard",
+        "work can't record the screen",
+        "work doesn't have permission",
+        "work's screen changed meanwhile",
+        "Atlas couldn't reach work",
+    ]) {
+        let row = logged(row.clone());
+        assert_eq!(
+            super::shown(&row, NOW, client.called()).reason.as_deref(),
+            Some(said)
+        );
+        assert!(
+            super::shown(&row, NOW, Called::Helper)
+                .reason
+                .unwrap()
+                .contains("helper")
+        );
+    }
+    let output = client.output_dir().unwrap();
+    for (at, row) in rows.iter().enumerate() {
+        let mut row = row.clone();
+        row["at"] = json!((NOW + u128::try_from(at).unwrap()).to_string());
+        row["actor"] = json!("agent");
+        crate::activity_log::append(output, &logged(row)).unwrap();
+    }
+
+    let listed = crate::host_session::activity::list(
+        &client,
+        None,
+        crate::host_session::activity::Scope::Everyone,
+        10,
+    )
+    .unwrap();
+
+    let text = listed.to_string();
+    assert!(
+        text.contains("work can't use the mouse and keyboard"),
+        "{listed}"
+    );
+    assert!(text.contains("Atlas couldn't reach work"), "{listed}");
+    assert!(!text.to_lowercase().contains("helper"), "{listed}");
+}
+
+#[test]
+fn a_vm_that_does_not_answer_in_time_is_said_to_by_its_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(directory.path(), None);
+
+    let late = late(&client);
+    let doctor = crate::capability::Doctor::vm(json!(late), client.unreachable());
+    let shown = super::overview(&doctor, false, Pending::default(), &[], NOW).value;
+
+    assert_eq!(late.error, "work did not answer in time");
+    assert_eq!(shown["reason"], "work did not answer in time", "{shown}");
+    assert!(
+        !shown.to_string().to_lowercase().contains("the helper"),
+        "{shown}"
+    );
 }

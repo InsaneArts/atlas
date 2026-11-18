@@ -1,8 +1,11 @@
 //! Which process a command about an app is for: a process ID, or a name
-//! found among the helper's windows and running apps.
+//! found among the desktop's windows and running apps, told apart from a
+//! later process with the same number by the start the desktop gave with
+//! them.
 use crate::client::{AppList, AppRow, Client, Verified, WINDOW_LOOKUP};
 use atlas_core::{
     actions::Expect,
+    desktop::Kind,
     error::{Code, Error, Result},
     name::same_text,
     process::{Instance, Start},
@@ -133,13 +136,16 @@ pub(super) async fn target_among(
             return snapshot_expect(*pid, starts);
         }
         Target::Pid(pid) => {
-            return Err(Error::new(
-                Code::Elements,
+            // A VM's apps are seen by their windows.
+            let said = if matches!(client.desktop().kind(), Kind::Vm(_)) {
                 format!(
-                    "No app in the helper has the process ID {pid}; run atlas apps to see them"
-                ),
-            )
-            .with_source(Absent));
+                    "No app in {} has the process ID {pid}; run atlas windows to see them",
+                    client.selected.name
+                )
+            } else {
+                format!("No app in the helper has the process ID {pid}; run atlas apps to see them")
+            };
+            return Err(Error::new(Code::Elements, said).with_source(Absent));
         }
         Target::Name(name) => name,
     };

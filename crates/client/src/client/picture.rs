@@ -316,7 +316,8 @@ impl Client {
         let (name, input) = slot.facts()?;
         let taken = before::time(&name)?;
         let limit = self.activity().typed_text_limit;
-        let finished = facts::finished(input, row, reply, slot.typed(), limit, taken);
+        let finished =
+            facts::finished(input, row, reply, slot.typed(), limit, taken, self.called());
         Some((name, finished))
     }
 }

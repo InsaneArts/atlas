@@ -5,8 +5,8 @@ mod activity;
 mod sessions;
 
 use crate::host_session::reading::SessionFacts;
-pub(crate) use activity::reason;
-pub use activity::{shown, shown_to_person};
+pub use activity::{Called, shown, shown_to_person};
+pub(crate) use activity::{listed, reason};
 pub use sessions::{add_host_sessions, add_sessions_for};
 
 use crate::{
@@ -34,9 +34,13 @@ pub const READ_DEADLINE: Duration = Duration::from_secs(5);
 /// How many recent activity rows a status carries.
 pub const ROWS: usize = 12;
 
-/// A read of the helper that took longer than a status waits.
-pub fn late() -> Error {
-    Error::new(Code::Transport, "The helper did not answer in time")
+/// A read of `client`'s desktop that took longer than a status waits,
+/// said of that desktop: the helper, or a VM by its name.
+pub fn late(client: &Client) -> Error {
+    Error::new(
+        Code::Transport,
+        format!("{} did not answer in time", client.subject()),
+    )
 }
 
 /// How long the account named at the person's screen is reused.
@@ -69,7 +73,7 @@ pub async fn helper_report(
 ) -> crate::capability::Doctor {
     let reply = tokio::time::timeout_at(until, client.status())
         .await
-        .unwrap_or_else(|_| json!(late()));
+        .unwrap_or_else(|_| json!(late(client)));
     let mut doctor = match client.desktop().kind() {
         Kind::User(login) => crate::user::overview::user_report(login, reply, until, idle).await,
         Kind::Vm(_) => crate::capability::Doctor::vm(reply, client.unreachable())
@@ -310,6 +314,12 @@ pub fn overview(
     let observation = &diagnosis.observation;
     let session = &diagnosis.value["session"];
     let reachable = observation.ok;
+    // A VM's activity names it, as its status does.
+    let called = match (&report.vm, diagnosis.value["desktop"]["name"].as_str()) {
+        (None, _) => activity::Called::Helper,
+        (Some(_), Some(name)) => activity::Called::Vm(name),
+        (Some(_), None) => activity::Called::UnnamedVm,
+    };
 
     // Recover fixes it: the panel offers the button beside the reason.
     let recoverable = !diagnosis.ready
@@ -372,7 +382,10 @@ pub fn overview(
         // Whether the helper's apps can be heard, as its daemon last said:
         // read with the status, never asked for on its own.
         "sound": session["sound"].is_object().then_some(&session["sound"]),
-        "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
+        "activity": activity
+            .iter()
+            .map(|row| shown(row, now, called))
+            .collect::<Vec<_>>(),
     });
     // A VM's guest says its own Stop, the work it carries, and whether any
     // it started may still run: the person's Stop stays offered for that

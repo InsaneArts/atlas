@@ -14,7 +14,7 @@
 //! stop must agree with. A job of another task is stopped only when that
 //! task is named.
 use crate::{
-    client::{Client, Mutation, Pinned, Verified, unconfirmed},
+    client::{Client, Mutation, Pinned, Verified},
     task::{
         Task,
         record::{JobEntry, Noted},
@@ -158,7 +158,7 @@ async fn started_in(
     };
     let reply = mutate(client, mutation, machine).await?;
     let Ok(JobReply::Start { job }) = JobReply::deserialize(&reply) else {
-        return Err(unconfirmed());
+        return Err(client.unconfirmed());
     };
     let mut warnings: Vec<String> = reply["warnings"]
         .as_array()
@@ -250,7 +250,7 @@ async fn waited_for(
     let mut reply = stopped(id, &shown, started.elapsed());
     if matches!(noted, Some(Ok(Noted::Disagrees))) {
         reply["mismatch"] = json!(true);
-        reply["warnings"] = json!([DISAGREES]);
+        reply["warnings"] = json!([disagrees(client)]);
     }
     if already_ended {
         reply["alreadyEnded"] = json!(true);
@@ -399,7 +399,10 @@ pub(crate) async fn stop_held(
         expected,
         grace,
     };
-    acknowledged(&accepted(client.mutate(mutation, None, None, None).await?)?)
+    acknowledged(
+        client,
+        &accepted(client.mutate(mutation, None, None, None).await?)?,
+    )
 }
 
 /// [`stop_held`], on a VM in the session its proof pinned, `machine`,
@@ -416,14 +419,14 @@ async fn stopped_in(
         expected,
         grace,
     };
-    acknowledged(&mutate(client, mutation, machine).await?)
+    acknowledged(client, &mutate(client, mutation, machine).await?)
 }
 
-/// What a stop's `reply` acknowledged.
-fn acknowledged(reply: &Value) -> Result<Stopped> {
+/// What a stop's `reply` to `client` acknowledged.
+fn acknowledged(client: &Client, reply: &Value) -> Result<Stopped> {
     match JobReply::deserialize(reply) {
         Ok(JobReply::Stop(stopped)) => Ok(stopped),
-        _ => Err(unconfirmed()),
+        _ => Err(client.unconfirmed()),
     }
 }
 
@@ -968,10 +971,11 @@ pub(crate) async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
         .await
         .map_err(Error::certain)?;
 
-    shown_from(&reply)
+    shown_from(&reply, &client.subject())
 }
 
-fn shown_from(reply: &Value) -> Result<Vec<Shown>> {
+/// The jobs `reply` shows, a refusal naming the desktop as `subject` does.
+fn shown_from(reply: &Value, subject: &str) -> Result<Vec<Shown>> {
     if reply["ok"] != true {
         return Err(refused(reply));
     }
@@ -979,7 +983,7 @@ fn shown_from(reply: &Value) -> Result<Vec<Shown>> {
         Ok(JobReply::Show(Showing::Every { jobs })) => Ok(jobs),
         _ => Err(Error::new(
             Code::Protocol,
-            "The helper did not report its background jobs",
+            format!("{subject} did not report its background jobs"),
         )),
     }
 }
@@ -1030,7 +1034,15 @@ fn note(client: &Client, owner: Option<&Key>, entry: JobEntry) -> Result<Noted> 
 
 /// What a reply says when the helper's record of a job names another
 /// identity than the task's record does, which is kept as it was.
-const DISAGREES: &str = "The helper's record of this job names another process than the task's record does; the task's record was kept as it was";
+/// The warning of a job whose record on `client`'s desktop names another
+/// process than the task's record does.
+fn disagrees(client: &Client) -> String {
+    format!(
+        "{} record of this job names another process than the task's record does; the \
+         task's record was kept as it was",
+        client.owner()
+    )
+}
 
 /// A helper's refusal of a job request, keeping its code, why and which
 /// job, and whether it may have happened anyway.

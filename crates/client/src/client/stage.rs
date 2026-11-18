@@ -10,7 +10,7 @@
 //! any changed byte goes.
 //! A reply lost on its way is asked of the guest, which keeps what the
 //! stage came to; the bytes are never sent again.
-use super::{Actor, Client, mutate::unconfirmed};
+use super::{Actor, Client};
 use crate::link::{Route, Stream};
 use atlas_control::{Pending, executors::Executor};
 use atlas_core::{
@@ -103,7 +103,7 @@ impl Client {
         let placed = reply["path"].as_str().is_some_and(|path| !path.is_empty())
             && reply["digest"] == json!(held.snapshot().digest);
         if reply["ok"] == true && !placed {
-            return Err(self.pending_on_vm(unconfirmed()));
+            return Err(self.pending_on_vm(self.unconfirmed()));
         }
         let reply = self
             .settle(&request, reply, false, Some(claim), started)

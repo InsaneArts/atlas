@@ -226,10 +226,7 @@ fn capture_error(message: &str) -> Error {
     Error::new(Code::Capture, message)
 }
 fn changed() -> Error {
-    Error::new(
-        Code::SessionChanged,
-        "The native stream's helper session changed",
-    )
+    Error::new(Code::SessionChanged, "The native stream's session changed")
 }
 fn cancelled() -> Error {
     Error::new(Code::Cancelled, "The native stream request was cancelled")
@@ -241,7 +238,7 @@ fn guard(expected: &InputEpoch) -> Result<()> {
     if !permitted() {
         return Err(Error::new(
             Code::Permission,
-            "Screen Recording is not allowed for Atlas in the helper account",
+            "Screen Recording is not allowed for Atlas in this account",
         ));
     }
     Ok(())
@@ -1689,7 +1686,7 @@ impl Running {
                 unsafe { display.displayID() == key.epoch.display_id as u32 }
             })
             .ok_or_else(|| {
-                capture_error("ScreenCaptureKit did not expose the exact helper display")
+                capture_error("ScreenCaptureKit did not expose the exact display")
                     .with("nativeReason", "no-exact-display".into())
             })?;
         let _display: &SCDisplay = &display;

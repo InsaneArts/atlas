@@ -143,7 +143,8 @@ fn replied(reply: &Value) -> Option<Value> {
 }
 
 /// The facts of a command's picture once `row` says how the command went:
-/// `input`'s facts with its outcome and why, the control or field it named,
+/// `input`'s facts with its outcome and why (naming the desktop as `called`
+/// does), the control or field it named,
 /// the element `reply` says it reached when the command found none itself,
 /// its keys as keycaps, when its picture was taken and when it ended (now),
 /// in milliseconds since 1970, and what it `typed`. Typed text is kept
@@ -159,9 +160,10 @@ pub(in crate::client) fn finished(
     typed: Typed,
     limit: Option<u32>,
     taken: u128,
+    called: crate::overview::Called<'_>,
 ) -> Value {
     facts.insert("outcome".into(), json!(outcome(row)));
-    if let Some(reason) = crate::overview::reason(row) {
+    if let Some(reason) = crate::overview::reason(row, called) {
         facts.insert("reason".into(), json!(reason));
     }
     if let Some(label) = &row.label {

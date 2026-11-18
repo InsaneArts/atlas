@@ -103,7 +103,19 @@ impl Service {
             }
             (LaneKind::Input { change: Some(_) }, "input") if owns => {
                 let performed = request["actions"].as_array().map_or(0, Vec::len);
-                json!({"ok": true, "performed": performed, "app": null, "bundleId": null})
+                let mut reply =
+                    json!({"ok": true, "performed": performed, "app": null, "bundleId": null});
+                // As a machine guest's says an action on an element went.
+                let actions: Vec<atlas_core::actions::Action> =
+                    serde_json::from_value(request["actions"].clone()).unwrap_or_default();
+                if actions
+                    .iter()
+                    .any(|action| action.element_action().is_some())
+                {
+                    reply["mechanism"] = json!("accessibility");
+                    reply["verification"] = json!("not-checked");
+                }
+                reply
             }
             (LaneKind::Input { change: Some(_) }, "release") if owns => {
                 *holding = None;
@@ -770,30 +782,128 @@ async fn a_release_refused_for_certain_or_never_said_leaves_its_owner_claimed() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_naming_an_element_is_refused_before_anything_is_proved_or_claimed() {
+async fn a_batch_naming_an_element_goes_whole_under_an_owner_of_its_own() {
     let (serving, saying, client, _directory) = proven().await;
     let service = serving_input(&serving, &saying);
-    let keeper = &serving.fixture.keeper;
-    until("the guest's report read", || {
-        keeper.shared.state().report.is_some()
-    })
-    .await;
-    let before = admitted(&serving).len();
-
-    for batch in [
+    let generation = live(&serving);
+    let batches = [
         json!([{"type": "reference", "ref": "8123abc.12"}]),
         json!([{"type": "press", "ref": "8123abc.12"}]),
-        json!([{"type": "click", "x": 1.0, "y": 1.0},
-            {"type": "set-value", "ref": "8123abc.12", "value": "x"}]),
+        json!([{"type": "set-value", "ref": "8123abc.12", "value": "x"},
+            {"type": "click", "x": 1.0, "y": 1.0}]),
         json!([{"type": "pick", "ref": "8123abc.12", "option": "8123abc.13"}]),
-    ] {
-        let refused = agent::act(&client, None, &batch).await.unwrap_err();
-        assert_eq!(refused.error, client.unreachable().error, "{batch}");
+    ];
+
+    for batch in &batches {
+        let reply = agent::act(&client, None, batch).await.unwrap();
+        assert_eq!(reply["ok"], true, "{batch}: {reply}");
     }
 
-    assert!(saying.challenges.lock().unwrap().is_empty(), "never proved");
-    assert!(service.changes().is_empty());
-    assert_eq!(admitted(&serving).len(), before, "no lane opened");
+    let sent: Vec<Heard> = service
+        .changes()
+        .into_iter()
+        .filter(|heard| heard.request["op"] == "input")
+        .collect();
+    assert_eq!(sent.len(), batches.len());
+    for (heard, batch) in sent.iter().zip(&batches) {
+        assert_eq!(heard.generation, generation);
+        for (action, asked) in heard.request["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(batch.as_array().unwrap())
+        {
+            assert_eq!(action["type"], asked["type"], "{heard:?}");
+            assert_eq!(action["ref"], asked["ref"], "{heard:?}");
+            assert_eq!(action["option"], asked["option"], "{heard:?}");
+        }
+        let line = serde_json::to_vec(&heard.request).unwrap();
+        assert!(
+            matches!(
+                atlas_native::native::service::classify(&line),
+                Some(atlas_native::native::service::Kind::Mutation(Some(_)))
+            ),
+            "{heard:?}"
+        );
+    }
+    assert!(pending(&client).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_its_guest_could_not_act_on_or_check_is_refused_before_anything_is_claimed() {
+    let (serving, saying, client, _directory) = proven().await;
+    let service = serving_input(&serving, &saying);
+    let mut older = input_hello();
+    older["capabilities"] = json!(
+        atlas_native::native::service::CAPABILITIES
+            .iter()
+            .filter(|name| {
+                ![
+                    atlas_core::session::ELEMENT_ACTIONS,
+                    atlas_core::session::FOCUS_WINDOW,
+                ]
+                .contains(name)
+            })
+            .collect::<Vec<_>>()
+    );
+    *saying.input.lock().unwrap() = Some(older);
+    let before = admitted(&serving).len();
+    let in_window = Expect::new(812).unwrap().in_window(42).unwrap();
+
+    let on_element = agent::act(
+        &client,
+        None,
+        &json!([{"type": "press", "ref": "8123abc.12"}]),
+    )
+    .await
+    .unwrap_err();
+    // A ref after what would already have been sent is refused by its batch.
+    let misordered = agent::act(
+        &client,
+        None,
+        &json!([{"type": "click", "x": 1.0, "y": 1.0},
+            {"type": "reference", "ref": "8123abc.12"}]),
+    )
+    .await
+    .unwrap_err();
+    let verified = client.verify_vm().await.unwrap();
+    let ownership = client.controller.acquire_beside_commands().unwrap();
+    let unchecked = client
+        .input_owned_in(
+            &ownership,
+            atlas_core::actions::Batch::decode(&click_at(1.0, 1.0)),
+            &verified,
+            Some(in_window),
+        )
+        .await
+        .unwrap_err();
+    drop(ownership);
+    let refused = [on_element, unchecked, misordered];
+
+    assert_eq!(refused[0].code, Code::Update, "{:?}", refused[0]);
+    assert!(
+        refused[0].error.contains("act on elements"),
+        "{:?}",
+        refused[0]
+    );
+    assert_eq!(refused[1].code, Code::Update, "{:?}", refused[1]);
+    assert!(
+        refused[1].error.contains("check where input lands"),
+        "{:?}",
+        refused[1]
+    );
+    assert_eq!(refused[2].code, Code::Input, "{:?}", refused[2]);
+    for refused in &refused {
+        assert!(!refused.uncertain, "{refused:?}");
+        assert!(!refused.error.contains("helper"), "{refused:?}");
+    }
+    assert!(service.changes().is_empty(), "nothing sent");
+    assert!(
+        admitted(&serving)[before..]
+            .iter()
+            .all(|header| !matches!(header.kind, LaneKind::Input { change: Some(_) })),
+        "no input lane opened"
+    );
     assert!(pending(&client).is_empty());
 }
 
@@ -880,7 +990,7 @@ async fn only_a_look_is_read_on_the_input_lane_and_every_other_read_there_is_ref
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_persons_input_and_input_checked_against_an_app_are_refused_in_the_one_wording() {
+async fn the_persons_input_is_refused_in_the_one_wording() {
     let (serving, saying, client, _directory) = proven().await;
     let service = serving_input(&serving, &saying);
     let lease = atlas_control::SharedLease::default();

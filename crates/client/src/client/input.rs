@@ -28,17 +28,24 @@ const GRANT_OUTLIVES: Duration =
 const LOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Refuse unless the input service that answered `verified` reads and
-/// keeps looks; nothing is asked of one that does not.
+/// keeps looks, and a VM's guest takes input from agents, else in its own
+/// words; nothing is asked of one that does not.
 pub(crate) fn require_looks(verified: &Verified) -> Result<()> {
-    if verified.input_offers(LOOKS) {
+    if let Some(pinned) = verified.machine() {
+        if let Some((code, held)) = &pinned.input_held {
+            return Err(Error::new(*code, held.clone()));
+        }
+        if !verified.input_offers(LOOKS) {
+            return Err(Error::new(
+                Code::Update,
+                "The VM's input service cannot read elements: update Atlas so the VM's Atlas \
+                 and this command are one build",
+            ));
+        }
         return Ok(());
     }
-    if verified.machine().is_some() {
-        return Err(Error::new(
-            Code::Update,
-            "The VM's input service cannot read elements: update Atlas so the VM's Atlas and \
-             this command are one build",
-        ));
+    if verified.input_offers(LOOKS) {
+        return Ok(());
     }
     Err(Error::new(
         Code::Startup,
@@ -69,7 +76,7 @@ pub(super) fn expectation(
 
 /// Whether input service `native` checks all of `expect`: the app, with
 /// the Dock, and the window and field when it names them.
-fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
+pub(super) fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
     native.has_capability(FOCUS_APP)
         && native.has_capability(FOCUS_DOCK)
         && (expect.window().is_none() || native.has_capability(FOCUS_WINDOW))
@@ -149,7 +156,8 @@ impl Client {
     /// caller verified just before. Its reply names the look. A read sends
     /// nothing, so its failure is never uncertain. A VM's guest is asked
     /// through its keeper, on its input service's own lane, in the
-    /// generation and epoch its proof pinned.
+    /// generation and epoch its proof pinned, and refused in the guest's own
+    /// words while its input service is not ready for agents.
     pub(crate) async fn look_at(&self, verified: &Verified, expect: &Expect) -> Result<Value> {
         require_looks(verified)?;
         let epoch = match verified.machine() {
@@ -173,9 +181,11 @@ impl Client {
                     .connect_change(&route, &request, pinned.generation)
                     .await
                     .map_err(Error::certain)?;
-                async { connection.dispatch(&asked).await?.finish().await }
+                let reply = async { connection.dispatch(&asked).await?.finish().await }
                     .await
-                    .map_err(unanswered)?
+                    .map_err(unanswered)?;
+                // What the guest said of itself is said of the VM.
+                crate::vm::guest_words::reply_said_of(reply, &self.selected.name)
             }
             None => {
                 let mut transport = self.input_transport()?;
@@ -318,8 +328,8 @@ impl Client {
 
     /// [`Client::input_owned`] in the session `verified`, which the caller
     /// proved for its whole command just before: a VM's every batch goes in
-    /// the generation and epoch that one proof pinned, and is refused when
-    /// it is to be checked against an app, which is not built for one.
+    /// the generation and epoch that one proof pinned, and its guest's input
+    /// service checks it against `check`, found in that same proof.
     pub(crate) async fn input_owned_in(
         &self,
         ownership: &Ownership,
@@ -331,13 +341,9 @@ impl Client {
             let expected = Some((&verified.session().epoch, Instant::now()));
             return self.input_owned(ownership, actions, expected, check).await;
         }
-        if check.is_some() {
-            return Err(self.unreachable());
-        }
-        self.refuse_references_on_vm(&actions)?;
         let sent = async {
             self.controller.require_known_beside(Beside::Commands)?;
-            self.input_on_vm(actions, verified).await
+            self.input_on_vm(actions, verified, check).await
         };
         self.advised_on_vm(sent.await)
     }
@@ -391,18 +397,18 @@ impl Client {
         check: Option<Expect>,
     ) -> Result<Value> {
         if let Kind::Vm(_) = self.desktop().kind() {
-            // Only an agent's own input at a point, or of keys and text, is
-            // built for a VM: the person's, input checked against an app or a
-            // look taken before, and any naming an element, are refused before
-            // the VM is read.
-            if expected.is_some() || lease.is_some() || check.is_some() {
+            // Only an agent's input is built for a VM: the person's is
+            // refused before the VM is read.
+            if lease.is_some() {
                 return Err(self.unreachable());
             }
-            self.refuse_references_on_vm(&actions)?;
             let sent = async {
                 self.controller.require_known_beside(Beside::Commands)?;
                 let verified = self.verify_vm().await?;
-                self.input_on_vm(actions, &verified).await
+                if expected.is_some_and(|(epoch, _)| *epoch != verified.session().epoch) {
+                    return Err(self.session_changed());
+                }
+                self.input_on_vm(actions, &verified, check).await
             };
             return self.advised_on_vm(sent.await);
         }

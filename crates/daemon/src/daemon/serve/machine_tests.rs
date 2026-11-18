@@ -2129,6 +2129,70 @@ async fn with_input_service_on(
 }
 
 #[tokio::test]
+async fn a_stop_while_an_apps_elements_are_looked_at_lets_the_look_be_answered_and_holds_changes() {
+    use crate::machine::input::tests::{ANSWER, SCANNING};
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::scripted_for_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    let look = json!({"op": "elements", "epoch": {"uid": 502}, "expect": {"pid": 812}});
+
+    let (looked, ()) = tokio::join!(
+        ask(&desktop, LaneKind::Input { change: None }, &look),
+        async {
+            for _ in 0..500 {
+                if folder.path().join(SCANNING).exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(folder.path().join(SCANNING).exists(), "the scan began");
+            controlling
+                .outbox
+                .say(atlas_session::control::Said::Stop)
+                .unwrap();
+            let mut halted = served.machine.daemon.halted.subscribe();
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                halted.wait_for(|halt| halt.halted && halt.stops > 0),
+            )
+            .await
+            .expect("the Stop took hold")
+            .unwrap();
+            std::fs::write(folder.path().join(ANSWER), b"").unwrap();
+        }
+    );
+    let change = Token::new();
+    let taken = ask(
+        &desktop,
+        LaneKind::Input {
+            change: Some(change.clone()),
+        },
+        &json!({"op": "acquire", "owner": Token::new(), "epoch": {"uid": 502},
+            "person": false, "change": change}),
+    )
+    .await;
+
+    let looked = looked.last().unwrap();
+    assert_eq!(looked["ok"], true, "{looked}");
+    assert_eq!(looked["look"], "8123abc", "{looked}");
+    let taken = taken.last().unwrap();
+    assert_eq!(taken["code"], "stopped", "{taken}");
+}
+
+#[tokio::test]
 async fn a_read_on_an_input_lane_is_answered_by_the_input_service() {
     let (_served, _controlling, desktop, _folder, _turn) = with_input_service().await;
 

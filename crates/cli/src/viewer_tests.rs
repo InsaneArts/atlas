@@ -1993,7 +1993,9 @@ async fn reading_the_helpers_apps_and_windows_records_no_activity() {
     let rows = atlas_client::activity_log::recent(&output, 5);
     assert_eq!(rows.len(), 1);
     assert!(
-        atlas_client::overview::shown(&rows[0], 0).reason.is_some(),
+        atlas_client::overview::shown(&rows[0], 0, atlas_client::overview::Called::Helper)
+            .reason
+            .is_some(),
         "a failed capture says why: {:?}",
         rows[0]
     );
@@ -2011,7 +2013,14 @@ fn the_apps_activity_row_keeps_its_fields_and_values() {
     let rows = atlas_client::activity_log::recent(dir.path(), 5);
     let shown: Vec<Value> = rows
         .iter()
-        .map(|row| activity_row(row, 100_000_000_000, true))
+        .map(|row| {
+            activity_row(
+                row,
+                100_000_000_000,
+                true,
+                atlas_client::overview::Called::Helper,
+            )
+        })
         .collect();
     // AtlasService decodes this same fixture, so producer and consumer cannot
     // silently drift while asserting separate copies of the wire contract.
@@ -2044,7 +2053,14 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
         )
         .unwrap();
     };
-    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000, true);
+    let shown = || {
+        activity_row(
+            &recent(dir.path(), 1)[0],
+            5_000_000_000,
+            true,
+            atlas_client::overview::Called::Helper,
+        )
+    };
 
     write(std::slice::from_ref(&start));
     let before = shown();
@@ -2077,7 +2093,7 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
     assert_eq!(Row::parse(&spoofed).unwrap().logical_id(), "2000000000");
     let standalone = Row::parse(&json!({"operation": "read"})).unwrap();
     assert_eq!(
-        activity_row(&standalone, 0, true)["logicalId"],
+        activity_row(&standalone, 0, true, atlas_client::overview::Called::Helper)["logicalId"],
         standalone.id
     );
 }

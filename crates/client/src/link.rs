@@ -292,7 +292,14 @@ impl Link {
         let (sent, unanswered) = self.send_in(request, generation).await?;
         let reply = sent.finish().await?;
         unanswered.answered();
-        Ok(reply)
+        // A VM's guest says its words of itself: said of the VM as they
+        // come in.
+        Ok(match self {
+            Self::Keeper(keeper) => {
+                crate::vm::guest_words::reply_said_of(reply, &keeper.selected.name)
+            }
+            Self::Unix(_) | Self::Session(_) | Self::Unreachable(_) => reply,
+        })
     }
 }
 

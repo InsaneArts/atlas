@@ -340,6 +340,23 @@ pub(crate) fn unconfirmed() -> Error {
     .uncertain()
 }
 
+impl Client {
+    /// [`unconfirmed`], said of the desktop this client acts on.
+    pub(crate) fn unconfirmed(&self) -> Error {
+        if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+            return unconfirmed();
+        }
+        Error::new(
+            Code::Protocol,
+            format!(
+                "{} did not confirm operation completion",
+                self.selected.name
+            ),
+        )
+        .uncertain()
+    }
+}
+
 /// Whether a job start's reply proves the job it started: a leader that
 /// is a group of its own, an exact start time, the boot it started in, the
 /// helper account `uid` it was for, and a state. Else a job may run that
@@ -1038,7 +1055,9 @@ impl Client {
                 .await;
         }
         let reply = reply.map_err(|error| self.pending_on_vm(error))?;
-        mutation.validate(&reply)?;
+        // What the guest said of itself is said of the VM as it comes in.
+        let reply = crate::vm::guest_words::reply_said_of(reply, &self.selected.name);
+        mutation.validate(&reply).map_err(|_| self.unconfirmed())?;
         let mut reply = self
             .settle(&request, reply, command, claim, started)
             .await?;

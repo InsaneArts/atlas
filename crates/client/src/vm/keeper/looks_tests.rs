@@ -913,6 +913,82 @@ async fn a_plain_click_after_a_vms_screenshot_still_goes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_screenshot_remembers_its_windows_so_a_plain_click_on_one_is_held_to_it() {
+    let mut looking = looking("click").await;
+    looking.client.host_session = Some(
+        crate::host_session::HostSession::new(crate::host_session::Host::Named, "one").unwrap(),
+    );
+    let generation = live(&looking.serving);
+    let heard: Arc<Mutex<Vec<(u64, Value)>>> = Arc::default();
+    let hearing = heard.clone();
+    *looking.saying.otherwise.lock().unwrap() =
+        Some(Arc::new(move |header: &Header, request: Value| {
+            hearing
+                .lock()
+                .unwrap()
+                .push((header.generation.0, request.clone()));
+            match (&header.kind, request["op"].as_str()) {
+                (LaneKind::Read, Some("windows")) => windows(),
+                (LaneKind::Picture, Some("screenshot")) => shot(&request),
+                (LaneKind::Input { change: Some(_) }, Some("acquire")) => json!({"ok": true}),
+                (LaneKind::Input { change: Some(_) }, Some("input")) => {
+                    json!({"ok": true, "app": "Notes", "bundleId": null, "performed": 1,
+                        "expect": request["expect"]})
+                }
+                (LaneKind::Input { change: Some(_) }, Some("release")) => {
+                    json!({"ok": true, "released": true})
+                }
+                _ => json!({"ok": false, "code": "bad-request", "error": "Not asked for."}),
+            }
+        }));
+
+    let saved = looking
+        .client
+        .capture(Size::Standard, None, false)
+        .await
+        .unwrap();
+    let clicked = agent::act(
+        &looking.client,
+        None,
+        &agent::click(30.0, 40.0, Button::Left, 1, &[]),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(clicked["ok"], true, "{clicked}");
+    let heard = heard.lock().unwrap().clone();
+    // The picture before the click is asked for beside taking input.
+    let ops: Vec<&str> = heard
+        .iter()
+        .map(|(_, request)| request["op"].as_str().unwrap())
+        .filter(|op| *op != "frame")
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            "windows",
+            "screenshot",
+            "windows",
+            "windows",
+            "acquire",
+            "input",
+            "release"
+        ],
+        "the windows read on either side of the picture, then to find the one clicked"
+    );
+    assert!(heard.iter().all(|(of, _)| *of == generation), "{heard:?}");
+    let input = heard
+        .iter()
+        .find(|(_, request)| request["op"] == "input")
+        .unwrap();
+    assert_eq!(
+        input.1["expect"],
+        json!({"pid": NOTES, "start": [123, 456], "window": WINDOW})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn files_read_while_a_vms_window_opened_or_opened_and_closed_again_are_never_kept() {
     for (window, reason) in [("open", "on-console"), ("closed", "session-changed")] {
         let looking = looking("collect").await;

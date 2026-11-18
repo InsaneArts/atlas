@@ -22,6 +22,104 @@ fn an_input_service_runs_when_started_for_these_tests() {
     std::process::exit(i32::from(served.is_err()));
 }
 
+/// The file a scripted service makes once it is asked to look at an app.
+pub(crate) const SCANNING: &str = "scanning";
+/// The file a test makes for a scripted service's look to be answered.
+pub(crate) const ANSWER: &str = "answer";
+
+/// A scripted input service a test of the daemon starts in its place,
+/// serving the channel on its standard input for the folder after `--`:
+/// ready, holding and releasing as it is told, and answering a look at an
+/// app's elements only once the test lets it, so a look can be held part
+/// way while the daemon goes on.
+#[test]
+fn a_scripted_input_service_runs_when_started_for_these_tests() {
+    use std::os::fd::AsFd;
+    let Some(folder) = std::env::args_os().skip_while(|word| word != "--").nth(1) else {
+        return;
+    };
+    let channel = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(scripted(
+        std::os::unix::net::UnixStream::from(channel),
+        std::path::PathBuf::from(folder),
+    ));
+    std::process::exit(0);
+}
+
+/// Serve `channel` as [`a_scripted_input_service_runs_when_started_for_these_tests`]
+/// says, its files in `folder`.
+async fn scripted(channel: std::os::unix::net::UnixStream, folder: std::path::PathBuf) {
+    use atlas_native::native::service::channel::Frame;
+    channel.set_nonblocking(true).unwrap();
+    let (mut reading, writing) = tokio::net::UnixStream::from_std(channel)
+        .unwrap()
+        .into_split();
+    let writing = Arc::new(tokio::sync::Mutex::new(writing));
+    let say = |frame: Frame| {
+        let writing = writing.clone();
+        async move {
+            let _ = frame.write(&mut *writing.lock().await).await;
+        }
+    };
+    let mut heard: std::collections::HashMap<u32, Vec<u8>> = std::collections::HashMap::new();
+    while let Ok(frame) = Frame::read(&mut reading).await {
+        match frame {
+            Frame::Hold { seq, on } => say(Frame::Held { seq, on }).await,
+            Frame::Revoke(generation) => {
+                say(Frame::Revoked(generation)).await;
+                say(Frame::Settled(generation)).await;
+            }
+            Frame::Data(connection, bytes) => {
+                let line = heard.entry(connection).or_default();
+                line.extend(bytes);
+                if !line.ends_with(b"\n") {
+                    continue;
+                }
+                let request: serde_json::Value =
+                    serde_json::from_slice(&std::mem::take(line)).unwrap_or_default();
+                let (folder, writing) = (folder.clone(), writing.clone());
+                tokio::spawn(async move {
+                    let mut reply = serde_json::to_vec(&scripted_answer(&request, &folder).await)
+                        .unwrap_or_default();
+                    reply.push(b'\n');
+                    let _ = Frame::Data(connection, reply)
+                        .write(&mut *writing.lock().await)
+                        .await;
+                });
+            }
+            Frame::Open(..)
+            | Frame::Close(_)
+            | Frame::Renew(..)
+            | Frame::Revoked(_)
+            | Frame::Settled(_)
+            | Frame::Held { .. } => {}
+        }
+    }
+}
+
+/// What the scripted service answers `request` with, its files in
+/// `folder`.
+async fn scripted_answer(request: &serde_json::Value, folder: &Path) -> serde_json::Value {
+    match request["op"].as_str() {
+        Some("hello") => serde_json::json!({"ok": true, "protocolVersion": 1,
+            "pid": std::process::id(), "ready": true, "accessibility": true,
+            "capabilities": []}),
+        Some("elements") => {
+            let _ = std::fs::write(folder.join(SCANNING), b"");
+            for _ in 0..1500 {
+                if folder.join(ANSWER).exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            serde_json::json!({"ok": true, "look": "8123abc", "elements": [],
+                "truncated": false, "reasons": [], "errors": {}})
+        }
+        _ => serde_json::json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
+    }
+}
+
 /// Held by every test that starts a real input service, so they take
 /// turns: many at once starve everything else of the window server.
 pub(crate) static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

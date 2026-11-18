@@ -1024,33 +1024,52 @@ async fn a_close_on_a_vm_reads_its_guests_apps_and_copies_through_dispatch_and_i
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_raw_batch_naming_an_element_on_a_vm_is_refused_before_it_is_proved_or_claimed() {
+async fn a_raw_batch_naming_an_element_on_a_vm_goes_whole_to_its_guests_input_service() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
     let config = dir.path().join("settings.toml");
-    let batch = r#"[{"type": "move", "x": 1, "y": 1}, {"type": "press", "ref": "8123abc.12"}]"#;
+    let batch = r#"[{"type": "press", "ref": "8123abc.12"}, {"type": "move", "x": 1, "y": 1}]"#;
     let file = dir.path().join("batch.json");
     std::fs::write(&file, batch).unwrap();
     let from_file = format!("@{}", file.display());
+    let batches = [
+        batch,
+        batch,
+        r#"[{"type": "reference", "ref": "8123abc.12"}]"#,
+        r#"[{"type": "set-value", "ref": "8123abc.12", "value": "x"}]"#,
+    ];
 
     for args in [
         &["input", batch][..],
         &["input", &from_file],
-        &["input", r#"[{"type": "reference", "ref": "8123abc.12"}]"#],
-        &[
-            "input",
-            r#"[{"type": "set-value", "ref": "8123abc.12", "value": "x"}]"#,
-        ],
+        &["input", batches[2]],
+        &["input", batches[3]],
     ] {
         let command = parse(args).unwrap().command.unwrap();
-        let refused = executed(&config, command, &client).await.unwrap_err();
-        assert_eq!(refused.error, client.unreachable().error, "{args:?}");
-        let shown = crate::output::failure(&refused, true);
-        assert!(!shown.to_string().contains("helper"), "{shown}");
+        let done = executed(&config, command, &client).await.unwrap();
+        assert_eq!(done["ok"], true, "{args:?}: {done}");
     }
 
-    assert!(keeper.asked_for("observe").is_empty(), "never proved");
-    assert!(keeper.asked_for("change").is_empty(), "nothing sent");
+    let sent: Vec<Value> = keeper
+        .asked_for("change")
+        .into_iter()
+        .filter(|change| change["request"]["op"] == "input")
+        .collect();
+    assert_eq!(sent.len(), batches.len(), "{sent:?}");
+    for (sent, batch) in sent.iter().zip(batches) {
+        let asked: Value = serde_json::from_str(batch).unwrap();
+        for (action, asked) in sent["request"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(asked.as_array().unwrap())
+        {
+            assert_eq!(action["type"], asked["type"], "{sent}");
+            assert_eq!(action["ref"], asked["ref"], "{sent}");
+        }
+        assert_eq!(sent["generation"], atlas_client::test_support::GENERATION);
+        assert!(sent["request"].get("expect").is_none(), "{sent}");
+    }
     assert!(client.controller.pending().unwrap().is_empty());
 }
 
@@ -1117,17 +1136,7 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
     let one_wording = client.unreachable().error;
 
     for args in [
-        &["click", "1", "2", "--app", "Finder"][..],
-        &["click", "--ref", "8123abc.12"],
-        &["click", "--app", "Finder", "--name", "OK"],
-        &["key", "cmd+s", "--app", "Finder"],
-        &["type", "hi", "--field", "Search"],
-        &["scroll", "1", "2", "--dy", "3", "--window", "4"],
-        &["drag", "1", "2", "3", "4", "--pid", "812"],
-        &["input", "[]", "--app", "Finder"],
-        &["element", "press", "--ref", "8123abc.12"],
-        &["elements", "--app", "Finder"],
-        &["apps"],
+        &["apps"][..],
         &["start-input"],
         &["environment", "discover", "--tool", "cat"],
     ] {
@@ -1149,6 +1158,329 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         keeper.asked.lock().unwrap()
     );
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn targeted_input_on_a_vm_goes_through_dispatch_with_what_its_guest_is_to_check() {
+    use atlas_client::test_support::{FINDER, FINDER_WINDOW, GENERATION};
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let finder = json!({"pid": FINDER, "start": [123, 456]});
+    let in_window = json!({"pid": FINDER, "start": [123, 456], "window": FINDER_WINDOW});
+    let in_field = json!({"pid": FINDER, "start": [123, 456], "field": "Search"});
+    let window = FINDER_WINDOW.to_string();
+    let move_to = r#"[{"type": "move", "x": 30, "y": 40}]"#;
+    let targeted: [(&[&str], &Value); 9] = [
+        (&["click", "30", "40", "--app", "Finder"], &finder),
+        (&["key", "cmd+s", "--app", "Finder"], &finder),
+        (
+            &["type", "hi", "--app", "Finder", "--field", "Search"],
+            &in_field,
+        ),
+        (
+            &["scroll", "30", "40", "--dy", "3", "--window", &window],
+            &in_window,
+        ),
+        (
+            &["drag", "30", "40", "50", "60", "--window", &window],
+            &in_window,
+        ),
+        (&["input", move_to, "--app", "Finder"], &finder),
+        (&["click", "--app", "Finder", "--name", "OK"], &in_window),
+        (&["click", "--ref", "8123abc.0", "--app", "Finder"], &finder),
+        (
+            &["element", "press", "--ref", "8123abc.0", "--app", "Finder"],
+            &finder,
+        ),
+    ];
+
+    for (args, expect) in targeted {
+        let before = keeper.asked_for("change").len();
+        let command = parse(args).unwrap().command.unwrap();
+        let done = executed(&config, command, &client).await.unwrap();
+
+        assert_eq!(done["ok"], true, "{args:?}: {done}");
+        let changes = keeper.asked_for("change").split_off(before);
+        let ops: Vec<&str> = changes
+            .iter()
+            .map(|change| change["request"]["op"].as_str().unwrap())
+            .collect();
+        assert_eq!(ops, ["acquire", "input", "release"], "{args:?}");
+        for change in &changes {
+            assert_eq!(change["lane"], "input", "{args:?}");
+            assert_eq!(change["generation"], GENERATION, "{args:?}");
+        }
+        assert_eq!(&changes[1]["request"]["expect"], expect, "{args:?}");
+    }
+    let looked = executed(
+        &config,
+        parse(&["elements", "--app", "Finder"])
+            .unwrap()
+            .command
+            .unwrap(),
+        &client,
+    )
+    .await
+    .unwrap();
+    let windows = executed(
+        &config,
+        parse(&["windows"]).unwrap().command.unwrap(),
+        &client,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(looked["look"], "8123abc", "{looked}");
+    let look = keeper
+        .asked_for("read")
+        .into_iter()
+        .rfind(|read| read["request"]["op"] == "elements")
+        .unwrap();
+    assert_eq!(look["lane"], "input", "{look}");
+    assert_eq!(look["generation"], GENERATION, "{look}");
+    assert_eq!(look["request"]["expect"], finder, "{look}");
+    assert_eq!(windows["windows"][0]["number"], FINDER_WINDOW, "{windows}");
+    assert_eq!(windows["windows"][0]["owner"], "Finder", "{windows}");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn targeted_input_and_looks_on_a_vm_wait_for_accessibility_in_its_guests_words_through_dispatch()
+ {
+    const ACCESSIBILITY: &str =
+        "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents wait for it.";
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    *keeper.held.lock().unwrap() = Some(ACCESSIBILITY);
+    let allow =
+        "Ask the person to allow Atlas in Privacy & Security, Accessibility, in work's window.";
+
+    for args in [
+        &["click", "10", "10", "--app", "Finder"][..],
+        &["elements", "--app", "Finder"],
+        &["click", "--app", "Finder", "--name", "OK"],
+        &["element", "press", "--ref", "8123abc.0"],
+        &["wait", "--app", "Finder", "--name", "OK", "--timeout", "0"],
+        &["type", "hi", "--app", "Finder"],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let refused = match executed(&config, command, &client).await {
+            Err(refused) => json!(refused),
+            Ok(reply) => reply,
+        };
+
+        assert_eq!(refused["ok"], false, "{args:?}: {refused}");
+        assert_eq!(refused["code"], "permission", "{args:?}: {refused}");
+        assert_eq!(refused["error"], ACCESSIBILITY, "{args:?}: {refused}");
+        assert_eq!(refused["next"], allow, "{args:?}: {refused}");
+        assert!(!refused.to_string().contains("helper"), "{refused}");
+    }
+    assert!(keeper.asked_for("change").is_empty(), "nothing sent");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_elements_windows_and_waits_are_served_under_either_stop_while_a_click_is_held() {
+    for by_station in [true, false] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        let config = dir.path().join("settings.toml");
+        let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+        if by_station {
+            client.controller.note_stop(true).unwrap();
+        } else {
+            *keeper.stop.lock().unwrap() = "stopped";
+        }
+
+        let looked = executed(&config, command(&["elements", "--app", "Finder"]), &client)
+            .await
+            .unwrap();
+        let windows = executed(&config, command(&["windows"]), &client)
+            .await
+            .unwrap();
+        let waited = executed(
+            &config,
+            command(&["wait", "--app", "Finder", "--name", "OK", "--timeout", "0"]),
+            &client,
+        )
+        .await
+        .unwrap();
+        let clicked = executed(
+            &config,
+            command(&["click", "30", "40", "--app", "Finder"]),
+            &client,
+        )
+        .await;
+
+        assert_eq!(looked["look"], "8123abc", "{by_station}: {looked}");
+        assert_eq!(
+            windows["windows"][0]["owner"], "Finder",
+            "{by_station}: {windows}"
+        );
+        assert_eq!(waited["matched"], true, "{by_station}: {waited}");
+        let held = clicked.unwrap_err();
+        assert_eq!(held.code, Code::Stopped, "{by_station}: {held:?}");
+        assert!(keeper.asked_for("change").is_empty(), "{by_station}");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_refusal_a_vm_gives_through_dispatch_says_helper() {
+    let refusals = [
+        json!({"ok": false, "code": "daemon", "error": "The helper daemon stopped unexpectedly"}),
+        json!({"ok": false, "code": "permission",
+            "error": "Screen Recording is not allowed for Atlas in the helper account"}),
+        json!({"ok": false, "code": "busy", "holder": "person",
+            "error": "The person is using the helper"}),
+        json!({"ok": false, "code": "job",
+            "error": "No background job with that ID is known in the helper"}),
+    ];
+    // Replies the station cannot read, which it refuses, or holds as of
+    // unknown outcome, in its own words.
+    let unreadable = json!({"ok": true, "apps": 5, "windows": 5});
+    let changes: [&[&str]; 6] = [
+        &["run", "--", "/bin/echo", "hi"],
+        &["job", "start", "--", "/bin/sleep", "30"],
+        &["click", "10", "20"],
+        &["type", "hi"],
+        &["key", "cmd+s"],
+        &["element", "press", "--ref", "8123abc.0"],
+    ];
+    let reads: [&[&str]; 8] = [
+        &["open", "--app", "Probe"],
+        &["close", "--app", "Probe"],
+        &["click", "10", "20", "--app", "Finder"],
+        &["elements", "--app", "Finder"],
+        &["windows"],
+        &["wait", "--app", "Finder", "--timeout", "0"],
+        &["wait", "--app", "Finder", "--name", "OK", "--timeout", "0"],
+        &["job", "list"],
+    ];
+    let cases = refusals
+        .iter()
+        .flat_map(|said| changes.iter().chain(&reads).map(move |args| (said, *args)))
+        .chain(
+            changes
+                .iter()
+                .chain(&reads)
+                .map(|args| (&unreadable, *args)),
+        );
+
+    for (said, args) in cases {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        let config = dir.path().join("settings.toml");
+        *keeper.answering.lock().unwrap() = Some(said.clone());
+
+        let outcome = executed(&config, parse(args).unwrap().command.unwrap(), &client).await;
+
+        let shown = match outcome {
+            Err(error) => crate::output::failure(&error, true),
+            Ok(reply) => reply,
+        };
+        assert!(
+            !shown.to_string().to_lowercase().contains("helper"),
+            "{args:?} answered {said}: {shown}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_or_path_with_helper_in_its_name_is_named_as_it_is_on_a_vm() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+
+    let absent = executed(
+        &config,
+        command(&["click", "10", "20", "--app", "BuildHelper"]),
+        &client,
+    )
+    .await
+    .unwrap_err();
+    *keeper.answering.lock().unwrap() = Some(json!({"ok": false, "code": "spawn-failed",
+        "error": "The file /tmp/helper/BuildHelper.app does not exist; the helper looked"}));
+    let unopened = executed(&config, command(&["run", "--", "/usr/bin/true"]), &client)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        absent.error, "BuildHelper is not running: run atlas open --app BuildHelper",
+        "{absent:?}"
+    );
+    assert_eq!(
+        unopened["error"], "The file /tmp/helper/BuildHelper.app does not exist; work looked",
+        "{unopened}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_named_the_helper_is_named_as_it_is_while_the_guests_own_words_name_the_vm() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+
+    let absent = executed(
+        &config,
+        command(&["click", "--app", "the helper", "10", "10"]),
+        &client,
+    )
+    .await
+    .unwrap_err();
+    *keeper.answering.lock().unwrap() = Some(json!({"ok": false, "code": "daemon",
+        "error": "the helper daemon stopped while the helper ran it"}));
+    let stopped = executed(&config, command(&["run", "--", "/usr/bin/true"]), &client)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        absent.error, "the helper is not running: run atlas open --app the helper",
+        "{absent:?}"
+    );
+    let shown = crate::output::failure(&absent, true);
+    assert_eq!(shown["error"], absent.error, "{shown}");
+    assert_eq!(
+        stopped["error"], "work's daemon stopped while work ran it",
+        "{stopped}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wait_on_a_vm_whose_session_moved_on_is_proved_again_and_goes_on() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    // Its keeper reconnected after the wait proved it: the first look is
+    // refused unread, as one of another generation is.
+    *keeper.refusing_once.lock().unwrap() = Some(json!({"ok": false,
+        "code": "session-changed", "sent": false,
+        "error": "work's session changed since this command proved it."}));
+
+    let waited = executed(
+        &config,
+        parse(&["wait", "--app", "Finder", "--timeout", "5"])
+            .unwrap()
+            .command
+            .unwrap(),
+        &client,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(waited["ok"], true, "{waited}");
+    assert_eq!(waited["windows"][0]["owner"], "Finder", "{waited}");
+    assert_eq!(keeper.asked_for("observe").len(), 2, "proved again once");
+    let looks = keeper
+        .asked_for("read")
+        .into_iter()
+        .filter(|read| read["request"]["op"] == "windows")
+        .count();
+    assert_eq!(looks, 2, "looked again in the new proof");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

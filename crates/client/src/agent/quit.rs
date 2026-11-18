@@ -112,10 +112,21 @@ pub(crate) async fn quit_until(
     let finished = client
         .run_finished_in(ownership, verified, argv, 64 * 1024)
         .await?;
+    // Said of the desktop the apps run in: a VM's are seen by its windows.
+    let (whose, it, look) = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        let name = &client.selected.name;
+        (format!("{name}'s"), name.clone(), "atlas windows")
+    } else {
+        (
+            "the helper's".to_owned(),
+            "The helper".to_owned(),
+            "atlas apps",
+        )
+    };
     if finished.timed_out || !finished.succeeded {
         return Err(Error::new(
             Code::WaitFailed,
-            "The helper did not finish quitting the apps; run atlas apps to see what is open",
+            format!("{it} did not finish quitting the apps; run {look} to see what is open"),
         ));
     }
 
@@ -125,9 +136,9 @@ pub(crate) async fn quit_until(
     let deadline = Instant::now() + limit;
 
     loop {
-        let after = apps_in(client, verified)
-            .await
-            .map_err(|error| unconfirmed(error, &names_by_quit(processes, &signalled, true)))?;
+        let after = apps_in(client, verified).await.map_err(|error| {
+            unconfirmed(error, &names_by_quit(processes, &signalled, true), &whose)
+        })?;
         let still = left(&after, &signalled);
         if still.is_empty() {
             return Ok(Quitting::Gone(Quit { signalled, after }));
@@ -142,22 +153,24 @@ pub(crate) async fn quit_until(
 
 /// `error`, from reading the app list after `names` were asked to quit, as
 /// what it leaves: they may or may not have exited, and their copies stay.
-/// The signal's own reply was received, so it is not uncertain.
-pub(super) fn unconfirmed(mut error: Error, names: &[String]) -> Error {
+/// The signal's own reply was received, so it is not uncertain. `whose`
+/// names the desktop the apps run in, as the apps' owner.
+pub(super) fn unconfirmed(mut error: Error, names: &[String], whose: &str) -> Error {
     let named: Vec<&str> = names
         .iter()
         .map(String::as_str)
         .filter(|name| !name.is_empty())
         .collect();
     let asked = match (names.is_empty(), named.is_empty()) {
-        (true, _) => "Atlas could not read the helper's apps to confirm the apps it was closing \
-                      exited"
-            .to_owned(),
-        (false, true) => "Atlas asked the apps it was closing to quit but could not read the \
-                          helper's apps to confirm they exited"
-            .to_owned(),
+        (true, _) => {
+            format!("Atlas could not read {whose} apps to confirm the apps it was closing exited")
+        }
+        (false, true) => format!(
+            "Atlas asked the apps it was closing to quit but could not read {whose} apps to \
+             confirm they exited"
+        ),
         (false, false) => format!(
-            "Atlas asked {} to quit but could not read the helper's apps to confirm they exited",
+            "Atlas asked {} to quit but could not read {whose} apps to confirm they exited",
             named.join(", ")
         ),
     };

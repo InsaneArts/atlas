@@ -74,20 +74,27 @@ fn malformed_job_lists_are_not_reported_as_no_running_jobs() {
         json!({"ok": true}),
         json!({"ok": true, "op": "job", "action": "show", "jobs": {}}),
     ] {
-        assert_eq!(shown_from(&reply).unwrap_err().code, Code::Protocol);
+        assert_eq!(
+            shown_from(&reply, "The helper").unwrap_err().code,
+            Code::Protocol
+        );
     }
     assert!(
-        shown_from(&json!({"ok": true, "op": "job", "action": "show", "jobs": []}))
-            .unwrap()
-            .is_empty()
+        shown_from(
+            &json!({"ok": true, "op": "job", "action": "show", "jobs": []}),
+            "The helper"
+        )
+        .unwrap()
+        .is_empty()
     );
     let jobs = shown_from(
         &json!({"ok": true, "op": "job", "action": "show", "jobs": [job_view(ID, "running")]}),
+        "The helper",
     )
     .unwrap();
     assert_eq!(jobs[0].state(), Some(JobState::Running));
     assert_eq!(
-        shown_from(&json!({"ok": false, "code": "bad-request"}))
+        shown_from(&json!({"ok": false, "code": "bad-request"}), "The helper")
             .unwrap_err()
             .code,
         Code::BadRequest

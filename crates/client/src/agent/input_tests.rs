@@ -252,7 +252,7 @@ async fn typing_records_the_whole_commands_outcome_after_its_batches() {
             "all requested type actions count"
         );
         assert_eq!(row.worked(), completed == 2);
-        let shown = crate::overview::shown(row, 0);
+        let shown = crate::overview::shown(row, 0, crate::overview::Called::Helper);
         if completed > 0 {
             assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
         }

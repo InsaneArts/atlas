@@ -1,4 +1,4 @@
-//! Window lists read by the daemon in the verified helper session.
+//! Window lists read by the desktop's daemon in the session it was proved in.
 use super::{Client, Verified};
 use crate::last_capture;
 use atlas_core::{
@@ -23,23 +23,43 @@ pub(crate) enum Seen {
 
 pub(crate) const WINDOW_LOOKUP: Duration = Duration::from_secs(5);
 
+/// The window list in `reply`, from Second Login's helper.
 fn window_list(reply: Value) -> Result<Shown> {
+    listed_by(reply, None)
+}
+
+/// The window list in `reply`, from Second Login's helper, or from the VM
+/// named `vm`, refused in that VM's words.
+fn listed_by(reply: Value, vm: Option<&str>) -> Result<Shown> {
     if reply["ok"] == false {
         if reply["code"] == "bad-request" && reply["error"] == "unknown op 'windows'" {
-            return Err(Error::new(
-                Code::Daemon,
-                "The helper is running an older Atlas that cannot list windows in its \
-                 daemon; run atlas restart, then try again",
-            ));
+            return Err(match vm {
+                Some(vm) => Error::new(
+                    Code::Update,
+                    format!("{vm}'s Atlas is from an older build that cannot list its windows."),
+                ),
+                None => Error::new(
+                    Code::Daemon,
+                    "The helper is running an older Atlas that cannot list windows in its \
+                     daemon; run atlas restart, then try again",
+                ),
+            });
         }
         return Err(refusal(&reply));
     }
-    from_reply(&reply)
-        .ok_or_else(|| Error::new(Code::Windows, "The helper window list is unavailable"))
+    from_reply(&reply).ok_or_else(|| {
+        let unavailable = vm.map_or_else(
+            || "The helper window list is unavailable".to_owned(),
+            |vm| format!("{vm}'s window list is unavailable"),
+        );
+        Error::new(Code::Windows, unavailable)
+    })
 }
 
 impl Client {
-    /// Read windows without starting a process.
+    /// Read windows without starting a process, in the session `verified`
+    /// names, and a VM's in the generation its proof was taken in; when it
+    /// names none, in the desktop as it is proved now.
     pub(crate) async fn windows_in(
         &self,
         verified: Option<&Verified>,
@@ -47,16 +67,23 @@ impl Client {
         limit: Duration,
     ) -> Result<Shown> {
         let read = async {
-            let (pin, generation) = match verified {
-                Some(verified) => (
-                    verified.pin()?,
-                    verified.machine().map(|machine| machine.generation),
-                ),
-                None => (self.verify().await?.pin()?, None),
+            let proved;
+            let verified = match verified {
+                Some(verified) => verified,
+                None => {
+                    proved = self.verify_reading().await?;
+                    &proved
+                }
             };
-            let request = json!({"op": "windows", "dock": dock, "session": pin});
+            let generation = verified.machine().map(|machine| machine.generation);
+            let request = json!({"op": "windows", "dock": dock, "session": verified.pin()?});
             let link = self.link.clone().with_timeout(limit);
-            window_list(link.call_in(&request, generation).await?)
+            let reply = link.call_in(&request, generation).await?;
+            if matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+                listed_by(reply, Some(&self.selected.name))
+            } else {
+                window_list(reply)
+            }
         };
         read.await.map_err(Error::certain)
     }

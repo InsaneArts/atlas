@@ -521,41 +521,11 @@ async fn every_command_not_built_for_a_vm_is_refused_in_one_wording_before_anyth
     .await;
     let before = admitted(&serving).len();
     let one_wording = client.unreachable().error;
-    let in_an_app = crate::agent::Expected::new(
-        Some(crate::agent::Target::Name("Finder".into())),
-        None,
-        None,
-    )
-    .unwrap()
-    .unwrap();
 
     let refused = [
         client.start_input().await.unwrap_err(),
         client.identity().await.unwrap_err(),
         client.apps().await.unwrap_err(),
-        crate::agent::list(&client, &crate::agent::WindowFilter::default())
-            .await
-            .unwrap_err(),
-        crate::agent::act(
-            &client,
-            Some(&in_an_app),
-            &crate::agent::click(10.0, 10.0, atlas_core::actions::Button::Left, 1, &[]),
-        )
-        .await
-        .unwrap_err(),
-        crate::agent::type_text(&client, "hi", Some(&in_an_app))
-            .await
-            .unwrap_err(),
-        crate::agent::click_reference(
-            &client,
-            None,
-            "8123abc.12",
-            atlas_core::actions::Button::Left,
-            1,
-            &[],
-        )
-        .await
-        .unwrap_err(),
         client.restart().await.unwrap_err(),
     ];
 

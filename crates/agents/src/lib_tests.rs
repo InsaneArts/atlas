@@ -387,3 +387,26 @@ fn every_error_code_is_in_the_troubleshooting_reference() {
 
     assert!(missing.is_empty(), "undocumented error codes: {missing:?}");
 }
+
+#[test]
+fn a_session_start_on_a_vm_that_does_not_answer_names_the_vm() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected = Selected {
+        name: "work".to_owned(),
+        desktop: atlas_core::config::desktops::Chosen::Vm(atlas_core::config::desktops::VmConfig {
+            id: atlas_core::desktop::DesktopId::parse("0123456789abcdef01234567").unwrap(),
+            output_dir: directory.path().join("output"),
+            activity: atlas_core::config::Activity::default(),
+        }),
+        user_entry: None,
+        adding: atlas_core::config::desktops::Adding::default(),
+    };
+
+    let said = unanswered("1.0.0", &selected);
+
+    assert_eq!(
+        said,
+        "Atlas 1.0.0: work is not answering; run atlas doctor."
+    );
+    assert_eq!(within(&selected), "work");
+}

@@ -87,6 +87,24 @@ impl Starter {
             ],
         )
     }
+
+    /// This test binary, running only the test that is a scripted input
+    /// service when given a folder after `--`.
+    #[cfg(test)]
+    pub(crate) fn scripted_for_these_tests(folder: &Path) -> Self {
+        Self::new(
+            std::env::current_exe().expect("the test binary"),
+            vec![
+                "--exact".into(),
+                "machine::input::tests::a_scripted_input_service_runs_when_started_for_these_tests"
+                    .into(),
+                "--test-threads=1".into(),
+                "-q".into(),
+                "--".into(),
+                folder.as_os_str().to_owned(),
+            ],
+        )
+    }
 }
 
 /// How the input service stands.

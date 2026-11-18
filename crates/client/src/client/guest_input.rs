@@ -7,20 +7,22 @@
 //! guest's input lanes, all in the generation the command's proof was
 //! taken in, each claimed as the guest's under a token of its own, which
 //! its lane and its request name too. Nothing is sent while the guest's
-//! input service is not ready for agents, and an action naming an element
-//! is not built for a VM. The picture before it is taken in the generation
-//! and session its proof pinned, and kept only once a proof after it shows
-//! the same.
+//! input service is not ready for agents. Where the input must land, an
+//! app, its window and its field, is found in that same proof and checked
+//! by the guest's input service before every event, as an element an
+//! action names is found again there. The picture before it is taken in
+//! the generation and session its proof pinned, and kept only once a proof
+//! after it shows the same.
 use super::{
     Client, Mutation, Verified,
-    input::{native_refusal, released},
+    input::{checks_all, native_refusal, released},
 };
 use atlas_control::{Pending, executors::Executor};
 use atlas_core::{
-    actions::Batch,
+    actions::{Batch, Expect},
     error::{Code, Error, Holder, Result},
     files::Token,
-    session::{ASKS, InputEpoch, TYPED_FIELDS},
+    session::{ASKS, ELEMENT_ACTIONS, InputEpoch, TYPED_FIELDS},
 };
 use atlas_session::compatibility::INPUT_LANES;
 use serde_json::{Value, json};
@@ -31,31 +33,24 @@ use std::time::Instant;
 const GRANT_OUTLIVES: std::time::Duration =
     atlas_core::session::GRANT_TTL.saturating_add(std::time::Duration::from_secs(1));
 
-impl Client {
-    /// Refuse, in the one wording for what this build cannot do on a VM,
-    /// `actions` that name an element by reference: those act on a look
-    /// this build never takes on a VM. Nothing is proved or claimed first.
-    ///
-    /// # Errors
-    ///
-    /// As said; a batch that does not decode is refused where it is read.
-    pub(super) fn refuse_references_on_vm(&self, actions: &Result<Batch<'_>>) -> Result<()> {
-        match actions {
-            Ok(batch)
-                if batch
-                    .actions()
-                    .iter()
-                    .any(|action| action.reference().is_some()) =>
-            {
-                Err(self.unreachable())
-            }
-            Ok(_) | Err(_) => Ok(()),
-        }
-    }
+/// The refusal of what the VM's input service is too old to do, `cannot`.
+fn older(cannot: &str) -> Error {
+    Error::new(
+        Code::Update,
+        format!(
+            "The VM's input service cannot {cannot}: update Atlas so the VM's Atlas and this \
+             command are one build"
+        ),
+    )
+}
 
+impl Client {
     /// Send an agent's `actions` to the VM `verified` proved, in that very
-    /// proof's session: refused before anything is claimed while its guest
-    /// takes no input from agents, in the guest's own words.
+    /// proof's session, checked by its guest's input service against
+    /// `check` when given: refused before anything is claimed while its
+    /// guest takes no input from agents, in the guest's own words, or while
+    /// its input service cannot check all `check` names or act on an
+    /// element the batch names.
     ///
     /// # Errors
     ///
@@ -66,8 +61,8 @@ impl Client {
         &self,
         actions: Result<Batch<'_>>,
         verified: &Verified,
+        check: Option<Expect>,
     ) -> Result<Value> {
-        self.refuse_references_on_vm(&actions)?;
         self.reachable()?;
         let pinned = verified.machine().ok_or_else(|| self.unreachable())?;
         if let Some((code, held)) = &pinned.input_held {
@@ -77,6 +72,13 @@ impl Client {
             format!("{name}'s Atlas is from an older build that takes no input from this Mac.")
         })?;
         let native = &verified.observation.native;
+        // Input that cannot be taken back is never sent unchecked.
+        if check
+            .as_ref()
+            .is_some_and(|expect| !checks_all(native, expect))
+        {
+            return Err(older("check where input lands"));
+        }
         // An input service older than this one may call a password field a
         // plain one: no text typed through it is kept.
         if !native.has_capability(TYPED_FIELDS)
@@ -88,11 +90,15 @@ impl Client {
         // An older input service would ignore the accounts and send without
         // asking: while the person lists any, it must ask.
         if !native.has_capability(ASKS) && crate::asking::policy(self).is_some() {
-            return Err(Error::new(
-                Code::Update,
-                "The VM's input service cannot ask the person before sending: update Atlas so \
-                 the VM's Atlas and this command are one build",
-            ));
+            return Err(older("ask the person before sending"));
+        }
+        if !native.has_capability(ELEMENT_ACTIONS)
+            && actions
+                .actions()
+                .iter()
+                .any(|action| action.element_action().is_some())
+        {
+            return Err(older("act on elements"));
         }
         actions.check(&verified.session().epoch.display)?;
         self.controller.interrupt().check()?;
@@ -112,7 +118,7 @@ impl Client {
             epoch,
             picture,
             app: self.doing.is_some(),
-            expect: None,
+            expect: check.as_ref(),
             asking,
         };
         let result = self.mutate_vm(mutation, generation, None).await;
@@ -137,11 +143,30 @@ impl Client {
     /// guest's Privacy & Security, for a `permission` refusal; a Second
     /// Login's outcome as it is.
     pub(crate) fn advised_on_vm_for(&self, outcome: Result<Value>, setting: &str) -> Result<Value> {
+        self.advised(outcome, Some(setting))
+    }
+
+    /// Any command's `outcome` on this VM, with what an agent does about a
+    /// failure in the VM's own words, as [`Client::advised_on_vm`] says; a
+    /// `permission` refusal's setting is the one it names already. Its own
+    /// words are left as they are: the station words them for the VM where
+    /// it makes them, and the guest's are said of the VM as they come in.
+    /// A Second Login's outcome as it is.
+    ///
+    /// # Errors
+    ///
+    /// The refusal in `outcome`, with its next step.
+    pub fn said_on_vm(&self, outcome: Result<Value>) -> Result<Value> {
+        self.advised(outcome, None)
+    }
+
+    /// [`Client::advised_on_vm_for`], for `setting` when it is known.
+    fn advised(&self, outcome: Result<Value>, setting: Option<&str>) -> Result<Value> {
         if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
             return outcome;
         }
         match outcome {
-            Err(error) => Err(self.advised_refusal_on_vm(error, setting)),
+            Err(error) => Err(self.refusal_on_vm(error, setting)),
             Ok(mut reply) => {
                 if reply["ok"] == false
                     && reply.get("next").is_none()
@@ -164,6 +189,11 @@ impl Client {
     /// is `setting`, allowed in its window. One that names its next step
     /// already keeps it.
     pub(crate) fn advised_refusal_on_vm(&self, error: Error, setting: &str) -> Error {
+        self.refusal_on_vm(error, Some(setting))
+    }
+
+    /// [`Client::advised_refusal_on_vm`], for `setting` when it is known.
+    fn refusal_on_vm(&self, error: Error, setting: Option<&str>) -> Error {
         if error.details.contains_key("next") {
             return error;
         }
@@ -181,30 +211,26 @@ impl Client {
         code: Code,
         holder: Option<Holder>,
         uncertain: bool,
-        setting: &str,
+        setting: Option<&str>,
     ) -> Option<String> {
         let name = &self.selected.name;
         if code == Code::Permission && !uncertain {
-            return Some(format!(
-                "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s \
-                 window."
-            ));
+            return Some(match setting {
+                Some(setting) => format!(
+                    "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s \
+                     window."
+                ),
+                None => format!(
+                    "Ask the person to allow what Atlas asks for in Privacy & Security, in \
+                     {name}'s window."
+                ),
+            });
         }
+        // The shared steps are fixed words of the station's, naming nothing
+        // but the helper, so the VM is put in their place.
         let step = atlas_core::error::advice::step(Some(code), holder, uncertain);
-        step.contains("helper").then(|| {
-            let owned = format!("{name}'s");
-            [
-                ("the helper account", name.as_str()),
-                ("the helper's", owned.as_str()),
-                ("the helper", name.as_str()),
-                ("The helper's", owned.as_str()),
-                ("The helper", name.as_str()),
-            ]
-            .into_iter()
-            .fold(step.to_owned(), |step, (helper, vm)| {
-                step.replace(helper, vm)
-            })
-        })
+        step.contains("helper")
+            .then(|| crate::vm::guest_words::said_of(step, name))
     }
 
     /// The owner `owner`, whose claim is `barrier`, let go of as its guest

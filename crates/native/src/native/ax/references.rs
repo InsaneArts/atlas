@@ -365,9 +365,7 @@ impl Looks {
             .find(|look| look.name == reference.look)
             .ok_or_else(|| stale("That look is no longer kept"))?;
         if look.epoch != *epoch {
-            return Err(stale(
-                "That look was taken before the helper's display changed",
-            ));
+            return Err(stale("That look was taken before the display changed"));
         }
 
         let mut at = reference.index;

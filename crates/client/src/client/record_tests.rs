@@ -651,7 +651,7 @@ fn a_failure_keeps_its_fixed_code_and_reads_as_plain_words_but_never_its_message
     let rows = crate::activity_log::recent(directory, 5);
     let reasons = rows
         .iter()
-        .map(|row| json!(crate::overview::shown(row, 0).reason))
+        .map(|row| json!(crate::overview::shown(row, 0, crate::overview::Called::Helper).reason))
         .collect::<Vec<_>>();
     assert_eq!(
         reasons,

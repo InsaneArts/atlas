@@ -149,7 +149,7 @@ impl Viewer {
                 Err((mut outcome, current)) => {
                     let waited = tokio::time::timeout_at(until, outcome.wait_for(Option::is_some))
                         .await
-                        .map_err(|_| late())?;
+                        .map_err(|_| late(client))?;
 
                     let shared = waited.ok().and_then(|outcome| outcome.clone());
                     match shared {
@@ -164,7 +164,7 @@ impl Viewer {
             let _clear = Capturing(&self.capture);
             let outcome = tokio::time::timeout_at(until, self.take_frame(client))
                 .await
-                .unwrap_or_else(|_| Err(late()));
+                .unwrap_or_else(|_| Err(late(client)));
             let shared = match &outcome {
                 Ok(frame) => Ok(frame.clone()),
                 Err(error) => Err((error.code, error.error.clone())),

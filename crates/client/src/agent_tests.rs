@@ -318,7 +318,7 @@ pub(super) fn refused(code: &str) -> Value {
 fn an_unconfirmed_quit_always_says_what_it_asked_in_plain_words() {
     let said = |names: &[&str]| {
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-        unconfirmed(Error::new(Code::Apps, "Refused"), &names)
+        unconfirmed(Error::new(Code::Apps, "Refused"), &names, "the helper's")
     };
 
     let named = said(&["TextEdit"]);

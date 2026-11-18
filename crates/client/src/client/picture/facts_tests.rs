@@ -82,13 +82,29 @@ fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
     let field = Some("AXTextField");
     let release = || typed(Some("Release 0.1.1"), &[field, field]);
 
-    let whole = finished(typing.clone(), &worked, &json!({}), release(), None, 0);
+    let whole = finished(
+        typing.clone(),
+        &worked,
+        &json!({}),
+        release(),
+        None,
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(
         (&whole["text"], &whole["length"]),
         (&json!("Release 0.1.1"), &json!(13))
     );
 
-    let limited = finished(typing.clone(), &worked, &json!({}), release(), Some(7), 0);
+    let limited = finished(
+        typing.clone(),
+        &worked,
+        &json!({}),
+        release(),
+        Some(7),
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(
         (&limited["text"], &limited["length"]),
         (&json!("Release"), &json!(13))
@@ -101,6 +117,7 @@ fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
         typed(None, &[field]),
         None,
         0,
+        crate::overview::Called::Helper,
     );
     assert_eq!(
         batch["text"], "part",
@@ -116,6 +133,7 @@ fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
             typed(Some("hunter2"), &into),
             None,
             0,
+            crate::overview::Called::Helper,
         );
         assert_eq!(secret["secure"], true, "{into:?}");
         assert!(secret.get("text").is_none() && secret.get("length").is_none());
@@ -136,6 +154,7 @@ fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
             typed(Some("hunter2"), &into),
             None,
             0,
+            crate::overview::Called::Helper,
         );
         assert!(
             unread.get("text").is_none()
@@ -165,6 +184,7 @@ fn no_text_is_kept_that_may_have_moved_on_to_another_field() {
             typed(Some(text), &[field]),
             None,
             0,
+            crate::overview::Called::Helper,
         );
         assert!(
             facts.get("text").is_none() && facts.get("length").is_none(),
@@ -197,6 +217,7 @@ fn a_commands_outcome_reads_as_it_is_marked() {
             Typed::default(),
             None,
             0,
+            crate::overview::Called::Helper,
         );
         assert_eq!(facts["outcome"], outcome, "{fields}");
     }
@@ -213,6 +234,7 @@ fn a_shortcuts_keys_read_as_keycaps_and_its_times_in_milliseconds() {
         Typed::default(),
         None,
         5_000_000,
+        crate::overview::Called::Helper,
     );
     assert_eq!(facts["keys"], json!([["⌘", "S"]]));
     assert_eq!(facts["label"], "⌘S");
@@ -226,7 +248,15 @@ fn keys_that_type_text_are_never_kept() {
     assert!(!typed.contains_key("keys"), "{typed:?}");
     // A row names no key that types text, so neither do the facts.
     let pressed = row(json!({"ok": true, "verb": "key"}));
-    let facts = finished(typed, &pressed, &json!({}), Typed::default(), None, 0);
+    let facts = finished(
+        typed,
+        &pressed,
+        &json!({}),
+        Typed::default(),
+        None,
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(facts["action"], "key");
     assert!(facts.get("keys").is_none(), "{facts}");
 }
@@ -276,7 +306,15 @@ fn an_element_the_input_service_reached_is_kept_unless_the_command_found_one() {
     let worked = row(json!({"ok": true}));
     let reached = json!({"ok": true, "element": {"frame": {"x": 1, "y": 2, "width": 3, "height": 4},
         "role": "AXTextArea", "name": "Dear Sam"}});
-    let facts = finished(click.clone(), &worked, &reached, Typed::default(), None, 0);
+    let facts = finished(
+        click.clone(),
+        &worked,
+        &reached,
+        Typed::default(),
+        None,
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(
         facts["element"],
         json!({"frame": {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}, "role": "AXTextArea"})
@@ -285,12 +323,28 @@ fn an_element_the_input_service_reached_is_kept_unless_the_command_found_one() {
 
     let pressed = json!({"ok": true, "element": {"frame": {"x": 1, "y": 2, "width": 3, "height": 4},
         "role": "AXCheckBox", "name": "Wrap"}});
-    let facts = finished(click.clone(), &worked, &pressed, Typed::default(), None, 0);
+    let facts = finished(
+        click.clone(),
+        &worked,
+        &pressed,
+        Typed::default(),
+        None,
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(facts["element"]["name"], "Wrap");
 
     let mut named = click.clone();
     named.extend(found(&element("AXButton", "Save", Some(frame()))));
-    let facts = finished(named, &worked, &pressed, Typed::default(), None, 0);
+    let facts = finished(
+        named,
+        &worked,
+        &pressed,
+        Typed::default(),
+        None,
+        0,
+        crate::overview::Called::Helper,
+    );
     assert_eq!(
         facts["element"]["name"], "Save",
         "the command's own is kept"
@@ -301,7 +355,15 @@ fn an_element_the_input_service_reached_is_kept_unless_the_command_found_one() {
         json!({"ok": true, "element": {"role": "AXButton"}}),
         json!({"ok": true, "element": {"frame": {"x": "1"}}}),
     ] {
-        let facts = finished(click.clone(), &worked, &reply, Typed::default(), None, 0);
+        let facts = finished(
+            click.clone(),
+            &worked,
+            &reply,
+            Typed::default(),
+            None,
+            0,
+            crate::overview::Called::Helper,
+        );
         assert!(facts.get("element").is_none(), "{reply}");
     }
 }

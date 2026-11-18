@@ -1,4 +1,4 @@
-//! The helper's on-screen windows: which ones a command is about, read
+//! The desktop's on-screen windows: which ones a command is about, read
 //! through its daemon, listed, and waited for until one appears or
 //! none is left.
 use super::{
@@ -7,6 +7,7 @@ use super::{
 };
 use crate::client::{Client, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     name::same_text,
     screen::{
@@ -58,15 +59,30 @@ impl WindowFilter {
     }
 }
 
-/// List the helper windows selected by `filter`, retaining their observed routing facts.
+/// List the desktop's windows selected by `filter`, retaining their observed routing facts.
 ///
 /// # Errors
 ///
 /// Returns identity, window-read or remembered-observation storage failures. Malformed
-/// helper data is never interpreted as an empty window list.
+/// desktop data is never interpreted as an empty window list.
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Vec<Window>> {
+    listed(client, filter).await.map_err(|error| {
+        if matches!(client.desktop().kind(), Kind::Vm(_)) {
+            client.advised_refusal_on_vm(error, WINDOW_SETTING)
+        } else {
+            error
+        }
+    })
+}
+
+/// What a VM's guest must be allowed for its windows to be read whole, as
+/// its Privacy & Security names it.
+const WINDOW_SETTING: &str = "Screen & System Audio Recording";
+
+/// [`list`], as the desktop answered it.
+async fn listed(client: &Client, filter: &WindowFilter) -> Result<Vec<Window>> {
     let windows = if client.host_session.is_some() {
-        let verified = client.verify().await?;
+        let verified = client.verify_reading().await?;
         let snapshot = client
             .windows_in(Some(&verified), true, WINDOW_LOOKUP)
             .await?;
@@ -94,6 +110,22 @@ pub async fn wait(
     gone: bool,
     timeout: Duration,
 ) -> Result<Value> {
+    let waited = waited(client, filter, gone, timeout).await;
+    client.advised_on_vm_for(waited, WINDOW_SETTING)
+}
+
+/// [`wait`], as the desktop answered it. The desktop is proved once, before
+/// the first look, and each look reads its windows in that proof's session
+/// within what is left of the deadline: a look refused because the session
+/// moved on (a VM's keeper that reconnected) proves it again once and goes
+/// on. A look that runs out of time once the deadline has passed ends the
+/// wait as any wait that ran out does.
+async fn waited(
+    client: &Client,
+    filter: &WindowFilter,
+    gone: bool,
+    timeout: Duration,
+) -> Result<Value> {
     if filter.app.is_none() && filter.title.is_none() {
         return Err(Error::new(Code::Usage, "Wait for --app, --title, or both"));
     }
@@ -102,6 +134,8 @@ pub async fn wait(
     let deadline = started
         .checked_add(timeout)
         .ok_or_else(|| Error::new(Code::Usage, "That --timeout is too long to wait"))?;
+    let mut verified = client.verify_reading().await?;
+    let mut proved_again = false;
 
     loop {
         // Each observation gets what is left of the deadline (at least half
@@ -114,7 +148,19 @@ pub async fn wait(
             probe_budget(remaining)
         };
 
-        let listed = client.windows_in(None, false, budget).await?;
+        let listed = match client.windows_in(Some(&verified), false, budget).await {
+            Ok(listed) => listed,
+            Err(error) if error.code == Code::SessionChanged && !proved_again => {
+                verified = client.verify_reading().await?;
+                proved_again = true;
+                continue;
+            }
+            Err(error) if error.code == Code::Transport && Instant::now() >= deadline => {
+                return Ok(ran_out(client, filter, gone).await);
+            }
+            Err(error) => return Err(error),
+        };
+        proved_again = false;
         let matching = filter.selected(listed.windows);
 
         if matching.is_empty() == gone {
@@ -127,19 +173,22 @@ pub async fn wait(
 
         let observed = Instant::now();
         if timeout.is_zero() || observed >= deadline {
-            let error = if gone {
-                "The window did not close in time".to_owned()
-            } else {
-                no_window(client, filter).await
-            };
-
-            return Ok(json!(
-                Error::new(Code::WaitFailed, error).with("timedOut", json!(true))
-            ));
+            return Ok(ran_out(client, filter, gone).await);
         }
 
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
     }
+}
+
+/// The reply of a wait for `filter` (or, with `gone`, for none) that ran
+/// out: why no window appeared, or that it did not close.
+async fn ran_out(client: &Client, filter: &WindowFilter, gone: bool) -> Value {
+    let error = if gone {
+        "The window did not close in time".to_owned()
+    } else {
+        no_window(client, filter).await
+    };
+    json!(Error::new(Code::WaitFailed, error).with("timedOut", json!(true)))
 }
 
 /// How long a wait rests between two looks.
@@ -166,6 +215,18 @@ const SCAN: Duration = Duration::from_secs(5);
 /// target and accessibility-read failures. A timeout is a `wait-failed`
 /// reply saying what the last look saw. Waiting sends nothing.
 pub async fn wait_for_element(
+    client: &Client,
+    target: &Target,
+    filter: &ElementFilter,
+    state: &State,
+    timeout: Duration,
+) -> Result<Value> {
+    let waited = waited_for_element(client, target, filter, state, timeout).await;
+    client.advised_on_vm_for(waited, "Accessibility")
+}
+
+/// [`wait_for_element`], as the desktop answered it.
+async fn waited_for_element(
     client: &Client,
     target: &Target,
     filter: &ElementFilter,
@@ -244,7 +305,7 @@ async fn observe(
     state: &State,
     budget: Duration,
 ) -> Result<Observed> {
-    let verified = client.verify().await?;
+    let verified = client.verify_reading().await?;
     let display = &verified.session().epoch.display;
     let display = Bounds::display(display.width, display.height);
     let expect = match target_expect(client, &verified, target).await {
@@ -261,7 +322,7 @@ async fn observe(
     };
 
     // A scan its budget stopped saw only part of the app, if anything.
-    let Some(scanned) = app_elements_within(client, &verified, expect.pid(), budget).await? else {
+    let Some(scanned) = app_elements_within(client, &verified, &expect, budget).await? else {
         return Ok(Observed::Unmet(Why::Incomplete));
     };
     let index = match judged(&scanned, filter, state, &display) {

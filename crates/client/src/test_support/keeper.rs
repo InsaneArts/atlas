@@ -106,6 +106,15 @@ pub struct ScriptedKeeper {
     pub runner: StandInRunner,
     /// Whether the keeper reaches no guest, as while the VM is stopped.
     pub away: Arc<Mutex<bool>>,
+    /// What the guest's input service still has to be allowed, as its hello
+    /// says it; none while it takes input from agents.
+    pub held: Arc<Mutex<Option<&'static str>>>,
+    /// What the guest answers every read and change it is asked but its
+    /// hello, in place of its own answer.
+    pub answering: Arc<Mutex<Option<Value>>>,
+    /// What the keeper answers the next read it is asked, in place of its
+    /// guest's answer: given once, then gone.
+    pub refusing_once: Arc<Mutex<Option<Value>>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -157,15 +166,28 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(Mutex::new("clear"));
     let away = Arc::new(Mutex::new(false));
+    let held = Arc::new(Mutex::new(None));
+    let answering = Arc::new(Mutex::new(None));
+    let refusing_once: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
-        let (asked, stop, away) = (asked.clone(), stop.clone(), away.clone());
+        let (asked, stop, away, held, answering, refusing_once) = (
+            asked.clone(),
+            stop.clone(),
+            away.clone(),
+            held.clone(),
+            answering.clone(),
+            refusing_once.clone(),
+        );
         async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (asked, stop, away, peer, own) = (
+                let (asked, stop, away, held, answering, refusing_once, peer, own) = (
                     asked.clone(),
                     stop.clone(),
                     away.clone(),
+                    held.clone(),
+                    answering.clone(),
+                    refusing_once.clone(),
                     peer.clone(),
                     own.clone(),
                 );
@@ -183,18 +205,40 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(request.clone());
                     let stop = *stop.lock().unwrap_or_else(PoisonError::into_inner);
+                    let held = *held.lock().unwrap_or_else(PoisonError::into_inner);
+                    let answering = answering
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
                     let job_stopped = asked
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .iter()
                         .any(|asked| asked["request"]["action"] == "stop");
-                    let answer = if *away.lock().unwrap_or_else(PoisonError::into_inner)
+                    let refused = (request["op"] == "read")
+                        .then(|| {
+                            refusing_once
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .take()
+                        })
+                        .flatten();
+                    let answer = if let Some(refused) = refused {
+                        refused
+                    } else if *away.lock().unwrap_or_else(PoisonError::into_inner)
                         && request["op"] != "hello"
                     {
                         json!({"ok": false, "code": "transport", "uncertain": false,
                             "error": "The control connection to the desktop failed."})
                     } else {
-                        answered(&request, stop, &peer, &own, job_stopped)
+                        let guest = Guest {
+                            stop,
+                            held,
+                            answering,
+                            peer: &peer,
+                            own: &own,
+                        };
+                        answered(&request, &guest, job_stopped)
                     };
                     // A picture is the keeper's own line, then the guest's.
                     let lines = match answer {
@@ -237,6 +281,9 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             stop,
             runner,
             away,
+            held,
+            answering,
+            refusing_once,
             serving,
         },
     )
@@ -345,27 +392,88 @@ fn environment_answered(asked: &Value) -> Value {
             "refusal": "scripted"}})
 }
 
-/// What the scripted keeper answers `request` with, its guest's Stop `stop`,
-/// the guest's key `peer`, the station's `own`, and its job stopped once
-/// `job_stopped`.
-fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped: bool) -> Value {
+/// The scripted guest as one request finds it.
+struct Guest<'a> {
+    /// Its own Stop.
+    stop: &'a str,
+    /// What its input service still has to be allowed; none while it takes
+    /// input from agents.
+    held: Option<&'a str>,
+    /// What it answers every read and change but its hello, when a test
+    /// says.
+    answering: Option<Value>,
+    /// Its key, and the station's.
+    peer: &'a Value,
+    own: &'a Value,
+}
+
+impl Guest<'_> {
+    /// Its daemon's hello.
+    fn hello(&self) -> Value {
+        let mut hello = machine_hello(self.stop);
+        if let Some(held) = self.held {
+            hello["input"]["held"] = json!(held);
+            hello["permissions"]["accessibility"] = json!(false);
+        }
+        hello
+    }
+
+    /// Its input service's hello.
+    fn input(&self) -> Value {
+        let mut hello = input_hello();
+        if self.held.is_some() {
+            hello["ready"] = json!(false);
+            hello["accessibility"] = json!(false);
+        }
+        hello
+    }
+}
+
+/// The scripted guest's one app with a window: Finder, process 812, its
+/// window number 42.
+pub const FINDER: i64 = 812;
+pub const FINDER_WINDOW: i64 = 42;
+
+/// What the scripted keeper answers `request` with, from `guest`, its job
+/// stopped once `job_stopped`.
+fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
+    if let Some(answering) = &guest.answering
+        && matches!(request["op"].as_str(), Some("read" | "change"))
+        && request["request"]["op"] != "hello"
+    {
+        return answering.clone();
+    }
     match request["op"].as_str() {
         Some("hello") => json!({"ok": true, "op": "hello",
             "keeper": {"protocol": crate::vm::keeper::PROTOCOL, "capabilities": []},
             "generation": GENERATION, "live": true}),
         Some("observe") => json!({"ok": true, "op": "observe", "generation": GENERATION,
-            "peer": peer, "station": own,
-            "status": {"hello": machine_hello(stop), "inputService": input_hello(),
+            "peer": guest.peer, "station": guest.own,
+            "status": {"hello": guest.hello(), "inputService": guest.input(),
                 "sessionProof": {"ok": true, "challenge": request["challenge"],
                     "proof": screen()}},
             "runner": {"ok": true, "power": "running", "confirmed": true,
                 "window": "closed", "incarnation": "6f1c0de2-run", "fence": 0}}),
-        Some("read") if request["request"]["op"] == "hello" => machine_hello(stop),
+        Some("read") if request["request"]["op"] == "hello" => guest.hello(),
         Some("read") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)
         }
         Some("read") if request["request"]["op"] == "apps" => {
-            json!({"ok": true, "apps": [], "starts": null})
+            json!({"ok": true, "apps": [], "starts": {}})
+        }
+        Some("read") if request["request"]["op"] == "windows" => {
+            json!({"ok": true, "starts": {FINDER.to_string(): [123, 456]},
+                "windows": [{"number": FINDER_WINDOW, "pid": FINDER, "owner": "Finder",
+                    "title": "Documents", "layer": 0, "alpha": 1.0,
+                    "bounds": {"x": 10, "y": 20, "width": 400, "height": 300}}]})
+        }
+        // Its input service keeps a look of Finder's one button.
+        Some("read") if request["request"]["op"] == "elements" => {
+            json!({"ok": true, "look": "8123abc", "truncated": false, "reasons": [],
+                "errors": {}, "elements": [{"index": 0, "depth": 0, "role": "AXButton",
+                    "title": "OK", "enabled": true,
+                    "window": {"x": 10, "y": 20, "width": 400, "height": 300},
+                    "frame": {"x": 20, "y": 30, "width": 60, "height": 20}}]})
         }
         Some("read") if request["request"]["op"] == "copies" => {
             json!({"ok": true, "op": "copies", "copies": [], "next": null, "unknown": []})
@@ -382,11 +490,11 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
         {
             environment_answered(&request["request"]["packet"]["request"])
         }
-        // Its input service takes, sends and lets go of whatever it is asked.
+        // Its input service takes, sends and lets go of whatever it is asked,
+        // and says it checked what it was to and how it acted on an element.
         Some("change") if request["lane"] == "input" => match request["request"]["op"].as_str() {
             Some("acquire") => json!({"ok": true}),
-            Some("input") => json!({"ok": true, "app": null, "bundleId": null,
-                "performed": request["request"]["actions"].as_array().map_or(0, Vec::len)}),
+            Some("input") => inputted(&request["request"]),
             Some("release") => json!({"ok": true, "released": true}),
             _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
         },
@@ -399,6 +507,27 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
         }
         _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
     }
+}
+
+/// What the scripted guest's input service answers an `input` request
+/// with: every action performed, its expectation echoed as checked, and an
+/// action on an element said to have gone through Accessibility.
+fn inputted(request: &Value) -> Value {
+    let actions: Vec<atlas_core::actions::Action> =
+        serde_json::from_value(request["actions"].clone()).unwrap_or_default();
+    let mut reply = json!({"ok": true, "app": null, "bundleId": null,
+        "performed": request["actions"].as_array().map_or(0, Vec::len)});
+    if request["expect"].is_object() {
+        reply["expect"] = request["expect"].clone();
+    }
+    if actions
+        .iter()
+        .any(|action| action.element_action().is_some())
+    {
+        reply["mechanism"] = json!("accessibility");
+        reply["verification"] = json!("not-checked");
+    }
+    reply
 }
 
 /// The scripted guest's screenshot of its whole 1440 × 900 point display,

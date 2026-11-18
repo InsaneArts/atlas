@@ -465,3 +465,7 @@ mod jobs_tests;
 #[cfg(test)]
 #[path = "input_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "targeted_tests.rs"]
+mod targeted_tests;

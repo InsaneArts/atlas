@@ -29,7 +29,7 @@ pub use apps::{AppList, AppRow};
 pub(crate) use capture::prune_captures;
 pub(crate) use input::require_looks;
 pub use keeper::Leftovers;
-pub(crate) use mutate::{Mutation, unconfirmed};
+pub(crate) use mutate::Mutation;
 pub use record::PersonInput;
 pub(crate) use record::{NOT_RECORDED, logged_at};
 pub(crate) use run::{Finished, Run};
@@ -349,6 +349,49 @@ impl Client {
         self.selected.unreachable()
     }
 
+    /// The desktop as the station's own words name it at the start of a
+    /// sentence: Second Login's "The helper", or the VM by its name, before
+    /// any name or path is put in beside it.
+    pub(crate) fn subject(&self) -> String {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            self.selected.name.clone()
+        } else {
+            "The helper".to_owned()
+        }
+    }
+
+    /// [`Client::subject`], owning what follows: "The helper's", or the
+    /// VM's.
+    pub(crate) fn owner(&self) -> String {
+        format!("{}'s", self.subject())
+    }
+
+    /// What this client's activity reasons call its desktop: Second Login's
+    /// helper, or the VM by its name.
+    #[must_use]
+    pub fn called(&self) -> crate::overview::Called<'_> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            crate::overview::Called::Vm(&self.selected.name)
+        } else {
+            crate::overview::Called::Helper
+        }
+    }
+
+    /// The refusal of what was found in a session the desktop is no longer
+    /// in, named for the desktop this client acts on.
+    pub(crate) fn session_changed(&self) -> Error {
+        if !matches!(self.desktop().kind(), Kind::Vm(_)) {
+            return Error::session_changed();
+        }
+        Error::new(
+            Code::SessionChanged,
+            format!(
+                "{} changed since Atlas checked it; look again",
+                self.selected.name
+            ),
+        )
+    }
+
     /// Where this VM's add stands, its lifecycle record looked at again
     /// when its file changed since: a look at the file, and a small read
     /// only then, one caller at a time. Every copy of the selection, the
@@ -625,6 +668,17 @@ impl Client {
     pub(crate) async fn verify_looking(&self) -> Result<Verified> {
         if matches!(self.desktop().kind(), Kind::Vm(_)) {
             self.verify_vm_looking().await
+        } else {
+            self.verify().await
+        }
+    }
+
+    /// The desktop proved for a read that changes nothing, an app's
+    /// elements or its windows: Second Login through [`Client::verify`], a
+    /// VM afresh through its keeper, held by neither Stop and never started.
+    pub(crate) async fn verify_reading(&self) -> Result<Verified> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            self.verify_vm_reading().await
         } else {
             self.verify().await
         }

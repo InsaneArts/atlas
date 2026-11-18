@@ -408,7 +408,7 @@ fn consented() -> Result<()> {
     } else {
         Err(Error::new(
             Code::Permission,
-            "Screen Recording is not allowed for Atlas in the helper account",
+            "Screen Recording is not allowed for Atlas in this account",
         ))
     }
 }

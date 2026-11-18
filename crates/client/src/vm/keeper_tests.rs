@@ -311,6 +311,8 @@ pub(super) struct Saying {
     pub(super) ran: Mutex<Option<Value>>,
     /// How it answers anything else, in place of an echo.
     pub(super) otherwise: Mutex<Option<Answering>>,
+    /// How long its proof takes, when a test says.
+    pub(super) proof_takes: Mutex<Option<std::time::Duration>>,
 }
 
 /// The reply of a command a machine guest ran that printed `hi` and kept
@@ -352,6 +354,9 @@ impl Guest {
                         said.ran.lock().unwrap().clone().unwrap_or_else(ran_hi)
                     }
                     (LaneKind::Read, Some("session-proof")) => {
+                        if let Some(takes) = *said.proof_takes.lock().unwrap() {
+                            std::thread::sleep(takes);
+                        }
                         let asked = request["challenge"].as_str().unwrap_or_default().to_owned();
                         said.challenges.lock().unwrap().push(asked.clone());
                         let answered = said.replaying.lock().unwrap().clone().unwrap_or(asked);

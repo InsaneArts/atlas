@@ -1,4 +1,4 @@
-//! Accessibility elements of an app's windows: looked at by the helper's
+//! Accessibility elements of an app's windows: looked at by the desktop's
 //! input service, which keeps each look, listed compactly or in full under
 //! the look's name, and clicked or acted on through Accessibility by that
 //! look and an element's index, or clicked by name or role only when
@@ -10,7 +10,7 @@ use super::{
 };
 use crate::client::{Client, Run, Seen, Verified, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
-    actions::{Action, Batch, Button},
+    actions::{Action, Batch, Button, Expect},
     desktop::Kind,
     error::{Code, Error, Result},
     protocol::{Crop, Part, Region},
@@ -26,7 +26,7 @@ use atlas_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, time::Instant};
+use std::collections::BTreeMap;
 
 /// Most accessibility failures a scan's diagnostics name.
 const SCAN_ERRORS: usize = 8;
@@ -302,37 +302,39 @@ const WEB_AREA: &str = "AXWebArea";
 pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps hide their windows from \
                              Accessibility while its screen is locked. Then look again.";
 
-/// The accessibility elements of process `pid`, scanned in the helper
-/// `verified` describes, which the caller verified just before.
+/// The accessibility elements of the process `expect` names, scanned in
+/// the desktop `verified` describes, which the caller verified just before.
 pub(super) async fn app_elements(
     client: &Client,
     verified: &Verified,
-    pid: i64,
+    expect: &Expect,
 ) -> Result<Scanned> {
-    probe(client, verified, pid, None)
+    probe(client, verified, expect, None)
         .await?
         .ok_or_else(|| Error::new(Code::Elements, "The accessibility probe returned no result"))
 }
 
-/// [`app_elements`], the helper stopping the scan after `timeout`; None
+/// [`app_elements`], the desktop stopping the scan after `timeout`; None
 /// when it did, before the scan said anything.
 pub(super) async fn app_elements_within(
     client: &Client,
     verified: &Verified,
-    pid: i64,
+    expect: &Expect,
     timeout: std::time::Duration,
 ) -> Result<Option<Scanned>> {
-    probe(client, verified, pid, Some(timeout)).await
+    probe(client, verified, expect, Some(timeout)).await
 }
 
-/// The scan of process `pid` in the desktop `verified` describes, stopped
-/// after `within` when given: none when it was, before it said anything.
-/// The helper runs its daemon's probe; a VM's guest has its input service
-/// look at the app, on its input lane, in the session its proof pinned.
+/// The scan of the process `expect` names in the desktop `verified`
+/// describes, stopped after `within` when given: none when it was, before
+/// it said anything. The helper runs its daemon's probe of its pid; a VM's
+/// guest has its input service look at that very process, as the guest
+/// told it apart when it was found, on its input lane, in the session its
+/// proof pinned.
 async fn probe(
     client: &Client,
     verified: &Verified,
-    pid: i64,
+    expect: &Expect,
     within: Option<std::time::Duration>,
 ) -> Result<Option<Scanned>> {
     match client.desktop().kind() {
@@ -342,15 +344,14 @@ async fn probe(
                 Some(timeout) => run.within(timeout),
                 None => run,
             };
-            let reply = crate::user::elements::probe_in(client, login, run, pid).await?;
+            let reply = crate::user::elements::probe_in(client, login, run, expect.pid()).await?;
             if reply["timedOut"] == true {
                 return Ok(None);
             }
             scanned(&reply).map(Some)
         }
         Kind::Vm(_) => {
-            let expect = atlas_core::actions::Expect::new(pid)?;
-            let look = client.look_at(verified, &expect);
+            let look = client.look_at(verified, expect);
             let looked = match within {
                 Some(timeout) => match tokio::time::timeout(timeout, look).await {
                     Ok(looked) => looked?,
@@ -376,8 +377,8 @@ fn scanned(reply: &Value) -> Result<Scanned> {
 /// in its form, under the name of the look a click names one by, with their
 /// indexes; only those of its window, or of its web pages, when it says so.
 /// Each window a compact listing names carries its number when the window
-/// list tells it. The helper's input service reads them and keeps the look;
-/// listing them grants nothing.
+/// list tells it. The desktop's input service reads them and keeps the
+/// look; listing them grants nothing.
 ///
 /// # Errors
 ///
@@ -386,8 +387,14 @@ fn scanned(reply: &Value) -> Result<Scanned> {
 /// for where the scan found none, and an input service that cannot keep looks.
 /// An incomplete window observation cannot establish remembered routing evidence.
 pub async fn elements(client: &Client, target: &Target, asked: &Asked) -> Result<Value> {
+    let listed = listed_elements(client, target, asked).await;
+    client.advised_on_vm_for(listed, "Accessibility")
+}
+
+/// [`elements`], as the desktop answered it.
+async fn listed_elements(client: &Client, target: &Target, asked: &Asked) -> Result<Value> {
     let window = asked.window;
-    let verified = client.verify().await?;
+    let verified = client.verify_reading().await?;
     let expect = target_expect(client, &verified, target).await?;
     let (scanned, seen) = client
         .look_seeing(&verified, window.is_some(), async {
@@ -471,7 +478,10 @@ pub async fn click_reference(
         "count": count,
         "modifiers": modifiers,
     });
-    crate::asking::after_asking(client, async || referenced(client, target, &action).await).await
+    let outcome =
+        crate::asking::after_asking(client, async || referenced(client, target, &action).await)
+            .await;
+    client.advised_on_vm_for(outcome, "Accessibility")
 }
 
 /// Do `action` to the element its `ref` names through Accessibility alone,
@@ -493,7 +503,10 @@ pub async fn click_reference(
 pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
     // Control is taken again for each attempt, so none is held while the
     // person is asked.
-    crate::asking::after_asking(client, async || element_once(client, target, action).await).await
+    let done =
+        crate::asking::after_asking(client, async || element_once(client, target, action).await)
+            .await;
+    client.advised_on_vm_for(done, "Accessibility")
 }
 
 /// [`element`] once: a refusal to ask the person comes back as it is.
@@ -524,7 +537,7 @@ async fn element_once(client: &Client, target: Option<&Target>, action: &Value) 
 /// Send `action`, which names an element by the `LOOK.INDEX` in its `ref`
 /// (and for a pick, its `option`), as a batch of its own under one ownership and the
 /// epoch verified first. A ref that is not one is refused before anything
-/// is asked of the helper.
+/// is asked of the desktop.
 async fn referenced(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
     let malformed = ["ref", "option"].iter().any(|key| {
         action
@@ -536,7 +549,7 @@ async fn referenced(client: &Client, target: Option<&Target>, action: &Value) ->
     }
 
     let ownership = client.controller.acquire_beside_commands()?;
-    let verified = client.verify().await?;
+    let verified = client.verify_either().await?;
     require_looks(&verified)?;
     let check = match target {
         Some(target) => Some(target_expect(client, &verified, target).await?),
@@ -545,12 +558,7 @@ async fn referenced(client: &Client, target: Option<&Target>, action: &Value) ->
 
     let actions = json!([action]);
     client
-        .input_owned(
-            &ownership,
-            Batch::decode(&actions),
-            Some((&verified.session().epoch, Instant::now())),
-            check,
-        )
+        .input_owned_in(&ownership, Batch::decode(&actions), &verified, check)
         .await
 }
 
@@ -1014,7 +1022,9 @@ fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) 
 /// Click exactly one matching element at its click point. Uniqueness needs a
 /// complete scan; the point must be uncovered in the element's own window in
 /// a window list read after the scan; and the click is posted under one
-/// ownership and the epoch observed at the start.
+/// ownership and the epoch observed at the start. On a VM it is that very
+/// element of the scan's look the guest clicks, found again and proved
+/// there first.
 ///
 /// # Errors
 /// Refuses incomplete or ambiguous scans and definitely disabled controls
@@ -1028,10 +1038,11 @@ pub async fn click_element(
     count: u8,
     modifiers: &[String],
 ) -> Result<Value> {
-    crate::asking::after_asking(client, async || {
+    let outcome = crate::asking::after_asking(client, async || {
         click_element_once(client, target, filter, which, count, modifiers).await
     })
-    .await
+    .await;
+    client.advised_on_vm_for(outcome, "Accessibility")
 }
 
 /// [`click_element`] once: a refusal to ask the person comes back as it is.
@@ -1051,10 +1062,9 @@ async fn click_element_once(
     }
 
     let ownership = client.controller.acquire_beside_commands()?;
-    let verified = client.verify().await?;
+    let verified = client.verify_either().await?;
     let expect = target_expect(client, &verified, target).await?;
-    let pid = expect.pid();
-    let scanned = app_elements(client, &verified, pid).await?;
+    let scanned = app_elements(client, &verified, &expect).await?;
     if scanned.incomplete {
         return Err(scanned.refusal());
     }
@@ -1064,7 +1074,12 @@ async fn click_element_once(
 
     // Resolve the element's owning window from a fresh list. Visibility is
     // checked after native preparation, under the same lock as the click.
-    let windows = client.windows_in(None, true, WINDOW_LOOKUP).await?.windows;
+    // A VM's is read in the generation its proof was taken in.
+    let pinned = verified.machine().is_some().then_some(&verified);
+    let windows = client
+        .windows_in(pinned, true, WINDOW_LOOKUP)
+        .await?
+        .windows;
     let check = element_check(element, &windows, expect, (x, y))?;
     client.picture_found(element);
 
@@ -1078,14 +1093,29 @@ async fn click_element_once(
         &uncaptioned
     };
 
-    let actions = click(x, y, which, count, modifiers);
+    // A VM's guest is asked to click that very element of the look it
+    // found it in: its input service finds it again and proves it before
+    // it clicks, so a control that moved or changed meanwhile is refused,
+    // nothing sent, never clicked where another now is.
+    let actions = match (verified.machine(), &scanned.look) {
+        (None, _) => click(x, y, which, count, modifiers),
+        (Some(_), Some(look)) => json!([{
+            "type": "reference",
+            "ref": Reference { look: *look, index: element.index }.to_string(),
+            "button": which,
+            "count": count,
+            "modifiers": modifiers,
+        }]),
+        (Some(_), None) => {
+            return Err(Error::new(
+                Code::Elements,
+                "The input service named no look, so the element cannot be clicked as found; \
+                 nothing was sent",
+            ));
+        }
+    };
     let mut result = client
-        .input_owned(
-            &ownership,
-            Batch::decode(&actions),
-            Some((&verified.session().epoch, Instant::now())),
-            Some(check),
-        )
+        .input_owned_in(&ownership, Batch::decode(&actions), &verified, Some(check))
         .await?;
     result["element"] = clicked(element, (x, y));
 

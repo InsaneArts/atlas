@@ -103,6 +103,7 @@ pub fn list(
         work,
         rows: activity_log::recent(output, ROWS),
         now: atlas_core::time::timestamp(),
+        called: client.called(),
         store: &store,
         records: &records,
         tasks: crate::task::store::Store::at(output).all(),
@@ -160,6 +161,8 @@ struct Reading<'a> {
     /// Every task record, for what each session's tasks left.
     tasks: Vec<crate::task::record::Record>,
     now: u128,
+    /// What its rows' reasons call the desktop.
+    called: crate::overview::Called<'a>,
 }
 
 impl Reading<'_> {
@@ -371,7 +374,7 @@ impl Reading<'_> {
     /// pictures taken around it are the person's alone: no agent is given
     /// them.
     fn row(&self, row: &Row) -> Value {
-        let shown = crate::overview::shown(row, self.now);
+        let shown = crate::overview::shown(row, self.now, self.called);
         let mut said = json!({
             "says": shown.says,
             "ok": shown.ok,
