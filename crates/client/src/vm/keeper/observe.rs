@@ -5,7 +5,11 @@
 //! the generation, what the guest declared in it, the guest key its
 //! handshake pinned and the station's own key. The keeper judges none of it
 //! and keeps none of it.
-use super::{Keeper, Session, read};
+use super::{
+    Keeper, Session, held,
+    lanes::{Ticket, Work},
+    read_until,
+};
 use atlas_core::{
     error::{Code, Error},
     protocol::valid_challenge,
@@ -53,6 +57,13 @@ pub(super) async fn observed(
             "An observation needs a challenge of 1 to 128 printable characters.",
         );
     };
+    // A proof is an agent's: none is taken while the person's maintenance
+    // holds the VM, and one under way is given up at a hold, its ticket
+    // held until every lane it opened is cancelled.
+    let ticket = match held::admitted(keeper, Work::Observe).await {
+        Ok(ticket) => ticket,
+        Err(refused) => return refused,
+    };
     let Ok(_room) = keeper.observing.try_acquire() else {
         return refusal(
             Code::Busy,
@@ -77,15 +88,22 @@ pub(super) async fn observed(
     let proving = json!({"op": "session-proof", "challenge": challenge});
     let reads = share(deadline, READS_BY);
     let (hello, input, proof) = tokio::join!(
-        final_reply(&session, LaneKind::Read, &hello, reads),
-        input_service(&session, share(deadline, INPUT_BY)),
-        final_reply(&session, LaneKind::Read, &proving, reads),
+        final_reply(&session, LaneKind::Read, &hello, reads, (keeper, &ticket)),
+        input_service(&session, share(deadline, INPUT_BY), (keeper, &ticket)),
+        final_reply(&session, LaneKind::Read, &proving, reads, (keeper, &ticket)),
     );
+    if ticket.is_stopped() {
+        return held::unsent_now(keeper);
+    }
     // Within what is left of its share, at the runner's socket itself.
     let left = (started + share(deadline, RUNNER_BY))
         .saturating_duration_since(tokio::time::Instant::now())
         .max(Duration::from_millis(1));
-    let runner = match keeper.reach.runner(left).await {
+    let runner = tokio::select! {
+        runner = keeper.reach.runner(left) => runner,
+        () = ticket.stopped() => return held::unsent_now(keeper),
+    };
+    let runner = match runner {
         Ok(reply) => json!({
             "ok": reply.ok,
             "power": reply.power,
@@ -122,7 +140,11 @@ pub(super) async fn observed(
 
 /// The guest's input service's own hello, read on an input lane; when the
 /// guest has none, or it says none, why, as an observation of its own.
-async fn input_service(session: &Session, deadline: Duration) -> Value {
+async fn input_service(
+    session: &Session,
+    deadline: Duration,
+    held: (&Keeper, &Ticket<'_>),
+) -> Value {
     let unavailable = |error: &str| json!({"available": false, "error": error});
     if judge(session.control.declared(), &[INPUT_LANES])
         .refusal()
@@ -135,6 +157,7 @@ async fn input_service(session: &Session, deadline: Duration) -> Value {
         LaneKind::Input { change: None },
         &json!({"op": "hello"}),
         deadline,
+        held,
     )
     .await;
     if hello["ok"] == true {
@@ -147,15 +170,22 @@ async fn input_service(session: &Session, deadline: Duration) -> Value {
     )
 }
 
-/// The final reply to `request` on a lane of `kind`, or why there is none.
+/// The final reply to `request` on a lane of `kind`, or why there is none:
+/// given up, its lane still opening included, once a hold stops `held`'s
+/// ticket.
 async fn final_reply(
     session: &Session,
     kind: LaneKind,
     request: &Value,
     deadline: Duration,
+    (keeper, ticket): (&Keeper, &Ticket<'_>),
 ) -> Value {
     let mut last = None;
-    let read = read(session, kind, request, deadline, |line| {
+    let stop = async {
+        ticket.stopped().await;
+        held::held_now(keeper)
+    };
+    let read = read_until(session, kind, request, deadline, stop, |line| {
         last = Some(line);
         true
     })

@@ -33,10 +33,14 @@ pub struct Doctor {
     pub(crate) vm: Option<VmMode>,
 }
 
-/// What a VM desktop is, as the overview shows it: what its guest said of
-/// its Stop first, then whether it is ready for agents.
+/// What a VM desktop is, as the overview shows it: the person's maintenance
+/// of it first, then what its guest said of its Stop, then whether it is
+/// ready for agents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VmMode {
+    /// The person's maintenance holds it, and why: no Resume is offered, as
+    /// it is refused until the maintenance ends.
+    Maintained(String),
     /// The guest says agents are stopped there: Resume is offered.
     Stopped,
     /// Ready for agents, as [`crate::client::readiness_of`] judges it.
@@ -81,7 +85,19 @@ impl Doctor {
         } else {
             &status["keeper"]["report"]["stop"]["state"]
         };
-        let mode = if status["ok"] == true && stop == "stopped" {
+        // Said by the station's own record, a status that failed included;
+        // the guest's Stop stays in the status as it is.
+        let maintained = status["station"]["maintenance"]["state"]
+            .as_str()
+            .filter(|state| *state != "none")
+            .map(|_| {
+                let name = status["desktop"]["name"].as_str().unwrap_or("the VM");
+                crate::vm::maintenance::holds(name, &status["station"]["maintenance"])
+                    .unwrap_or_default()
+            });
+        let mode = if let Some(why) = maintained {
+            VmMode::Maintained(why)
+        } else if status["ok"] == true && stop == "stopped" {
             VmMode::Stopped
         } else if status["ok"] != true {
             VmMode::Unavailable(
@@ -154,11 +170,14 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
     let observe = proven && status["proof"]["capture"] == true;
     let input = proven && status["proof"]["input"] == true;
     let checks = crate::client::readiness_checks(&status);
-    let next_steps: Vec<Value> = checks
+    let mut next_steps: Vec<Value> = checks
         .iter()
         .filter(|check| check["ok"] == false)
         .map(|check| check["nextStep"].clone())
         .collect();
+    // A step two checks fail for, as maintenance makes the proof's, is
+    // said once.
+    next_steps.dedup();
     let not_checked = |reason: String| json!({"state": NativeState::NotChecked, "reason": reason});
     let mut warnings = vec![json!(format!(
         "Native Save/Open is not checked on {name}; use atlas run or atlas open."
@@ -186,12 +205,26 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
         "installedApps": not_checked(format!(
             "Atlas does not check which apps are installed on {name} yet."
         )),
-        "maintenance": not_checked(format!("Atlas does not check {name}'s maintenance yet.")),
+        "maintenance": maintenance(&name, &status["station"]["maintenance"]),
     });
     status["checks"] = json!(checks);
     status["nextSteps"] = json!(next_steps);
     status["warnings"] = json!(warnings);
     status
+}
+
+/// Doctor's word on the person's maintenance of the VM `name`, as its
+/// status says it, `said`: its state, and why agents wait while one is
+/// kept. A status that does not say is never none, and never passed.
+fn maintenance(name: &str, said: &Value) -> Value {
+    match said["state"].as_str() {
+        Some("none") => json!({"state": "none"}),
+        Some(state @ ("on" | "ending")) => json!({"state": state, "reason": said["reason"]}),
+        _ => json!({
+            "state": "unknown",
+            "reason": crate::vm::maintenance::holds(name, said),
+        }),
+    }
 }
 
 /// `why` a VM whose status is `status` is not ready yet, and, once it is

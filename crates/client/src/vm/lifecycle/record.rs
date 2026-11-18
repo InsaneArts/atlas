@@ -80,6 +80,66 @@ pub struct RefusedStart {
     pub at_ms: u64,
 }
 
+/// How far the person's maintenance of a VM got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    /// Kept: its keeper is being asked to hold every agent's lane, and
+    /// Atlas VM is asked nothing until it has.
+    Holding,
+    /// Atlas VM is being asked to open its window with input.
+    Opening,
+    /// Its window takes the person's input.
+    Open,
+    /// Atlas VM is being asked to turn its window's input off.
+    Closing,
+}
+
+/// The proof that ended a maintenance: the run of Atlas VM that confirmed
+/// the window takes no input, and the change it confirmed it for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Ended {
+    pub by: String,
+    pub close: Token,
+}
+
+/// The person's maintenance of a VM, its window taking their input.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Maintenance {
+    /// Its ID, which its keeper's hold names.
+    pub change: Token,
+    pub phase: Phase,
+    /// Whether the person asked the VM stopped and started again first.
+    #[serde(default)]
+    pub restart: bool,
+    /// When it was kept, in milliseconds since 1970.
+    pub since_ms: u64,
+    /// The change that opens its window with input, once one is kept.
+    #[serde(default)]
+    pub open: Option<Token>,
+    /// The change that turns its window's input off, once one is kept.
+    #[serde(default)]
+    pub close: Option<Token>,
+    /// The run of Atlas VM that opened the window, as its ledger says;
+    /// none while it is not known.
+    #[serde(default)]
+    pub opened_by: Option<String>,
+    /// Kept once Atlas VM confirmed the window takes no input.
+    #[serde(default)]
+    pub ended: Option<Ended>,
+}
+
+impl Maintenance {
+    /// Whether it is ending: its window's input asked off, or confirmed off
+    /// and not yet forgotten.
+    #[must_use]
+    pub fn ending(&self) -> bool {
+        self.phase == Phase::Closing || self.ended.is_some()
+    }
+}
+
 /// A VM's lifecycle record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -114,6 +174,11 @@ pub struct Record {
     /// The last of them Atlas VM refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_start: Option<RefusedStart>,
+    /// The person's maintenance of the VM, kept before anything of it is
+    /// asked and until its window is confirmed to take no input: agents
+    /// wait for as long as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<Maintenance>,
 }
 
 impl Record {
@@ -140,6 +205,7 @@ impl Record {
             failure: None,
             starts: Vec::new(),
             refused_start: None,
+            maintenance: None,
         }
     }
 
@@ -293,6 +359,24 @@ impl Lifecycle {
                 "A VM's lifecycle record names another VM.",
             )),
             record => Ok(record.map(|record| record.state)),
+        }
+    }
+
+    /// The person's maintenance of the VM `id`, its record read where it is
+    /// and no folder made: none when it has no record or none is kept.
+    ///
+    /// # Errors
+    ///
+    /// Fails when its record cannot be read, or is not one this Atlas
+    /// reads, or names another VM: a maintenance is never taken for none.
+    pub(crate) fn maintenance_of(&self, id: &DesktopId) -> Result<Option<(String, Maintenance)>> {
+        let record: Option<Record> = read(&self.record_at(id), "A VM's lifecycle record")?;
+        match record {
+            Some(record) if record.id != *id => Err(Error::new(
+                Code::State,
+                "A VM's lifecycle record names another VM.",
+            )),
+            record => Ok(record.and_then(|record| Some((record.name, record.maintenance?)))),
         }
     }
 

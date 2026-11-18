@@ -851,3 +851,30 @@ async fn a_live_picture_cut_part_way_through_a_frame_stops_in_the_vms_words() {
     );
     assert!(!stream.can_retry(&stopped));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_live_picture_is_cancelled_at_a_hold_for_maintenance_and_its_credit_comes_back() {
+    let watching = watching(Arc::new(plain)).await;
+    let serving = &watching.serving;
+    let (mut stream, first) = begun(serving, &picture(stream_request(), live(serving))).await;
+    until("its lane opened", || watching.picture_lanes().len() == 1).await;
+    let lane = watching.lane();
+    let keeper = &serving.fixture.keeper;
+    let change = crate::test_support::under_maintenance(
+        keeper.lifecycle.home(),
+        &keeper.vm,
+        crate::vm::lifecycle::record::Phase::Holding,
+    );
+
+    let held = crate::vm::keeper::clients::tests::asked(
+        &serving.socket,
+        &json!({"op": "hold", "change": change}),
+    )
+    .await;
+
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(held[0]["cancelled"], json!({"picture": 1}), "{held:?}");
+    assert!(!watching.pumped(lane).await, "its lane was cancelled");
+    rest(&mut stream, Duration::from_secs(10)).await;
+    watching.refunded().await;
+}

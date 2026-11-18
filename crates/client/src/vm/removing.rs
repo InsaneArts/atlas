@@ -202,6 +202,7 @@ fn begun(
             failure: None,
             starts: Vec::new(),
             refused_start: None,
+            maintenance: None,
         },
     };
     let recorded = lifecycle

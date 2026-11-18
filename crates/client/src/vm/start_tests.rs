@@ -767,3 +767,22 @@ async fn a_signal_given_while_a_start_atlas_vm_never_heard_of_waits_for_its_clai
         vec![change.to_string()]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_under_maintenance_is_never_started_when_needed() {
+    use crate::vm::lifecycle::record::Phase;
+    for phase in [Phase::Holding, Phase::Open, Phase::Closing] {
+        let dir = tempdir();
+        let (client, keeper) = vm(dir.path(), "stopped");
+        crate::test_support::under_maintenance(dir.path(), &client.desktop().id(), phase);
+
+        let refused = ensure_running_within(&client, QUICK).await.unwrap_err();
+
+        assert_eq!(refused.code, Code::Busy, "{phase:?}: {refused:?}");
+        assert!(refused.error.starts_with("work"), "{phase:?}: {refused:?}");
+        assert!(refused.error.contains("maintenance"), "{phase:?}");
+        assert!(keeper.runner.asked_for("start").is_empty(), "{phase:?}");
+        assert_eq!(keeper.runner.power(), "stopped", "{phase:?}");
+        assert!(client.controller.pending().unwrap().is_empty(), "{phase:?}");
+    }
+}

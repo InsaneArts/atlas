@@ -514,11 +514,15 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
 /// # Errors
 ///
 /// Returns helper or job-list decoding failures. Unreadable supervision state is not
-/// reported as an empty list.
+/// reported as an empty list. A VM under the person's maintenance is refused in its
+/// words, as every agent's command on it is: its guest was not asked.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     // A desktop this build cannot reach has none it can tell; a VM's guest
     // tells its own through its keeper.
     client.reachable()?;
+    if let Some(held) = client.maintenance_held() {
+        return Err(held);
+    }
     let mine = client.task.as_ref().map(|task| task.key().clone());
     let store = client.output_dir().ok().map(Store::at);
     let recorded: Vec<JobEntry> = mine
@@ -530,6 +534,14 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 
     let jobs = match shown_all(client).await {
         Ok(jobs) => jobs,
+        // The person's maintenance holds a VM: its guest's jobs were not
+        // asked, so no list stands in for them.
+        Err(error)
+            if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_))
+                && error.holder == Some(atlas_core::error::Holder::Person) =>
+        {
+            return Err(error);
+        }
         Err(error) => {
             let jobs: Vec<Value> = recorded
                 .iter()

@@ -2025,3 +2025,131 @@ fn a_vms_activity_and_headline_say_what_was_done_of_the_vm_never_the_helper() {
         );
     }
 }
+
+#[test]
+fn a_vm_under_maintenance_shows_its_maintenance_before_its_guests_stop_and_offers_no_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let reason = "work is under maintenance: its window takes your input and agents wait. End \
+                  it with atlas desktop maintain work --end.";
+    let ending = "work's maintenance is ending, but its window's input off is not confirmed \
+                  yet. Run atlas desktop maintain work --end again.";
+    let unknown = "Whether work is under maintenance cannot be read, so agents wait.";
+    for (said, words) in [
+        (json!({"state": "on", "reason": reason}), reason),
+        (json!({"state": "ending", "reason": ending}), ending),
+        (json!({"state": "unknown", "reason": unknown}), unknown),
+    ] {
+        let doctor = crate::capability::Doctor::vm(
+            json!({"ok": true, "proven": false, "desktop": {"kind": "vm", "name": "work"},
+                "keeper": {"live": true}, "guest": {"ok": true, "stop": {"state": "stopped",
+                    "why": "control-lost"}},
+                "stop": {"state": "stopped", "why": "control-lost"},
+                "station": {"maintenance": said}}),
+            client.unreachable(),
+        );
+
+        let shown = super::overview(&doctor, false, Pending::default(), &[], NOW).value;
+
+        assert_eq!(
+            doctor.vm,
+            Some(crate::capability::VmMode::Maintained(words.to_owned()))
+        );
+        assert_eq!(shown["mode"], "unavailable", "{shown}");
+        assert_eq!(shown["reason"], words, "{shown}");
+        assert_eq!(
+            shown["guest"]["stop"]["state"], "stopped",
+            "the Stop said apart: {shown}"
+        );
+        assert!(!shown.to_string().contains("resume it"), "{shown}");
+    }
+}
+
+/// A VM's keeper trusted whoever listens.
+struct Trusting;
+
+impl crate::link::Trust for Trusting {
+    fn trusts(
+        &self,
+        _: &atlas_core::desktop::DesktopId,
+        _: &std::path::Path,
+        _: &std::os::unix::net::UnixStream,
+    ) -> atlas_core::error::Result<()> {
+        Ok(())
+    }
+}
+
+/// A keeper on `socket` that says its own hello and never answers a read of
+/// its guest's: every connection asking one is held open, unanswered.
+fn stalling_keeper(socket: &std::path::Path) -> tokio::task::JoinHandle<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            let mut stream = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            if stream.read_line(&mut line).await.is_err() {
+                continue;
+            }
+            let asked: Value = serde_json::from_str(&line).unwrap_or_default();
+            if asked["op"] == "hello" {
+                let hello = json!({"ok": true, "op": "hello", "live": true,
+                    "keeper": {"protocol": crate::vm::keeper::PROTOCOL}});
+                let _ = stream
+                    .get_mut()
+                    .write_all(format!("{hello}\n").as_bytes())
+                    .await;
+            } else {
+                held.push(stream);
+            }
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_overview_keeps_its_maintenance_when_its_status_comes_too_late() {
+    use crate::vm::lifecycle::record::Phase;
+    let on = "work is under maintenance: its window takes your input and agents wait. End it \
+              with atlas desktop maintain work --end.";
+    let ending = "work's maintenance is ending, but its window's input off is not confirmed \
+                  yet. Run atlas desktop maintain work --end again.";
+    for (phase, state, words) in [(Phase::Open, "on", on), (Phase::Closing, "ending", ending)] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = crate::test_support::vm_client(dir.path(), None);
+        crate::test_support::under_maintenance(dir.path(), &client.desktop().id(), phase);
+        let socket = dir.path().join("keeper.sock");
+        let _keeper = stalling_keeper(&socket);
+        client.link = crate::link::Link::Keeper(
+            crate::link::Keeper::at(
+                std::sync::Arc::new(client.selected.clone()),
+                client.desktop().id(),
+                socket,
+                Duration::from_secs(30),
+                std::sync::Arc::new(Trusting),
+            )
+            .with_lifecycle(client.lifecycle.clone()),
+        );
+
+        let until = Instant::now() + Duration::from_millis(300);
+        let doctor = helper_report(&client, until, crate::idle_time::Look::Only).await;
+        let shown = super::overview(&doctor, false, Pending::default(), &[], NOW).value;
+
+        let status = &doctor.diagnosis.value;
+        assert_eq!(status["ok"], false, "{phase:?}: {status}");
+        assert!(
+            status["error"]
+                .as_str()
+                .unwrap()
+                .contains("did not answer in time"),
+            "{status}"
+        );
+        assert_eq!(status["station"]["maintenance"]["state"], state, "{status}");
+        assert_eq!(
+            doctor.vm,
+            Some(crate::capability::VmMode::Maintained(words.to_owned()))
+        );
+        assert_eq!(shown["mode"], "unavailable", "{shown}");
+        assert_eq!(shown["reason"], words, "{shown}");
+    }
+}

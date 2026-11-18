@@ -13,6 +13,7 @@ pub mod handover;
 pub mod keeper;
 pub mod lifecycle;
 pub mod listing;
+pub(crate) mod maintenance;
 pub(crate) mod proof;
 mod removal;
 pub mod removing;

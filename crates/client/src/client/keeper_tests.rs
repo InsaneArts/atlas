@@ -39,13 +39,21 @@ fn a_vms_status_that_fails_still_says_an_unfinished_handover_and_keeps_the_keepe
     let why = "An Atlas update is still handing work's session to the new build; run atlas \
                update again.";
 
-    let said = json!(handing_over(failed, Some(why.to_owned())));
+    let said = json!(handing_over(
+        failed,
+        Some(why.to_owned()),
+        &json!({"state": "none"})
+    ));
 
     assert_eq!(said["code"], "transport");
     assert_eq!(said["error"], "work's session keeper did not answer.");
     assert_eq!(said["why"], "work's session keeper is not running");
     assert_eq!(said["station"]["handover"], why);
-    let plain = json!(handing_over(Error::new(Code::Transport, "x"), None));
+    let plain = json!(handing_over(
+        Error::new(Code::Transport, "x"),
+        None,
+        &json!({"state": "none"}),
+    ));
     assert!(plain.get("station").is_none());
 }
 
@@ -72,8 +80,8 @@ fn ready() -> Value {
         "guest": guest,
         "stop": {"state": "clear"},
         "leftovers": "running",
-        "station": {"stop": {"state": "clear"}, "handover": null, "pending": [],
-            "unresolved": []}})
+        "station": {"stop": {"state": "clear"}, "handover": null,
+            "maintenance": {"state": "none"}, "pending": [], "unresolved": []}})
 }
 
 /// One way a rule fails: what it changes of a ready status, and the words
@@ -81,7 +89,7 @@ fn ready() -> Value {
 type Failing = (fn(&mut Value), &'static str);
 
 /// How each rule fails on its own, in the order they are judged.
-fn each_rule_failing() -> [Failing; 19] {
+fn each_rule_failing() -> [Failing; 21] {
     [
         (
             |status| {
@@ -169,6 +177,19 @@ fn each_rule_failing() -> [Failing; 19] {
                     json!("An Atlas update is still handing work's session to the new build.");
             },
             "An Atlas update is still handing work's session to the new build.",
+        ),
+        (
+            |status| {
+                status["station"]["maintenance"] = json!({"state": "on",
+                    "reason": "work is under maintenance: its window takes your input and agents \
+                               wait. End it with atlas desktop maintain work --end."});
+            },
+            "work is under maintenance: its window takes your input and agents wait. End it \
+             with atlas desktop maintain work --end.",
+        ),
+        (
+            |status| status["station"]["maintenance"] = Value::Null,
+            "Whether work is under maintenance cannot be read, so agents wait.",
         ),
         (
             |status| {

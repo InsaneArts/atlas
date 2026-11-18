@@ -21,6 +21,7 @@ use super::{
         Lifecycle,
         record::{Record, RefusedStart, State},
     },
+    maintenance::Kept,
     runner::{Operation, Outcome, Power, Reply, Runner},
 };
 use crate::client::Client;
@@ -441,6 +442,11 @@ impl Starter {
         let station = crate::station::Station::under(self.lifecycle.home()).path_of(&self.vm);
         if let Some(why) = handover::unfinished_in(&station, &self.name) {
             return Err(Error::new(Code::Stopped, why));
+        }
+        // The person's maintenance holds it as it holds agents: never started
+        // under their hands.
+        if let Some(held) = Kept::of(record.maintenance.clone()).held(&self.name) {
+            return Err(held);
         }
         Ok(record)
     }

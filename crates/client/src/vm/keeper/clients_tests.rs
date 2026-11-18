@@ -16,7 +16,7 @@ impl Admit for Admitting {
 pub(in crate::vm::keeper) struct Serving {
     pub(in crate::vm::keeper) fixture: Fixture,
     pub(in crate::vm::keeper) socket: std::path::PathBuf,
-    capability: String,
+    pub(in crate::vm::keeper) capability: String,
     _folder: tempfile::TempDir,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -441,7 +441,8 @@ fn client_within(serving: &Serving, directory: &Path, timeout: Duration) -> crat
             timeout,
             Arc::new(Trusting),
         )
-        .with_pairing(serving.fixture.kept.clone()),
+        .with_pairing(serving.fixture.kept.clone())
+        .with_lifecycle(client.lifecycle.clone()),
     );
     client
 }
@@ -1155,7 +1156,11 @@ async fn a_ready_vm_is_ready_to_doctor_and_the_overview_and_nothing_unchecked_is
     for check in report["checks"].as_array().unwrap() {
         assert_eq!(check["ok"], true, "{report}");
     }
-    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+    assert_eq!(
+        report["capabilities"]["maintenance"],
+        json!({"state": "none"})
+    );
+    for unchecked in ["nativeDialogs", "installedApps"] {
         assert_eq!(
             report["capabilities"][unchecked]["state"], "notChecked",
             "{unchecked}: {report}"
@@ -1277,7 +1282,8 @@ async fn a_fresh_vm_is_not_ready_with_screen_recording_first_in_its_guests_words
     );
     assert_eq!(report["nextSteps"][0], status["notReady"], "{report}");
     assert_eq!(report["canObserve"], false);
-    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+    assert_eq!(summary["capabilities"]["maintenance"]["state"], "none");
+    for unchecked in ["nativeDialogs", "installedApps"] {
         assert_eq!(
             summary["capabilities"][unchecked]["state"], "notChecked",
             "{summary}"

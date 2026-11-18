@@ -8,7 +8,7 @@
 use super::{Actor, Client, Pinned, Verified};
 use crate::{
     link::{Keeper, Link},
-    vm::proof::Observed,
+    vm::{maintenance::Kept, proof::Observed},
 };
 use atlas_core::{
     config::desktops::{Admission, Chosen},
@@ -57,12 +57,21 @@ struct Proved {
 }
 
 /// `error`, a VM's status that failed, with the handover an update is still
-/// making of it, `unfinished`, when one is: its code and words kept.
-fn handing_over(error: Error, unfinished: Option<String>) -> Error {
-    match unfinished {
-        Some(why) => error.with("station", json!({"handover": why})),
-        None => error,
+/// making of it, `unfinished`, when one is, and the person's maintenance of
+/// it as its record says it, `maintenance`, when one is kept or cannot be
+/// read: its code and words kept.
+fn handing_over(error: Error, unfinished: Option<String>, maintenance: &Value) -> Error {
+    let mut station = serde_json::Map::new();
+    if let Some(why) = unfinished {
+        station.insert("handover".to_owned(), json!(why));
     }
+    if maintenance["state"] != "none" {
+        station.insert("maintenance".to_owned(), maintenance.clone());
+    }
+    if station.is_empty() {
+        return error;
+    }
+    error.with("station", Value::Object(station))
 }
 
 impl Client {
@@ -108,6 +117,21 @@ impl Client {
         crate::vm::handover::unfinished(&self.selected.name, &config.id)
     }
 
+    /// What this VM's lifecycle record says of the person's maintenance of
+    /// it: none for any other desktop.
+    pub(crate) fn maintenance(&self) -> Kept {
+        let Chosen::Vm(config) = &self.selected.desktop else {
+            return Kept::None;
+        };
+        Kept::read(self.lifecycle.as_ref(), &config.id).0
+    }
+
+    /// Why the person's maintenance of this VM holds agents now; none
+    /// while none is kept, and for any other desktop.
+    pub(crate) fn maintenance_held(&self) -> Option<Error> {
+        self.maintenance().held(&self.selected.name)
+    }
+
     /// A VM proved now, in one generation of its session: a challenge of
     /// this command's own, what `keeper` observed for it, and the VM's
     /// pairing read afresh. Nothing of it is kept.
@@ -129,7 +153,8 @@ impl Client {
         let paired = tokio::task::spawn_blocking(move || reading.paired())
             .await
             .unwrap_or_else(|_| Err(Error::new(Code::State, "The pairing could not be read.")));
-        let session = paired.and_then(|paired| observed.prove(&self.desktop(), &paired));
+        let held = self.maintenance_held();
+        let session = paired.and_then(|paired| observed.prove(&self.desktop(), &paired, held));
         Ok(Proved { observed, session })
     }
 
@@ -164,6 +189,9 @@ impl Client {
     pub(crate) async fn verify_vm(&self) -> Result<Verified> {
         if let Some(why) = self.handover_unfinished() {
             return Err(Error::new(Code::Stopped, why));
+        }
+        if let Some(held) = self.maintenance_held() {
+            return Err(held);
         }
         let keeper = self.keeper().await?;
         let proved = self.verify_machine(&keeper).await?;
@@ -207,6 +235,9 @@ impl Client {
     async fn vm_looking(&self, capture: bool) -> Result<Verified> {
         if let Some(why) = self.handover_unfinished() {
             return Err(Error::new(Code::Busy, why));
+        }
+        if let Some(held) = self.maintenance_held() {
+            return Err(held);
         }
         let keeper = self.keeper().await?;
         let proved = self.verify_machine(&keeper).await?;
@@ -406,6 +437,9 @@ impl Client {
         if self.admission() != Admission::Open {
             return Err(self.selected.unreachable());
         }
+        if let Some(held) = self.maintenance_held() {
+            return Err(held);
+        }
         if let Some(why) = self.handover_unfinished() {
             return Err(Error::new(Code::Busy, why));
         }
@@ -438,24 +472,38 @@ impl Client {
     /// of it, read through the keeper, and whether it is ready for agents,
     /// as [`readiness`] judges it from all of these, or why not.
     pub(super) async fn vm_status(&self) -> Result<Value> {
+        // The person's maintenance, read from the station's own record
+        // whether or not its keeper answers, and an update still handing it
+        // over, are said on every path, the keeper's own failure kept.
+        let maintenance = self.maintenance();
+        let said = maintenance.said(&self.selected.name);
+        let handing = |error| handing_over(error, self.handover_unfinished(), &said);
         // A VM still being added answers nothing but the person's Stop.
         if self.admission() != Admission::Open {
-            return Err(self.selected.unreachable());
+            return Err(handing(self.selected.unreachable()));
         }
-        // An update still handing it over is said on every path, the
-        // keeper's own failure kept.
-        let handing = |error| handing_over(error, self.handover_unfinished());
         let keeper = self.keeper().await.map_err(handing)?;
         let hello = keeper.one(&json!({"op": "hello"})).await.map_err(handing)?;
-        let (observed, session) = match self.verify_machine(&keeper).await {
-            Ok(proved) => (Some(proved.observed), proved.session),
-            Err(refused) => (None, Err(refused)),
+        // The person's maintenance holds agents before any proof: none is
+        // asked, and what the person is told of it stands in for the proof's
+        // refusal.
+        let held = maintenance.held(&self.selected.name);
+        let maintained = held.is_some();
+        let (observed, session) = match held {
+            Some(held) => {
+                let reason = said["reason"].as_str().unwrap_or(&held.error);
+                (None, Err(Error::new(held.code, reason)))
+            }
+            None => match self.verify_machine(&keeper).await {
+                Ok(proved) => (Some(proved.observed), proved.session),
+                Err(refused) => (None, Err(refused)),
+            },
         };
         // A VM Atlas VM says is stopped is said so, not as a connection that
         // failed: a command that needs it starts it.
-        let stopped = match &observed {
-            Some(_) => None,
-            None => crate::vm::start::stopped_now(self).await,
+        let stopped = match (&observed, maintained) {
+            (Some(_), _) | (None, true) => None,
+            (None, false) => crate::vm::start::stopped_now(self).await,
         };
         let session = match &stopped {
             Some(stopped) => Err(Error::new(stopped.code, stopped.error.clone())),
@@ -535,6 +583,7 @@ impl Client {
                 (None, None) => Value::Null,
             },
             "station": {"stop": station, "handover": self.handover_unfinished(),
+                "maintenance": said,
                 "pending": pending, "unresolved": unresolved},
         });
         let judged = readiness_of(&status);
@@ -587,6 +636,9 @@ impl Client {
         }
         if self.admission() != Admission::Open {
             return Err(self.selected.unreachable());
+        }
+        if let Some(refused) = self.maintenance().resume_refused(&self.selected.name) {
+            return Err(refused);
         }
         let keeper = self.keeper().await?;
         let revision = self.controller.stop_revision()?;
@@ -777,6 +829,8 @@ enum Rule {
     Admitted,
     /// No update is handing its session over.
     HandedOver,
+    /// The person's maintenance does not hold it.
+    Maintained,
     /// Its session keeper serves everything this build asks of it, pictures
     /// among them, and Atlas VM keeps a picture fence.
     Kept,
@@ -788,13 +842,14 @@ enum Rule {
 }
 
 impl Rule {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Live,
         Self::Proven,
         Self::Allowed,
         Self::Clear,
         Self::Admitted,
         Self::HandedOver,
+        Self::Maintained,
         Self::Kept,
         Self::Served,
         Self::Settled,
@@ -809,6 +864,7 @@ impl Rule {
             Self::Clear => "Agents not stopped",
             Self::Admitted => "Open to no one but Atlas",
             Self::HandedOver => "No update handing it over",
+            Self::Maintained => "Not under maintenance",
             Self::Kept => "Session keeper and Atlas VM serve this build",
             Self::Served => "Atlas in it serves this build",
             Self::Settled => "No action of unknown outcome",
@@ -820,7 +876,7 @@ impl Rule {
         match self {
             Self::Proven | Self::Clear | Self::Served => Some(Self::Live),
             Self::Allowed | Self::Admitted | Self::Kept => Some(Self::Proven),
-            Self::Live | Self::HandedOver | Self::Settled => None,
+            Self::Live | Self::HandedOver | Self::Maintained | Self::Settled => None,
         }
     }
 
@@ -866,6 +922,10 @@ impl Rule {
             Self::HandedOver => status["station"]["handover"]
                 .as_str()
                 .map_or(Ok(()), |why| Err(why.to_owned())),
+            Self::Maintained => {
+                crate::vm::maintenance::holds(name, &status["station"]["maintenance"])
+                    .map_or(Ok(()), Err)
+            }
             Self::Kept => kept(name, status),
             Self::Served if status["declared"].is_null() => Err(format!(
                 "What {name}'s Atlas serves is not known; run it again."

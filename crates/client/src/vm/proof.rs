@@ -143,26 +143,48 @@ impl Observed {
 
     /// What the VM's proof is held to: its pairing `paired`, the keys its
     /// session proved, and what the station knows of it beside
-    /// `observation`.
-    fn expect<'a>(&self, paired: &'a Paired, observation: &Observation) -> MachineExpect<'a> {
+    /// `observation`, its hands on while `maintained`.
+    fn expect<'a>(
+        &self,
+        paired: &'a Paired,
+        observation: &Observation,
+        maintained: bool,
+    ) -> MachineExpect<'a> {
         MachineExpect {
             paired,
             peer: self.peer,
             station: self.station,
             eligible: eligible(&self.runner, observation),
-            hands_off: hands_off(&self.runner),
+            hands_off: if maintained {
+                Some(false)
+            } else {
+                hands_off(&self.runner)
+            },
         }
     }
 
     /// The session this observation proves of `desktop`, held to its
-    /// pairing `paired`.
+    /// pairing `paired`. While the person's maintenance holds agents, as
+    /// `maintained` says why, the person's hands are on it whatever its
+    /// window says, and that is what its refusal says.
     ///
     /// # Errors
     ///
     /// What [`Desktop::prove_machine`] refuses.
-    pub(crate) fn prove(&self, desktop: &Desktop, paired: &Paired) -> Result<MachineSession> {
+    pub(crate) fn prove(
+        &self,
+        desktop: &Desktop,
+        paired: &Paired,
+        maintained: Option<Error>,
+    ) -> Result<MachineSession> {
         let observation = Observation::decode(&self.status);
-        desktop.prove_machine(&observation, &self.expect(paired, &observation))
+        let expect = self.expect(paired, &observation, maintained.is_some());
+        desktop
+            .prove_machine(&observation, &expect)
+            .map_err(|refused| match maintained {
+                Some(held) if refused.code == Code::OnConsole => held,
+                _ => refused,
+            })
     }
 }
 

@@ -138,6 +138,10 @@ pub(super) struct Guest {
     pairings: AtomicUsize,
     pub(super) held_lanes: Mutex<Vec<Dialer>>,
     connections: Mutex<Vec<Connection>>,
+    /// While set, each lane's dial waits for one of its permits, counted
+    /// as it begins to wait.
+    pub(super) lanes_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
+    pub(super) lanes_waiting: AtomicUsize,
 }
 
 impl Guest {
@@ -201,6 +205,14 @@ impl Reach for Guest {
                     Ok(Box::new(station) as Raw)
                 }
                 Purpose::Lane => {
+                    let gate = self.lanes_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        self.lanes_waiting.fetch_add(1, SeqCst);
+                        let _ = gate
+                            .acquire()
+                            .await
+                            .map(tokio::sync::SemaphorePermit::forget);
+                    }
                     let lanes = self
                         .live
                         .lock()
@@ -425,6 +437,8 @@ pub(super) fn fixture() -> Fixture {
         pairings: AtomicUsize::new(0),
         held_lanes: Mutex::default(),
         connections: Mutex::default(),
+        lanes_gate: Mutex::default(),
+        lanes_waiting: AtomicUsize::new(0),
     });
     let state = tempfile::tempdir().unwrap();
     let vm = standin.desktop.clone();
@@ -452,6 +466,8 @@ pub(super) fn fixture() -> Fixture {
         recovering: tokio::sync::Mutex::new(()),
         progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
+        lifecycle: crate::vm::lifecycle::Lifecycle::under(state.path()),
+        lanes: lanes::Lanes::default(),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
     Fixture {
@@ -490,6 +506,8 @@ fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         recovering: tokio::sync::Mutex::new(()),
         progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
+        lifecycle: keeper.lifecycle.clone(),
+        lanes: lanes::Lanes::default(),
     })
 }
 

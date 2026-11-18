@@ -63,7 +63,7 @@ fn answer(challenge: &str) -> Value {
 
 /// What `answer` proves, asked for `challenge`, held to `paired`.
 fn proved(answer: &Value, challenge: &str, paired: &Paired) -> Result<MachineSession> {
-    Observed::decode(answer, challenge)?.prove(&vm(), paired)
+    Observed::decode(answer, challenge)?.prove(&vm(), paired, None)
 }
 
 /// A change made to an observation.
@@ -345,4 +345,45 @@ fn atlas_in_a_vm_is_mid_update_only_while_a_ready_input_service_runs_another_bui
     for (what, change) in not_mid_update {
         assert!(!mid_update(&status(change)), "{what}");
     }
+}
+
+#[test]
+fn a_vm_under_maintenance_is_hands_on_even_with_its_window_closed() {
+    let observed = Observed::decode(&answer("c1"), "c1").unwrap();
+    let held = crate::vm::maintenance::on("work");
+
+    let refused = observed
+        .prove(&vm(), &paired(), Some(crate::vm::maintenance::on("work")))
+        .unwrap_err();
+
+    assert_eq!(observed.runner.window, Some(Window::Closed));
+    assert_eq!(refused.code, Code::Busy, "{refused:?}");
+    assert_eq!(refused.error, held.error);
+    assert!(!refused.error.contains("helper"), "{refused:?}");
+    assert!(observed.prove(&vm(), &paired(), None).is_ok());
+}
+
+#[test]
+fn an_unreadable_lifecycle_record_counts_as_maintenance() {
+    use crate::vm::{lifecycle::Lifecycle, maintenance::Kept};
+    let home = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::under(home.path());
+    let id = atlas_core::desktop::DesktopId::parse(crate::test_support::VM_ID).unwrap();
+    let record = lifecycle.record_at(&id);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, b"{not a record").unwrap();
+    let observed = Observed::decode(&answer("c1"), "c1").unwrap();
+
+    let (kept, _) = Kept::read(Some(&lifecycle), &id);
+    let held = kept.held("work").expect("held");
+    let refused = observed.prove(&vm(), &paired(), Some(held)).unwrap_err();
+
+    assert_eq!(kept, Kept::Unreadable);
+    assert_eq!(refused.code, Code::State, "{refused:?}");
+    assert!(refused.error.contains("cannot be read"), "{refused:?}");
+    assert_eq!(
+        Kept::read(None, &id).0,
+        Kept::Unreadable,
+        "no lifecycle at all"
+    );
 }

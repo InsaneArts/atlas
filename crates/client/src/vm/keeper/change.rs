@@ -10,7 +10,7 @@
 //! `"sent": true, "uncertain": true`, and the guest's own record of it is
 //! what tells. A client that hangs up before the final reply has its
 //! change's lane cancelled over control.
-use super::{Keeper, Session, final_reply, reply_line};
+use super::{Keeper, Session, final_reply, lanes::Ticket, reply_line};
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
@@ -146,7 +146,12 @@ enum Carrying {
 
 /// Carry the change `request` asks for on its lane, answering the client on
 /// `stream` with each reply line as it comes, or with why it could not be.
-pub(super) async fn changed(keeper: &Keeper, request: &Value, stream: UnixStream) {
+pub(super) async fn changed(
+    keeper: &Keeper,
+    request: &Value,
+    stream: UnixStream,
+    ticket: &Ticket<'_>,
+) {
     let deadline = request["deadline_ms"]
         .as_u64()
         .map_or(DEADLINE, Duration::from_millis)
@@ -224,6 +229,9 @@ pub(super) async fn changed(keeper: &Keeper, request: &Value, stream: UnixStream
     let carried = tokio::select! {
         carried = carrying => carried,
         _ = reading.read(&mut byte) => Carrying::Gone,
+        // The person's maintenance holds it: its lane is cancelled, and what
+        // it came to is the guest's record's to tell.
+        () = ticket.stopped() => Carrying::Lost(super::held::held_now(keeper)),
     };
     match carried {
         Carrying::Answered => {}

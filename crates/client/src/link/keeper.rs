@@ -6,7 +6,10 @@
 //! code signed as Atlas, in this account, as the very process launchd runs
 //! for the VM's keeper.
 use super::{Link, Route, Stream, Unreachable};
-use crate::station::Station;
+use crate::{
+    station::Station,
+    vm::{lifecycle::Lifecycle, maintenance::Kept},
+};
 use atlas_core::{
     app_bundle::signature::{APP_IDENTIFIER, requirement_for},
     config::desktops::{Admission, Selected},
@@ -60,6 +63,9 @@ pub struct Keeper {
     /// Where the VM's pairing is kept, when a test says; else its station
     /// folder's.
     pairing: Option<Arc<dyn StationRecords>>,
+    /// The station's lifecycle records, which say whether the person's
+    /// maintenance holds the VM; none when they cannot be found.
+    lifecycle: Option<Lifecycle>,
 }
 
 impl fmt::Debug for Keeper {
@@ -175,6 +181,31 @@ impl Keeper {
             timeout,
             trust,
             pairing: None,
+            lifecycle: Lifecycle::own().ok(),
+        }
+    }
+
+    /// This keeper, the person's maintenance of its VM read in `lifecycle`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub(crate) fn with_lifecycle(mut self, lifecycle: Option<Lifecycle>) -> Self {
+        self.lifecycle = lifecycle;
+        self
+    }
+
+    /// Refuse an agent's request while the person's maintenance holds the
+    /// VM, in its words, before anything is said.
+    ///
+    /// # Errors
+    ///
+    /// As said, an unreadable record holding as a kept one does.
+    fn maintained(&self) -> Result<()> {
+        match Kept::read(self.lifecycle.as_ref(), &self.vm)
+            .0
+            .held(&self.selected.name)
+        {
+            Some(held) => Err(held),
+            None => Ok(()),
         }
     }
 
@@ -382,6 +413,9 @@ impl Keeper {
         if !crate::vm::keeper::carries(&LaneKind::Read, request) {
             return Err(self.selected.unreachable());
         }
+        if !crate::vm::keeper::served_while_held(request) {
+            self.maintained()?;
+        }
         let asked = json!({"op": "read", "request": request, "generation": generation,
             "deadline_ms": duration_ms(self.timeout)});
         self.connected().await?.dispatch(&asked).await
@@ -406,6 +440,7 @@ impl Keeper {
         if !crate::vm::keeper::carries_bulk(request) {
             return Err(self.selected.unreachable());
         }
+        self.maintained()?;
         let asked = json!({"op": "picture", "generation": generation, "request": request,
             "deadline_ms": duration_ms(self.timeout)});
         let (mut stream, left) = self
@@ -439,6 +474,7 @@ impl Keeper {
     /// Refuses a read on the input lane the keeper does not carry, in the
     /// one wording for what this build cannot do on a VM.
     pub(crate) fn change(&self, route: &Route, request: &Value, generation: u64) -> Result<Value> {
+        self.maintained()?;
         let deadline = duration_ms(self.timeout);
         Ok(match route {
             Route::Change(change) => json!({"op": "change", "lane": "change",

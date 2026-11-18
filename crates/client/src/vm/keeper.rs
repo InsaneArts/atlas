@@ -19,6 +19,10 @@
 //! of the generation it proved, what the guest sends passed back only as
 //! fast as the command takes it ([`picture`]).
 //!
+//! While the person's maintenance is kept for the VM, it carries no agent's
+//! request, and a hold cancels every agent's lane it carries before it is
+//! answered ([`held`]).
+//!
 //! An update of Atlas replaces its program while it runs; it does nothing
 //! on its own then. The update hands it over ([`super::handover`]): asked,
 //! it keeps the station's Stop for the update, says it, leaves its
@@ -27,6 +31,8 @@
 mod agent;
 mod change;
 mod clients;
+mod held;
+mod lanes;
 mod observe;
 mod picture;
 mod program;
@@ -35,6 +41,7 @@ mod stage;
 
 pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{CAPABILITIES, PROTOCOL, RESUME_KEY, carries};
+pub(crate) use held::served_while_held;
 pub(crate) use picture::carries_bulk;
 use program::Program;
 pub(crate) use stage::deadline as stage_deadline;
@@ -251,8 +258,11 @@ async fn started(
         recovering: tokio::sync::Mutex::new(()),
         progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
+        lifecycle: super::lifecycle::Lifecycle::own()?,
+        lanes: lanes::Lanes::default(),
     });
     keeper.finish_handover()?;
+    held::at_start(&keeper).await;
     let listener = clients::bind(&socket_of(&keeper.vm)?)?;
     Ok((keeper, listener, capability))
 }
@@ -429,6 +439,11 @@ struct Keeper {
     /// How long a picture's client is given to take each chunk.
     progress: Mutex<Duration>,
     shared: Shared,
+    /// The station's lifecycle records, which keep the person's maintenance
+    /// of the VM.
+    lifecycle: super::lifecycle::Lifecycle,
+    /// The agents' lanes it carries now, and what holds them.
+    lanes: lanes::Lanes,
 }
 
 /// The live generation, and what the keeper says of its session.
@@ -872,6 +887,32 @@ async fn read(
     deadline: Duration,
     line: impl FnMut(String) -> bool,
 ) -> Result<()> {
+    read_until(
+        session,
+        kind,
+        request,
+        deadline,
+        std::future::pending(),
+        line,
+    )
+    .await
+}
+
+/// [`read`], given up once `stop` gives why first, its lane still opening
+/// included: nothing is said on a lane given up before it opened, and one
+/// given up once open is cancelled on the guest; refused for that.
+///
+/// # Errors
+///
+/// As [`read`], and what `stop` gives.
+async fn read_until(
+    session: &Session,
+    kind: LaneKind,
+    request: &Value,
+    deadline: Duration,
+    stop: impl Future<Output = Error>,
+    line: impl FnMut(String) -> bool,
+) -> Result<()> {
     let until = tokio::time::Instant::now() + deadline;
     let late = || {
         Error::new(
@@ -879,13 +920,20 @@ async fn read(
             "The guest did not answer the read in time.",
         )
     };
-    let opened = tokio::time::timeout_at(until, session.desktop.open(kind))
-        .await
-        .map_err(|_| late())??;
+    tokio::pin!(stop);
+    let opened = tokio::select! {
+        opened = tokio::time::timeout_at(until, session.desktop.open(kind)) => {
+            opened.map_err(|_| late())??
+        }
+        why = &mut stop => return Err(why),
+    };
     let lane = opened.lane;
-    let carried = tokio::time::timeout_at(until, carry(opened.stream, request, line))
-        .await
-        .unwrap_or_else(|_| Err(late()));
+    let carried = tokio::select! {
+        carried = tokio::time::timeout_at(until, carry(opened.stream, request, line)) => {
+            carried.unwrap_or_else(|_| Err(late()))
+        }
+        why = &mut stop => Err(why),
+    };
     // A read given up, by its reader or for a failure, is cancelled on the
     // guest too.
     if !matches!(carried, Ok(true)) {

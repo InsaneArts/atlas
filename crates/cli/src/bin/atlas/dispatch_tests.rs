@@ -1703,7 +1703,11 @@ async fn a_ready_vms_status_and_doctor_say_it_is_ready_and_doctor_checks_nothing
             .starts_with("Native Save/Open is not checked on work"),
         "{doctor}"
     );
-    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+    assert_eq!(
+        verbose["capabilities"]["maintenance"],
+        json!({"state": "none"})
+    );
+    for unchecked in ["nativeDialogs", "installedApps"] {
         assert_eq!(
             verbose["capabilities"][unchecked]["state"], "notChecked",
             "{unchecked}: {verbose}"
@@ -1935,4 +1939,194 @@ async fn atlas_apps_live_window_of_a_vm_is_refused_through_dispatch_in_its_one_w
         "{said}"
     );
     assert!(keeper.asked.lock().unwrap().is_empty());
+}
+
+/// The person's maintenance of the VM `client` acts on, kept at `phase` in
+/// its lifecycle record under `dir`.
+fn under_maintenance(
+    dir: &Path,
+    client: &Client,
+    phase: atlas_client::vm::lifecycle::record::Phase,
+) {
+    atlas_client::test_support::under_maintenance(dir, &client.desktop().id(), phase);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_agent_command_on_a_vm_under_maintenance_is_refused_in_its_words_before_any_proof() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    under_maintenance(
+        dir.path(),
+        &client,
+        atlas_client::vm::lifecycle::record::Phase::Open,
+    );
+    let job = atlas_client::test_support::JOB;
+
+    for args in [
+        &["run", "--", "/bin/echo", "hi"][..],
+        &["screenshot"],
+        &["job", "log", job],
+        &["job", "list"],
+        &["job", "list", "--all"],
+        &["collect", "notes.txt"],
+        &["input", r#"[{"type": "move", "x": 1, "y": 1}]"#],
+        &["open", "--app", "TextEdit"],
+        &["windows"],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let refused = executed(&config, command, &client).await.unwrap_err();
+        assert_eq!(refused.code, Code::Busy, "{args:?}: {refused:?}");
+        assert_eq!(
+            refused.error,
+            "work is under maintenance: its window takes the person's input. Agents wait \
+             until the person ends it.",
+            "{args:?}"
+        );
+        assert_eq!(
+            refused.holder,
+            Some(atlas_core::error::Holder::Person),
+            "{args:?}"
+        );
+    }
+
+    for op in ["observe", "change", "stage", "picture"] {
+        assert!(keeper.asked_for(op).is_empty(), "{op} asked");
+    }
+    let reads: Vec<Value> = keeper
+        .asked_for("read")
+        .into_iter()
+        .map(|read| read["request"]["op"].clone())
+        .filter(|op| !["hello", "outcome", "leftovers"].contains(&op.as_str().unwrap_or("")))
+        .collect();
+    assert!(reads.is_empty(), "{reads:?}");
+    assert!(keeper.runner.asked_for("start").is_empty());
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_status_doctor_and_overview_of_a_vm_under_maintenance_say_so_and_what_ends_it() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    under_maintenance(
+        dir.path(),
+        &client,
+        atlas_client::vm::lifecycle::record::Phase::Open,
+    );
+    let reason = "work is under maintenance: its window takes your input and agents wait. End \
+                  it with atlas desktop maintain work --end.";
+
+    let status = executed(&config, command(&["status"]), &client)
+        .await
+        .unwrap();
+    let doctor = executed(&config, command(&["doctor", "--verbose"]), &client)
+        .await
+        .unwrap();
+    let overview = atlas_client::overview::read(&client).await;
+
+    assert_eq!(status["station"]["maintenance"]["state"], "on", "{status}");
+    assert_eq!(status["station"]["maintenance"]["reason"], reason);
+    assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(status["proof"]["error"], reason, "{status}");
+    assert_eq!(doctor["nextSteps"], json!([reason]), "said once: {doctor}");
+    assert_eq!(doctor["ready"], false, "{doctor}");
+    assert_eq!(
+        doctor["capabilities"]["maintenance"],
+        json!({"state": "on", "reason": reason})
+    );
+    let check = doctor["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["name"] == "Not under maintenance")
+        .cloned()
+        .unwrap();
+    assert_eq!(check["ok"], false, "{doctor}");
+    assert_eq!(check["nextStep"], reason);
+    assert!(!overview.ready, "{}", overview.value);
+    assert_eq!(
+        overview.value["overview"]["reason"], reason,
+        "{}",
+        overview.value
+    );
+    assert!(keeper.asked_for("observe").is_empty(), "no proof asked");
+    for said in [&status, &doctor] {
+        assert!(!said.to_string().contains("helper"), "{said}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readiness_is_false_while_a_vm_is_under_maintenance_naming_it() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, _keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    under_maintenance(
+        dir.path(),
+        &client,
+        atlas_client::vm::lifecycle::record::Phase::Closing,
+    );
+
+    let status = executed(&config, command(&["status"]), &client)
+        .await
+        .unwrap();
+
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(
+        status["notReady"],
+        "work's maintenance is ending, but its window's input off is not confirmed yet. Run \
+         atlas desktop maintain work --end again."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_maintenance_is_said_from_its_record_while_its_keeper_is_not_there() {
+    use atlas_client::vm::lifecycle::record::Phase;
+    let on = "work is under maintenance: its window takes your input and agents wait. End it \
+              with atlas desktop maintain work --end.";
+    let ending = "work's maintenance is ending, but its window's input off is not confirmed \
+                  yet. Run atlas desktop maintain work --end again.";
+    let unknown = "Whether work is under maintenance cannot be read, so agents wait.";
+    for (kept, state, words) in [
+        (Some(Phase::Open), "on", on),
+        (Some(Phase::Closing), "ending", ending),
+        (None, "unknown", unknown),
+    ] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        let config = dir.path().join("settings.toml");
+        let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+        let record =
+            atlas_client::test_support::lifecycle_record(dir.path(), &client.desktop().id());
+        match kept {
+            Some(phase) => under_maintenance(dir.path(), &client, phase),
+            None => std::fs::write(&record, b"{not a record").unwrap(),
+        }
+        // Its keeper is gone: nothing answers on its socket.
+        drop(keeper);
+
+        let status = client.status().await;
+        let doctor = executed(&config, command(&["doctor"]), &client)
+            .await
+            .unwrap_err();
+        let overview = atlas_client::overview::read(&client).await;
+
+        assert_eq!(status["ok"], false, "{state}: {status}");
+        assert_eq!(status["station"]["maintenance"]["state"], state, "{status}");
+        assert_eq!(status["station"]["maintenance"]["reason"], words);
+        assert_eq!(doctor.details["next"], words, "{state}: {doctor:?}");
+        assert_eq!(
+            doctor.details["station"]["maintenance"]["state"], state,
+            "{doctor:?}"
+        );
+        assert!(!overview.ready, "{state}");
+        assert_eq!(
+            overview.value["overview"]["reason"], words,
+            "{}",
+            overview.value
+        );
+    }
 }

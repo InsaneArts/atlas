@@ -12,7 +12,16 @@
 //! An update asks `handover`, with its change: the keeper keeps the station's
 //! Stop for the update, says it, leaves its generation, answers and ends,
 //! all under its turn, so no Resume comes between.
-use super::{Keeper, read};
+//!
+//! The person's maintenance of the VM holds every agent's request here,
+//! read afresh from the VM's lifecycle record at each one ([`super::held`]);
+//! every request that carries an agent's work to the guest holds a ticket
+//! for its lane ([`super::lanes`]), so a hold can cancel it.
+use super::{
+    Keeper, held,
+    lanes::{Ticket, Work},
+    read_until,
+};
 use atlas_control::{Resumed, StopRevision, StopWhy};
 use atlas_core::{
     app_bundle::signature::{APP_IDENTIFIER, requirement_for},
@@ -41,7 +50,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(crate) const CAPABILITIES: [&str; 9] = [
+pub(crate) const CAPABILITIES: [&str; 10] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
@@ -51,6 +60,7 @@ pub(crate) const CAPABILITIES: [&str; 9] = [
     super::recover::CAPABILITY,
     super::stage::CAPABILITY,
     super::picture::CAPABILITY,
+    super::held::CAPABILITY,
 ];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
@@ -307,21 +317,48 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             if request["request"].is_object()
                 && (request["generation"].is_null() || request["generation"].is_u64()) =>
         {
+            let ticket = if held::served_while_held(&request["request"]) {
+                None
+            } else {
+                let Some(ticket) = ticket(keeper, Work::Read, &mut writing).await else {
+                    return;
+                };
+                Some(ticket)
+            };
             let pinned = request["generation"].as_u64();
             let lane = read_lane(&request).unwrap_or(LaneKind::Read);
-            carried(
-                keeper,
+            let asked = Asked {
                 lane,
-                &request["request"],
+                request: &request["request"],
                 pinned,
                 deadline,
-                &mut writing,
-            )
-            .await;
+                ticket: ticket.as_ref(),
+            };
+            carried(keeper, asked, &mut writing).await;
         }
-        Some("change") => super::change::changed(keeper, &request, writing).await,
-        Some("stage") => super::stage::staged(keeper, &request, writing, early).await,
-        Some("picture") => super::picture::pictured(keeper, &request, writing, early).await,
+        Some("change") => {
+            if let Some(ticket) = ticket(keeper, Work::Change, &mut writing).await {
+                super::change::changed(keeper, &request, writing, &ticket).await;
+            }
+        }
+        Some("stage") => {
+            if let Some(ticket) = ticket(keeper, Work::Stage, &mut writing).await {
+                super::stage::staged(keeper, &request, writing, early, &ticket).await;
+            }
+        }
+        Some("picture") => {
+            if let Some(ticket) = ticket(keeper, Work::Picture, &mut writing).await {
+                super::picture::pictured(keeper, &request, writing, early, &ticket).await;
+            }
+        }
+        Some("hold") => {
+            let held = held::hold(keeper, &request, deadline).await;
+            let _ = say(&mut writing, &held).await;
+        }
+        Some("release") => {
+            let released = held::release(keeper, &request).await;
+            let _ = say(&mut writing, &released).await;
+        }
         Some("settle") => {
             let settled = super::change::settled(keeper, &request).await;
             let _ = say(&mut writing, &settled).await;
@@ -331,6 +368,8 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             let recovered = super::recover::asked(keeper, generation, deadline).await;
             let _ = say(&mut writing, &recovered).await;
         }
+        // A proof is an agent's, held to the person's maintenance as every
+        // agent's lane is.
         Some("observe") => {
             let challenge = request["challenge"].as_str();
             let observed = super::observe::observed(keeper, challenge, deadline).await;
@@ -381,6 +420,11 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
                     Code::Stopped,
                     "A Stop given since this Resume read it still holds agents; nothing was said.",
                 );
+            }
+            // Held by the turn from this look through the Stop's lift, so a
+            // hold for the person's maintenance comes wholly before or after.
+            if let Some(refused) = held::resume_refused(keeper).await {
+                return refused;
             }
             // From here the guest may resume, answered in time or not: what it
             // applied of the Stop no longer holds, and the Stop is said again
@@ -439,17 +483,46 @@ async fn handed_over(keeper: &Keeper, change: &Value, deadline: Duration) -> Val
     handed
 }
 
-/// Carry `request` on a lane of `lane`, passing each reply line on to the
-/// client as it comes, and a refusal line when it could not be carried. A
-/// read `pinned` to a generation is carried only in that generation.
-async fn carried(
-    keeper: &Keeper,
+/// A ticket for an agent's lane carrying `work`, or none, its refusal said
+/// to the client on `writing` while the person's maintenance holds the VM.
+async fn ticket<'a>(
+    keeper: &'a Keeper,
+    work: Work,
+    writing: &mut UnixStream,
+) -> Option<Ticket<'a>> {
+    match held::admitted(keeper, work).await {
+        Ok(ticket) => Some(ticket),
+        Err(refused) => {
+            let _ = say(writing, &refused).await;
+            None
+        }
+    }
+}
+
+/// A read a client asked carried to the guest.
+struct Asked<'a> {
     lane: LaneKind,
-    request: &Value,
+    request: &'a Value,
+    /// The generation it is carried only in, when it names one.
     pinned: Option<u64>,
     deadline: Duration,
-    writing: &mut UnixStream,
-) {
+    /// Its agent's lane's ticket; none for a read served while agents are
+    /// held.
+    ticket: Option<&'a Ticket<'a>>,
+}
+
+/// Carry the read `asked`, passing each reply line on to the client as it
+/// comes, and a refusal line when it could not be carried. A read pinned to
+/// a generation is carried only in that generation; an agent's read is
+/// cancelled once the person's maintenance holds its lane.
+async fn carried(keeper: &Keeper, asked: Asked<'_>, writing: &mut UnixStream) {
+    let Asked {
+        lane,
+        request,
+        pinned,
+        deadline,
+        ticket,
+    } = asked;
     let Some(session) = keeper.shared.live() else {
         let why = keeper.shared.state().why.clone();
         let refused = Error::new(
@@ -468,7 +541,16 @@ async fn carried(
         return;
     }
     let (lines, replies) = mpsc::unbounded_channel();
-    let reading = read(&session, lane, request, deadline, move |line| {
+    let stop = async {
+        match ticket {
+            Some(ticket) => {
+                ticket.stopped().await;
+                held::held_now(keeper)
+            }
+            None => std::future::pending().await,
+        }
+    };
+    let reading = read_until(&session, lane, request, deadline, stop, move |line| {
         lines.send(line).is_ok()
     });
     let carrying = async {

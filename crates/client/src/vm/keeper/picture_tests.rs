@@ -18,13 +18,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The session a command's proof pins, as a picture names it.
-pub(super) fn session() -> Value {
+pub(in crate::vm::keeper) fn session() -> Value {
     json!({"securitySessionId": 42, "displayId": 7})
 }
 
 /// The keeper's request for `request`, a picture or a read, in the
 /// generation `generation`.
-pub(super) fn picture(request: Value, generation: u64) -> Value {
+pub(in crate::vm::keeper) fn picture(request: Value, generation: u64) -> Value {
     json!({"op": "picture", "generation": generation, "request": request})
 }
 
@@ -69,7 +69,10 @@ fn picture_lanes(serving: &Serving) -> usize {
 
 /// A client of the keeper that says `request` and reads the keeper's own
 /// first line, a byte at a time so nothing after it is taken.
-pub(super) async fn begun(serving: &Serving, request: &Value) -> (UnixStream, Value) {
+pub(in crate::vm::keeper) async fn begun(
+    serving: &Serving,
+    request: &Value,
+) -> (UnixStream, Value) {
     let mut stream = UnixStream::connect(&serving.socket).await.unwrap();
     let mut line = serde_json::to_vec(request).unwrap();
     line.push(b'\n');
@@ -84,7 +87,7 @@ pub(super) async fn begun(serving: &Serving, request: &Value) -> (UnixStream, Va
 }
 
 /// Everything left on `stream` until the keeper closes it, within `within`.
-pub(super) async fn rest(stream: &mut UnixStream, within: Duration) -> Vec<u8> {
+pub(in crate::vm::keeper) async fn rest(stream: &mut UnixStream, within: Duration) -> Vec<u8> {
     let mut rest = Vec::new();
     tokio::time::timeout(within, stream.read_to_end(&mut rest))
         .await

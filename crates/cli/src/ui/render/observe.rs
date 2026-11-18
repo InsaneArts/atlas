@@ -175,7 +175,10 @@ fn vm_details(value: &Value, name: &str) -> Vec<String> {
     };
     let capability = |key: &str| {
         let said = &value["capabilities"][key];
-        format!("{} · {}", fact(&said["state"]), fact(&said["reason"]))
+        match &said["reason"] {
+            Value::Null => fact(&said["state"]),
+            reason => format!("{} · {}", fact(&said["state"]), fact(reason)),
+        }
     };
     let rows = [
         ("VM", text::printable(name).into_owned()),

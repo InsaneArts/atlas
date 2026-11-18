@@ -23,6 +23,7 @@
 use super::{
     Keeper, Session,
     change::{OPENING, say_within, unsent},
+    lanes::Ticket,
 };
 use crate::vm::{proof::Fence, runner::Window};
 use atlas_core::error::{Code, Error};
@@ -96,6 +97,8 @@ enum Relayed {
     /// A live picture's frame was held back: Atlas VM's picture fence
     /// moved since the picture was admitted, or could not be read.
     Withheld,
+    /// The person's maintenance holds every agent's lane.
+    Held,
 }
 
 /// What a live picture's frames are held to: Atlas VM's picture fence as
@@ -169,7 +172,13 @@ fn took_input() -> Error {
 /// generation it names, passing back to the client on `stream` the
 /// keeper's first line and then whatever the guest sends; `early` says the
 /// client sent more after its request before it was told to.
-pub(super) async fn pictured(keeper: &Keeper, request: &Value, stream: UnixStream, early: bool) {
+pub(super) async fn pictured(
+    keeper: &Keeper,
+    request: &Value,
+    stream: UnixStream,
+    early: bool,
+    ticket: &Ticket<'_>,
+) {
     let (mut reading, mut writing) = stream.into_split();
     let asked = &request["request"];
     let Some(generation) = request["generation"].as_u64() else {
@@ -267,6 +276,7 @@ pub(super) async fn pictured(keeper: &Keeper, request: &Value, stream: UnixStrea
         (&mut reading, &mut writing),
         (progress, until),
         fenced.as_ref(),
+        ticket.stopped(),
     )
     .await;
     // Whatever the guest has not said yet is no longer wanted: its pump
@@ -308,7 +318,8 @@ fn live(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc<Session>, Err
 /// chunk at a time, each chunk's credit given back once the client took
 /// it whole, each within `progress`; and what the client says to the guest,
 /// a few bytes at a time. Until the guest ends the lane, the client hangs
-/// up or stalls, the lane fails, the generation is left or `until` passes.
+/// up or stalls, the lane fails, the generation is left, `until` passes or
+/// `stop` completes, as the person's maintenance holding its lane does.
 /// A live picture's frames go only while `fenced` holds.
 async fn relay<R, W>(
     session: &Session,
@@ -317,6 +328,7 @@ async fn relay<R, W>(
     (reading, writing): (&mut OwnedReadHalf, &mut OwnedWriteHalf),
     (progress, until): (Duration, Option<tokio::time::Instant>),
     fenced: Option<&Fenced<'_>>,
+    stop: impl Future<Output = ()>,
 ) -> Relayed
 where
     R: AsyncRead + Unpin,
@@ -357,6 +369,7 @@ where
         relayed = up => relayed,
         () = session.ended() => Relayed::Retired,
         () = late => Relayed::Late,
+        () = stop => Relayed::Held,
     }
 }
 
@@ -511,7 +524,7 @@ async fn say<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) -> std::io::R
 
 #[cfg(test)]
 #[path = "picture_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "looks_tests.rs"]

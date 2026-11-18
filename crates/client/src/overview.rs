@@ -71,9 +71,21 @@ pub async fn helper_report(
     until: Instant,
     idle: crate::idle_time::Look,
 ) -> crate::capability::Doctor {
+    // A VM's maintenance, read from the station's own record before its
+    // status is asked, outlives a status that comes too late.
+    let maintenance = match client.desktop().kind() {
+        Kind::Vm(_) => Some(client.maintenance().said(&client.selected.name)),
+        Kind::User(_) => None,
+    };
     let reply = tokio::time::timeout_at(until, client.status())
         .await
-        .unwrap_or_else(|_| json!(late(client)));
+        .unwrap_or_else(|_| {
+            let mut late = json!(late(client));
+            if let Some(said) = maintenance.filter(|said| said["state"] != "none") {
+                late["station"] = json!({"maintenance": said});
+            }
+            late
+        });
     let mut doctor = match client.desktop().kind() {
         Kind::User(login) => crate::user::overview::user_report(login, reply, until, idle).await,
         Kind::Vm(_) => crate::capability::Doctor::vm(reply, client.unreachable())
@@ -427,7 +439,11 @@ fn vm_work_may_run(report: &crate::capability::Doctor) -> bool {
     let may_run = |said: &Value| matches!(said.as_str(), Some("running" | "unknown"));
     matches!(
         report.vm,
-        Some(crate::capability::VmMode::Unavailable(_) | crate::capability::VmMode::Ready)
+        Some(
+            crate::capability::VmMode::Maintained(_)
+                | crate::capability::VmMode::Unavailable(_)
+                | crate::capability::VmMode::Ready
+        )
     ) && status["ok"] == true
         && status["keeper"]["live"] == true
         && (may_run(&status["leftovers"]) || may_run(&status["work"]["state"]))
@@ -465,8 +481,12 @@ fn mode(
     pending: Pending,
     recent: bool,
 ) -> (Mode, String) {
-    // A VM: its guest's own Stop first, then whether it is ready.
+    // A VM: the person's maintenance first, which no Resume ends, then its
+    // guest's own Stop, then whether it is ready.
     match &report.vm {
+        Some(crate::capability::VmMode::Maintained(why)) => {
+            return (Mode::Unavailable, why.clone());
+        }
         Some(crate::capability::VmMode::Stopped) => {
             return (
                 Mode::Stopped,

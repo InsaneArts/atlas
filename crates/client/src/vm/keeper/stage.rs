@@ -14,7 +14,9 @@
 use super::{
     Keeper,
     change::{OPENING, lane_failed, live_in, lost, say_within, unsent},
-    final_reply, reply_line,
+    final_reply,
+    lanes::Ticket,
+    reply_line,
 };
 use atlas_core::{
     error::{Code, Error},
@@ -113,7 +115,13 @@ enum Carrying {
 /// the client on `stream` once the guest is ready, and answering it with
 /// each reply line, or with why it could not be. `early` says the client
 /// sent more after its request before it was told to.
-pub(super) async fn staged(keeper: &Keeper, request: &Value, stream: UnixStream, early: bool) {
+pub(super) async fn staged(
+    keeper: &Keeper,
+    request: &Value,
+    stream: UnixStream,
+    early: bool,
+    ticket: &Ticket<'_>,
+) {
     let (mut reading, mut writing) = stream.into_split();
     let Some(asked) = Asked::of(request) else {
         let refused = unsent(Error::new(
@@ -177,7 +185,7 @@ pub(super) async fn staged(keeper: &Keeper, request: &Value, stream: UnixStream,
     let lane = opened.lane;
     let credit = session.control.credit().clone();
     let between = AtomicBool::new(true);
-    let carried = tokio::time::timeout_at(
+    let relaying = tokio::time::timeout_at(
         until,
         relay(
             &asked,
@@ -186,14 +194,18 @@ pub(super) async fn staged(keeper: &Keeper, request: &Value, stream: UnixStream,
             (&credit, lane),
             &between,
         ),
-    )
-    .await
-    .unwrap_or_else(|_| {
-        Carrying::Lost(Error::new(
-            Code::Transport,
-            "The guest did not answer the stage in time.",
-        ))
-    });
+    );
+    let carried = tokio::select! {
+        carried = relaying => carried.unwrap_or_else(|_| {
+            Carrying::Lost(Error::new(
+                Code::Transport,
+                "The guest did not answer the stage in time.",
+            ))
+        }),
+        // The person's maintenance holds it: its lane is cancelled and its
+        // credit comes back before its ticket goes.
+        () = ticket.stopped() => Carrying::Lost(super::held::held_now(keeper)),
+    };
     match carried {
         Carrying::Answered => {}
         Carrying::Unsent(error) => {

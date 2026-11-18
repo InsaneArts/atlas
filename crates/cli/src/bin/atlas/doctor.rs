@@ -132,9 +132,18 @@ async fn vm_report(client: &Client, verbose: bool) -> atlas_core::error::Result<
     let status = client.status().await;
     if status["ok"] != true {
         let refused = client.unreachable();
-        return Err(match status["why"].as_str().or(status["error"].as_str()) {
+        let refused = match status["why"].as_str().or(status["error"].as_str()) {
             Some(why) if why != refused.error => refused.with("why", json!(why)),
             _ => refused,
+        };
+        // The person's maintenance, which its record says without its
+        // keeper, is said with what ends it.
+        let maintenance = &status["station"]["maintenance"];
+        return Err(match maintenance["reason"].as_str() {
+            Some(reason) => refused
+                .with("station", json!({"maintenance": maintenance}))
+                .with("next", json!(reason)),
+            None => refused,
         });
     }
     let report = atlas_client::capability::vm_report(status, client.unreachable());

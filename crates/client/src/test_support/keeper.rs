@@ -285,7 +285,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             Duration::from_secs(10),
             Arc::new(Trusting),
         )
-        .with_pairing(records),
+        .with_pairing(records)
+        .with_lifecycle(client.lifecycle.clone()),
     );
     (
         client,
@@ -327,6 +328,54 @@ fn added(home: &Path, id: &atlas_core::desktop::DesktopId) {
     Lifecycle::under(home)
         .keep_record(&record)
         .expect("the VM's lifecycle record");
+}
+
+/// Where the lifecycle record of the VM `id` under `home` is, made or not.
+#[must_use]
+pub fn lifecycle_record(home: &Path, id: &atlas_core::desktop::DesktopId) -> std::path::PathBuf {
+    crate::vm::lifecycle::Lifecycle::under(home).record_at(id)
+}
+
+/// Keep the person's maintenance of the VM `id` at `phase` in the lifecycle
+/// record under `home`, the VM added there first when it has no record: its
+/// ID.
+///
+/// # Panics
+///
+/// When the record cannot be read or kept.
+pub fn under_maintenance(
+    home: &Path,
+    id: &atlas_core::desktop::DesktopId,
+    phase: crate::vm::lifecycle::record::Phase,
+) -> Token {
+    use crate::vm::lifecycle::{Lifecycle, record::Maintenance};
+    let lifecycle = Lifecycle::under(home);
+    if lifecycle
+        .record(id)
+        .expect("the VM's lifecycle record")
+        .is_none()
+    {
+        added(home, id);
+    }
+    let mut record = lifecycle
+        .record(id)
+        .expect("the VM's lifecycle record")
+        .expect("added");
+    let change = Token::new();
+    record.maintenance = Some(Maintenance {
+        change: change.clone(),
+        phase,
+        restart: false,
+        since_ms: atlas_core::time::now_ms(),
+        open: None,
+        close: None,
+        opened_by: None,
+        ended: None,
+    });
+    lifecycle
+        .keep_record(&record)
+        .expect("the VM's lifecycle record");
+    change
 }
 
 /// The one background job the scripted keeper's guest keeps.
