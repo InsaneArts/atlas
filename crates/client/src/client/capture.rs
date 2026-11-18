@@ -29,7 +29,7 @@ use std::{
 };
 
 /// The longest side, in pixels, of a picture a VM's guest sends.
-const VM_SIDE: u32 = 1600;
+pub(super) const VM_SIDE: u32 = 1600;
 
 /// Who sent a screenshot, as what is refused of it names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

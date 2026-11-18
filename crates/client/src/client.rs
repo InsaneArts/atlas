@@ -567,6 +567,29 @@ impl Client {
         self.verify().await.map(|verified| verified.session)
     }
 
+    /// The desktop's session as proved now for a look at its screen:
+    /// Second Login's as [`Client::identity`] proves it, a VM's afresh
+    /// through its keeper, held by neither Stop and never starting it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::identity`] for Second Login; for a VM, the refusal of a
+    /// VM that does not prove, is open to more than Atlas, is being handed
+    /// over by an update, or whose guest may not record its screen, in its
+    /// own words, each with its next step in the VM's words.
+    pub async fn looking_identity(&self) -> Result<Session> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            return self
+                .verify_vm_looking()
+                .await
+                .map(|verified| verified.session)
+                .map_err(|error| {
+                    self.advised_refusal_on_vm(error, "Screen & System Audio Recording")
+                });
+        }
+        self.identity().await
+    }
+
     /// The helper session as the daemon reports it now, and whether that
     /// daemon refuses a read meant for another session: what reads in this
     /// session are checked by. It verifies the helper as

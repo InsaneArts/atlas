@@ -188,3 +188,31 @@ async fn a_terminal_that_followed_the_settings_to_another_helper_heeds_that_help
     other_controller.end_private().unwrap();
     lease.release();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_terminal_watching_a_vm_asks_its_keeper_for_the_vms_own_live_picture() {
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(directory.path());
+    let service = TerminalService::start(
+        client,
+        &directory.path().join("unused.toml"),
+        640,
+        CaptureBackend::CoreGraphics,
+    )
+    .await
+    .unwrap();
+    let mut frames = service.frames();
+
+    // The scripted keeper gives no live pictures: what matters is where
+    // the terminal asked for one.
+    let unanswered = frames.next().await.err().unwrap();
+
+    let pictures = keeper.asked_for("picture");
+    assert_eq!(pictures.len(), 1, "{pictures:?}");
+    assert_eq!(pictures[0]["request"]["op"], "stream");
+    assert_eq!(pictures[0]["request"]["maxDimension"], 640);
+    assert!(pictures[0]["request"]["session"].is_object());
+    assert_eq!(unanswered.error, "Not scripted.", "{unanswered:?}");
+    assert!(!frames.live());
+    service.shutdown().await.unwrap();
+}

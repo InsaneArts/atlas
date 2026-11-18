@@ -1,8 +1,16 @@
 //! Persistent raw preview reads. Every readiness byte follows an independent
 //! session proof; no picture captured before that checkpoint can be accepted.
-use super::Client;
+//!
+//! A VM's live picture comes from its guest through its keeper, on a picture
+//! lane of the generation its proof pinned. Each frame is held to its own
+//! header's proof of that session, the keeper passes it on only while the
+//! VM's window stayed closed, and the VM is proved again in full at most
+//! every [`REPROVE`].
+use super::{Client, Pinned};
+use crate::link::Stream;
 use atlas_core::{
     buffer::Buffer,
+    desktop::Kind,
     error::{Code, Error, Result},
     frame_pipe::{
         budget::Budget,
@@ -13,16 +21,19 @@ use atlas_core::{
         CaptureBackend, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
         SESSION_PROOF, SessionPin,
     },
-    session::{Epoch, InputEpoch},
+    session::{Console, Epoch, InputEpoch},
     transport::refusal,
 };
+use atlas_session::compatibility::PICTURES;
 use serde_json::{Value, json};
 use std::{
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf},
     net::UnixStream,
 };
 
@@ -33,6 +44,10 @@ const DEADLINE: Duration = Duration::from_secs(2);
 const FRESHNESS: Duration = Duration::from_millis(500);
 /// How often a stop that went unanswered is asked about while it settles.
 const DRAIN_QUERY: Duration = Duration::from_millis(50);
+/// The longest a VM's live picture goes without its VM proved again in
+/// full: between, each frame is held to its own header's proof and to the
+/// VM's picture fence, which its keeper reads before passing it on.
+const REPROVE: Duration = Duration::from_secs(1);
 
 /// One verified picture of the helper and how it was read, its pixels in
 /// `P`: a shared buffer, or pixels charged to a budget.
@@ -124,9 +139,10 @@ impl CaptureStats {
     }
 }
 
-/// One persistent raw frame connection to the verified helper daemon.
+/// One persistent raw frame connection to the verified helper daemon, or
+/// to a VM's guest through its keeper.
 pub struct LiveStream {
-    socket: UnixStream,
+    socket: Socket,
     epoch: Epoch,
     sequence: u64,
     limit: u32,
@@ -172,6 +188,14 @@ impl LiveStream {
         if !(320..=4096).contains(&limit) {
             return Err(invalid("Invalid preview size"));
         }
+        if matches!(client.desktop().kind(), Kind::Vm(_)) {
+            return Self::open_on_vm(client, limit)
+                .await
+                .map(Some)
+                .map_err(|error| {
+                    client.advised_refusal_on_vm(error, "Screen & System Audio Recording")
+                });
+        }
         let verified = client.verify().await?;
         let offers = |name: &str| verified.observation.has_capability(name);
         if backend == CaptureBackend::ScreenCaptureKit && !offers(SCK_EXPERIMENTAL) {
@@ -206,7 +230,7 @@ impl LiveStream {
             ));
         };
         let mut stream = Self {
-            socket,
+            socket: Socket::Unix(socket),
             epoch,
             sequence: 0,
             limit,
@@ -252,6 +276,86 @@ impl LiveStream {
             });
         }
         Ok(Some(stream))
+    }
+
+    /// Open a live picture of a VM, at most `limit` pixels on its longer
+    /// side and never more than a VM's guest sends: proved for a look, held
+    /// by neither Stop and never starting it, its guest giving pictures and
+    /// Atlas VM keeping a picture fence; asked through its keeper in the
+    /// generation the proof was taken in, of the guest's daemon that proof
+    /// names, which says which capture source serves it.
+    async fn open_on_vm(client: &Client, limit: u32) -> Result<Self> {
+        let verified = client.verify_vm_looking().await?;
+        let pinned = verified
+            .machine()
+            .cloned()
+            .ok_or_else(|| client.unreachable())?;
+        let generation = client.generation_offering(&verified, PICTURES, |name| {
+            format!("{name}'s Atlas is from an older build that gives this Mac no pictures.")
+        })?;
+        client.fenced(&pinned)?;
+        let limit = limit.min(super::capture::VM_SIDE);
+        let epoch = verified.session().epoch.clone();
+        let asked = request(&epoch, limit, CaptureBackend::CoreGraphics);
+        let (stream, _) = client
+            .link
+            .send_bulk(&asked, generation)
+            .await
+            .map_err(|error| on_vm(client, error))?
+            .into_stream();
+        let mut socket = Socket::Keeper(Box::new(OnVm {
+            stream,
+            pinned,
+            proved: tokio::time::Instant::now(),
+        }));
+        let accepted = tokio::time::timeout(DEADLINE, read_header(&mut socket))
+            .await
+            .map_err(|_| invalid("Preview handshake timed out"))?
+            .map_err(|error| on_vm(client, error))?;
+        let daemon = accepted["daemonPID"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid == epoch.capture_pid);
+        let generation = accepted["producerGeneration"]
+            .as_u64()
+            .filter(|generation| *generation > 0);
+        let (Some(daemon), Some(generation)) = (daemon, generation) else {
+            return Err(Error::new(
+                Code::Capture,
+                format!(
+                    "{} did not name its live capture source",
+                    client.selected.name
+                ),
+            ));
+        };
+        if accepted["stream"] != RGB_STREAM {
+            return Err(Error::new(
+                Code::Capture,
+                format!(
+                    "{} did not accept the raw preview protocol",
+                    client.selected.name
+                ),
+            ));
+        }
+        Ok(Self {
+            socket,
+            epoch,
+            sequence: 0,
+            limit,
+            synchronized: true,
+            backend: CaptureBackend::CoreGraphics,
+            profile: Profile {
+                ceiling: super::capture::VM_SIDE,
+                persistent_proofs: false,
+            },
+            producer: Some(Served {
+                daemon,
+                generation,
+                // Its process is the guest's, never one of this Mac's.
+                instance: None,
+            }),
+            acquisitions: 0,
+        })
     }
 
     /// The next frame, bracketed by fresh session proofs. Its outcome,
@@ -359,7 +463,8 @@ impl LiveStream {
     /// source's generation once this end of the connection is closed. A
     /// stream without a stop-confirming helper is a CoreGraphics one, given
     /// back when the connection closes. Asking again after a failure only
-    /// asks again; no second stop is sent.
+    /// asks again; no second stop is sent. A VM's stop goes on its lane,
+    /// and its guest's daemon is asked through its keeper.
     ///
     /// # Errors
     ///
@@ -410,7 +515,13 @@ impl LiveStream {
             let query = atlas_core::files::token()[..32].to_owned();
             let reply = tokio::time::timeout_at(
                 until,
-                drain_query(client, daemon, generation, &query, until),
+                drain_query(
+                    client,
+                    (daemon, generation),
+                    &query,
+                    self.socket.on_vm(),
+                    until,
+                ),
             )
             .await;
             match reply {
@@ -432,10 +543,24 @@ impl LiveStream {
             }
             tokio::time::sleep(DRAIN_QUERY).await;
         }
+        let who = match &self.socket {
+            Socket::Unix(_) => "The helper".to_owned(),
+            Socket::Keeper(_) => client.selected.name.clone(),
+        };
         Err(Error::new(
             Code::Capture,
-            "The helper did not confirm that its live capture stopped",
+            format!("{who} did not confirm that its live capture stopped"),
         ))
+    }
+
+    /// Have a VM's picture last proved its VM `ago`, as if that long passed.
+    #[cfg(test)]
+    pub(crate) fn proved_ago(&mut self, ago: Duration) {
+        if let Socket::Keeper(vm) = &mut self.socket {
+            vm.proved = tokio::time::Instant::now()
+                .checked_sub(ago)
+                .unwrap_or(vm.proved);
+        }
     }
 
     /// Whether `error` left this connection at a frame boundary, so the next
@@ -452,9 +577,12 @@ impl LiveStream {
     ) -> Result<LiveFrame<P>> {
         let began = Instant::now();
         progress.enter(Stage::BeforeProof);
-        let before = client.identity().await;
+        let before = match &mut self.socket {
+            Socket::Unix(_) => client.identity().await.map(|session| session.epoch),
+            Socket::Keeper(vm) => vm.bracket(client).await.map(|()| self.epoch.clone()),
+        };
         progress.done();
-        let before = before?.epoch;
+        let before = before?;
         let before_ms = began.elapsed().as_secs_f64() * 1000.0;
         if before != self.epoch {
             return Err(changed());
@@ -466,8 +594,13 @@ impl LiveStream {
             let header = read_header(&mut self.socket).await?;
             progress.done();
             let capture_wait_ms = at.elapsed().as_secs_f64() * 1000.0;
-            let (width, height, sequence) =
-                validate_header(&header, &before, self.limit, self.sequence)?;
+            let (width, height, sequence) = validate_header(
+                &header,
+                &before,
+                self.limit,
+                self.sequence,
+                self.socket.console(),
+            )?;
             let source = match (self.backend, header["captureBackend"].as_str()) {
                 (CaptureBackend::CoreGraphics, None | Some("cg")) => "cg",
                 (CaptureBackend::ScreenCaptureKit, Some("sck")) => "sck",
@@ -493,7 +626,10 @@ impl LiveStream {
             progress.record.allocated_bytes = length as u64;
             progress.enter(Stage::BodyRead);
             let reading = Instant::now();
-            self.socket.read_exact(rgb.bytes()).await?;
+            self.socket
+                .read_exact(rgb.bytes())
+                .await
+                .map_err(|error| self.socket.cut_short(error))?;
             progress.done();
             Ok::<_, Error>((
                 Received {
@@ -513,7 +649,7 @@ impl LiveStream {
         })
         .await;
         let (header, rgb) = match read {
-            Ok(read) => read?,
+            Ok(read) => read.map_err(|error| self.socket.said(client, error))?,
             Err(_) => {
                 progress.record.outcome = Outcome::Timeout;
                 return Err(invalid("Preview frame timed out"));
@@ -521,9 +657,14 @@ impl LiveStream {
         };
         progress.enter(Stage::AfterProof);
         let proving = Instant::now();
-        let after = client.identity().await;
+        // A VM's frame is held to its header's proof and its keeper's fence;
+        // the VM itself is proved before frames, at most every REPROVE.
+        let after = match &self.socket {
+            Socket::Unix(_) => client.identity().await.map(|session| session.epoch),
+            Socket::Keeper(_) => Ok(before.clone()),
+        };
         progress.done();
-        let after = after?.epoch;
+        let after = after?;
         let after_ms = proving.elapsed().as_secs_f64() * 1000.0;
         if after != before {
             return Err(changed());
@@ -579,6 +720,141 @@ impl Pixels for Buffer {
 impl Pixels for FramePixels {
     fn bytes(&mut self) -> &mut [u8] {
         self.as_mut_slice()
+    }
+}
+
+/// Where a live picture is read from.
+enum Socket {
+    /// The helper's daemon, on its own socket.
+    Unix(UnixStream),
+    /// A VM's guest, through its keeper.
+    Keeper(Box<OnVm>),
+}
+
+impl Socket {
+    /// Where the proved screen must be: off the console for the helper,
+    /// as this process keeps it, on its own for a VM's guest.
+    fn console(&self) -> Console {
+        match self {
+            Self::Unix(_) => Console::kept(),
+            Self::Keeper(_) => Console::Own,
+        }
+    }
+
+    /// The proof a VM's picture was opened on; none for the helper's.
+    fn on_vm(&self) -> Option<&Pinned> {
+        match self {
+            Self::Unix(_) => None,
+            Self::Keeper(vm) => Some(&vm.pinned),
+        }
+    }
+
+    /// `error`, which ended a frame's pixels part way: the helper's as it
+    /// came; a VM's as its picture stopped, as its keeper ends a frame's
+    /// connection once the window may have taken the person's input after
+    /// the frame began, with no word among its pixels.
+    fn cut_short(&self, error: std::io::Error) -> Error {
+        match self {
+            Self::Unix(_) => error.into(),
+            Self::Keeper(_) => Error::new(
+                Code::OnConsole,
+                "The VM's picture stopped part way through a frame",
+            ),
+        }
+    }
+
+    /// `error`, which ended a frame's read, as `client` says it of its
+    /// desktop: the helper's as it came, a VM's in that VM's own words.
+    fn said(&self, client: &Client, error: Error) -> Error {
+        match self {
+            Self::Unix(_) => error,
+            Self::Keeper(_) => on_vm(client, error),
+        }
+    }
+}
+
+impl AsyncRead for Socket {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(stream) => Pin::new(stream).poll_read(context, buffer),
+            Self::Keeper(vm) => Pin::new(&mut vm.stream).poll_read(context, buffer),
+        }
+    }
+}
+
+impl AsyncWrite for Socket {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Unix(stream) => Pin::new(stream).poll_write(context, bytes),
+            Self::Keeper(vm) => Pin::new(&mut vm.stream).poll_write(context, bytes),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(stream) => Pin::new(stream).poll_flush(context),
+            Self::Keeper(vm) => Pin::new(&mut vm.stream).poll_flush(context),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(stream) => Pin::new(stream).poll_shutdown(context),
+            Self::Keeper(vm) => Pin::new(&mut vm.stream).poll_shutdown(context),
+        }
+    }
+}
+
+/// A VM's live picture: its connection through the VM's keeper, the proof
+/// it was opened on, and when the VM was last proved in full.
+struct OnVm {
+    stream: Stream,
+    pinned: Pinned,
+    proved: tokio::time::Instant,
+}
+
+impl OnVm {
+    /// Prove the VM again in full once [`REPROVE`] passed since it last was:
+    /// the same epoch, generation, and Atlas VM's same run and picture
+    /// fence as when its picture was opened, its window closed.
+    ///
+    /// # Errors
+    ///
+    /// The proof's own refusal, or `session-changed` when anything named
+    /// above differs.
+    async fn bracket(&mut self, client: &Client) -> Result<()> {
+        if self.proved.elapsed() < REPROVE {
+            return Ok(());
+        }
+        client.reproved(&self.pinned).await?;
+        self.proved = tokio::time::Instant::now();
+        Ok(())
+    }
+}
+
+/// `error`, which ended a VM's live picture, in that VM's own words: its
+/// window opened, its session changed, or its session gone.
+fn on_vm(client: &Client, error: Error) -> Error {
+    let name = &client.selected.name;
+    match error.code {
+        Code::OnConsole => Error::new(
+            Code::OnConsole,
+            format!("{name}'s window took the person's input, so its picture stopped"),
+        ),
+        Code::SessionChanged => client.vm_changed(),
+        Code::Io => Error::new(
+            Code::Transport,
+            format!("{name}'s picture stopped as its session ended; open it again"),
+        ),
+        _ => error,
     }
 }
 
@@ -660,22 +936,34 @@ fn request(epoch: &Epoch, limit: u32, backend: CaptureBackend) -> Value {
     request
 }
 
-/// Ask the daemon `daemon`, and only it, whether `generation` is drained.
+/// Ask the daemon `daemon`, and only it, whether `generation` is drained:
+/// the helper's on a connection of its own, or a VM's guest's, when
+/// `on_vm` names the proof its picture was opened on, through its keeper on a
+/// read lane of that proof's generation.
 async fn drain_query(
     client: &Client,
-    daemon: u32,
-    generation: u64,
+    (daemon, generation): (u32, u64),
     query: &str,
+    on_vm: Option<&Pinned>,
     until: tokio::time::Instant,
 ) -> Result<Value> {
+    let asked = json!({"op": "stream-drain-status", "daemonPID": daemon,
+        "producerGeneration": generation, "queryID": query});
+    if let Some(pinned) = on_vm {
+        let mut asked = asked;
+        asked["session"] = json!(SessionPin {
+            security_session_id: pinned.epoch.security_session_id,
+            display_id: pinned.epoch.display_id,
+        });
+        return client.link.call_in(&asked, Some(pinned.generation)).await;
+    }
     let Some(mut socket) = client.link.socket()?.lane(daemon, until).await? else {
         return Err(Error::new(
             Code::Identity,
             "The drain answer did not come from the helper daemon that ran the stream",
         ));
     };
-    let mut line = serde_json::to_vec(&json!({"op": "stream-drain-status", "daemonPID": daemon,
-        "producerGeneration": generation, "queryID": query}))?;
+    let mut line = serde_json::to_vec(&asked)?;
     line.push(b'\n');
     socket.write_all(&line).await?;
     let mut reply = Vec::new();
@@ -700,11 +988,14 @@ pub(super) async fn read_header(reader: &mut (impl tokio::io::AsyncRead + Unpin)
     Ok(header)
 }
 
+/// A frame's `header`, held to `epoch`, whose screen is where `console`
+/// says, at most `limit` on either side, its sequence past `previous`.
 fn validate_header(
     header: &Value,
     epoch: &Epoch,
     limit: u32,
     previous: u64,
+    console: Console,
 ) -> Result<(u32, u32, u64)> {
     let side = |key: &str| {
         header[key]
@@ -723,7 +1014,7 @@ fn validate_header(
         .and_then(|n| u32::try_from(n).ok())
         .filter(|pid| *pid == epoch.capture_pid)
         .ok_or_else(changed)?;
-    let proof = InputEpoch::from_proof(&header["session"], process_id)?;
+    let proof = InputEpoch::from_proof_kept(&header["session"], process_id, console)?;
     let expected = InputEpoch {
         process_id: epoch.capture_pid,
         ..epoch.input_epoch()
@@ -734,9 +1025,10 @@ fn validate_header(
     let distortion =
         (f64::from(width) * epoch.display.height - f64::from(height) * epoch.display.width).abs();
     if distortion > epoch.display.width.max(epoch.display.height) * 1.5 {
-        return Err(invalid(
-            "Preview aspect ratio disagrees with the helper display",
-        ));
+        return Err(invalid(match console {
+            Console::Off => "Preview aspect ratio disagrees with the helper display",
+            Console::Own => "Preview aspect ratio disagrees with the VM's display",
+        }));
     }
     Ok((width, height, sequence))
 }

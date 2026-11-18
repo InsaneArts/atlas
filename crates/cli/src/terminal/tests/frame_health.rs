@@ -159,3 +159,22 @@ async fn recovery_keeps_the_first_interruption_reason_until_another_outage_start
         Some("transport")
     );
 }
+
+#[tokio::test]
+async fn a_terminal_watching_a_vm_names_the_vm_and_never_the_helper() {
+    let states = state();
+    states.send_modify(|state| {
+        state.controlling = false;
+        state.phase = ControlPhase::Watching;
+        state.message = "Connecting to work...".into();
+    });
+    let mut session = Session::at(
+        Arc::new(std::sync::Mutex::new("http://127.0.0.1:1/".into())),
+        true,
+        "work".into(),
+    );
+
+    received(&mut session, &states, &mut None, Ok(picture("first")));
+
+    assert_eq!(states.borrow().message, "Watching work");
+}

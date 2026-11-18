@@ -228,7 +228,7 @@ pub(crate) async fn bind(controller: u32, client: &Client) -> Result<(Listeners,
         // Keyed by the two accounts, as every earlier build keys it, so
         // builds before and after this one still exclude each other.
         Kind::User(user) => bind_in(Path::new(BASE), controller, user.uid).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => Err(super::live_refused(client)),
     }
 }
 

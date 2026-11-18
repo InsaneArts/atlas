@@ -55,8 +55,9 @@ impl Service {
 ///
 /// # Errors
 ///
-/// Returns the endpoint's refusals (an unsafe folder, another service for
-/// this helper) and failures to write its record.
+/// Refuses a VM in the one wording for its live window; returns the
+/// endpoint's refusals (an unsafe folder, another service for this helper)
+/// and failures to write its record.
 pub(crate) async fn start(
     client: Arc<Client>,
     longest: u32,
@@ -64,6 +65,7 @@ pub(crate) async fn start(
     privacy: Privacy,
     input: Arc<Notify>,
 ) -> Result<Service> {
+    crate::viewer::shown_in_window(&client)?;
     let controller = nix::unistd::getuid().as_raw();
     let helper = client.link.socket()?.peer_uid;
     let (listeners, endpoint) = endpoint::bind(controller, &client).await?;

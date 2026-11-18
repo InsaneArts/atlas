@@ -141,12 +141,7 @@ impl Client {
             return outcome;
         }
         match outcome {
-            Err(error) if error.details.contains_key("next") => Err(error),
-            Err(error) => match self.next_on_vm(error.code, error.holder, error.uncertain, setting)
-            {
-                Some(next) => Err(error.with("next", json!(next))),
-                None => Err(error),
-            },
+            Err(error) => Err(self.advised_refusal_on_vm(error, setting)),
             Ok(mut reply) => {
                 if reply["ok"] == false
                     && reply.get("next").is_none()
@@ -161,6 +156,20 @@ impl Client {
                 }
                 Ok(reply)
             }
+        }
+    }
+
+    /// `error`, refused on this VM, with what an agent does about it in this
+    /// VM's own words, as [`Client::advised_on_vm_for`] says: a permission
+    /// is `setting`, allowed in its window. One that names its next step
+    /// already keeps it.
+    pub(crate) fn advised_refusal_on_vm(&self, error: Error, setting: &str) -> Error {
+        if error.details.contains_key("next") {
+            return error;
+        }
+        match self.next_on_vm(error.code, error.holder, error.uncertain, setting) {
+            Some(next) => error.with("next", json!(next)),
+            None => error,
         }
     }
 

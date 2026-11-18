@@ -12,10 +12,19 @@
 //! answered at the request's deadline or once the generation is left has
 //! its lane cancelled and its connection closed: the guest's pump ends then
 //! and takes back what it was owed.
+//!
+//! A live picture is admitted only while Atlas VM says the VM's window is
+//! closed, its picture fence read then; the keeper reads its frames' bounds
+//! from their headers, and reads the fence again before each header and each
+//! chunk of pixels goes. Nothing sent once the window may have taken the
+//! person's input is passed on: at a frame's start the keeper says why in
+//! its place, part way through one it only ends the connection, and either
+//! way it cancels the lane.
 use super::{
     Keeper, Session,
     change::{OPENING, say_within, unsent},
 };
+use crate::vm::{proof::Fence, runner::Window};
 use atlas_core::error::{Code, Error};
 use atlas_session::{
     compatibility::{PICTURES, judge},
@@ -50,6 +59,15 @@ const LONGEST: Duration = Duration::from_secs(120);
 /// picture's readiness, its stop, or a frame's cancel.
 const UPSTREAM: usize = 64;
 
+/// How long Atlas VM is given to say its picture fence, at a live
+/// picture's admission and before each of its frames goes.
+const FENCE_READ: Duration = Duration::from_secs(1);
+
+/// The longest header a live picture's guest frames, and the longest side
+/// of a frame it sends.
+const HEADER: usize = 4096;
+const SIDE: u64 = 4096;
+
 /// Whether `request` is one the keeper carries on a picture lane: a
 /// screenshot, a frame, a live picture or a file's read, each naming the
 /// session its command proved.
@@ -75,6 +93,76 @@ enum Relayed {
     Retired,
     /// The request's deadline passed.
     Late,
+    /// A live picture's frame was held back: Atlas VM's picture fence
+    /// moved since the picture was admitted, or could not be read.
+    Withheld,
+}
+
+/// What a live picture's frames are held to: Atlas VM's picture fence as
+/// the keeper read it when the picture was admitted, the VM's window
+/// closed then. A frame goes only once a fresh reading shows the same.
+struct Fenced<'a> {
+    keeper: &'a Keeper,
+    admitted: Fence,
+}
+
+impl<'a> Fenced<'a> {
+    /// The fence `keeper` reads now, its window closed; else why no live
+    /// picture is admitted.
+    async fn admit(keeper: &'a Keeper) -> Result<Self, Error> {
+        let admitted = closed_fence(keeper).await?;
+        Ok(Self { keeper, admitted })
+    }
+
+    /// Whether a frame may go now: Atlas VM's run and picture fence as at
+    /// admission, its window closed; else why it may not.
+    async fn holds(&self) -> Result<(), Error> {
+        if closed_fence(self.keeper).await? != self.admitted {
+            return Err(took_input());
+        }
+        Ok(())
+    }
+}
+
+/// Atlas VM's picture fence, bound to its run, as it says it now with the
+/// VM's window closed; else why no picture of it goes.
+async fn closed_fence(keeper: &Keeper) -> Result<Fence, Error> {
+    let unread = || {
+        Error::new(
+            Code::Transport,
+            "Atlas VM did not say whether the VM's window was opened, so its picture stopped.",
+        )
+    };
+    let reply = keeper
+        .reach
+        .runner(FENCE_READ)
+        .await
+        .map_err(|_| unread())?;
+    if !reply.ok {
+        return Err(unread());
+    }
+    if reply.window != Some(Window::Closed) {
+        return Err(took_input());
+    }
+    let (Some(incarnation), Some(count)) = (reply.incarnation, reply.fence) else {
+        return Err(Error::new(
+            Code::Update,
+            "Atlas VM, which runs the VM, is from an older build that cannot say whether its \
+             window was opened; update Atlas.",
+        ));
+    };
+    Ok(Fence {
+        incarnation: incarnation.id,
+        count,
+    })
+}
+
+/// Why a live picture stopped once the VM's window may have been opened.
+fn took_input() -> Error {
+    Error::new(
+        Code::OnConsole,
+        "The VM's window took the person's input, so its picture stopped.",
+    )
 }
 
 /// Carry the picture or read `request` asks for on a picture lane of the
@@ -115,6 +203,17 @@ pub(super) async fn pictured(keeper: &Keeper, request: &Value, stream: UnixStrea
             say_within(&mut writing, &unsent(refused)).await;
             return;
         }
+    };
+    let fenced = if asked["op"] == "stream" {
+        match Fenced::admit(keeper).await {
+            Ok(fenced) => Some(fenced),
+            Err(refused) => {
+                say_within(&mut writing, &unsent(refused)).await;
+                return;
+            }
+        }
+    } else {
+        None
     };
     let until = (asked["op"] != "stream").then(|| {
         let deadline = request["deadline_ms"]
@@ -166,8 +265,8 @@ pub(super) async fn pictured(keeper: &Keeper, request: &Value, stream: UnixStrea
         lane,
         (&mut from_guest, &mut to_guest),
         (&mut reading, &mut writing),
-        progress,
-        until,
+        (progress, until),
+        fenced.as_ref(),
     )
     .await;
     // Whatever the guest has not said yet is no longer wanted: its pump
@@ -210,37 +309,29 @@ fn live(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc<Session>, Err
 /// it whole, each within `progress`; and what the client says to the guest,
 /// a few bytes at a time. Until the guest ends the lane, the client hangs
 /// up or stalls, the lane fails, the generation is left or `until` passes.
+/// A live picture's frames go only while `fenced` holds.
 async fn relay<R, W>(
     session: &Session,
     lane: LaneId,
     (from_guest, to_guest): (&mut R, &mut W),
     (reading, writing): (&mut OwnedReadHalf, &mut OwnedWriteHalf),
-    progress: Duration,
-    until: Option<tokio::time::Instant>,
+    (progress, until): (Duration, Option<tokio::time::Instant>),
+    fenced: Option<&Fenced<'_>>,
 ) -> Relayed
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut down = Down {
+        session,
+        lane,
+        writing,
+        progress,
+    };
     let down = async {
-        let mut chunk = vec![0_u8; CHUNK];
-        loop {
-            let read = match from_guest.read(&mut chunk).await {
-                Ok(0) => return Relayed::Ended,
-                Ok(read) => read,
-                Err(_) => return Relayed::Failed,
-            };
-            match tokio::time::timeout(progress, writing.write_all(&chunk[..read])).await {
-                Ok(Ok(())) => {}
-                Ok(Err(_)) => return Relayed::Gone,
-                Err(_) => return Relayed::Stalled,
-            }
-            // Only now may the guest send it again; a generation already
-            // closed takes no credit, and its lanes end with it.
-            let _ = session.control.say(Said::Credit {
-                lane,
-                bytes: read as u64,
-            });
+        match fenced {
+            Some(fenced) => down.frames(from_guest, fenced).await,
+            None => down.bytes(from_guest).await,
         }
     };
     let up = async {
@@ -269,6 +360,148 @@ where
     }
 }
 
+/// The guest's side of a relay, toward its client: what it sends passed
+/// on, and its credit given back for each part once the client took it.
+struct Down<'a> {
+    session: &'a Session,
+    lane: LaneId,
+    writing: &'a mut OwnedWriteHalf,
+    progress: Duration,
+}
+
+impl Down<'_> {
+    /// Pass on whatever the guest sends, unread, until it ends the lane.
+    async fn bytes<R: AsyncRead + Unpin>(&mut self, from_guest: &mut R) -> Relayed {
+        let mut chunk = vec![0_u8; CHUNK];
+        loop {
+            let read = match from_guest.read(&mut chunk).await {
+                Ok(0) => return Relayed::Ended,
+                Ok(read) => read,
+                Err(_) => return Relayed::Failed,
+            };
+            if let Err(relayed) = self.pass(&chunk[..read]).await {
+                return relayed;
+            }
+        }
+    }
+
+    /// Pass on a live picture's frames as the guest frames them, each
+    /// header's length, its header, then the pixels it says follow, until
+    /// the guest ends the lane. Each part goes only once `fenced` holds
+    /// after it came: its header, and each chunk of its pixels, so nothing
+    /// the guest sent once the window may have taken the person's input is
+    /// passed on, whatever its header said. Held at a header, the client is
+    /// told why in the frame's place; held part way through a frame, the
+    /// client's connection only ends, as no word may stand among pixels.
+    async fn frames<R: AsyncRead + Unpin>(
+        &mut self,
+        from_guest: &mut R,
+        fenced: &Fenced<'_>,
+    ) -> Relayed {
+        let mut chunk = vec![0_u8; CHUNK];
+        loop {
+            let mut length = [0_u8; 4];
+            match begun(from_guest, &mut length).await {
+                Ok(true) => {}
+                Ok(false) => return Relayed::Ended,
+                Err(_) => return Relayed::Failed,
+            }
+            let size = u32::from_be_bytes(length) as usize;
+            if size == 0 || size > HEADER {
+                return Relayed::Failed;
+            }
+            let mut header = length.to_vec();
+            header.resize(length.len() + size, 0);
+            if from_guest
+                .read_exact(&mut header[length.len()..])
+                .await
+                .is_err()
+            {
+                return Relayed::Failed;
+            }
+            let Some(mut left) = pixels(&header[length.len()..]) else {
+                return Relayed::Failed;
+            };
+            if left > 0
+                && let Err(withheld) = fenced.holds().await
+            {
+                let _ = tokio::time::timeout(self.progress, frame_header(self.writing, &withheld))
+                    .await;
+                return Relayed::Withheld;
+            }
+            if let Err(relayed) = self.pass(&header).await {
+                return relayed;
+            }
+            while left > 0 {
+                let want = usize::try_from(left).map_or(CHUNK, |left| left.min(CHUNK));
+                if from_guest.read_exact(&mut chunk[..want]).await.is_err() {
+                    return Relayed::Failed;
+                }
+                if fenced.holds().await.is_err() {
+                    return Relayed::Withheld;
+                }
+                if let Err(relayed) = self.pass(&chunk[..want]).await {
+                    return relayed;
+                }
+                left -= want as u64;
+            }
+        }
+    }
+
+    /// Write `part`, read from the guest, to the client within
+    /// `progress`, and only then give its credit back.
+    async fn pass(&mut self, part: &[u8]) -> Result<(), Relayed> {
+        match tokio::time::timeout(self.progress, self.writing.write_all(part)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return Err(Relayed::Gone),
+            Err(_) => return Err(Relayed::Stalled),
+        }
+        // Only now may the guest send it again; a generation already
+        // closed takes no credit, and its lanes end with it.
+        let _ = self.session.control.say(Said::Credit {
+            lane: self.lane,
+            bytes: part.len() as u64,
+        });
+        Ok(())
+    }
+}
+
+/// Fill `bytes` from `reader`: false when it ended before any of them.
+async fn begun<R: AsyncRead + Unpin>(reader: &mut R, bytes: &mut [u8]) -> std::io::Result<bool> {
+    let first = reader.read(bytes).await?;
+    if first == 0 {
+        return Ok(false);
+    }
+    reader.read_exact(&mut bytes[first..]).await?;
+    Ok(true)
+}
+
+/// How many pixel bytes follow a live picture's frame header `header`, as
+/// its guest frames it: a frame's width by its height by three, none after
+/// its first word, its stop's answer or a refusal; none at all for a header
+/// that is not one.
+fn pixels(header: &[u8]) -> Option<u64> {
+    let header: Value = serde_json::from_slice(header).ok()?;
+    if header["ok"] != true || (header.get("width").is_none() && header.get("height").is_none()) {
+        return Some(0);
+    }
+    let side = |key: &str| {
+        header[key]
+            .as_u64()
+            .filter(|side| (1..=SIDE).contains(side))
+    };
+    Some(side("width")? * side("height")? * 3)
+}
+
+/// Say `refused` to a live picture's client in a frame header's place.
+async fn frame_header(writing: &mut OwnedWriteHalf, refused: &Error) -> std::io::Result<()> {
+    let header = serde_json::to_vec(refused)?;
+    let length = u32::try_from(header.len()).map_err(std::io::Error::other)?;
+    writing.write_all(&length.to_be_bytes()).await?;
+    writing.write_all(&header).await?;
+    writing.flush().await
+}
+
 async fn say<W: AsyncWrite + Unpin>(writing: &mut W, said: &Value) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(said)?;
     line.push(b'\n');
@@ -283,3 +516,7 @@ mod tests;
 #[cfg(test)]
 #[path = "looks_tests.rs"]
 mod looks_tests;
+
+#[cfg(test)]
+#[path = "live_picture_tests.rs"]
+mod live_picture_tests;

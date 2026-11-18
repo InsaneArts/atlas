@@ -651,3 +651,44 @@ fn frames_are_written_and_the_folder_removed_through_its_own_descriptor() {
     frames.clear();
     assert!(!moved.join("frame.png").exists());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_keeps_a_live_vms_screen_from_the_vm_itself_stopped_or_resumed() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let output = client.output_dir().unwrap().to_path_buf();
+    let frame = dir.path().join("frames/frame.png");
+    let mut watch = Watch::new(Some(Frames::open(&dir.path().join("frames")).unwrap()));
+    let mut lines = Lines {
+        stdout: std::io::stdout(),
+        written: Instant::now(),
+    };
+
+    *keeper.stop.lock().unwrap() = "stopped";
+    assert!(watch.tick(&client, &output, 1, &mut lines).await);
+    let stopped = (watch.state.clone(), keeper.asked_for("picture").len());
+    let kept_stopped = frame.exists();
+
+    *keeper.stop.lock().unwrap() = "clear";
+    watch.read_at = None;
+    watch.framed_at = Some(Instant::now() - IDLE_FRAME_EVERY);
+    assert!(watch.tick(&client, &output, 1, &mut lines).await);
+    let resumed = (watch.state.clone(), keeper.asked_for("picture").len());
+
+    assert_eq!(stopped, (State::Stopped, 1));
+    assert!(kept_stopped, "the stopped VM's screen was kept");
+    assert_eq!(
+        resumed,
+        (State::NotReady, 2),
+        "a resumed VM not ready for agents"
+    );
+    assert!(frame.exists(), "its screen is still kept");
+    let pictures = keeper.asked_for("picture");
+    assert!(
+        pictures
+            .iter()
+            .all(|asked| asked["request"]["op"] == "screenshot"
+                && asked["request"]["maxDimension"] == 1280),
+        "{pictures:?}"
+    );
+}

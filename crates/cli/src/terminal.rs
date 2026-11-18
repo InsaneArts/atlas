@@ -31,6 +31,9 @@ use tokio::{
     task::JoinSet,
 };
 
+/// What the terminal says it watches when it watches the helper.
+const HELPER: &str = "the hidden helper";
+
 #[derive(Clone)]
 struct State {
     revision: u64,
@@ -86,6 +89,7 @@ enum Operation {
 }
 
 /// Watch the helper inside an interactive terminal until it closes or the person exits.
+/// A VM is watched read-only, whatever `read_only` says.
 ///
 /// # Errors
 ///
@@ -108,7 +112,19 @@ pub async fn monitor(
     // While the person signs the helper in to an account its screen is
     // hidden here as from agents, from the start and at each picture.
     client.controller.screen_visible()?;
-    let display = client.identity().await?.epoch.display;
+    // A VM is only watched here: no control, no Stop, its own live picture
+    // of the guest's CoreGraphics frames, never the frame service's.
+    let vm = matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_));
+    let (read_only, backend, watched) = if vm {
+        (
+            true,
+            CaptureBackend::CoreGraphics,
+            client.selected.name.clone(),
+        )
+    } else {
+        (read_only, backend, HELPER.to_owned())
+    };
+    let display = client.looking_identity().await?.epoch.display;
     let points = (display.width, display.height);
     // With the menu bar running for this helper, the terminal shares its
     // frame service and its control routes, so no second capture runs.
@@ -125,7 +141,7 @@ pub async fn monitor(
             address: address.clone(),
             controller: Box::new(client.controller.clone()),
         };
-        return connected(address, frames, read_only, max_dimension, points).await;
+        return connected(address, frames, read_only, HELPER, max_dimension, points).await;
     }
     let dimension = quality::current(max_dimension, points);
     let service = viewer::TerminalService::start(client, settings, dimension, backend).await?;
@@ -133,6 +149,7 @@ pub async fn monitor(
         Arc::new(std::sync::Mutex::new(service.url.clone())),
         Frames::Private(service.frames()),
         read_only,
+        &watched,
         max_dimension,
         points,
     )
@@ -290,6 +307,7 @@ async fn connected(
     url: Address,
     mut source: Frames,
     read_only: bool,
+    watched: &str,
     max_dimension: Option<u32>,
     mut display: (f64, f64),
 ) -> Result<()> {
@@ -300,7 +318,7 @@ async fn connected(
         controlling: false,
         paused: false,
         phase: ControlPhase::Watching,
-        message: "Connecting to the hidden helper...".into(),
+        message: format!("Connecting to {watched}..."),
         view: viewport::Viewport::default(),
         diagnostics: 0,
         input_ack_ms: None,
@@ -314,7 +332,7 @@ async fn connected(
         screen::run(receiver, commands, terminal_stop, read_only, screen_budget)
     });
     let (frames, mut captured) = mpsc::channel(1);
-    let mut session = Session::at(url, read_only);
+    let mut session = Session::at(url, read_only, watched.to_owned());
     let refresh = session.refresh.clone();
     let frame_stop = stop.clone();
     let view_state = states.subscribe();
@@ -447,11 +465,10 @@ fn received(
                 .any(|prefix| state.message.starts_with(prefix))
                 {
                     state.message = if state.controlling {
-                        "You have control. Ctrl+G gives it back; Ctrl+Q exits."
+                        "You have control. Ctrl+G gives it back; Ctrl+Q exits.".to_owned()
                     } else {
-                        "Watching the hidden helper"
-                    }
-                    .into();
+                        format!("Watching {}", session.watched)
+                    };
                 }
             });
         }
@@ -516,6 +533,8 @@ struct Session {
     releasing: bool,
     closing: bool,
     read_only: bool,
+    /// What it watches, as its messages name it: the hidden helper, or a VM.
+    watched: String,
     acquire_cancelled: bool,
     queue: VecDeque<(String, Value)>,
     operations: JoinSet<(Operation, Result<Value>)>,
@@ -526,12 +545,17 @@ struct Session {
 impl Session {
     #[cfg(test)]
     fn new(url: String, read_only: bool) -> Self {
-        Self::at(Arc::new(std::sync::Mutex::new(url)), read_only)
+        Self::at(
+            Arc::new(std::sync::Mutex::new(url)),
+            read_only,
+            HELPER.to_owned(),
+        )
     }
 
-    fn at(url: Address, read_only: bool) -> Self {
+    fn at(url: Address, read_only: bool, watched: String) -> Self {
         Self {
             url,
+            watched,
             lease: None,
             pending: false,
             paused: false,
@@ -621,11 +645,10 @@ impl Session {
                 self.release(states);
                 change(states, |state| {
                     state.message = if self.releasing || self.pending {
-                        "Giving back control..."
+                        "Giving back control...".to_owned()
                     } else {
-                        "Watching the hidden helper"
+                        format!("Watching {}", self.watched)
                     }
-                    .into()
                 });
             }
             Command::FocusPause(paused) => {
@@ -706,7 +729,7 @@ impl Session {
         {
             change(states, |state| {
                 state.view = view;
-                state.message = "Watching the hidden helper".into();
+                state.message = format!("Watching {}", self.watched);
             });
         }
     }
@@ -843,7 +866,7 @@ impl Session {
                         if state.message.starts_with("Giving back")
                             || state.message.starts_with("Taking control")
                         {
-                            state.message = "Watching the hidden helper".into();
+                            state.message = format!("Watching {}", self.watched);
                         }
                     });
                 }

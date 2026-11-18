@@ -221,6 +221,11 @@ struct Watch {
     following: Option<std::sync::Arc<follow::Following>>,
     read_told: u64,
     unanswered: usize,
+    /// Whether the desktop read is a VM made and reached through its live
+    /// keeper, as its last status said: its pictures are due then, whatever
+    /// agents' readiness or either Stop says, each taken only once
+    /// `Client::frame` proved it.
+    vm_live: bool,
 }
 
 impl Watch {
@@ -238,6 +243,7 @@ impl Watch {
             following: None,
             read_told: 0,
             unanswered: 0,
+            vm_live: false,
         }
     }
 
@@ -278,7 +284,10 @@ impl Watch {
             }
             if let Some((mut status, source)) = read {
                 self.add_own_session(client, &mut status).await;
-                if status.state == State::NotReady {
+                self.vm_live = matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_))
+                    && status.value["ok"] == true
+                    && status.value["keeper"]["live"] == true;
+                if status.state == State::NotReady && !self.vm_live {
                     self.forget_frame();
                 }
 
@@ -357,13 +366,15 @@ impl Watch {
         }))
     }
 
-    /// Whether to keep the screen now.
+    /// Whether to keep the screen now. A live VM's is kept whatever its
+    /// readiness, its picture's own proofs deciding it.
     fn frame_due(&self, now: Instant) -> bool {
         let every = match self.state {
             State::Working | State::Control => FRAME_EVERY,
             State::Idle | State::NeedsYou | State::Stopped | State::Extension(_) => {
                 IDLE_FRAME_EVERY
             }
+            State::NotReady | State::Empty | State::Missing if self.vm_live => IDLE_FRAME_EVERY,
             State::NotReady | State::Empty | State::Missing => return false,
         };
         self.frames.is_some()
@@ -527,19 +538,21 @@ pub(crate) fn pictures_withheld(client: &Client) -> Option<Error> {
     ))
 }
 
-/// [`screen`], whatever the screen's privacy. A VM's is not shown here yet.
+/// [`screen`], whatever the screen's privacy. A VM's is its own picture,
+/// taken between two proofs: no viewer shares one.
 async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen> {
-    if pictures_withheld(client).is_some() {
-        return None;
-    }
-    let output = output.to_path_buf();
-    let shared = tokio::task::spawn_blocking(move || {
-        let url = crate::viewer::local(&output, port)?;
-        Some(crate::viewer::fetch_frame(&url, VIEWER_DEADLINE, FRAME_LIMIT).ok())
-    })
-    .await
-    .ok()
-    .flatten();
+    let shared = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        None
+    } else {
+        let output = output.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let url = crate::viewer::local(&output, port)?;
+            Some(crate::viewer::fetch_frame(&url, VIEWER_DEADLINE, FRAME_LIMIT).ok())
+        })
+        .await
+        .ok()
+        .flatten()
+    };
 
     match shared {
         Some(frame) => frame.map(|frame| Screen {

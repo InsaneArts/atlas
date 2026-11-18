@@ -513,7 +513,9 @@ async fn carry_out(
             Ok(Value::Null)
         }
         Command::Monitor { port, .. } => {
-            viewer::monitor(config, port, client()?.output_dir()?).await
+            let client = client()?;
+            viewer::shown_in_window(&client)?;
+            viewer::monitor(config, port, client.output_dir()?).await
         }
         Command::Screenshot(args) => {
             let client = client()?;

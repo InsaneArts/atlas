@@ -17,6 +17,7 @@ use atlas_session::{
     keys::Keypair,
     pairing::{Enrolment, StationRecords},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -134,7 +135,8 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// runs no app and keeps no copy, and settles whatever it is asked to. The
+/// runs no app and keeps no copy, gives a picture of its whole display for
+/// a screenshot, and settles whatever it is asked to. The
 /// VM is added, its lifecycle record kept in `directory`, and runs, as
 /// Atlas VM, stood in for there too, says.
 #[must_use]
@@ -194,10 +196,20 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                     } else {
                         answered(&request, stop, &peer, &own, job_stopped)
                     };
-                    let _ = stream
-                        .get_mut()
-                        .write_all(format!("{answer}\n").as_bytes())
-                        .await;
+                    // A picture is the keeper's own line, then the guest's.
+                    let lines = match answer {
+                        Value::Array(lines) => lines,
+                        one => vec![one],
+                    };
+                    for line in lines {
+                        let written = stream
+                            .get_mut()
+                            .write_all(format!("{line}\n").as_bytes())
+                            .await;
+                        if written.is_err() {
+                            return;
+                        }
+                    }
                 });
             }
         }
@@ -382,6 +394,23 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
             "signal": null, "truncated": false,
             "events": [{"event": "started", "pid": 321}, {"event": "output", "data": "aGkK"}]}),
         Some("settle") => json!({"ok": true, "op": "settle", "settled": request["changes"]}),
+        Some("picture") if request["request"]["op"] == "screenshot" => {
+            json!([{"ok": true, "op": "picture"}, screenshot(&request["request"])])
+        }
         _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
     }
+}
+
+/// The scripted guest's screenshot of its whole 1440 × 900 point display,
+/// 2880 × 1800 pixels, no larger than `request` asks: the head of a PNG
+/// of that size, all its size is read from.
+fn screenshot(request: &Value) -> Value {
+    let width = request["maxDimension"].as_u64().unwrap_or(2880).min(2880);
+    let height = width * 900 / 1440;
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend(u32::try_from(width).unwrap_or_default().to_be_bytes());
+    png.extend(u32::try_from(height).unwrap_or_default().to_be_bytes());
+    png.resize(33, 0);
+    json!({"ok": true, "png": STANDARD.encode(png), "width": width, "height": height,
+        "scale": 2.0, "offDisplayWindows": []})
 }

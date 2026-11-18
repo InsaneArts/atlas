@@ -18,7 +18,7 @@ fn optional_capture_telemetry_cannot_inject_terminal_text_or_replace_frame_proof
     let mut unverified = header();
     unverified["captureStats"] = json!({"nativeFrames":u64::MAX,"lastFallback":"none"});
     unverified["session"]["onConsole"] = json!(true);
-    assert!(validate_header(&unverified, &epoch(), 640, 0).is_err());
+    assert!(validate_header(&unverified, &epoch(), 640, 0, Console::kept()).is_err());
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn the_live_request_is_accepted_by_the_helpers_session_pinned_protocol() {
 /// An open stream on `socket`, as a helper that confirms no stops serves it.
 fn opened(socket: UnixStream, epoch: &Epoch) -> LiveStream {
     LiveStream {
-        socket,
+        socket: Socket::Unix(socket),
         epoch: epoch.clone(),
         sequence: 0,
         limit: 640,
@@ -80,7 +80,7 @@ fn header() -> Value {
 #[test]
 fn a_live_frame_requires_the_exact_verified_helper_display_and_process() {
     assert_eq!(
-        validate_header(&header(), &epoch(), 640, 0).unwrap(),
+        validate_header(&header(), &epoch(), 640, 0, Console::kept()).unwrap(),
         (640, 400, 1)
     );
     for (key, value) in [
@@ -95,7 +95,7 @@ fn a_live_frame_requires_the_exact_verified_helper_display_and_process() {
         let mut changed = header();
         changed["session"][key] = value;
         assert!(
-            validate_header(&changed, &epoch(), 640, 0).is_err(),
+            validate_header(&changed, &epoch(), 640, 0, Console::kept()).is_err(),
             "{key}"
         );
     }
@@ -107,7 +107,7 @@ fn a_live_frame_requires_the_exact_verified_helper_display_and_process() {
         let mut changed = header();
         changed[key] = value;
         assert!(
-            validate_header(&changed, &epoch(), 640, 0).is_err(),
+            validate_header(&changed, &epoch(), 640, 0, Console::kept()).is_err(),
             "{key}"
         );
     }
@@ -127,14 +127,14 @@ fn a_live_frame_bounds_allocation_and_rejects_replayed_or_distorted_pixels() {
         let mut changed = header();
         changed[key] = value;
         assert!(
-            validate_header(&changed, &epoch(), 640, 0).is_err(),
+            validate_header(&changed, &epoch(), 640, 0, Console::kept()).is_err(),
             "{key}"
         );
     }
-    assert!(validate_header(&header(), &epoch(), 640, 1).is_err());
+    assert!(validate_header(&header(), &epoch(), 640, 1, Console::kept()).is_err());
     let mut advanced = header();
     advanced["sequence"] = json!(3);
-    assert!(validate_header(&advanced, &epoch(), 640, 1).is_ok());
+    assert!(validate_header(&advanced, &epoch(), 640, 1, Console::kept()).is_ok());
 }
 
 #[tokio::test]

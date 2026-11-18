@@ -3328,15 +3328,45 @@ async fn letting_go_is_never_turned_away_while_renewals_are_full() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_viewers_shared_picture_of_a_vm_is_refused_before_its_keeper_is_asked_for_one() {
+async fn the_live_window_and_frame_service_of_a_vm_are_refused_in_one_plain_wording_asking_nothing()
+{
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
-    let one_wording = client.unreachable().error;
-    let (_listener, viewer) = bind(client, 0, None).await.unwrap();
+    let client = Arc::new(client);
+    let words = "work's live picture shows only in the terminal, read-only: atlas monitor \
+                 --terminal --desktop work.";
+    let (_listener, viewer) = bind(Client::clone(&client), 0, None).await.unwrap();
 
-    let refused = viewer.frame().await.err().unwrap();
+    let window = viewer.frame().await.err().unwrap();
+    let shown = viewer.shown_frame().await.err().unwrap();
+    let privacy = crate::frame_pipe::broker::Privacy {
+        visible: Arc::new(|| None),
+        exempt: Arc::new(|_| false),
+    };
+    let service = crate::frame_pipe::service::start(
+        client,
+        1600,
+        Arc::new(|_, _, _| {}),
+        privacy,
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .await
+    .err()
+    .unwrap();
 
-    assert_eq!(refused.error, one_wording, "{refused:?}");
+    for refused in [window, shown, service] {
+        assert_eq!(refused.error, words, "{refused:?}");
+        assert_eq!(refused.code, Code::Platform);
+        assert_eq!(
+            refused.details["next"],
+            "Run atlas monitor --terminal --desktop work."
+        );
+        let said = serde_json::to_string(&refused).unwrap();
+        assert!(
+            !said.contains("helper") && !said.contains("macOS only"),
+            "{said}"
+        );
+    }
     assert!(keeper.asked_for("picture").is_empty());
     assert!(keeper.asked_for("observe").is_empty());
 }

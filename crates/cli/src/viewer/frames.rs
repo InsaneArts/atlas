@@ -111,11 +111,13 @@ impl Viewer {
 
     /// [`Viewer::frame`] of `client`'s helper, whichever the settings name
     /// by the time it is read: a caller that checked that helper's privacy
-    /// is shown that helper's screen, never another's.
+    /// is shown that helper's screen, never another's. A VM's live picture
+    /// is not shown here, before anything is asked of it.
     pub(super) async fn frame_of(
         &self,
         client: &Arc<atlas_client::client::Client>,
     ) -> Result<(String, Arc<Frame>)> {
+        super::shown_in_window(client)?;
         let until = tokio::time::Instant::now() + READ_DEADLINE;
 
         loop {

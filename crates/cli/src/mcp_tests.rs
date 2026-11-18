@@ -1647,20 +1647,17 @@ async fn the_activity_keeps_only_the_marks_of_a_steps_facts_and_where_its_elemen
 async fn a_vms_pictures_are_refused_through_the_atlas_tools_in_plain_words_and_nothing_is_asked() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
-    let output = client.output_dir().unwrap().to_path_buf();
-    let server = Server::new(client.clone(), dir.path().join("u.toml"), 1, false, None);
+    let server = Server::new(client, dir.path().join("u.toml"), 1, false, None);
     let words = "Pictures of work are not shown through the Atlas tools yet; use atlas screenshot \
                  --desktop work.";
 
     let screenshot = server.take_screenshot(&json!({})).await.unwrap_err();
     let screen = server.screen(None, None).await.unwrap_err();
-    let watched = crate::watch::screen(&client, &output, 1).await;
 
     for refused in [screenshot, screen] {
         assert_eq!(refused.error, words, "{refused:?}");
         assert_eq!(refused.code, Code::Platform);
     }
-    assert!(watched.is_none(), "no picture through the watch");
     assert!(keeper.asked_for("picture").is_empty());
     assert!(keeper.asked_for("observe").is_empty());
 }
