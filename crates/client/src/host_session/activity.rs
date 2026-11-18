@@ -303,7 +303,7 @@ impl Reading<'_> {
             && let Some(recovery) = Recovery::of(&self.causes, Asker::Agent(Some(subject.key)))
             && recovery.own()
         {
-            reply["next"] = json!(recovery.step());
+            reply["next"] = json!(recovery.step_for(self.called));
         }
         reply
     }

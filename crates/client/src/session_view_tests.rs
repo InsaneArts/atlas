@@ -55,6 +55,7 @@ fn scene(rows: &[Row]) -> Scene<'_> {
         pending: false,
         agent_holds: false,
         now: NOW,
+        called: crate::overview::Called::Helper,
     }
 }
 
@@ -801,6 +802,7 @@ fn showing_a_session_samples_each_bounded_waiter_once_however_often_it_is_shown(
             pending: false,
             agent_holds: false,
             now: u128::from(now_ms) * 1_000_000,
+            called: crate::overview::Called::Helper,
         };
         for _ in 0..200 {
             let shown = scene.shown(&Who::Host(own.key().clone()), false);
@@ -809,4 +811,27 @@ fn showing_a_session_samples_each_bounded_waiter_once_however_often_it_is_shown(
     });
     assert_eq!(reads, BUDGET);
     drop(hold);
+}
+
+#[test]
+fn a_sessions_latest_action_on_a_vm_is_said_of_the_vm() {
+    let session = key("left");
+    let rows = [row(
+        Some(&session),
+        1,
+        json!({"operation": "read", "verb": null, "app": null}),
+    )];
+    let on_vm = Scene {
+        called: crate::overview::Called::Vm("work"),
+        ..scene(&rows)
+    };
+
+    let vm = on_vm.shown(&Who::Host(session.clone()), false);
+    let helper = scene(&rows).shown(&Who::Host(session), false);
+
+    assert_eq!(vm.latest.unwrap()["says"], "did something in work");
+    assert_eq!(
+        helper.latest.unwrap()["says"],
+        "did something in the helper"
+    );
 }

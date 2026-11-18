@@ -1345,6 +1345,7 @@ fn a_verified_idle_host_does_not_expire_while_it_runs() {
             pending: false,
             agent_holds: false,
             now: atlas_core::time::timestamp(),
+            called: crate::overview::Called::Helper,
         };
         let (shown, lifetime) = scene.project(&record);
         assert!(shown.live && shown.relevant());
@@ -1932,4 +1933,95 @@ fn a_vm_that_does_not_answer_in_time_is_said_to_by_its_name() {
         !shown.to_string().to_lowercase().contains("the helper"),
         "{shown}"
     );
+}
+
+#[test]
+fn a_ready_vms_mode_says_what_happens_there_by_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let mut doctor = crate::capability::Doctor::vm(
+        json!({"ok": true, "proven": true, "desktop": {"kind": "vm", "name": "work"},
+            "keeper": {"live": true}, "guest": {"ok": true, "stop": {"state": "clear"}}}),
+        client.unreachable(),
+    );
+    assert_ne!(
+        doctor.vm,
+        Some(crate::capability::VmMode::Ready),
+        "readiness decides it"
+    );
+    doctor.vm = Some(crate::capability::VmMode::Ready);
+    let shown = |pending: Pending, activity: &[Row]| {
+        super::overview(&doctor, false, pending, activity, NOW).value
+    };
+    let acted = logged(json!({"operation": "input", "ok": true, "actor": "agent",
+        "at": NOW.to_string()}));
+
+    let idle = shown(Pending::default(), &[]);
+    let acting = shown(Pending::default(), &[acted]);
+    let in_flight = shown(
+        Pending {
+            in_flight: 1,
+            commands: 1,
+            ..Pending::default()
+        },
+        &[],
+    );
+    let unknown = shown(unresolved(1), &[]);
+
+    assert_eq!(idle["mode"], "observing", "{idle}");
+    assert_eq!(idle["reason"], "Nothing is happening in work");
+    assert_eq!(acting["mode"], "agent", "{acting}");
+    assert_eq!(acting["reason"], "An agent is acting in work");
+    assert_eq!(in_flight["mode"], "agent", "{in_flight}");
+    assert_eq!(unknown["mode"], "recovering", "{unknown}");
+    for overview in [idle, acting, in_flight, unknown] {
+        assert!(
+            !overview.to_string().to_lowercase().contains("helper"),
+            "{overview}"
+        );
+    }
+}
+
+#[test]
+fn a_vms_activity_and_headline_say_what_was_done_of_the_vm_never_the_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::vm_client(dir.path(), None);
+    let mut doctor = crate::capability::Doctor::vm(
+        json!({"ok": true, "proven": true, "desktop": {"kind": "vm", "name": "work"},
+            "keeper": {"live": true}, "guest": {"ok": true, "stop": {"state": "clear"}}}),
+        client.unreachable(),
+    );
+    doctor.vm = Some(crate::capability::VmMode::Ready);
+
+    for (operation, ok, said) in [
+        ("read", true, "did something in work"),
+        ("frobnicate", true, "did something in work"),
+        ("logout", true, "logged out work"),
+        ("restart", false, "couldn't recover work"),
+    ] {
+        let row = logged(json!({"operation": operation, "ok": ok, "actor": "agent",
+            "at": NOW.to_string()}));
+        let rows = [row.clone()];
+
+        let shown = super::overview(&doctor, false, Pending::default(), &rows, NOW).value;
+
+        assert_eq!(shown["activity"][0]["says"], said, "{shown}");
+        assert_eq!(
+            super::shown_to_person(&row, NOW, client.called()).says,
+            said
+        );
+        assert_eq!(super::listed(&row, NOW, client.called()).says, said);
+        for words in [&shown["headline"], &shown["reason"], &shown["activity"]] {
+            assert!(
+                !words.to_string().to_lowercase().contains("helper"),
+                "{operation}: {words}"
+            );
+        }
+        assert!(
+            super::shown(&row, NOW, Called::Helper)
+                .says
+                .contains("the helper"),
+            "Second Login's words are kept"
+        );
+    }
 }

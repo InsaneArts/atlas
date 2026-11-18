@@ -96,6 +96,7 @@ pub(crate) fn service_blocker_with(
         waiting,
         running: client.controller.running_candidates(),
         processes: Snapshot::default(),
+        vm: None,
     }
     .sample(output, sample);
     let remains = |note: &atlas_control::Note| reading.processes.state(note.process) != State::Gone;

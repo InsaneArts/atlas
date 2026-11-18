@@ -105,13 +105,17 @@ pub(super) fn login_timing(value: &Value) -> String {
 /// Ready in one line; otherwise each check and the numbered fixes. Verbose
 /// adds the facts behind them.
 pub(super) fn doctor(value: &Value, verbose: bool) -> String {
-    let facts: Vec<String> = [
-        helper_name(value).map(|name| format!("helper {}", text::printable(name))),
-        display(value),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let vm = vm_name(value);
+    let facts: Vec<String> = match vm {
+        Some(name) => vec![format!("VM {}", text::printable(name))],
+        None => [
+            helper_name(value).map(|name| format!("helper {}", text::printable(name))),
+            display(value),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    };
 
     let mut lines = Vec::new();
 
@@ -146,10 +150,55 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
     let native = &value["capabilities"]["nativeDialogs"];
     if verbose {
         lines.push(String::new());
-        lines.extend(details(value, native));
+        lines.extend(match vm {
+            Some(name) => vm_details(value, name),
+            None => details(value, native),
+        });
     }
 
     lines.join("\n")
+}
+
+/// The name of the VM a doctor report is of; none for any other desktop.
+fn vm_name(value: &Value) -> Option<&str> {
+    (value["desktop"]["kind"] == "vm").then(|| value["desktop"]["name"].as_str().unwrap_or("VM"))
+}
+
+/// The facts behind a VM's doctor report, for `doctor --verbose`: which VM,
+/// its Atlas, and what is not checked there yet, then why each check that
+/// did not pass did not.
+fn vm_details(value: &Value, name: &str) -> Vec<String> {
+    let fact = |value: &Value| match value {
+        Value::Null => "unknown".to_owned(),
+        Value::String(text) => text::printable(text).into_owned(),
+        other => other.to_string(),
+    };
+    let capability = |key: &str| {
+        let said = &value["capabilities"][key];
+        format!("{} · {}", fact(&said["state"]), fact(&said["reason"]))
+    };
+    let rows = [
+        ("VM", text::printable(name).into_owned()),
+        (
+            "Atlas in it",
+            format!("version {}", fact(&value["guest"]["daemon"]["version"])),
+        ),
+        ("Save/Open", capability("nativeDialogs")),
+        ("Apps", capability("installedApps")),
+        ("Maintenance", capability("maintenance")),
+    ];
+    let mut lines = labelled(&rows, 13);
+    for check in items(&value["checks"]) {
+        if let Some(step) = check["nextStep"].as_str() {
+            lines.push(format!(
+                "{}  {}",
+                style::dim(format!("{:<13}", check["name"].as_str().unwrap_or(""))),
+                text::printable(step)
+            ));
+        }
+    }
+    lines.push(style::dim("--json --verbose has everything."));
+    lines
 }
 
 /// The warnings `value` carries, each on a line and safe to print.
@@ -279,6 +328,9 @@ pub(super) fn status(value: &Value) -> Rendered {
         }))
         .unwrap_or_default();
     }
+    if let Some(name) = vm_name(value) {
+        return Rendered::out(vm_status(value, name));
+    }
 
     let name = helper_name(value).unwrap_or("helper");
     let place = match value["session"]["onConsole"].as_bool() {
@@ -322,6 +374,52 @@ pub(super) fn status(value: &Value) -> Rendered {
     ];
 
     Rendered::out(labelled(&rows, 8).join("\n"))
+}
+
+/// What the VM `name` is, as its status `value` says: ready or why not,
+/// what its proof showed, and its guest's own Stop and work.
+fn vm_status(value: &Value, name: &str) -> String {
+    let said = |value: &Value| {
+        value
+            .as_str()
+            .map(|said| text::printable(said).into_owned())
+            .unwrap_or_default()
+    };
+    let state = if value["ready"] == true {
+        "ready".to_owned()
+    } else {
+        "not ready".to_owned()
+    };
+    let proof = if value["proven"] == true {
+        format!(
+            "proven  Screen Recording {}  Accessibility {}",
+            style::mark(value["proof"]["capture"].as_bool()),
+            style::mark(value["proof"]["input"].as_bool())
+        )
+    } else {
+        "not proven".to_owned()
+    };
+    let work = match value["work"]["jobs"].as_u64() {
+        Some(jobs) => format!("{} · {jobs} jobs", said(&value["work"]["state"])),
+        None => said(&value["work"]["state"]),
+    };
+    let mut rows = vec![("VM", format!("{} · {state}", text::printable(name)))];
+    if value["ready"] != true {
+        rows.push(("Why", said(&value["notReady"])));
+    }
+    rows.extend([
+        ("Proof", proof),
+        ("Stop", said(&value["stop"]["state"])),
+        ("Work", work),
+        (
+            "Version",
+            value["guest"]["daemon"]["version"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned(),
+        ),
+    ]);
+    labelled(&rows, 8).join("\n")
 }
 
 /// The resolved settings, labelled in words.

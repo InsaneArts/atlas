@@ -677,10 +677,11 @@ async fn a_watch_keeps_a_live_vms_screen_from_the_vm_itself_stopped_or_resumed()
 
     assert_eq!(stopped, (State::Stopped, 1));
     assert!(kept_stopped, "the stopped VM's screen was kept");
+    assert_eq!(resumed, (State::Idle, 2), "a resumed VM ready for agents");
     assert_eq!(
-        resumed,
-        (State::NotReady, 2),
-        "a resumed VM not ready for agents"
+        watch.said["overview"]["reason"], "Nothing is happening in work",
+        "{}",
+        watch.said
     );
     assert!(frame.exists(), "its screen is still kept");
     let pictures = keeper.asked_for("picture");
@@ -690,5 +691,24 @@ async fn a_watch_keeps_a_live_vms_screen_from_the_vm_itself_stopped_or_resumed()
             .all(|asked| asked["request"]["op"] == "screenshot"
                 && asked["request"]["maxDimension"] == 1280),
         "{pictures:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_status_read_with_no_viewer_says_it_came_from_the_vm() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, _keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let output = client.output_dir().unwrap().to_path_buf();
+
+    let (status, source) = read(&client, &output, 1).await.unwrap();
+    let mut watch = Watch::new(None);
+    let line = watch.fixture_news(&status, source, None).unwrap();
+
+    assert_eq!(source, "vm");
+    assert_eq!(line["source"], "vm", "{line}");
+    assert_eq!(line["overview"]["state"], "idle", "{line}");
+    assert!(
+        !line.to_string().contains("\"source\":\"helper\""),
+        "{line}"
     );
 }

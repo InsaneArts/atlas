@@ -2,8 +2,9 @@
 //! generation for that command to judge. The guest's hello, its input
 //! service's own hello and its proof for the command's own challenge are
 //! read on lanes of that generation, then Atlas VM's state; the answer names
-//! the generation, the guest key its handshake pinned and the station's own
-//! key. The keeper judges none of it and keeps none of it.
+//! the generation, what the guest declared in it, the guest key its
+//! handshake pinned and the station's own key. The keeper judges none of it
+//! and keeps none of it.
 use super::{Keeper, Session, read};
 use atlas_core::{
     error::{Code, Error},
@@ -111,6 +112,7 @@ pub(super) async fn observed(
         "ok": true,
         "op": "observe",
         "generation": session.control.generation(),
+        "declared": session.control.declared(),
         "peer": session.guest,
         "station": keeper.own.public(),
         "status": {"hello": hello, "inputService": input, "sessionProof": proof},

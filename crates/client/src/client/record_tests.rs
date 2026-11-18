@@ -859,7 +859,10 @@ fn an_agents_input_row_names_the_listed_account_and_what_let_it_act_there() {
             "account": account, "allowed": allowed}));
         assert_eq!(row.account.as_ref().unwrap().name, "github.com");
         assert_eq!(row.allowed, Some(kept), "{allowed}");
-        assert_eq!(crate::doing::says_to_person(&row), "clicked on github.com");
+        assert_eq!(
+            crate::doing::says_to_person(&row, crate::overview::Called::Helper),
+            "clicked on github.com"
+        );
         assert_eq!(crate::doing::says(&row), "clicked in Google Chrome");
     }
     // In an account that asks, a click that sent nothing needed allowing.

@@ -56,24 +56,7 @@ pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error:
         restarts,
     } = match client.desktop().kind() {
         Kind::User(login) => crate::user::doctor::user_report(client, login).await,
-        // Never ready: its first step, from a fresh proof, else refused as
-        // every command on it is, in the failure's own words, and an update
-        // still handing it over said plainly first.
-        Kind::Vm(_) => {
-            if let Some(why) = client.handover_unfinished() {
-                let refused = client.unreachable();
-                return Err(refused.with("why", json!(why)).with("next", json!(why)));
-            }
-            let status = client.status().await;
-            let refused = client.unreachable();
-            let refused = match status["why"].as_str().or(status["error"].as_str()) {
-                Some(why) if status["ok"] != true && why != refused.error => {
-                    refused.with("why", json!(why))
-                }
-                _ => refused,
-            };
-            return Err(atlas_client::capability::vm_first_step(&status).unwrap_or(refused));
-        }
+        Kind::Vm(_) => return vm_report(client, verbose).await,
     };
 
     // Every command keeps a lock and screenshots in the person's Library;
@@ -134,6 +117,32 @@ pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error:
     } else {
         Ok(atlas_client::capability::summary(report))
     }
+}
+
+/// Doctor's report of a VM from a fresh status: whether it is ready for
+/// agents, each check of it in order, what to do, and what is not checked
+/// on a VM yet. An update still handing it over is said plainly first, and
+/// a status that is no answer is refused as every command on it is, in the
+/// failure's own words.
+async fn vm_report(client: &Client, verbose: bool) -> atlas_core::error::Result<Value> {
+    if let Some(why) = client.handover_unfinished() {
+        let refused = client.unreachable();
+        return Err(refused.with("why", json!(why)).with("next", json!(why)));
+    }
+    let status = client.status().await;
+    if status["ok"] != true {
+        let refused = client.unreachable();
+        return Err(match status["why"].as_str().or(status["error"].as_str()) {
+            Some(why) if why != refused.error => refused.with("why", json!(why)),
+            _ => refused,
+        });
+    }
+    let report = atlas_client::capability::vm_report(status, client.unreachable());
+    Ok(if verbose || ui::human() {
+        report
+    } else {
+        atlas_client::capability::summary(report)
+    })
 }
 
 /// Doctor's warning when the helper's mute is not what was asked: its

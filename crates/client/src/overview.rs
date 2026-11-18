@@ -345,7 +345,7 @@ pub fn overview(
     let newest = activity
         .iter()
         .find(|row| row.actor() != "viewer")
-        .map(crate::doing::says);
+        .map(|row| crate::doing::says_in(row, called));
     let headline = match (mode, newest) {
         (Mode::Agent, Some(newest)) => crate::doing::capitalized(&newest),
         (Mode::Observing, Some(newest)) => format!("Last: {newest}"),
@@ -419,14 +419,16 @@ fn helper_jobs(counted: &Value) -> Value {
 }
 
 /// Whether work an agent started on the VM `report` is of may still run
-/// while its keeper reaches it and its agents are not stopped already: its
-/// guest says it runs, or cannot say. Never for Second Login, whose jobs
-/// keep Stop offered by their own count.
+/// while its keeper reaches it and its agents are not stopped already,
+/// ready or not: its guest says it runs, or cannot say. Never for Second
+/// Login, whose jobs keep Stop offered by their own count.
 fn vm_work_may_run(report: &crate::capability::Doctor) -> bool {
     let status = &report.diagnosis.value;
     let may_run = |said: &Value| matches!(said.as_str(), Some("running" | "unknown"));
-    matches!(report.vm, Some(crate::capability::VmMode::Unavailable(_)))
-        && status["ok"] == true
+    matches!(
+        report.vm,
+        Some(crate::capability::VmMode::Unavailable(_) | crate::capability::VmMode::Ready)
+    ) && status["ok"] == true
         && status["keeper"]["live"] == true
         && (may_run(&status["leftovers"]) || may_run(&status["work"]["state"]))
 }
@@ -441,19 +443,42 @@ fn vm_jobs(work: &Value) -> Value {
     }
 }
 
+/// The mode of the VM `name`, ready for agents, and why, named for it: an
+/// outcome its station read as unknown since, an agent acting there now
+/// (`acting`) or work in progress, else nothing happening.
+fn ready_vm(name: &str, pending: Pending, acting: bool) -> (Mode, String) {
+    if pending.unresolved > 0 {
+        (
+            Mode::Recovering,
+            format!("An action's outcome on {name} is unknown; agents wait until it is recovered"),
+        )
+    } else if acting || pending.in_flight > 0 {
+        (Mode::Agent, format!("An agent is acting in {name}"))
+    } else {
+        (Mode::Observing, format!("Nothing is happening in {name}"))
+    }
+}
+
 fn mode(
     report: &crate::capability::Doctor,
     lease_active: bool,
     pending: Pending,
     recent: bool,
 ) -> (Mode, String) {
-    // A VM before its proof: only its guest's own Stop decides it.
+    // A VM: its guest's own Stop first, then whether it is ready.
     match &report.vm {
         Some(crate::capability::VmMode::Stopped) => {
             return (
                 Mode::Stopped,
                 "You stopped the agent. It waits until you resume it.".to_owned(),
             );
+        }
+        Some(crate::capability::VmMode::Ready) => {
+            let name = report.diagnosis.value["desktop"]["name"]
+                .as_str()
+                .unwrap_or("the VM");
+            let acting = report.diagnosis.observation.native.control_active == Some(true);
+            return ready_vm(name, pending, recent || acting);
         }
         Some(crate::capability::VmMode::Unavailable(why)) => {
             return (Mode::Unavailable, why.clone());

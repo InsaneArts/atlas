@@ -34,7 +34,7 @@ mod recover;
 mod stage;
 
 pub use agent::{install_keeper, install_keeper_held};
-pub(crate) use clients::{PROTOCOL, RESUME_KEY, carries};
+pub(crate) use clients::{CAPABILITIES, PROTOCOL, RESUME_KEY, carries};
 pub(crate) use picture::carries_bulk;
 use program::Program;
 pub(crate) use stage::deadline as stage_deadline;

@@ -41,7 +41,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 9] = [
+pub(crate) const CAPABILITIES: [&str; 9] = [
     "read-v1",
     "stop-v1",
     "resume-v1",

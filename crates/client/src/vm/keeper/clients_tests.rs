@@ -481,7 +481,7 @@ async fn a_vms_status_through_its_keeper_says_both_hellos_and_is_never_proven() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
+async fn a_vms_status_proven_through_its_keeper_with_everything_holding_is_ready() {
     let serving = serving(true).await;
     serving.fixture.guest.proving();
     let directory = tempfile::tempdir().unwrap();
@@ -492,14 +492,9 @@ async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
 
     assert_eq!(status["ok"], true, "{status}");
     assert_eq!(status["proven"], true, "{status}");
-    assert_eq!(status["ready"], false);
-    assert!(
-        status["notReady"]
-            .as_str()
-            .unwrap()
-            .contains("cannot see its screen yet"),
-        "{status}"
-    );
+    assert_eq!(status["ready"], true, "{status}");
+    assert!(status.get("notReady").is_none(), "{status}");
+    assert_eq!(status["station"]["unresolved"], json!([]), "{status}");
     let proof = &status["proof"];
     assert_eq!(proof["generation"], json!(generation));
     assert_eq!(proof["capture"], true);
@@ -510,7 +505,8 @@ async fn a_vms_status_is_proven_through_its_keeper_and_still_never_ready() {
     assert_eq!(status["guest"]["stop"]["state"], "clear");
     assert_eq!(status["runner"]["window"], "closed");
     let doctor = crate::capability::Doctor::vm(status.clone(), client.unreachable());
-    assert!(!doctor.diagnosis.ready);
+    assert!(doctor.diagnosis.ready);
+    assert_eq!(doctor.vm, Some(crate::capability::VmMode::Ready));
     assert!(crate::capability::vm_first_step(&status).is_none());
     assert_eq!(
         client.identity().await.unwrap_err().error,
@@ -1141,4 +1137,341 @@ async fn a_vm_without_screen_recording_asks_for_it_in_its_own_window_never_the_h
     );
     let shown = serde_json::to_string(&first).unwrap();
     assert!(!shown.contains("helper"), "{shown}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ready_vm_is_ready_to_doctor_and_the_overview_and_nothing_unchecked_is_said_to_pass() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+    let report = crate::capability::vm_report(status.clone(), client.unreachable());
+    let reading = crate::overview::read(&client).await;
+
+    assert_eq!(status["ready"], true, "{status}");
+    assert_eq!(report["ready"], true, "{report}");
+    for check in report["checks"].as_array().unwrap() {
+        assert_eq!(check["ok"], true, "{report}");
+    }
+    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+        assert_eq!(
+            report["capabilities"][unchecked]["state"], "notChecked",
+            "{unchecked}: {report}"
+        );
+        assert!(report["capabilities"][unchecked]["reason"].is_string());
+    }
+    assert!(!report["capabilities"].to_string().contains("passed"));
+    let summary = crate::capability::summary(report);
+    assert_eq!(summary["ready"], true, "{summary}");
+    assert!(
+        summary["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Native Save/Open is not checked on work"),
+        "{summary}"
+    );
+    assert!(reading.ready, "{}", reading.value);
+    let overview = &reading.value["overview"];
+    assert_eq!(overview["mode"], "observing", "{overview}");
+    assert_eq!(overview["state"], "idle");
+    assert_eq!(overview["reason"], "Nothing is happening in work");
+    assert_eq!(overview["nativeDialogs"], "notChecked");
+    assert!(
+        !overview.to_string().to_lowercase().contains("helper"),
+        "{overview}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ready_vm_with_a_change_atlas_vm_left_unanswered_is_not_ready_in_words_naming_it() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let start = atlas_core::files::Token::new();
+    // A start of the VM whose command ended before Atlas VM answered it.
+    drop(
+        client
+            .controller
+            .quarantine_by(start.as_str(), atlas_control::executors::Executor::Vm)
+            .unwrap(),
+    );
+    let words = "Atlas VM has not said yet what a change it was making to work came to, so \
+                 agents wait until it does.";
+
+    let status = client.status().await;
+    let report = crate::capability::vm_report(status.clone(), client.unreachable());
+    let reading = crate::overview::read(&client).await;
+
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(status["notReady"], words);
+    assert_eq!(
+        status["station"]["unresolved"],
+        json!([{"generation": start.as_str(), "executor": "vm", "holder": "gone"}])
+    );
+    assert_eq!(report["ready"], false);
+    assert_eq!(report["nextSteps"], json!([words]), "{report}");
+    assert!(!reading.ready);
+    assert_eq!(reading.value["overview"]["mode"], "unavailable");
+    let reason = reading.value["overview"]["reason"].as_str().unwrap();
+    assert!(reason.starts_with(words), "{reason}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_an_agent_started_that_still_runs_keeps_a_vm_ready_until_it_is_left_unanswered() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let command = atlas_core::files::Token::new();
+    let running = client
+        .controller
+        .quarantine_command_by(command.as_str(), atlas_control::executors::Executor::Guest)
+        .unwrap();
+
+    let beside = client.status().await;
+    client.controller.abandon_command(running);
+    let left = client.status().await;
+
+    assert_eq!(beside["ready"], true, "{beside}");
+    assert_eq!(beside["station"]["pending"], json!([command.as_str()]));
+    assert_eq!(beside["station"]["unresolved"], json!([]));
+    assert_eq!(left["ready"], false, "{left}");
+    assert_eq!(
+        left["notReady"],
+        "An action on work may not have finished; Atlas settles it on its own once work \
+         answers. If it stays, run atlas doctor --desktop work."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fresh_vm_is_not_ready_with_screen_recording_first_in_its_guests_words() {
+    let serving = serving(true).await;
+    let saying = serving.fixture.guest.proving();
+    *saying.hello.lock().unwrap() = Some(|hello| {
+        hello["permissions"]["screenCapture"] = json!(false);
+        hello["permissions"]["accessibility"] = json!(false);
+        hello["capture"] = json!({"held": "Allow Atlas in Privacy & Security, Screen & System \
+            Audio Recording, in the VM's window: agents' pictures wait for it."});
+        hello["input"]["held"] = json!(
+            "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents wait \
+             for it."
+        );
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+
+    let status = client.status().await;
+    let report = crate::capability::vm_report(status.clone(), client.unreachable());
+    let summary = crate::capability::summary(report.clone());
+
+    assert_eq!(status["proven"], true, "{status}");
+    assert_eq!(status["ready"], false);
+    assert_eq!(
+        status["notReady"],
+        "Allow Atlas in Privacy & Security, Screen & System Audio Recording, in the VM's window: \
+         agents' pictures wait for it."
+    );
+    assert_eq!(report["nextSteps"][0], status["notReady"], "{report}");
+    assert_eq!(report["canObserve"], false);
+    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+        assert_eq!(
+            summary["capabilities"][unchecked]["state"], "notChecked",
+            "{summary}"
+        );
+    }
+    assert!(
+        summary.get("guest").is_none(),
+        "the status stays verbose: {summary}"
+    );
+    assert!(summary.get("helper").is_none(), "{summary}");
+    assert!(
+        !summary.to_string().to_lowercase().contains("helper"),
+        "{summary}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_another_command_is_making_leaves_a_vm_ready_until_it_ends_without_an_answer() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    let change = atlas_core::files::Token::new();
+    let making = client
+        .controller
+        .quarantine_by(change.as_str(), atlas_control::executors::Executor::Guest)
+        .unwrap();
+
+    let during = client.status().await;
+    let report = crate::capability::vm_report(during.clone(), client.unreachable());
+    let reading = crate::overview::read(&client).await;
+    // Its command ends without settling it, as one killed would.
+    drop(making);
+    let after = client.status().await;
+
+    assert_eq!(during["ready"], true, "{during}");
+    assert_eq!(
+        during["station"]["unresolved"],
+        json!([{"generation": change.as_str(), "executor": "guest", "holder": "live"}])
+    );
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("A change to work is still being made.")),
+        "{report}"
+    );
+    assert!(reading.ready);
+    assert_eq!(
+        reading.value["overview"]["mode"], "agent",
+        "{}",
+        reading.value
+    );
+    assert_eq!(
+        reading.value["overview"]["reason"],
+        "An agent is acting in work"
+    );
+    assert_eq!(after["ready"], false, "{after}");
+    assert_eq!(
+        after["notReady"],
+        "An action on work may not have finished; Atlas settles it on its own once work \
+         answers. If it stays, run atlas doctor --desktop work."
+    );
+}
+
+/// The claim file of the change `generation`, found under `folder`.
+fn claim_under(folder: &Path, generation: &str) -> std::path::PathBuf {
+    let suffix = format!(".{generation}.live");
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.to_string_lossy().ends_with(&suffix) {
+                return path;
+            }
+        }
+    }
+    panic!("no claim of {generation} under {}", folder.display());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_whose_command_ended_beside_a_record_that_cannot_be_read_keeps_a_vm_not_ready() {
+    let serving = serving(true).await;
+    serving.fixture.guest.proving();
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = client_of(&serving, directory.path());
+    // The station's records in a folder of the test's own, to find the claim in.
+    client.controller =
+        atlas_control::Controller::of_at(&client.desktop(), &directory.path().join("station"));
+    let change = atlas_core::files::Token::new();
+    let making = client
+        .controller
+        .quarantine_by(change.as_str(), atlas_control::executors::Executor::Guest)
+        .unwrap();
+    let claim = claim_under(directory.path(), change.as_str());
+    std::fs::write(claim.with_extension("executor.live"), b"{").unwrap();
+    // Its command ends: the claim is kept, as what holds it cannot be told.
+    drop(making);
+
+    let status = client.status().await;
+
+    assert!(claim.exists(), "recovery would still keep it");
+    assert_eq!(
+        status["station"]["unresolved"],
+        json!([{"generation": change.as_str(), "executor": "guest", "holder": "unknown"}])
+    );
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(
+        status["notReady"],
+        "Whether a change to work is still being made cannot be told, so agents wait."
+    );
+}
+
+/// An observation in the generation after the keeper's hello, whose guest
+/// is of a build that serves no pictures.
+fn reconnected_older(answer: &mut Value) {
+    answer["generation"] = json!(answer["generation"].as_u64().unwrap() + 1);
+    let older: Vec<&str> = atlas_session::compatibility::MACHINE
+        .into_iter()
+        .filter(|name| *name != atlas_session::compatibility::PICTURES)
+        .collect();
+    answer["declared"] = json!({"protocol": 1, "capabilities": older, "version": "0.9.0"});
+}
+
+/// Doctor's check that the VM's Atlas serves this build, of `status`.
+fn served(status: &Value, client: &crate::client::Client) -> Value {
+    crate::capability::vm_report(status.clone(), client.unreachable())["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["name"] == "Atlas in it serves this build")
+        .unwrap()
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_that_reconnected_to_an_older_build_between_its_hello_and_proof_is_never_ready() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = crate::test_support::vm_through_keeper(dir.path());
+
+    // Proved in the next generation, while the hello read first said
+    // everything.
+    *keeper.observing.lock().unwrap() = Some(reconnected_older);
+    let older = client.status().await;
+    // The same, its proof refused there: its window is open.
+    *keeper.observing.lock().unwrap() = Some(|answer| {
+        reconnected_older(answer);
+        answer["runner"]["window"] = json!("open");
+    });
+    let refused = client.status().await;
+    // An observation that does not say what its generation declared.
+    *keeper.observing.lock().unwrap() = Some(|answer| {
+        reconnected_older(answer);
+        answer.as_object_mut().unwrap().remove("declared");
+    });
+    let unsaid = client.status().await;
+    *keeper.observing.lock().unwrap() = Some(|answer| {
+        reconnected_older(answer);
+        answer.as_object_mut().unwrap().remove("declared");
+        answer["runner"]["window"] = json!("open");
+    });
+    let unsaid_refused = client.status().await;
+
+    assert_eq!(older["proven"], true, "{older}");
+    assert_eq!(older["ready"], false, "{older}");
+    assert!(
+        older["notReady"]
+            .as_str()
+            .unwrap()
+            .contains("(pictures-v1)"),
+        "{older}"
+    );
+    assert_eq!(refused["proven"], false, "{refused}");
+    let check = served(&refused, &client);
+    assert_eq!(check["ok"], false, "the observation's own: {check}");
+    assert!(
+        check["nextStep"]
+            .as_str()
+            .unwrap()
+            .contains("(pictures-v1)"),
+        "{check}"
+    );
+    assert_eq!(unsaid["ready"], false, "{unsaid}");
+    assert_eq!(
+        unsaid["notReady"],
+        "work's session keeper is from an older build; run atlas update."
+    );
+    assert_eq!(
+        served(&unsaid, &client)["ok"],
+        Value::Null,
+        "never the hello's"
+    );
+    assert_eq!(unsaid_refused["proven"], false, "{unsaid_refused}");
+    assert_eq!(served(&unsaid_refused, &client)["ok"], Value::Null);
 }

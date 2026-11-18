@@ -1661,16 +1661,63 @@ async fn a_stopped_vms_status_and_doctor_say_it_is_stopped_and_what_starts_it() 
         .unwrap();
     let doctor = executed(&config, command(&["doctor"]), &client)
         .await
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(status["proven"], false, "{status}");
+    assert_eq!(status["ready"], false, "{status}");
     assert_eq!(status["notReady"], words, "{status}");
     assert_eq!(status["proof"]["code"], "not-ready", "{status}");
     assert_eq!(status["guest"]["error"], words, "{status}");
     assert_eq!(status["runner"]["power"], "stopped", "{status}");
-    assert_eq!(doctor.error, words, "{doctor:?}");
-    assert_eq!(doctor.code, Code::NotReady);
+    assert_eq!(doctor["ready"], false, "{doctor}");
+    assert_eq!(doctor["notReady"], words, "{doctor}");
+    assert_eq!(doctor["nextSteps"][0], words, "{doctor}");
+    assert!(doctor.get("guest").is_none(), "{doctor}");
     assert!(keeper.runner.asked_for("start").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ready_vms_status_and_doctor_say_it_is_ready_and_doctor_checks_nothing_it_cannot() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, _keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+
+    let status = executed(&config, command(&["status"]), &client)
+        .await
+        .unwrap();
+    let doctor = executed(&config, command(&["doctor"]), &client)
+        .await
+        .unwrap();
+    let verbose = executed(&config, command(&["doctor", "--verbose"]), &client)
+        .await
+        .unwrap();
+
+    assert_eq!(status["ready"], true, "{status}");
+    assert!(status.get("notReady").is_none(), "{status}");
+    assert_eq!(doctor["ready"], true, "{doctor}");
+    assert!(
+        doctor["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Native Save/Open is not checked on work"),
+        "{doctor}"
+    );
+    for unchecked in ["nativeDialogs", "installedApps", "maintenance"] {
+        assert_eq!(
+            verbose["capabilities"][unchecked]["state"], "notChecked",
+            "{unchecked}: {verbose}"
+        );
+    }
+    assert!(!verbose["capabilities"].to_string().contains("passed"));
+    let shown = atlas_cli::ui::render::render(
+        &atlas_cli::ui::render::View::Doctor { verbose: true },
+        &verbose,
+    )
+    .out;
+    assert!(shown.contains("VM work"), "{shown}");
+    assert!(shown.contains("notChecked"), "{shown}");
+    assert!(!shown.to_lowercase().contains("helper"), "{shown}");
 }
 
 /// A manifest of one file, and a profile of it, in `folder`.

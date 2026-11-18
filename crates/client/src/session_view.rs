@@ -113,6 +113,8 @@ pub(crate) struct Scene<'a> {
     pub agent_holds: bool,
     /// Now, in nanoseconds since 1970.
     pub now: u128,
+    /// What the desktop the rows were done on is called.
+    pub called: crate::overview::Called<'a>,
 }
 
 /// What the apps are told of one session beyond its record.
@@ -313,7 +315,7 @@ impl Scene<'_> {
     /// A row as a session's latest action: what it did in words and how
     /// long ago.
     fn latest(&self, row: &Row) -> Value {
-        let shown = crate::overview::listed(row, self.now);
+        let shown = crate::overview::listed(row, self.now, self.called);
         json!({
             "says": shown.says,
             "verb": shown.verb,

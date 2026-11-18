@@ -397,3 +397,227 @@ fn a_claim_waits_for_the_markers_lock_no_longer_than_it_is_given() {
     FileExt::unlock(&lock).unwrap();
     assert!(controller.pending().unwrap().is_empty(), "nothing recorded");
 }
+
+#[test]
+fn what_keeps_control_from_being_taken_is_every_pending_change_whoever_carries_it_out() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::from_millis(50);
+    assert!(controller.unresolved_within(wait).unwrap().is_empty());
+    let vms = token();
+    drop(controller.quarantine_by(&vms, Executor::Vm).unwrap());
+    let own = controller.quarantine().unwrap();
+
+    let unresolved = controller.unresolved_within(wait).unwrap();
+
+    assert_eq!(
+        unresolved,
+        [
+            Unresolved {
+                generation: vms.clone(),
+                executor: Some(Executor::Vm),
+                holder: Liveness::Gone,
+            },
+            Unresolved {
+                generation: own.generation().to_owned(),
+                executor: None,
+                holder: Liveness::Live,
+            },
+        ]
+    );
+    assert!(controller.require_known_beside(Beside::Commands).is_err());
+    drop(own);
+}
+
+#[test]
+fn commands_agents_started_that_still_run_keep_nothing_from_being_taken_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::from_millis(50);
+    let command = controller
+        .quarantine_command_by(&token(), Executor::Guest)
+        .unwrap();
+
+    assert!(controller.unresolved_within(wait).unwrap().is_empty());
+    assert!(controller.require_known_beside(Beside::Commands).is_ok());
+
+    let theirs = token();
+    drop(
+        controller
+            .quarantine_by(&theirs, Executor::Station)
+            .unwrap(),
+    );
+    let unresolved = controller.unresolved_within(wait).unwrap();
+    assert_eq!(
+        unresolved,
+        [Unresolved {
+            generation: theirs,
+            executor: Some(Executor::Station),
+            holder: Liveness::Gone,
+        }],
+        "only the change beside the command"
+    );
+    controller.abandon_command(command);
+}
+
+#[test]
+fn what_keeps_control_from_being_taken_is_never_read_as_nothing_from_records_that_cannot_be_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::from_millis(50);
+    drop(controller.quarantine_by(&token(), Executor::Vm).unwrap());
+    std::fs::write(&controller.executors, b"{").unwrap();
+    assert!(controller.unresolved_within(wait).is_err());
+
+    std::fs::write(&controller.marker, b"[").unwrap();
+    assert!(controller.unresolved_within(wait).is_err());
+
+    std::fs::write(&controller.marker, b"[]").unwrap();
+    assert!(
+        controller.unresolved_within(wait).is_err(),
+        "a marker naming nothing is an unknown outcome"
+    );
+}
+
+#[test]
+fn a_change_a_live_process_makes_is_live_until_it_dies_then_gone_or_unknown_by_its_record() {
+    const TEST: &str = "tests::executors::a_change_a_live_process_makes_is_live_until_it_dies_then_gone_or_unknown_by_its_record";
+    if let Some(directory) = std::env::var_os("ATLAS_CONTROL_TEST_CLAIMER") {
+        let controller = Controller::at(505, std::path::Path::new(&directory));
+        let _claim = controller.quarantine_by(&token(), Executor::Guest).unwrap();
+        atlas_core::test_support::message("claimed");
+        atlas_core::test_support::permitted("never");
+        return;
+    }
+    if !atlas_core::test_support::isolated(TEST) {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::from_millis(50);
+    let mut child = atlas_core::test_support::TestChild::spawn(
+        atlas_core::test_support::rerun(TEST)
+            .arg("--nocapture")
+            .env("ATLAS_CONTROL_TEST_CLAIMER", directory.path()),
+    );
+    child.expect("claimed");
+
+    let making = controller.unresolved_within(wait).unwrap();
+    child.process.kill().unwrap();
+    child.wait();
+    let left = controller.unresolved_within(wait).unwrap();
+
+    assert_eq!(making.len(), 1, "{making:?}");
+    assert_eq!(making[0].holder, Liveness::Live, "{making:?}");
+    assert_eq!(making[0].executor, Some(Executor::Guest));
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(
+        left[0].holder,
+        Liveness::Gone,
+        "the claim no process holds: {left:?}"
+    );
+    assert_eq!(left[0].generation, making[0].generation);
+
+    // A malformed executor record beside the claim it left: whether a
+    // process still carries it out cannot be told, and recovery still
+    // keeps it.
+    let claim = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.to_string_lossy()
+                .ends_with(&format!(".{}.live", left[0].generation))
+        })
+        .unwrap();
+    std::fs::write(claim.with_extension("executor.live"), b"{").unwrap();
+    let unknown = controller.unresolved_within(wait).unwrap();
+    assert_eq!(unknown[0].holder, Liveness::Unknown, "{unknown:?}");
+    let _ = controller.clear();
+    assert_eq!(controller.pending().unwrap(), [left[0].generation.clone()]);
+}
+
+#[test]
+fn an_executor_whose_process_cannot_be_read_is_unknown_never_live_or_gone() {
+    use std::io::Write;
+    let mut file = tempfile::tempfile().unwrap();
+    // This process stands for one that reused the executor's PID.
+    let executor = crate::executor::Executor {
+        pid: nix::unistd::getpid().as_raw(),
+        boot: "boot-session".into(),
+        start: [300, 400],
+    };
+    file.write_all(&serde_json::to_vec(&executor).unwrap())
+        .unwrap();
+    let boot = || Ok("boot-session".to_owned());
+    let liveness = |seen: atlas_core::error::Result<Option<crate::executor::Seen>>| {
+        crate::executor::executor_liveness_with(&file, boot, |_| seen)
+    };
+    let seen = |start, exited| Ok(Some(crate::executor::Seen { start, exited }));
+
+    assert_eq!(liveness(seen([300, 400], false)), Liveness::Live);
+    assert_eq!(
+        liveness(seen([300, 401], false)),
+        Liveness::Gone,
+        "another process"
+    );
+    assert_eq!(
+        liveness(seen([300, 400], true)),
+        Liveness::Gone,
+        "exited, not reaped"
+    );
+    assert_eq!(liveness(Ok(None)), Liveness::Gone, "no such process");
+    assert_eq!(
+        liveness(Err(atlas_core::error::Error::new(
+            atlas_core::error::Code::State,
+            "unreadable process"
+        ))),
+        Liveness::Unknown
+    );
+    assert!(
+        crate::executor::executor_running_with(&file, boot, |_| Err(
+            atlas_core::error::Error::new(atlas_core::error::Code::State, "unreadable process")
+        ),),
+        "recovery still holds what cannot be told"
+    );
+}
+
+#[test]
+fn a_change_whose_executor_exited_but_is_not_reaped_yet_is_gone() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::from_millis(50);
+    let mut executor = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped()),
+    )
+    .unwrap();
+    let pid = i32::try_from(executor.id()).unwrap();
+    let change = token();
+    let claim = controller.quarantine_by(&change, Executor::Guest).unwrap();
+    let claims = ExecutorClaims::new(std::slice::from_ref(&claim)).unwrap();
+    record_executor(nix::unistd::Pid::from_raw(pid)).unwrap();
+    drop(claims);
+    // Its caller ends: the claim is kept for the executor that still runs.
+    drop(claim);
+    let running = controller.unresolved_within(wait).unwrap();
+
+    // The executor exits; nothing reaps it before the check.
+    drop(executor.stdin.take());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !atlas_core::process::info(pid)
+        .unwrap()
+        .is_some_and(|info| info.zombie)
+    {
+        assert!(std::time::Instant::now() < deadline, "never exited");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let exited = controller.unresolved_within(wait).unwrap();
+    executor.wait().unwrap();
+
+    assert_eq!(running.len(), 1, "{running:?}");
+    assert_eq!(running[0].holder, Liveness::Live, "{running:?}");
+    assert_eq!(exited.len(), 1, "{exited:?}");
+    assert_eq!(exited[0].generation, change);
+    assert_eq!(exited[0].holder, Liveness::Gone, "{exited:?}");
+}

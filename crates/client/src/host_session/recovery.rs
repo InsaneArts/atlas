@@ -2,6 +2,7 @@
 //! every surface that words a step for them: the asking session recovers
 //! its own, waits for others', or the person recovers.
 use super::Key;
+use crate::overview::Called;
 use atlas_control::Cause;
 use atlas_core::error::advice as hints;
 
@@ -84,4 +85,26 @@ impl Recovery {
             Self::PersonOnceCommandEnds => hints::UNKNOWN_FOR_PERSON_ONCE_COMMAND_ENDS,
         }
     }
+
+    /// [`Recovery::step`] for the desktop `called` names: Second Login's as it
+    /// is. On a VM no command recovers it, whoever asks: its changes are
+    /// settled on their own, so the step says that, in
+    /// [`settled_on_its_own`]'s words.
+    pub fn step_for(self, called: Called<'_>) -> String {
+        if called == Called::Helper {
+            return self.step().to_owned();
+        }
+        settled_on_its_own(&called.object())
+    }
+}
+
+/// What happens to an action on the VM `vm` that may not have finished:
+/// its keeper asks the guest what it came to until it answers, and a start
+/// Atlas VM did not answer is asked again by the next command that needs
+/// the VM, so nothing is for anyone to recover.
+pub(crate) fn settled_on_its_own(vm: &str) -> String {
+    format!(
+        "An action on {vm} may not have finished; Atlas settles it on its own once {vm} \
+         answers. If it stays, run atlas doctor --desktop {vm}."
+    )
 }

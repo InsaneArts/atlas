@@ -2,7 +2,7 @@
 //! boot and start time, published before it acts, so recovery waits while
 //! that process can still act after its caller is gone, and never for a
 //! process that reused its PID.
-use super::Pending;
+use super::{Pending, marker::Liveness};
 pub(super) use atlas_core::process::{boot as executor_boot, start as executor_start};
 use atlas_core::{
     context::context,
@@ -130,14 +130,21 @@ pub(super) fn publish_executor_with(
 }
 
 pub(super) fn claim_executor_running(file: &File, live: &Path) -> bool {
+    claim_executor(file, live) != Liveness::Gone
+}
+
+/// Whether an executor still carries out the claim at `live`, whose file
+/// is `file`, as its record says: [`Liveness::Unknown`] whenever the record
+/// or the process it names cannot be read.
+pub(super) fn claim_executor(file: &File, live: &Path) -> Liveness {
     match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(live.with_extension("executor.live"))
     {
-        Ok(record) => executor_running(&record),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => executor_running(file),
-        Err(_) => true,
+        Ok(record) => executor_liveness(&record),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => executor_liveness(file),
+        Err(_) => Liveness::Unknown,
     }
 }
 
@@ -153,41 +160,93 @@ pub(super) struct Executor {
 
 /// A different boot or process instance cannot be the dispatched executor.
 /// Unreadable identities and records remain conservative.
+#[cfg(test)]
 pub(super) fn executor_running(file: &File) -> bool {
-    executor_running_with(file, executor_boot, executor_start)
+    executor_liveness(file) != Liveness::Gone
 }
 
+fn executor_liveness(file: &File) -> Liveness {
+    executor_liveness_with(file, executor_boot, seen)
+}
+
+/// [`executor_running`], with how the boot and a process's start are read:
+/// a process whose start is read is taken as not exited.
+#[cfg(test)]
 pub(super) fn executor_running_with(
-    mut file: &File,
+    file: &File,
     boot: impl FnOnce() -> Result<String>,
     start: impl FnOnce(i32) -> Result<Start>,
 ) -> bool {
+    let seen = |pid| {
+        start(pid).map(|start| {
+            Some(Seen {
+                start,
+                exited: false,
+            })
+        })
+    };
+    executor_liveness_with(file, boot, seen) != Liveness::Gone
+}
+
+/// What the kernel says now of a process an executor record names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Seen {
+    pub(super) start: Start,
+    /// It has exited and waits to be reaped: it acts no more.
+    pub(super) exited: bool,
+}
+
+/// Process `pid` as the kernel says it now; none when there is no such
+/// process.
+fn seen(pid: i32) -> Result<Option<Seen>> {
+    Ok(atlas_core::process::info(pid)?.map(|info| Seen {
+        start: info.instance.start,
+        exited: info.zombie,
+    }))
+}
+
+/// Whether the executor the record `file` names still runs: live only when
+/// its process is read, is that very instance, on this boot, and has not
+/// exited; gone when it names none, or its process is gone, exited or
+/// another; unknown when the record or the process cannot be read.
+pub(super) fn executor_liveness_with(
+    mut file: &File,
+    boot: impl FnOnce() -> Result<String>,
+    seen: impl FnOnce(i32) -> Result<Option<Seen>>,
+) -> Liveness {
     let mut text = String::new();
     if file
         .seek(SeekFrom::Start(0))
         .and_then(|_| file.read_to_string(&mut text))
         .is_err()
     {
-        return true;
+        return Liveness::Unknown;
     }
     if text.is_empty() {
-        return false;
+        return Liveness::Gone;
     }
     let Some(executor) = serde_json::from_str::<Executor>(&text)
         .ok()
         .filter(|executor| executor.pid > 0)
     else {
-        return true;
+        return Liveness::Unknown;
     };
-    // An exited process has no start time to read. Only ESRCH proves absence;
-    // permission errors and unavailable identities still retain the claim.
+    // Only ESRCH proves absence here; permission errors and unavailable
+    // identities still retain the claim.
     if nix::sys::signal::kill(nix::unistd::Pid::from_raw(executor.pid), None)
         == Err(nix::errno::Errno::ESRCH)
     {
-        return false;
+        return Liveness::Gone;
     }
-    let (Ok(boot), Ok(start)) = (boot(), start(executor.pid)) else {
-        return true;
+    let (Ok(boot), Ok(seen)) = (boot(), seen(executor.pid)) else {
+        return Liveness::Unknown;
     };
-    boot == executor.boot && start == executor.start
+    // An exited process still answers a signal and keeps its start time
+    // until it is reaped, so its state decides, not its identity alone.
+    match seen {
+        Some(seen) if boot == executor.boot && seen.start == executor.start && !seen.exited => {
+            Liveness::Live
+        }
+        Some(_) | None => Liveness::Gone,
+    }
 }

@@ -33,6 +33,7 @@ pub(crate) use busy::seconds;
 pub use executor::{ExecutorClaims, record_executor};
 pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
+pub use marker::{Liveness, Unresolved};
 pub use notes::Note;
 pub use privacy::{Adopted, HoldKind, Interrupted, PrivateHold, Visible};
 pub use stop::{Resumed, StopRevision, StopWhy};

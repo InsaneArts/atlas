@@ -410,3 +410,64 @@ fn a_session_start_on_a_vm_that_does_not_answer_names_the_vm() {
     );
     assert_eq!(within(&selected), "work");
 }
+
+#[test]
+fn a_session_start_on_a_vm_says_by_its_name_whether_it_is_ready() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected = Selected {
+        name: "work".to_owned(),
+        desktop: atlas_core::config::desktops::Chosen::Vm(atlas_core::config::desktops::VmConfig {
+            id: atlas_core::desktop::DesktopId::parse("0123456789abcdef01234567").unwrap(),
+            output_dir: directory.path().join("output"),
+            activity: atlas_core::config::Activity::default(),
+        }),
+        user_entry: None,
+        adding: atlas_core::config::desktops::Adding::default(),
+    };
+
+    let ready = vm_brief("1.0.0", &selected, &json!({"ok": true, "ready": true}));
+    let not_ready = vm_brief(
+        "1.0.0",
+        &selected,
+        &json!({"ok": true, "ready": false, "notReady": "Allow Atlas."}),
+    );
+
+    assert!(ready.starts_with("Atlas 1.0.0: work is ready."), "{ready}");
+    assert_eq!(
+        not_ready,
+        "Atlas 1.0.0: work is not ready; run atlas doctor and tell the person what it says."
+    );
+    for said in [ready, not_ready] {
+        assert!(!said.contains("helper"), "{said}");
+        assert!(!said.contains("cannot reach"), "{said}");
+    }
+}
+
+#[test]
+fn a_session_start_on_a_vm_with_an_unknown_outcome_says_atlas_settles_it_never_the_menu_bar() {
+    let vm = recovering(
+        "1.0.0",
+        Recovery::Own,
+        atlas_client::overview::Called::Vm("work"),
+    );
+    let helper = recovering(
+        "1.0.0",
+        Recovery::Own,
+        atlas_client::overview::Called::Helper,
+    );
+
+    assert_eq!(
+        vm,
+        "Atlas 1.0.0: An action on work may not have finished; Atlas settles it on its own \
+         once work answers. If it stays, run atlas doctor --desktop work."
+    );
+    assert!(
+        !vm.contains("menu bar") && !vm.contains("atlas restart"),
+        "{vm}"
+    );
+    assert!(!vm.to_lowercase().contains("helper"), "{vm}");
+    assert!(
+        helper.contains("atlas restart"),
+        "Second Login's is kept: {helper}"
+    );
+}

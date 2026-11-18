@@ -455,9 +455,10 @@ impl Lines {
 }
 
 /// The status and where it came from: the menu bar's viewer when it runs
-/// (or the helper, read here, when that viewer is from a build that does
-/// not say the state yet); the helper when no viewer runs. None when a
-/// viewer runs but did not answer: only it knows who holds control.
+/// (or the desktop, read here, when that viewer is from a build that does
+/// not say the state yet); the desktop when no viewer runs, by its kind:
+/// `helper` for Second Login, `vm` for a VM. None when a viewer runs but
+/// did not answer: only it knows who holds control.
 pub(crate) async fn read(
     client: &Client,
     output: &Path,
@@ -466,6 +467,15 @@ pub(crate) async fn read(
     read_typed(client, output, port)
         .await
         .map(|(status, source)| (status.value, source))
+}
+
+/// Where a status read here, from the desktop `client` acts on, came from.
+fn read_from(client: &Client) -> &'static str {
+    if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        "vm"
+    } else {
+        "helper"
+    }
 }
 
 async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Reading, &'static str)> {
@@ -493,7 +503,10 @@ async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Readin
 
     match viewer {
         Some(Some(status)) if status.state.is_string() => Some((status, "viewer")),
-        Some(Some(_)) | None => Some((atlas_client::overview::read(client).await, "helper")),
+        Some(Some(_)) | None => Some((
+            atlas_client::overview::read(client).await,
+            read_from(client),
+        )),
         Some(None) => None,
     }
 }

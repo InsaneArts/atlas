@@ -1,6 +1,7 @@
-//! What doctor reports of a helper's native dialogs and web content, and the
-//! summary programs read. The user desktop's dated check of native Save/Open
-//! panels, and its record, are in [`crate::user::capability`].
+//! What doctor reports of a helper's native dialogs and web content, a VM
+//! desktop's report from its status, and the summary programs read. The
+//! user desktop's dated check of native Save/Open panels, and its record,
+//! are in [`crate::user::capability`].
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -11,6 +12,8 @@ pub(crate) enum NativeState {
     Stale,
     Passed,
     Failed,
+    /// No check of them is made on this desktop yet.
+    NotChecked,
 }
 
 /// Default location of the compiled fixture (tests/live/DesktopFixture.swift).
@@ -30,12 +33,14 @@ pub struct Doctor {
     pub(crate) vm: Option<VmMode>,
 }
 
-/// What a VM desktop is, as the overview shows it before its proof: only
-/// what its guest said of its Stop decides it.
+/// What a VM desktop is, as the overview shows it: what its guest said of
+/// its Stop first, then whether it is ready for agents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VmMode {
     /// The guest says agents are stopped there: Resume is offered.
     Stopped,
+    /// Ready for agents, as [`crate::client::readiness_of`] judges it.
+    Ready,
     /// Anything else, and why.
     Unavailable(String),
 }
@@ -57,13 +62,19 @@ impl Doctor {
         }
     }
 
-    /// The report of a VM desktop from its `status`: never ready, stopped
-    /// when its guest says so, through its keeper, otherwise unavailable with
-    /// why: the keeper's own when its session is not live, else its first
-    /// step, [`vm_first_step`]'s, or `refusal`, the one wording for what it
-    /// cannot do yet.
+    /// The report of a VM desktop from its `status`, its report beside it:
+    /// stopped when its guest says so, through its keeper; ready when
+    /// [`crate::client::readiness_of`] says so; otherwise unavailable with
+    /// why: the keeper's own when its session is not live, else why it is
+    /// not ready, [`vm_first_step`]'s, or `refusal`, the one wording for what
+    /// it cannot do.
     pub(crate) fn vm(status: Value, refusal: atlas_core::error::Error) -> Self {
-        let first = vm_first_step(&status).map_or_else(|| refusal.error.clone(), |step| step.error);
+        let ready = crate::client::readiness_of(&status).is_ok();
+        let first = status["notReady"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| vm_first_step(&status).map(|step| step.error))
+            .unwrap_or_else(|| refusal.error.clone());
         let guest = &status["guest"];
         let stop = if guest["ok"] == true {
             &guest["stop"]["state"]
@@ -87,24 +98,100 @@ impl Doctor {
                     .unwrap_or(&refusal.error)
                     .to_owned(),
             )
+        } else if ready {
+            VmMode::Ready
         } else {
             VmMode::Unavailable(with_work(&first, &status))
         };
-        let mut doctor = Self::unreached(status, refusal);
+        let ready = mode == VmMode::Ready;
+        let mut doctor = Self::unreached(with_vm_report(status, ready), refusal);
+        doctor.diagnosis.ready = ready;
         doctor.diagnosis.first_step = atlas_core::session::Guidance::Advice(first);
+        if ready {
+            doctor.absence = None;
+        }
+        doctor.native = NativeState::NotChecked;
         doctor.vm = Some(mode);
         doctor
     }
 
     /// This VM report, its mode the handover `unfinished` says is still under
-    /// way, when one is: that is its reason, whatever else it says.
+    /// way, when one is: that is its reason, whatever else it says, and it is
+    /// not ready.
     #[must_use]
     pub(crate) fn handing_over(mut self, unfinished: Option<String>) -> Self {
         if let Some(why) = unfinished {
+            self.diagnosis.ready = false;
+            self.diagnosis.value["ready"] = json!(false);
             self.vm = Some(VmMode::Unavailable(why));
         }
         self
     }
+}
+
+/// Doctor's report of the VM whose status, an answer, is `status`: what it
+/// says, whether it is ready for agents, each check of it in order, what to
+/// do, and what is not checked on a VM yet. `refusal` is the one wording
+/// for what this build cannot do on a VM.
+#[must_use]
+pub fn vm_report(status: Value, refusal: atlas_core::error::Error) -> Value {
+    Doctor::vm(status, refusal).diagnosis.value
+}
+
+/// The VM whose status is `status`, `ready` or not, with doctor's report
+/// beside what it says: each check of its readiness, what to do, what
+/// agents may do there, and what is not checked on a VM yet, never as
+/// passed.
+fn with_vm_report(mut status: Value, ready: bool) -> Value {
+    if !status.is_object() {
+        return status;
+    }
+    let name = status["desktop"]["name"]
+        .as_str()
+        .unwrap_or("the VM")
+        .to_owned();
+    let proven = status["ok"] == true && status["proven"] == true;
+    let observe = proven && status["proof"]["capture"] == true;
+    let input = proven && status["proof"]["input"] == true;
+    let checks = crate::client::readiness_checks(&status);
+    let next_steps: Vec<Value> = checks
+        .iter()
+        .filter(|check| check["ok"] == false)
+        .map(|check| check["nextStep"].clone())
+        .collect();
+    let not_checked = |reason: String| json!({"state": NativeState::NotChecked, "reason": reason});
+    let mut warnings = vec![json!(format!(
+        "Native Save/Open is not checked on {name}; use atlas run or atlas open."
+    ))];
+    match status["leftovers"].as_str() {
+        Some("running") if proven => warnings.push(json!(format!(
+            "Work an agent started is still running on {name}."
+        ))),
+        Some("unknown") if proven => warnings.push(json!(format!(
+            "Whether work an agent started still runs on {name} is not known."
+        ))),
+        _ => {}
+    }
+    if let Some(being_made) = crate::client::under_way(&name, &status["station"]["unresolved"]) {
+        warnings.push(json!(being_made));
+    }
+    status["ready"] = json!(ready);
+    status["canObserve"] = json!(observe);
+    status["capabilities"] = json!({
+        "observe": observe,
+        "input": input,
+        "nativeDialogs": not_checked(format!(
+            "Atlas does not check native Save/Open panels on {name} yet."
+        )),
+        "installedApps": not_checked(format!(
+            "Atlas does not check which apps are installed on {name} yet."
+        )),
+        "maintenance": not_checked(format!("Atlas does not check {name}'s maintenance yet.")),
+    });
+    status["checks"] = json!(checks);
+    status["nextSteps"] = json!(next_steps);
+    status["warnings"] = json!(warnings);
+    status
 }
 
 /// `why` a VM whose status is `status` is not ready yet, and, once it is
@@ -123,11 +210,11 @@ fn with_work(why: &str, status: &Value) -> String {
     }
 }
 
-/// What comes first for a VM desktop whose status is `status`, before the
-/// one wording for what this build cannot do on a VM: its proof's refusal,
-/// or, once proven, what its guest still has to be allowed, in its own
-/// words, or that Atlas in it is part way through an update. None once nothing comes before that wording, and for a status
-/// that is no answer, whose refusal is that wording.
+/// What comes first for a VM desktop whose status is `status`: its proof's
+/// refusal, or, once proven, what its guest still has to be allowed, in its
+/// own words, with what the person is asked, or that Atlas in it is part
+/// way through an update. None once nothing of these holds it, and for a
+/// status that is no answer.
 #[must_use]
 pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
     use atlas_core::error::{Code, Error};
@@ -224,14 +311,17 @@ fn compact_warning(state: NativeState) -> String {
         NativeState::Failed => NATIVE_DIALOGS_FAILED,
         NativeState::Stale => "Native Save/Open's check is stale; use atlas run or atlas open.",
         NativeState::Unknown => "Native Save/Open is unqualified; use atlas run or atlas open.",
+        NativeState::NotChecked => {
+            "Native Save/Open is not checked here; use atlas run or atlas open."
+        }
     };
     format!("{native} {WEB_CONTENT}")
 }
 
-/// Doctor's report for programs. A ready helper is only that, with any
-/// warnings. Otherwise it is the report without the raw helper status it was
+/// Doctor's report for programs. A ready desktop is only that, with any
+/// warnings. Otherwise it is the report without the raw status it was
 /// judged from: the verdict, each check, what to do, and which helper and
-/// display. `doctor --verbose` keeps everything for diagnosis.
+/// display, or which VM. `doctor --verbose` keeps everything for diagnosis.
 /// Objects and legacy null reports retain their projection; other roots
 /// return a certain state-error report.
 pub fn summary(report: Value) -> Value {
@@ -247,6 +337,26 @@ fn summarize(mut report: Value, ready: bool) -> Value {
     if ready {
         let warnings = report["warnings"].as_array().cloned().unwrap_or_default();
         return json!({"ok": true, "ready": true, "warnings": warnings});
+    }
+
+    // A VM's report keeps only its verdict, its checks and which VM, never
+    // the status it was judged from.
+    if report["desktop"]["kind"] == "vm" {
+        let shown = [
+            "ok",
+            "ready",
+            "notReady",
+            "desktop",
+            "canObserve",
+            "capabilities",
+            "checks",
+            "nextSteps",
+            "warnings",
+        ];
+        if let Some(fields) = report.as_object_mut() {
+            fields.retain(|key, _| shown.contains(&key.as_str()));
+        }
+        return report;
     }
 
     let session = report

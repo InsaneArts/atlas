@@ -330,3 +330,29 @@ async fn a_vms_host_is_verified_without_a_word_to_its_guest() {
         "nothing was asked of the keeper or the guest"
     );
 }
+
+#[test]
+fn a_recovery_step_on_a_vm_says_atlas_settles_it_never_the_menu_bar_or_restart() {
+    use crate::overview::Called;
+    let every = [
+        Recovery::Own,
+        Recovery::OwnOnceCommandEnds,
+        Recovery::Others,
+        Recovery::Person,
+        Recovery::PersonOnceCommandEnds,
+    ];
+
+    for recovery in every {
+        let step = recovery.step_for(Called::Vm("work"));
+
+        assert_eq!(recovery.step_for(Called::Helper), recovery.step());
+        assert_eq!(
+            step,
+            "An action on work may not have finished; Atlas settles it on its own once work \
+             answers. If it stays, run atlas doctor --desktop work."
+        );
+        assert!(!step.to_lowercase().contains("helper"), "{step}");
+        assert!(!step.contains("menu bar"), "{step}");
+        assert!(!step.contains("atlas restart"), "{step}");
+    }
+}

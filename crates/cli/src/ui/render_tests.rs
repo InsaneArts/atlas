@@ -494,6 +494,41 @@ fn status_is_a_short_list_or_says_the_helper_is_silent() {
 }
 
 #[test]
+fn a_vms_status_says_its_name_whether_it_is_ready_its_proof_and_its_guests_stop_and_work() {
+    let vm = |ready: bool| {
+        let mut status = json!({"ok": true, "ready": ready, "proven": true,
+            "desktop": {"kind": "vm", "name": "work"},
+            "proof": {"capture": true, "input": ready},
+            "stop": {"state": "clear"}, "work": {"state": "running", "jobs": 2},
+            "guest": {"daemon": {"version": "0.1.3"}}});
+        if !ready {
+            status["notReady"] = json!("Allow Atlas in Privacy & Security, Accessibility.");
+        }
+        show(View::Status, status).out
+    };
+
+    let ready = vm(true);
+    let not_ready = vm(false);
+
+    assert!(ready.starts_with("VM        work · ready"), "{ready}");
+    assert!(ready.contains("Proof     proven  Screen Recording ✓  Accessibility ✓"));
+    assert!(ready.contains("Stop      clear"));
+    assert!(ready.contains("Work      running · 2 jobs"));
+    assert!(ready.contains("Version   0.1.3"));
+    assert!(!ready.contains("Why"), "{ready}");
+    assert!(
+        not_ready.starts_with("VM        work · not ready"),
+        "{not_ready}"
+    );
+    assert!(not_ready.contains("Why       Allow Atlas in Privacy & Security, Accessibility."));
+    assert!(not_ready.contains("Accessibility ✗"));
+    for shown in [ready, not_ready] {
+        assert!(!shown.to_lowercase().contains("helper"), "{shown}");
+        assert!(!shown.contains("Input "), "{shown}");
+    }
+}
+
+#[test]
 fn config_names_the_settings_file() {
     let shown = show(
         View::Config,

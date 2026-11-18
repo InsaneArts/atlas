@@ -14,6 +14,7 @@ pub mod store;
 
 pub(crate) use atlas_core::host::{Host, HostId, HostSession, Key};
 pub(crate) use atlas_core::process::Instance;
+pub(crate) use recovery::settled_on_its_own;
 pub use recovery::{Asker, Recovery};
 
 use crate::client::Client;

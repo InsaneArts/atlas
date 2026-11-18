@@ -312,12 +312,10 @@ impl Viewer {
         let now = atlas_core::time::timestamp();
         let facts = SessionFacts::local(&client.controller, now);
         let reading_client = client.clone();
-        let reading = tokio::task::spawn_blocking(move || {
-            SessionReading::collect(reading_client.output_dir().ok(), &reading_client.controller)
-        })
-        .await
-        .ok()
-        .flatten();
+        let reading = tokio::task::spawn_blocking(move || SessionReading::of(&reading_client))
+            .await
+            .ok()
+            .flatten();
         let mut live = reading
             .as_ref()
             .map_or_else(Vec::new, |reading| reading.entries(facts));
@@ -736,7 +734,7 @@ async fn sessions_named<'a>(
     tokio::task::spawn_blocking(move || {
         let records = || seen.iter().map(|seen| &seen.record);
         let named = names(records());
-        let reading = SessionReading::collect(client.output_dir().ok(), &client.controller);
+        let reading = SessionReading::of(&client);
         let processes = reading.as_ref().map(|reading| &reading.processes);
         let now = atlas_core::time::now_ms();
         let facts = SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);

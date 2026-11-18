@@ -1,9 +1,10 @@
 //! What a client asks of a VM desktop through its session keeper: its status
-//! with a fresh proof of it, never ready yet; the proof a command acts in,
-//! and its guest's own Stop; the guest's word on work it started that may
-//! still run; the person's Stop and Resume; and the recovery of changes
-//! whose command ended without an answer. Everything else stays refused in
-//! the one wording for what this build cannot do on a VM.
+//! with a fresh proof of it, and whether it is ready for agents; the proof a
+//! command acts in, and its guest's own Stop; the guest's word on work it
+//! started that may still run; the person's Stop and Resume; and the
+//! recovery of changes whose command ended without an answer. Everything
+//! else stays refused in the one wording for what this build cannot do on a
+//! VM.
 use super::{Actor, Client, Pinned, Verified};
 use crate::{
     link::{Keeper, Link},
@@ -15,6 +16,7 @@ use atlas_core::{
     files::Token,
     session::{MachineSession, Observation, Session},
 };
+use atlas_session::compatibility::{Declared, MACHINE, PROTOCOL, Usable, judge};
 use serde_json::{Value, json};
 
 /// How long a status waits for the station's pending changes to be read.
@@ -433,7 +435,8 @@ impl Client {
     }
 
     /// A VM's status: its keeper's hello, its guest's own and a fresh proof
-    /// of it, read through the keeper. It is never ready yet, proven or not.
+    /// of it, read through the keeper, and whether it is ready for agents,
+    /// as [`readiness`] judges it from all of these, or why not.
     pub(super) async fn vm_status(&self) -> Result<Value> {
         // A VM still being added answers nothing but the person's Stop.
         if self.admission() != Admission::Open {
@@ -485,39 +488,41 @@ impl Client {
             .map_or(json!("unknown"), |pending| {
                 pending.map_or(json!("unknown"), |pending| json!(pending))
             });
+        // Those of them that keep control from being taken, by the
+        // controller's own rule: unknown when they cannot be read.
+        let controller = self.controller.clone();
+        let unresolved =
+            tokio::task::spawn_blocking(move || controller.unresolved_within(PENDING_READ))
+                .await
+                .map_or(json!("unknown"), |unresolved| {
+                    unresolved.map_or(json!("unknown"), |unresolved| json!(unresolved))
+                });
         // The guest's own word on the work it started, which may outlive its
         // commands: unknown when it cannot be asked.
         let leftovers = self.leftovers().await.unwrap_or(Leftovers::Unknown);
         let generation = observed.as_ref().map(|observed| observed.generation);
         let mid_update = !session.as_ref().is_ok_and(|session| session.input)
             && crate::vm::proof::mid_update(&guest);
-        let (proof, not_ready) = match &session {
-            Ok(session) if mid_update => (
-                json!({"epoch": session.epoch, "capture": session.capture,
-                    "input": session.input, "generation": generation,
-                    "inputWhy": crate::vm::proof::MID_UPDATE}),
-                crate::vm::proof::MID_UPDATE.to_owned(),
-            ),
-            Ok(session) => (
-                json!({"epoch": session.epoch, "capture": session.capture,
-                    "input": session.input, "generation": generation}),
-                format!(
-                    "{} is proven: agents run commands and send input there, but this build of \
-                     Atlas cannot see its screen yet.",
-                    self.selected.name
-                ),
-            ),
-            Err(refused) => (
-                json!({"code": refused.code, "error": refused.error}),
-                refused.error.clone(),
-            ),
+        // What the guest declared in the generation it was observed in, its
+        // proof refused or not: none when no observation said it, as no
+        // hello read apart from it stands in for it.
+        let declared = observed
+            .as_ref()
+            .and_then(|observed| observed.declared.as_ref())
+            .map_or(Value::Null, |declared| json!(declared));
+        let mut proof = match &session {
+            Ok(session) => json!({"epoch": session.epoch, "capture": session.capture,
+                "input": session.input, "generation": generation}),
+            Err(refused) => json!({"code": refused.code, "error": refused.error}),
         };
-        Ok(json!({
+        if session.is_ok() && mid_update {
+            proof["inputWhy"] = json!(crate::vm::proof::MID_UPDATE);
+        }
+        let mut status = json!({
             "ok": true,
             "proven": session.is_ok(),
             "proof": proof,
-            "ready": false,
-            "notReady": not_ready,
+            "declared": declared,
             "desktop": {"kind": "vm", "name": self.selected.name},
             "keeper": hello,
             "stop": guest_stop(&guest),
@@ -530,8 +535,14 @@ impl Client {
                 (None, None) => Value::Null,
             },
             "station": {"stop": station, "handover": self.handover_unfinished(),
-                "pending": pending},
-        }))
+                "pending": pending, "unresolved": unresolved},
+        });
+        let judged = readiness_of(&status);
+        status["ready"] = json!(judged.is_ok());
+        if let Err(why) = judged {
+            status["notReady"] = json!(why);
+        }
+        Ok(status)
     }
 
     /// The person's Stop on a VM: kept here first, then said through the
@@ -746,6 +757,323 @@ fn guest_work(guest: &Value) -> Value {
     } else {
         json!({"state": "unknown"})
     }
+}
+
+/// One thing a VM must hold for agents to use it, in the order
+/// [`readiness`] judges them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    /// Its keeper holds a live session to it.
+    Live,
+    /// It proves itself to the command's own challenge: hands off, on its
+    /// own console, by the paired keys.
+    Proven,
+    /// Its guest may record its screen and take input, and its Atlas is not
+    /// part way through an update.
+    Allowed,
+    /// Neither the person's Stop nor the guest's holds agents.
+    Clear,
+    /// It is open to no one but Atlas.
+    Admitted,
+    /// No update is handing its session over.
+    HandedOver,
+    /// Its session keeper serves everything this build asks of it, pictures
+    /// among them, and Atlas VM keeps a picture fence.
+    Kept,
+    /// Its Atlas serves everything this build asks of a VM.
+    Served,
+    /// No change whose claim no live process holds keeps control of it
+    /// from being taken.
+    Settled,
+}
+
+impl Rule {
+    const ALL: [Self; 9] = [
+        Self::Live,
+        Self::Proven,
+        Self::Allowed,
+        Self::Clear,
+        Self::Admitted,
+        Self::HandedOver,
+        Self::Kept,
+        Self::Served,
+        Self::Settled,
+    ];
+
+    /// Its name among doctor's checks.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Live => "Session with the VM",
+            Self::Proven => "VM proved",
+            Self::Allowed => "Screen Recording and Accessibility allowed",
+            Self::Clear => "Agents not stopped",
+            Self::Admitted => "Open to no one but Atlas",
+            Self::HandedOver => "No update handing it over",
+            Self::Kept => "Session keeper and Atlas VM serve this build",
+            Self::Served => "Atlas in it serves this build",
+            Self::Settled => "No action of unknown outcome",
+        }
+    }
+
+    /// The rule that must hold before this one can be judged at all.
+    const fn after(self) -> Option<Self> {
+        match self {
+            Self::Proven | Self::Clear | Self::Served => Some(Self::Live),
+            Self::Allowed | Self::Admitted | Self::Kept => Some(Self::Proven),
+            Self::Live | Self::HandedOver | Self::Settled => None,
+        }
+    }
+
+    /// Whether it holds of `facts`, or why not, in the guest's own words
+    /// where it gives them.
+    fn judged(self, facts: &Facts<'_>) -> std::result::Result<(), String> {
+        let (status, name) = (facts.status, facts.name);
+        let guest = &status["guest"];
+        match self {
+            Self::Live if status["ok"] == true && status["keeper"]["live"] == true => Ok(()),
+            Self::Live => {
+                let why = if status["ok"] == true {
+                    status["proof"]["error"]
+                        .as_str()
+                        .or_else(|| status["keeper"]["why"].as_str())
+                } else {
+                    status["why"].as_str().or_else(|| status["error"].as_str())
+                };
+                Err(why.map_or_else(
+                    || format!("Atlas has no session with {name} now."),
+                    str::to_owned,
+                ))
+            }
+            Self::Proven if status["proven"] == true => Ok(()),
+            Self::Proven => Err(status["proof"]["error"].as_str().map_or_else(
+                || format!("{name} has not proved itself to Atlas."),
+                str::to_owned,
+            )),
+            Self::Allowed if status["proof"]["capture"] != true => {
+                Err(crate::capability::vm_capture_held(guest).error)
+            }
+            Self::Allowed
+                if status["proof"]["input"] != true || crate::vm::proof::mid_update(guest) =>
+            {
+                Err(crate::capability::vm_input_held(guest).error)
+            }
+            Self::Allowed => Ok(()),
+            Self::Clear => match station_held(name, &status["station"]["stop"]) {
+                Some(why) => Err(why),
+                None => guest_held(name, guest).map_or(Ok(()), |held| Err(held.error)),
+            },
+            Self::Admitted => admitted(guest).map_err(|refused| refused.error),
+            Self::HandedOver => status["station"]["handover"]
+                .as_str()
+                .map_or(Ok(()), |why| Err(why.to_owned())),
+            Self::Kept => kept(name, status),
+            Self::Served if status["declared"].is_null() => Err(format!(
+                "What {name}'s Atlas serves is not known; run it again."
+            )),
+            Self::Served => match judge(facts.declared, &MACHINE) {
+                Usable::Usable => Ok(()),
+                Usable::MissingCapabilities { missing } => Err(format!(
+                    "{name}'s Atlas is from another build that does not serve all this one needs \
+                     ({}); update Atlas so both are one build.",
+                    missing.join(", ")
+                )),
+                Usable::Incompatible { theirs } => Err(format!(
+                    "{name}'s Atlas speaks protocol {theirs} and this Mac's {PROTOCOL}; update \
+                     Atlas so both are one build."
+                )),
+            },
+            Self::Settled => unsettled(name, facts.pending),
+        }
+    }
+
+    /// Why it cannot be judged: the rule it comes after does not hold, or,
+    /// once Atlas `reached` the VM, what it is judged by was not said.
+    fn unknown(self, name: &str, reached: bool) -> Option<String> {
+        match self.after()? {
+            Self::Live if !reached => Some(format!("Not known until Atlas reaches {name}.")),
+            _ => Some(format!("Not known until {name} is proved.")),
+        }
+    }
+}
+
+/// Why the session keeper and Atlas VM of the VM `name`, whose status is
+/// `status`, keep it from agents: a keeper that does not serve all this
+/// build asks of it, pictures among them, or does not say what the guest
+/// declared where it observed it; or an Atlas VM that keeps no picture
+/// fence. None when both serve it.
+fn kept(name: &str, status: &Value) -> std::result::Result<(), String> {
+    let serves = |capability: &str| {
+        status["keeper"]["keeper"]["capabilities"]
+            .as_array()
+            .is_some_and(|served| served.iter().any(|served| served == capability))
+    };
+    if !crate::vm::keeper::CAPABILITIES
+        .iter()
+        .all(|capability| serves(capability))
+        || status["declared"].is_null()
+    {
+        return Err(format!(
+            "{name}'s session keeper is from an older build; run atlas update."
+        ));
+    }
+    let runner = &status["runner"];
+    if !runner["incarnation"].is_string() || !runner["fence"].is_u64() {
+        return Err(format!(
+            "{name}'s Atlas VM is from an older build and keeps no picture fence; run atlas update."
+        ));
+    }
+    Ok(())
+}
+
+/// Why the Stop this Mac keeps for the VM `name`, as its status says it,
+/// `stop`, holds agents: none when it is clear, and unknown is never clear.
+fn station_held(name: &str, stop: &Value) -> Option<String> {
+    let resume = "until the person resumes them from the Atlas menu bar";
+    match (stop["state"].as_str(), stop["why"].as_str()) {
+        (Some("clear"), _) => None,
+        (Some("stopped"), Some("update")) => Some(format!(
+            "An update of Atlas stopped agents on {name}; they wait {resume}."
+        )),
+        (Some("stopped"), _) => Some(format!(
+            "The person stopped agents on {name}. Ask them before doing anything more there."
+        )),
+        _ => Some(format!(
+            "The Stop this Mac keeps for {name} cannot be read, so agents wait {resume}."
+        )),
+    }
+}
+
+/// What [`readiness`] judges a VM by.
+struct Facts<'a> {
+    status: &'a Value,
+    declared: &'a Declared,
+    pending: &'a Value,
+    /// The VM's name, as its status gives it.
+    name: &'a str,
+}
+
+impl<'a> Facts<'a> {
+    fn new(status: &'a Value, declared: &'a Declared, pending: &'a Value) -> Self {
+        Self {
+            status,
+            declared,
+            pending,
+            name: status["desktop"]["name"].as_str().unwrap_or("the VM"),
+        }
+    }
+}
+
+/// Whether the VM whose status is `status`, whose guest declared
+/// `declared`, and whose station holds `pending` (the changes that keep
+/// control of it from being taken, as
+/// [`atlas_control::Controller::unresolved_within`] reads them, else
+/// `"unknown"`), is ready for agents: every [`Rule`] holding, in order. Why
+/// not is the first that fails. Work its guest started that still runs,
+/// and a change a live process is making now, never make it not ready.
+pub(crate) fn readiness(
+    status: &Value,
+    declared: &Declared,
+    pending: &Value,
+) -> std::result::Result<(), String> {
+    let facts = Facts::new(status, declared, pending);
+    Rule::ALL
+        .into_iter()
+        .try_for_each(|rule| rule.judged(&facts))
+}
+
+/// [`readiness`] of the VM whose status is `status`, as it says what its
+/// guest declared and what its station holds pending.
+pub(crate) fn readiness_of(status: &Value) -> std::result::Result<(), String> {
+    readiness(
+        status,
+        &declared_of(status),
+        &status["station"]["unresolved"],
+    )
+}
+
+/// Doctor's check of each [`Rule`] of the VM whose status is `status`, in
+/// order: whether it holds, and why not; not known while one it comes after
+/// does not hold.
+pub(crate) fn readiness_checks(status: &Value) -> Vec<Value> {
+    let declared = declared_of(status);
+    let facts = Facts::new(status, &declared, &status["station"]["unresolved"]);
+    let mut held = Vec::new();
+    Rule::ALL
+        .into_iter()
+        .map(|rule| {
+            let judged = match rule.after() {
+                Some(before) if !held.contains(&before) => None,
+                // What the guest declared is not known while no observation
+                // said it: no hello read apart from one stands in for it.
+                _ if rule == Rule::Served && status["declared"].is_null() => None,
+                _ => Some(rule.judged(&facts)),
+            };
+            let (ok, next) = match judged {
+                Some(Ok(())) => {
+                    held.push(rule);
+                    (Some(true), None)
+                }
+                Some(Err(why)) => (Some(false), Some(why)),
+                None => (None, rule.unknown(facts.name, held.contains(&Rule::Live))),
+            };
+            json!({"name": rule.name(), "ok": ok, "nextStep": next})
+        })
+        .collect()
+}
+
+/// What the guest of the VM whose status is `status` declared, in the
+/// generation it was observed in; nothing when no observation said it,
+/// never an earlier hello's.
+fn declared_of(status: &Value) -> Declared {
+    serde_json::from_value(status["declared"].clone()).unwrap_or_else(|_| Declared {
+        protocol: PROTOCOL,
+        capabilities: Vec::new(),
+        version: String::new(),
+    })
+}
+
+/// Why changes the station holds on the VM `name`, `pending`, keep it from
+/// agents: none when nothing does, and unknown is never nothing. A change a
+/// process is proven to be making is work in progress, as a running command
+/// is; one whose holder is gone, or cannot be told, keeps it.
+fn unsettled(name: &str, pending: &Value) -> std::result::Result<(), String> {
+    let Some(unresolved) = pending.as_array() else {
+        return Err(format!(
+            "Which of Atlas's changes on {name} are still unsettled cannot be read, so agents \
+             wait."
+        ));
+    };
+    let Some(left) = unresolved.iter().find(|change| change["holder"] != "live") else {
+        return Ok(());
+    };
+    if left["holder"] != "gone" {
+        return Err(format!(
+            "Whether a change to {name} is still being made cannot be told, so agents wait."
+        ));
+    }
+    Err(match left["executor"].as_str() {
+        Some("vm") => format!(
+            "Atlas VM has not said yet what a change it was making to {name} came to, so \
+             agents wait until it does."
+        ),
+        Some("guest") => crate::host_session::settled_on_its_own(name),
+        Some("station") => format!(
+            "What a change Atlas made on this Mac for {name} came to is not known, so agents \
+             wait."
+        ),
+        _ => format!("What a change on {name} came to is not known, so agents wait."),
+    })
+}
+
+/// What the status of the VM `name` says of changes being made there now,
+/// `pending`, for the person: none when no process is proven to be making
+/// one.
+pub(crate) fn under_way(name: &str, pending: &Value) -> Option<String> {
+    pending
+        .as_array()?
+        .iter()
+        .any(|change| change["holder"] == "live")
+        .then(|| format!("A change to {name} is still being made."))
 }
 
 fn late(client: &Client) -> Error {

@@ -849,6 +849,33 @@ fn unanswered(version: &str, selected: &Selected) -> String {
     )
 }
 
+/// The session-start line of Atlas `version` while changes of unknown
+/// outcome wait for `recovery`, on the desktop `called` names.
+fn recovering(
+    version: &str,
+    recovery: Recovery,
+    called: atlas_client::overview::Called<'_>,
+) -> String {
+    format!("Atlas {version}: {}", recovery.step_for(called))
+}
+
+/// The session-start line of Atlas `version` for the VM `selected` names,
+/// whose status is `status`: ready for agents or not, by its name.
+fn vm_brief(version: &str, selected: &Selected, status: &Value) -> String {
+    let name = &selected.name;
+    if status["ready"] == true {
+        format!(
+            "Atlas {version}: {name} is ready. After any change a person could see, check it in \
+             {name} with the atlas skill before saying it works."
+        )
+    } else {
+        format!(
+            "Atlas {version}: {name} is not ready; run atlas doctor and tell the person what it \
+             says."
+        )
+    }
+}
+
 /// One line for an agent's session start: local, bounded, never failing.
 /// For host `session`, it says what that session left in the helper, and
 /// lets it recover an unknown action that is all its own.
@@ -886,7 +913,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 
     let causes = client.controller.pending_causes().unwrap_or_default();
     if let Some(recovery) = Recovery::of(&causes, Asker::Agent(session.map(HostSession::key))) {
-        return format!("Atlas {version}: {}", recovery.step());
+        return recovering(version, recovery, client.called());
     }
 
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
@@ -903,7 +930,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 
     let ready = match selected.desktop().kind() {
         Kind::User(login) => atlas_client::user::capability::doctor(status, login)["ready"] == true,
-        Kind::Vm(_) => return format!("Atlas {version}: {}", selected.unreachable().error),
+        Kind::Vm(_) => return vm_brief(version, &selected, &status),
     };
     if ready {
         let mut line = format!(

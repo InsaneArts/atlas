@@ -41,8 +41,7 @@ pub async fn add_sessions_for(
     let has_own = own.is_some();
     let own = own.cloned();
     let (listed, own_entry) = tokio::task::spawn_blocking(move || {
-        let Some(reading) = SessionReading::collect(client.output_dir().ok(), &client.controller)
-        else {
+        let Some(reading) = SessionReading::of(&client) else {
             return (HostSessions::default(), None);
         };
         let own_entry = own.and_then(|key| {

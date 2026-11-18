@@ -509,10 +509,11 @@ async fn a_vms_status_says_its_guests_stop_work_and_leftovers() {
     assert_eq!(overview["guest"]["work"]["state"], "running");
     assert_eq!(overview["jobs"]["running"], 1, "{overview}");
     assert_eq!(overview["workMayRun"], true, "the person's Stop offered");
-    assert!(
-        overview["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("Work an agent started is still running")),
-        "{overview}"
-    );
+    assert_eq!(status["ready"], true, "work still running keeps it ready");
+    assert_eq!(reading.value["ready"], true, "{overview}");
+    assert_ne!(overview["mode"], "unavailable", "{overview}");
+    for said in ["reason", "headline"] {
+        let words = overview[said].as_str().unwrap();
+        assert!(!words.to_lowercase().contains("helper"), "{said}: {words}");
+    }
 }

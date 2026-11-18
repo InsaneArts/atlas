@@ -96,6 +96,9 @@ impl crate::link::Trust for Trusting {
     }
 }
 
+/// How a scripted keeper's observations differ from what it says otherwise.
+pub type Observing = Option<fn(&mut Value)>;
+
 /// The keeper a test scripts, and what it was asked.
 pub struct ScriptedKeeper {
     /// Every request it was asked, in order.
@@ -115,6 +118,9 @@ pub struct ScriptedKeeper {
     /// What the keeper answers the next read it is asked, in place of its
     /// guest's answer: given once, then gone.
     pub refusing_once: Arc<Mutex<Option<Value>>>,
+    /// How the keeper's every observation differs from what it says
+    /// otherwise, as when its guest reconnected since its hello.
+    pub observing: Arc<Mutex<Observing>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -169,18 +175,21 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let held = Arc::new(Mutex::new(None));
     let answering = Arc::new(Mutex::new(None));
     let refusing_once: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+    let observing: Arc<Mutex<Observing>> = Arc::new(Mutex::new(None));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
-        let (asked, stop, away, held, answering, refusing_once) = (
+        let (asked, stop, away, held, answering, refusing_once, observing) = (
             asked.clone(),
             stop.clone(),
             away.clone(),
             held.clone(),
             answering.clone(),
             refusing_once.clone(),
+            observing.clone(),
         );
         async move {
             while let Ok((stream, _)) = listener.accept().await {
+                let observing = *observing.lock().unwrap_or_else(PoisonError::into_inner);
                 let (asked, stop, away, held, answering, refusing_once, peer, own) = (
                     asked.clone(),
                     stop.clone(),
@@ -238,7 +247,11 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                             peer: &peer,
                             own: &own,
                         };
-                        answered(&request, &guest, job_stopped)
+                        let mut answer = answered(&request, &guest, job_stopped);
+                        if let Some(differ) = observing.filter(|_| request["op"] == "observe") {
+                            differ(&mut answer);
+                        }
+                        answer
                     };
                     // A picture is the keeper's own line, then the guest's.
                     let lines = match answer {
@@ -284,6 +297,7 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             held,
             answering,
             refusing_once,
+            observing,
             serving,
         },
     )
@@ -445,9 +459,14 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
     }
     match request["op"].as_str() {
         Some("hello") => json!({"ok": true, "op": "hello",
-            "keeper": {"protocol": crate::vm::keeper::PROTOCOL, "capabilities": []},
+            "keeper": {"protocol": crate::vm::keeper::PROTOCOL,
+                "capabilities": crate::vm::keeper::CAPABILITIES},
+            "guest": {"protocol": atlas_session::compatibility::PROTOCOL,
+                "capabilities": atlas_session::compatibility::MACHINE, "version": "1.0.0"},
             "generation": GENERATION, "live": true}),
         Some("observe") => json!({"ok": true, "op": "observe", "generation": GENERATION,
+            "declared": {"protocol": atlas_session::compatibility::PROTOCOL,
+                "capabilities": atlas_session::compatibility::MACHINE, "version": "1.0.0"},
             "peer": guest.peer, "station": guest.own,
             "status": {"hello": guest.hello(), "inputService": guest.input(),
                 "sessionProof": {"ok": true, "challenge": request["challenge"],

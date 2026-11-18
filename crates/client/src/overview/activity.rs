@@ -26,7 +26,7 @@ impl Called<'_> {
     }
 
     /// The desktop within a sentence.
-    fn object(self) -> String {
+    pub(crate) fn object(self) -> String {
         match self {
             Self::Helper => "the helper".to_owned(),
             Self::Vm(name) => name.to_owned(),
@@ -191,12 +191,13 @@ impl Shown {
 pub fn shown(row: &Row, now: u128, called: Called<'_>) -> Shown {
     Shown {
         reason: reason(row, called),
-        ..listed(row, now)
+        ..listed(row, now, called)
     }
 }
 
-/// [`shown`], with no reason given.
-pub(crate) fn listed(row: &Row, now: u128) -> Shown {
+/// [`shown`], with no reason given, what it did said of the desktop as
+/// `called` names it.
+pub(crate) fn listed(row: &Row, now: u128, called: Called<'_>) -> Shown {
     Shown {
         id: row.id.clone(),
         operation: row.operation.clone(),
@@ -214,7 +215,7 @@ pub(crate) fn listed(row: &Row, now: u128) -> Shown {
         nothing_sent: row.coded(Code::FocusChanged) && row.partial != Some(true),
         partial: row.partial == Some(true),
         uncertain: row.coded(Code::Uncertain),
-        says: crate::doing::says(row),
+        says: crate::doing::says_in(row, called),
         reason: None,
         actor: row.actor().to_owned(),
         age_seconds: row
@@ -230,7 +231,7 @@ pub fn shown_to_person(row: &Row, now: u128, called: Called<'_>) -> Shown {
     Shown {
         account: row.account.clone(),
         allowed: row.account.as_ref().and(row.allowed),
-        says: crate::doing::says_to_person(row),
+        says: crate::doing::says_to_person(row, called),
         ..shown(row, now, called)
     }
 }

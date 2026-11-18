@@ -363,11 +363,8 @@ impl Places {
 fn slow_values(client: &Client) -> Vec<(Kind, Value)> {
     let now = atlas_core::time::timestamp();
     let facts = atlas_client::host_session::reading::SessionFacts::local(&client.controller, now);
-    let mut live = atlas_client::host_session::reading::SessionReading::collect(
-        client.output_dir().ok(),
-        &client.controller,
-    )
-    .map_or_else(Vec::new, |reading| reading.entries(facts));
+    let mut live = atlas_client::host_session::reading::SessionReading::of(client)
+        .map_or_else(Vec::new, |reading| reading.entries(facts));
     live.iter_mut().for_each(crate::watch::without_ticking_ages);
     let (asks, allowed) = super::accounts::asks_for_status(client);
     vec![

@@ -62,6 +62,9 @@ pub(crate) struct Observed {
     /// own hello as `inputService`, and its proof as `sessionProof`.
     pub(crate) status: Value,
     pub(crate) runner: Runner,
+    /// What the guest declared in the generation it was observed in; none
+    /// from a keeper that does not say.
+    pub(crate) declared: Option<atlas_session::compatibility::Declared>,
 }
 
 impl Observed {
@@ -127,12 +130,14 @@ impl Observed {
         status["inputService"] = said["inputService"].clone();
         status["sessionProof"] = proof["proof"].clone();
         let runner = serde_json::from_value(answer["runner"].clone()).unwrap_or_default();
+        let declared = serde_json::from_value(answer["declared"].clone()).ok();
         Ok(Self {
             generation,
             peer,
             station,
             status,
             runner,
+            declared,
         })
     }
 

@@ -2,7 +2,7 @@
 //! surface says it: a verb, the app it acted in and the control it named.
 //! Typed text, argv, coordinates, output, file names and window titles are
 //! never kept.
-use crate::activity_log::Row;
+use crate::{activity_log::Row, overview::Called};
 pub(crate) use atlas_core::name::capitalized;
 use atlas_core::{actions::Button, error::Code, name::bounded};
 
@@ -431,20 +431,31 @@ fn worded(done: &str, action: &str) -> (String, String) {
 }
 
 /// What a recorded row did, after who did it ("clicked Save in TextEdit"),
-/// or what could not be done: naming the app, as any reader may be told.
+/// or what could not be done: naming the app, as any reader may be told,
+/// and Second Login's desktop as the helper.
 pub fn says(row: &Row) -> String {
-    says_on(row, None)
+    says_in(row, Called::Helper)
 }
 
-/// [`says`] as the person's own app words it: a browser's action in a site
-/// they listed happened on that site, not in the browser ("clicked Merge
-/// on github.com"). Which sites they listed is theirs alone.
-pub fn says_to_person(row: &Row) -> String {
-    says_on(row, row.account.as_ref().and_then(|account| account.site()))
+/// [`says`] of a row done on the desktop `called` names: what names the
+/// desktop itself names it so.
+pub fn says_in(row: &Row, called: Called<'_>) -> String {
+    says_on(row, None, called)
 }
 
-/// [`says`], naming `site` in place of the app when there is one.
-fn says_on(row: &Row, site: Option<&str>) -> String {
+/// [`says_in`] as the person's own app words it: a browser's action in a
+/// site they listed happened on that site, not in the browser ("clicked
+/// Merge on github.com"). Which sites they listed is theirs alone.
+pub fn says_to_person(row: &Row, called: Called<'_>) -> String {
+    says_on(
+        row,
+        row.account.as_ref().and_then(|account| account.site()),
+        called,
+    )
+}
+
+/// [`says_in`], naming `site` in place of the app when there is one.
+fn says_on(row: &Row, site: Option<&str>, called: Called<'_>) -> String {
     if row.under_way() {
         return doing(row);
     }
@@ -528,6 +539,7 @@ fn says_on(row: &Row, site: Option<&str>) -> String {
                 operation(
                     plain.or(row.operation.as_ref().map(|op| op.as_str())),
                     row.action_count,
+                    called,
                 )
             }
         },
@@ -581,7 +593,8 @@ fn doing(row: &Row) -> String {
 /// What an operation did and what could not be done, worded as Atlas.app
 /// words it: for rows from older builds and raw commands, which say only
 /// their operation, and verbs that need no more (run, screenshot).
-fn operation(name: Option<&str>, count: Option<u64>) -> (String, String) {
+fn operation(name: Option<&str>, count: Option<u64>, called: Called<'_>) -> (String, String) {
+    let desktop = called.object();
     let count = count.unwrap_or(0);
     if name == Some("input") && count > 0 {
         let actions = format!("{count} action{}", if count == 1 { "" } else { "s" });
@@ -594,12 +607,18 @@ fn operation(name: Option<&str>, count: Option<u64>) -> (String, String) {
     match name {
         Some("input") => worded("used the mouse and keyboard", "use the mouse and keyboard"),
         Some("run") => worded("ran a command", "run a command"),
-        Some("restart") => worded("recovered the helper", "recover the helper"),
-        Some("logout") => worded("logged out the helper", "log out the helper"),
+        Some("restart") => worded(
+            &format!("recovered {desktop}"),
+            &format!("recover {desktop}"),
+        ),
+        Some("logout") => worded(
+            &format!("logged out {desktop}"),
+            &format!("log out {desktop}"),
+        ),
         Some("screenshot") => worded("took a screenshot", "take a screenshot"),
         Some("apps") => worded("listed the open apps", "list the open apps"),
         Some("start") => worded("started the VM", "start the VM"),
-        _ => worded("did something in the helper", "finish an action"),
+        _ => worded(&format!("did something in {desktop}"), "finish an action"),
     }
 }
 

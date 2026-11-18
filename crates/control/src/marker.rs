@@ -266,6 +266,29 @@ impl Controller {
         commands::read(&self.commands)
     }
 
+    /// Whether a process still carries out `generation`'s claim, proven
+    /// either way or unknown: unlike [`Controller::in_progress`], which takes
+    /// what cannot be told as held, so recovery never clears it.
+    fn liveness(&self, generation: &str) -> Liveness {
+        let Some(live) = self.live(generation) else {
+            return Liveness::Unknown;
+        };
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&live)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Liveness::Gone,
+            Err(_) => return Liveness::Unknown,
+        };
+        match FileExt::try_lock_shared(&file) {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Liveness::Live,
+            Err(_) => Liveness::Unknown,
+            Ok(()) => super::executor::claim_executor(&file, &live),
+        }
+    }
+
     /// Whether some live mutation, in any process, still holds the claim.
     pub(super) fn in_progress(&self, generation: &str) -> bool {
         self.open_claim(generation).is_some_and(|(live, file)| {
@@ -407,6 +430,46 @@ impl Controller {
             .into_iter()
             .filter(|generation| executors.get(generation) == Some(&executor))
             .filter(|generation| !self.in_progress(generation))
+            .collect())
+    }
+
+    /// Every pending change that keeps control from being taken now, as
+    /// taking it judges them: none when nothing is pending or only commands
+    /// agents started still run; otherwise every pending change but those
+    /// commands, whoever carries it out. From one read of the marker and its
+    /// executors under the marker lock, waiting at most `wait` for it, as
+    /// [`Controller::pending_within`] reads.
+    ///
+    /// # Errors
+    ///
+    /// Busy when the lock is held past `wait`; refuses a marker that cannot
+    /// be read or names nothing, an unknown outcome to taking control, and
+    /// who carries out the pending changes when that cannot be read.
+    pub fn unresolved_within(&self, wait: Duration) -> Result<Vec<Unresolved>> {
+        let _lock = self.lock_marker_within(wait)?;
+        if matches!(
+            self.read_unsettled()?,
+            Unsettled::Nothing | Unsettled::Commands
+        ) {
+            return Ok(Vec::new());
+        }
+        let pending = pending(&self.marker)?;
+        if pending.is_empty() || pending.iter().any(|entry| entry == UNREADABLE) {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read.",
+            ));
+        }
+        let executors = executors::read(&self.executors)?;
+        let marked = self.commands();
+        Ok(pending
+            .into_iter()
+            .filter(|generation| !self.running_command(&marked, generation))
+            .map(|generation| Unresolved {
+                executor: executors.get(&generation).copied(),
+                holder: self.liveness(&generation),
+                generation,
+            })
             .collect())
     }
 
@@ -728,6 +791,32 @@ pub struct Snapshot {
     pub total: usize,
     /// How many are commands agents started with `run`, still running.
     pub commands: usize,
+}
+
+/// A pending change that keeps control from being taken, as
+/// [`Controller::unresolved_within`] reads it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Unresolved {
+    pub generation: String,
+    /// Who carries it out, when it is not the desktop's own services.
+    pub executor: Option<Executor>,
+    /// Whether a process still carries it out.
+    pub holder: Liveness,
+}
+
+/// Whether a process still carries out a claimed change, as far as can be
+/// told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Liveness {
+    /// Proven: its claim's lock is held, or the executor its record names
+    /// is read and is that very process.
+    Live,
+    /// Proven gone: no claim, or neither a lock nor an executor that runs.
+    Gone,
+    /// Cannot be told: the claim, its record or the process it names cannot
+    /// be read.
+    Unknown,
 }
 
 /// What a marker that cannot be read names: an unknown outcome, pending.

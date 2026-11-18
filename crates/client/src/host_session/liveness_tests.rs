@@ -303,6 +303,7 @@ fn a_liveness_sample_never_infers_death_after_expiry() {
         pending: false,
         agent_holds: false,
         now: 100_000_000,
+        called: crate::overview::Called::Helper,
     }
     .project(&record);
     let history = crate::session_view::HistorySource {

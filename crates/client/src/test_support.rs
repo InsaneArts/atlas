@@ -17,8 +17,8 @@ pub use executor::{
 };
 pub use helper::{Helper, Pictures, completed, exited};
 pub use keeper::{
-    FINDER, FINDER_WINDOW, GENERATION, JOB, ScriptedKeeper, input_hello, machine_hello, screen,
-    vm_through_keeper,
+    FINDER, FINDER_WINDOW, GENERATION, JOB, Observing, ScriptedKeeper, input_hello, machine_hello,
+    screen, vm_through_keeper,
 };
 pub use requester::{Requester, WATCHDOG};
 pub use runner::StandInRunner;

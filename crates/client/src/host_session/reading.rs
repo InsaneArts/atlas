@@ -33,6 +33,8 @@ pub struct SessionReading {
     pub(crate) waiting: Vec<atlas_control::Note>,
     pub(crate) running: Vec<atlas_control::Note>,
     pub processes: Snapshot,
+    /// The VM the rows were done on, by its name; none for Second Login.
+    pub(crate) vm: Option<String>,
 }
 
 /// How many recent activity rows each session's state and latest action
@@ -80,6 +82,16 @@ pub fn first_command_running(
 }
 
 impl SessionReading {
+    /// [`SessionReading::collect`] of the desktop `client` acts on, its
+    /// sessions' actions said of that desktop.
+    pub fn of(client: &crate::client::Client) -> Option<Self> {
+        let mut reading = Self::collect(client.output_dir().ok(), &client.controller)?;
+        if let crate::overview::Called::Vm(name) = client.called() {
+            reading.vm = Some(name.to_owned());
+        }
+        Some(reading)
+    }
+
     pub fn collect(output: Option<&Path>, controller: &Controller) -> Option<Self> {
         Self::collect_with(output, controller, Snapshot::polled)
     }
@@ -106,6 +118,7 @@ impl SessionReading {
             waiting,
             running,
             processes: Snapshot::default(),
+            vm: None,
         }
         .sample(output, sample);
         reading.processes.keep_live(
@@ -144,6 +157,10 @@ impl SessionReading {
             pending: facts.pending,
             agent_holds: facts.agent_holds,
             now: facts.now,
+            called: self
+                .vm
+                .as_deref()
+                .map_or(crate::overview::Called::Helper, crate::overview::Called::Vm),
         }
     }
 
