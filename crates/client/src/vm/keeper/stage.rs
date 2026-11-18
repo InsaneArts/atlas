@@ -469,3 +469,7 @@ mod tests;
 #[cfg(test)]
 #[path = "copies_tests.rs"]
 mod copies_tests;
+
+#[cfg(test)]
+#[path = "environment_tests.rs"]
+mod environment_tests;

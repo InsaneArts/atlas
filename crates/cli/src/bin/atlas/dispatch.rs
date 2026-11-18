@@ -251,16 +251,20 @@ async fn execute_with(
     // the one wording before any Stop is read; one that needs the VM running
     // starts it when it is stopped, the station's Stop checked first and the
     // guest's own after.
+    // Whether a command starts its VM is decided apart from whether it
+    // changes it: a preview of an environment changes nothing and needs the
+    // VM running all the same.
     let mut started = None;
-    if policy.changes_helper() {
+    let (changes, starts) = (policy.changes_helper(), starts_vm(&command));
+    if changes || starts {
         let client = client()?;
-        if !changes_on_vm(&command) {
+        if changes && !changes_on_vm(&command) {
             client.second_login_only()?;
         }
-        if starts_vm(&command) {
+        if starts {
             started = atlas_client::vm::start::ensure_running(&client).await?;
         }
-        if let Err(held) = client.require_going().await {
+        if changes && let Err(held) = client.require_going().await {
             return Err(said_started(held, started.as_ref()));
         }
     }
@@ -290,11 +294,16 @@ async fn execute_with(
 
 /// Whether `command` is a change this build makes on a VM desktop: a
 /// command, a background job's start or stop, `open` and `close`, a
-/// cleanup of what they left, and an agent's input at a point or of keys
-/// and text. Input checked against an app, a window or a field, and a click
-/// on an element, are not built for a VM.
+/// cleanup of what they left, an environment's plans and their commands
+/// (never a discovery), and an agent's input at a point or of keys and
+/// text. Input checked against an app, a window or a field, and a click on
+/// an element, are not built for a VM.
 fn changes_on_vm(command: &Command) -> bool {
     match command {
+        Command::Environment(environment) => !matches!(
+            environment.command,
+            Some(EnvironmentCommand::Discover { .. })
+        ),
         Command::Run(_)
         | Command::Open(_)
         | Command::Close { .. }
@@ -322,9 +331,11 @@ fn changes_on_vm(command: &Command) -> bool {
     }
 }
 
-/// Whether `command`, a change this build makes on a VM desktop, needs the
-/// VM running: a command, a background job's start, `open`, and an agent's
-/// input. A close, a cleanup and a job's stop never start it.
+/// Whether `command`, one this build carries out on a VM desktop, needs the
+/// VM running: a command, a background job's start, `open`, an agent's
+/// input, and an environment's preview, apply, undo and commands. A close,
+/// a cleanup, a job's stop, an environment's list and a look at what
+/// undoing would do never start it.
 fn starts_vm(command: &Command) -> bool {
     changes_on_vm(command)
         && !matches!(
@@ -334,6 +345,13 @@ fn starts_vm(command: &Command) -> bool {
                 | Command::Job {
                     command: JobCommand::Stop { .. },
                 }
+                | Command::Environment(cli::Environment {
+                    command: Some(
+                        EnvironmentCommand::List { .. }
+                            | EnvironmentCommand::Rollback { apply: false, .. }
+                    ),
+                    ..
+                })
         )
 }
 

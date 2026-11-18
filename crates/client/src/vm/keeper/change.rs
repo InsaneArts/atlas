@@ -47,8 +47,9 @@ pub(super) const OPENING: Duration = Duration::from_secs(15);
 pub(super) const SAYING: Duration = Duration::from_secs(2);
 
 /// Set in a build made for live checks of a lost reply: the keeper keeps
-/// back the final reply of each change whose command names this word, as
-/// if its lane failed, and says so. Empty, it keeps back every change's.
+/// back the final reply of each change whose command names this word, or
+/// whose request is this operation (such as `environment`), as if its lane
+/// failed, and says so. Empty, it keeps back every change's.
 /// `scripts/release.sh` refuses to release one.
 const DROPS_REPLY: Option<&str> = option_env!("ATLAS_TEST_DROP_REPLY");
 
@@ -332,6 +333,7 @@ where
 fn drops_reply(request: &Value) -> bool {
     DROPS_REPLY.is_some_and(|word| {
         word.is_empty()
+            || request["op"] == word
             || request["argv"]
                 .as_array()
                 .is_some_and(|argv| argv.iter().any(|argument| argument == word))

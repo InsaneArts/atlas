@@ -34,6 +34,9 @@ pub struct Copy {
     pub processes: Option<Vec<i32>>,
     /// Every file's contents, in the manifest's order.
     pub contents: Vec<u8>,
+    /// The manifest it was staged with, which says where each file's
+    /// contents begin.
+    pub snapshot: Snapshot,
 }
 
 impl StandIn {
@@ -171,7 +174,7 @@ where
         read = received(stand_in, (header, change), manifest, size, lane) => read,
         () = lanes.until_cancelled(header.lane) => Err("it was cancelled".to_owned()),
     };
-    let contents = match read.and_then(|(snapshot, contents)| {
+    let (snapshot, contents) = match read.and_then(|(snapshot, contents)| {
         let matches = snapshot.check().is_ok()
             && snapshot.name == name
             && snapshot.digest == digest
@@ -179,12 +182,12 @@ where
             && request["entries"] == json!(snapshot.entries.len())
             && request["attributes"] == json!(snapshot.attribute_bytes());
         if matches {
-            Ok(contents)
+            Ok((snapshot, contents))
         } else {
             Err("its manifest is not the one it asked for".to_owned())
         }
     }) {
-        Ok(contents) => contents,
+        Ok(read) => read,
         Err(why) => {
             let placed_nothing = nothing_placed(&why);
             stand_in.done(change, &placed_nothing);
@@ -209,6 +212,7 @@ where
                 node,
                 processes: Some(Vec::new()),
                 contents,
+                snapshot,
             },
         );
         json!({"ok": true, "path": format!("{ROOT}/{change}/{name}"), "digest": digest})

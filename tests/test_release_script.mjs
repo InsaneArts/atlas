@@ -22,6 +22,7 @@ const variables = [
   'ATLAS_TEST_HAND_RUN',
   'ATLAS_TEST_FAKE_GRANT',
   'ATLAS_TEST_DROP_REPLY',
+  'ATLAS_TEST_WORKER_PAUSE',
 ];
 
 test('a release with no test variable set is allowed', () => {

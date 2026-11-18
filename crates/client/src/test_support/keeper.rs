@@ -319,6 +319,20 @@ fn job_answered(request: &Value, stopped: bool) -> Value {
     }
 }
 
+/// What the scripted guest's environment worker answers `asked`, a request
+/// of its records: no transactions listed, anything else refused as its
+/// own refusal.
+fn environment_answered(asked: &Value) -> Value {
+    if asked["operation"] == "transactions" {
+        return json!({"ok": true, "op": "environment", "exitCode": 0,
+            "result": {"ok": true, "transactions": [], "hidden": 0, "more": 0, "unreadable": 0}});
+    }
+    json!({"ok": true, "op": "environment",
+        "exitCode": crate::environment::WORKER_REFUSED,
+        "result": {"ok": false, "code": "environment", "error": "Not scripted.",
+            "refusal": "scripted"}})
+}
+
 /// What the scripted keeper answers `request` with, its guest's Stop `stop`,
 /// the guest's key `peer`, the station's `own`, and its job stopped once
 /// `job_stopped`.
@@ -347,6 +361,14 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
         Some("read") => json!({"ok": true, "outcome": "unknown"}),
         Some("change") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)
+        }
+        // Its environment worker runs a command as any command runs, lists
+        // no transactions, and refuses anything else as its own refusal.
+        Some("change")
+            if request["request"]["op"] == "environment"
+                && request["request"]["packet"]["request"]["operation"] != "run" =>
+        {
+            environment_answered(&request["request"]["packet"]["request"])
         }
         // Its input service takes, sends and lets go of whatever it is asked.
         Some("change") if request["lane"] == "input" => match request["request"]["op"].as_str() {

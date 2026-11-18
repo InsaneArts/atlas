@@ -126,6 +126,7 @@ fn a_guests_copy_is_known_here_only_by_its_inventory() {
                 copy: copy.clone(),
                 session: Some(session.clone()),
                 task: None,
+                plan: None,
             })
             .unwrap();
     }

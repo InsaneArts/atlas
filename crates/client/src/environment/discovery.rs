@@ -490,6 +490,11 @@ pub async fn discover(
     environment: &[String],
     references: &[PathBuf],
 ) -> Result<Value> {
+    // A VM keeps its own files: no path on this Mac is looked for there.
+    if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) && !references.is_empty()
+    {
+        return Err(crate::vm::environment::references_refused(client));
+    }
     Ok(inspect(client, tools, apps, environment, references)
         .await?
         .report())

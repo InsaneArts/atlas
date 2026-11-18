@@ -123,7 +123,9 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
             )
             .await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => {
+            crate::vm::environment::sync_in(client, &manifest, selection.files, apply_now).await
+        }
     }
 }
 
@@ -136,7 +138,7 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::apply_in(client, login, plan_id).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::apply_in(client, plan_id).await,
     }
 }
 
@@ -151,7 +153,7 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
         Kind::User(login) => {
             crate::user::environment::rollback_in(client, login, transaction_id, apply).await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::rollback_in(client, transaction_id, apply).await,
     }
 }
 
@@ -167,6 +169,6 @@ pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Resul
     runner::validate_argv(&argv)?;
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::run_in(client, login, argv, timeout).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::run_in(client, argv, timeout).await,
     }
 }

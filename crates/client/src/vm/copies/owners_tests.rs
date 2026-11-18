@@ -7,6 +7,7 @@ fn owner(copy: &Token) -> Owner {
         copy: copy.clone(),
         session: Some(Key::of(Host::Codex, "one")),
         task: None,
+        plan: None,
     }
 }
 

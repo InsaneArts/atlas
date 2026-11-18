@@ -582,11 +582,7 @@ pub(crate) async fn sync_in(
         result["profileVersion"] = json!(2);
         result["environmentNames"] = json!(profile.environment);
         result["readinessBeforeApply"] = readiness;
-        result["environmentScope"] = json!(
-            "Selected exported values are frozen privately and used by environment run. \
-             Existing GUI apps and interactive shell startup files are not modified. \
-             Application logins remain separate."
-        );
+        result["environmentScope"] = json!(crate::environment::profile::SCOPE);
 
         Ok(result)
     }

@@ -16,7 +16,8 @@ pub(super) const SHOWN: usize = 50;
 /// transactions joined with the frozen plans here that it never started,
 /// labelled with the session and task that made each one. Files are named
 /// by their targets, never their contents. Reads only: it takes no control
-/// and records nothing.
+/// and records nothing. A VM's guest is asked as a change of its own,
+/// claimed while it is asked.
 ///
 /// # Errors
 ///
@@ -25,7 +26,7 @@ pub(super) const SHOWN: usize = 50;
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::list_in(client, login, all).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::list_in(client, all).await,
     }
 }
 
@@ -71,6 +72,15 @@ impl Frozen {
             request,
             running,
             updated,
+        }
+    }
+
+    /// It, as one whose outcome is not known: while the desktop cannot be
+    /// asked, what it holds of the plan is unknown.
+    pub(crate) fn unknown(self) -> Self {
+        Self {
+            request: true,
+            ..self
         }
     }
 

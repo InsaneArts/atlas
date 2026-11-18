@@ -26,10 +26,6 @@ impl Identity {
 
     /// The identity a VM's packet names: its guest's session, its daemon as
     /// what captures it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "packets for a VM are not made on this Mac yet")
-    )]
     pub(crate) fn from_machine(epoch: &atlas_core::session::MachineEpoch) -> Self {
         Self {
             uid: epoch.uid,

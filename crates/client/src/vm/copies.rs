@@ -304,9 +304,70 @@ fn kept_for(
             copy: copy.clone(),
             session: session.clone(),
             task: task.clone(),
+            plan: None,
         })?;
     }
     Ok(())
+}
+
+/// Stage `payloads`, the folder of a frozen plan's payloads on this Mac,
+/// into the guest as the change `copy`, in the generation of `verified`,
+/// the command's own proof: where the guest placed it. Its owner is kept
+/// first, naming the plan, so only that plan's discard removes it; one
+/// whose stage may have placed it stays owned. The folder is the one the
+/// plan's own record made, in Atlas's records, never a path an agent
+/// names, so it is read as Atlas reads its own records: never through the
+/// guard for files handed over, which refuses Atlas's own folder.
+///
+/// # Errors
+///
+/// Refuses a guest that takes no stages, an owner that cannot be kept and
+/// a folder that cannot be snapshotted; returns the stage's refusal or
+/// failure.
+pub(in crate::vm) async fn stage_frozen(
+    client: &Client,
+    payloads: &crate::vm::environment::Payloads,
+    copy: &Token,
+    verified: &Verified,
+) -> Result<PathBuf> {
+    let generation = client.generation_offering(verified, STAGE, |vm| {
+        format!("{vm} is running an older Atlas that takes no files")
+    })?;
+    let owners = Owners::in_records(client.output_dir()?);
+    owners.keep(&Owner {
+        copy: copy.clone(),
+        session: client.host_session.as_ref().map(HostSession::key).cloned(),
+        task: client.task.as_ref().map(|task| task.key().clone()),
+        plan: Some(payloads.plan().clone()),
+    })?;
+    let folder = payloads.folder().to_owned();
+    let held = tokio::task::spawn_blocking({
+        let folder = folder.clone();
+        move || {
+            let held = Snapshot::held(&folder)?;
+            held.still(&folder)?;
+            Ok::<_, Error>(Arc::new(held))
+        }
+    })
+    .await
+    .map_err(|_| Error::new(Code::Io, "The plan's payloads could not be read."))
+    .and_then(|held| held);
+    let staged = match held {
+        Ok(held) => client
+            .stage_vm(copy, &held, &folder, generation)
+            .await
+            .and_then(accepted),
+        Err(error) => Err(error),
+    };
+    match staged {
+        Ok(reply) => Ok(PathBuf::from(reply["path"].as_str().unwrap_or_default())),
+        Err(error) => {
+            if !error.uncertain {
+                let _ = owners.forget(copy);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// What one target becomes for the guest.
@@ -376,12 +437,12 @@ pub(crate) async fn remove(
 
 /// Remove the guest's copy `copy` for a command of host session `session`,
 /// or none, in the generation of `verified`, the command's own proof, by
-/// the rule every removal of a copy follows: only a copy whose
-/// record here names that session (one with no record, or an unreadable
-/// one, is never taken as anyone's); kept while the guest lists it as
-/// anything but placed, and while anything runs from it or an app in
-/// `running` (from a list the guest gave) does. Its record goes once it is
-/// known gone.
+/// the rule every removal of a copy follows: only a copy whose record here
+/// names that session (one with no record, or an unreadable one, is never
+/// taken as anyone's), and never one holding a frozen plan's payloads;
+/// kept while the guest lists it as anything but placed, and while
+/// anything runs from it or an app in `running` (from a list the guest
+/// gave) does. Its record goes once it is known gone.
 pub(crate) async fn removal(
     client: &Client,
     copy: &Token,
@@ -393,6 +454,8 @@ pub(crate) async fn removal(
         Err(error) => return CopyRemoval::Failed(error.error),
     };
     match owners.of(copy) {
+        // A frozen plan's payloads go only with its plan.
+        Owned::By(owner) if owner.plan.is_some() => return CopyRemoval::AnotherSession,
         Owned::By(owner) if owner.names(session) => {}
         Owned::By(_) => return CopyRemoval::AnotherSession,
         Owned::Unknown | Owned::Unreadable => return CopyRemoval::Unreadable,

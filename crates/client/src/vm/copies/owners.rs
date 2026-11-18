@@ -28,13 +28,17 @@ const FOLDER: &str = "copies";
 const LONGEST: u64 = 4096;
 
 /// Who one copy was made for: the host session of the command that staged
-/// it, and its task, or none for a command without one.
+/// it, and its task, or none for a command without one; and the frozen
+/// plan whose payloads it holds, when it holds a plan's, which only that
+/// plan's discard removes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Owner {
     pub(crate) copy: Token,
     pub(crate) session: Option<Key>,
     pub(crate) task: Option<Key>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) plan: Option<Token>,
 }
 
 impl Owner {

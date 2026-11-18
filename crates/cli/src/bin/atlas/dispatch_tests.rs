@@ -1131,6 +1131,7 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         &["screenshot"],
         &["start-input"],
         &["install-app", "/Applications/Probe.app"],
+        &["environment", "discover", "--tool", "cat"],
     ] {
         let command = parse(args).unwrap().command.unwrap();
         let policy = Policy::of(&command);
@@ -1340,4 +1341,139 @@ async fn a_stopped_vms_status_and_doctor_say_it_is_stopped_and_what_starts_it() 
     assert_eq!(doctor.error, words, "{doctor:?}");
     assert_eq!(doctor.code, Code::NotReady);
     assert!(keeper.runner.asked_for("start").is_empty());
+}
+
+/// A manifest of one file, and a profile of it, in `folder`.
+fn environment_files(folder: &Path) -> (PathBuf, PathBuf) {
+    std::fs::write(folder.join("notes.txt"), b"notes\n").unwrap();
+    let manifest = folder.join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[[files]]\nsource = \"notes.txt\"\ntarget = \".config/probe/notes.txt\"\n",
+    )
+    .unwrap();
+    let profile = folder.join("profile.toml");
+    std::fs::write(
+        &profile,
+        "version = 2\n\n[[files]]\nsource = \"notes.txt\"\ntarget = \".config/probe/notes.txt\"\n",
+    )
+    .unwrap();
+    (manifest, profile)
+}
+
+/// A plan's ID, as a preview prints it.
+const PLAN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_environment_preview_starts_a_stopped_vm_and_its_list_and_undo_preview_never_do() {
+    let files = tempfile::tempdir().unwrap();
+    let (manifest, profile) = environment_files(files.path());
+    let (manifest, profile) = (manifest.to_str().unwrap(), profile.to_str().unwrap());
+    for args in [
+        &["environment", "list"][..],
+        &["environment", "rollback", PLAN],
+    ] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        keeper.runner.set_power("stopped");
+        let config = dir.path().join("settings.toml");
+
+        let _ = executed(&config, parse(args).unwrap().command.unwrap(), &client).await;
+
+        assert!(keeper.runner.asked_for("start").is_empty(), "{args:?}");
+        assert_eq!(keeper.runner.power(), "stopped", "{args:?}");
+    }
+    for args in [
+        &["environment", manifest][..],
+        &["environment", "profile", profile],
+    ] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        keeper.runner.set_power("stopped");
+        let config = dir.path().join("settings.toml");
+
+        let reply = executed(&config, parse(args).unwrap().command.unwrap(), &client).await;
+
+        assert_eq!(keeper.runner.asked_for("start").len(), 1, "{args:?}");
+        assert_eq!(keeper.runner.power(), "running", "{args:?}");
+        let started = match &reply {
+            Ok(reply) => reply["started"]["desktop"].clone(),
+            Err(error) => error.details["started"]["desktop"].clone(),
+        };
+        assert_eq!(started, "work", "{args:?}: {reply:?}");
+        assert!(client.controller.pending().unwrap().is_empty(), "{args:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_environment_change_on_a_vm_goes_through_dispatch_and_is_held_by_either_stop() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let (manifest, profile) = environment_files(dir.path());
+    let (manifest, profile) = (manifest.to_str().unwrap(), profile.to_str().unwrap());
+    let changes: [&[&str]; 5] = [
+        &["environment", "run", "--", "/bin/echo", "hi"],
+        &["environment", "apply", PLAN],
+        &["environment", "rollback", PLAN, "--apply"],
+        &["environment", manifest, "--apply"],
+        &["environment", "profile", profile, "--apply"],
+    ];
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+
+    let ran = executed(&config, command(changes[0]), &client)
+        .await
+        .unwrap();
+    let asked = keeper.asked_for("change").len();
+    client.controller.note_stop(true).unwrap();
+    let mut held = Vec::new();
+    for args in changes {
+        held.push(executed(&config, command(args), &client).await);
+    }
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+    for stop in ["stopped", "unknown"] {
+        *keeper.stop.lock().unwrap() = stop;
+        for args in changes {
+            held.push(executed(&config, command(args), &client).await);
+        }
+    }
+
+    assert_eq!(ran["output"], "hi\n", "{ran}");
+    let change = &keeper.asked_for("change")[0];
+    assert_eq!(change["lane"], "change");
+    assert_eq!(change["request"]["op"], "environment");
+    assert_eq!(change["request"]["apply"], true);
+    assert_eq!(
+        change["request"]["packet"]["request"],
+        json!({"operation": "run", "argv": ["/bin/echo", "hi"]})
+    );
+    assert_eq!(change["request"]["packet"]["expected"]["uid"], 502);
+    assert_eq!(asked, 1, "only the command");
+    for held in held {
+        let held = held.unwrap_err();
+        assert_eq!(held.code, Code::Stopped, "{held:?}");
+        assert!(held.error.contains("work"), "{held:?}");
+    }
+    assert_eq!(keeper.asked_for("change").len(), asked, "nothing more went");
+    assert!(keeper.asked_for("stage").is_empty(), "nothing staged");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[test]
+fn an_environment_plans_steps_record_no_activity_and_still_heed_the_stop_as_an_agents() {
+    // The client heeds the person's Stop for these by its actor alone: they
+    // name no activity of their own.
+    for args in [
+        &["environment", "manifest.toml"][..],
+        &["environment", "manifest.toml", "--apply"],
+        &["environment", "profile", "profile.toml", "--apply"],
+        &["environment", "apply", PLAN],
+        &["environment", "rollback", PLAN],
+        &["environment", "rollback", PLAN, "--apply"],
+    ] {
+        let policy = Policy::of(&parse(args).unwrap().command.unwrap());
+        assert!(policy.doing.is_none(), "{args:?}");
+        assert!(policy.labelled(Actor::Agent), "{args:?}");
+    }
 }

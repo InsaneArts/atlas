@@ -23,10 +23,20 @@ pub(crate) const MISSING: &str =
 /// Partial filesystem effects remain recorded for recovery.
 pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     let packet: Packet = decode(&read_limited(path, MAX_RECORD)?)?;
-    carry_out(packet, apply, || {
+    carry_out(packet, apply, HELPER_CHANGED, || {
         Identity::from_proof(&atlas_native::native::session_info()?)
     })
 }
+
+/// The words a helper's worker refuses to go on in once its session is
+/// not the one its packet expects.
+const HELPER_CHANGED: &str =
+    "Expected helper session or display changed; no further mutation is allowed";
+
+/// The words a machine guest's worker refuses to go on in once its session
+/// is not the one its packet expects.
+const DESKTOP_CHANGED: &str =
+    "The desktop's session or display changed since Atlas checked it; nothing more is changed";
 
 /// The words a machine guest's worker refuses an answer too long to keep in.
 pub(crate) const TOO_LONG: &str =
@@ -56,7 +66,7 @@ pub fn machine_worker(packet: &[u8], apply: bool, daemon: u32) -> Result<Value> 
         )));
     }
     let mutating = packet.request.changes_helper();
-    carry_out(packet, apply, || {
+    carry_out(packet, apply, DESKTOP_CHANGED, || {
         Identity::from_machine_proof(&atlas_native::native::session_info()?, daemon)
     })
     .and_then(|answer| keepable(answer, mutating))
@@ -74,41 +84,54 @@ fn keepable(answer: Value, mutating: bool) -> Result<Value> {
 
 /// Carry out `packet`'s request, `apply` for one that may change the
 /// login, every step guarded by the session `current` reads now being the
-/// one the packet expects.
-fn carry_out(packet: Packet, apply: bool, current: impl Fn() -> Result<Identity>) -> Result<Value> {
+/// one the packet expects, refused in `changed`'s words once it is not.
+fn carry_out(
+    packet: Packet,
+    apply: bool,
+    changed: &'static str,
+    current: impl Fn() -> Result<Identity>,
+) -> Result<Value> {
     if packet.version != 1 {
         return Err(problem("Unsupported environment packet version"));
     }
 
+    let expected = packet.expected.clone();
     let guard = || {
-        if current()? != packet.expected {
-            return Err(problem(
-                "Expected helper session or display changed; no further mutation is allowed",
-            ));
+        if current()? != expected {
+            return Err(problem(changed));
         }
         Ok(())
     };
 
     guard()?;
     let home = account_home(packet.expected.uid)?;
+    carry_out_in(&home, packet, apply, &guard)
+}
+
+/// [`carry_out`] in `home`, the home of the account `packet` names, once
+/// its session was checked, every step guarded by `guard`.
+pub(crate) fn carry_out_in(
+    home: &Path,
+    packet: Packet,
+    apply: bool,
+    guard: &impl Fn() -> Result<()>,
+) -> Result<Value> {
     if apply != packet.request.changes_helper() {
         return Err(problem("Worker apply flag does not match its request"));
     }
 
     match packet.request {
-        Request::Preview { id, files } => preview(&home, packet.expected.uid, &id, files, &guard),
-        Request::Apply { plan } => apply_plan(&home, &plan, &guard),
-        Request::Rollback { id, apply } => rollback(&home, &id, apply, &guard),
-        Request::Run { argv } => runner::execute(&home, &argv, &guard),
-        Request::Transactions { all, ids } => transactions(&home, all, &ids, &guard),
+        Request::Preview { id, files } => preview(home, packet.expected.uid, &id, files, guard),
+        Request::Apply { plan } => apply_plan(home, &plan, guard),
+        Request::Rollback { id, apply } => rollback(home, &id, apply, guard),
+        Request::Run { argv } => runner::execute(home, &argv, guard),
+        Request::Transactions { all, ids } => transactions(home, all, &ids, guard),
         Request::InstallApp { id, source, name } => {
-            installs::install(&home, &id, &source, &name, &guard)
+            installs::install(home, &id, &source, &name, guard)
         }
-        Request::RemoveApp { id } => {
-            installs::remove(&home, &id, &guard, &installs::Looks::system())
-        }
+        Request::RemoveApp { id } => installs::remove(home, &id, guard, &installs::Looks::system()),
         Request::Installs { ids } => {
-            installs::states(&home, &ids, &guard, &installs::Looks::system())
+            installs::states(home, &ids, guard, &installs::Looks::system())
         }
     }
 }

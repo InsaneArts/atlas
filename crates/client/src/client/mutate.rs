@@ -114,11 +114,22 @@ pub(crate) enum Mutation<'a> {
     Release {
         owner: &'a str,
     },
+    /// A VM's guest's own environment worker handed `packet`, in the
+    /// session `pin` names, stopped after `timeout`: `apply` when it may
+    /// change the guest. It goes as the change `change`, named by its
+    /// caller first, so what the caller keeps of it carries that name.
+    Environment {
+        packet: &'a Value,
+        apply: bool,
+        timeout: Duration,
+        pin: SessionPin,
+        change: &'a Token,
+    },
 }
 
 impl Mutation<'_> {
     /// The request this mutation sends.
-    pub(super) fn request(&self) -> Value {
+    pub(crate) fn request(&self) -> Value {
         match self {
             Self::Input {
                 actions,
@@ -191,6 +202,31 @@ impl Mutation<'_> {
                 json!({"op": "acquire", "owner": owner, "epoch": epoch, "person": false})
             }
             Self::Release { owner } => json!({"op": "release", "owner": owner}),
+            Self::Environment {
+                packet,
+                apply,
+                timeout,
+                pin,
+                ..
+            } => json!({"op": "environment", "apply": apply, "timeoutMs": ms(*timeout),
+                "session": pin, "packet": packet}),
+        }
+    }
+
+    /// Whether what it came to is a command's own end: a command, or one
+    /// the environment worker runs.
+    fn command(&self) -> bool {
+        match self {
+            Self::Run { .. } => true,
+            Self::Environment { packet, .. } => packet["request"]["operation"] == "run",
+            Self::Input { .. }
+            | Self::JobStart { .. }
+            | Self::JobStop { .. }
+            | Self::Restart
+            | Self::Logout { .. }
+            | Self::RemoveCopy { .. }
+            | Self::Acquire { .. }
+            | Self::Release { .. } => false,
         }
     }
 
@@ -241,16 +277,8 @@ impl Mutation<'_> {
                 }
                 _ => false,
             },
-            Self::Run { .. } => {
-                reply["timedOut"].is_boolean()
-                    && reply.get("exitCode").is_some()
-                    && (reply["exitCode"].is_i64()
-                        || (reply["exitCode"].is_null()
-                            && (reply["timedOut"] == true
-                                || reply["signal"]
-                                    .as_str()
-                                    .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
-            }
+            Self::Run { .. } => ended_as_command(reply),
+            Self::Environment { .. } if self.command() => ended_as_command(reply),
             Self::Restart | Self::Logout { .. } => true,
             // What a removal came to names the copy it was asked for.
             Self::RemoveCopy { copy, .. } => {
@@ -261,10 +289,30 @@ impl Mutation<'_> {
             Self::Acquire { .. } => true,
             // Only a release that says so let go of what was held.
             Self::Release { .. } => reply["released"] == true,
+            // Any other request of the worker's is answered by the worker's
+            // own whole answer, kept as what the change came to.
+            Self::Environment { .. } => {
+                reply["op"] == "environment"
+                    && reply["exitCode"].is_i64()
+                    && reply["result"]["ok"].is_boolean()
+            }
         };
 
         valid.then_some(()).ok_or_else(unconfirmed)
     }
+}
+
+/// Whether `reply` says how a command ended: whether its time ran out, and
+/// its exit code, or the signal or timeout it ended by.
+fn ended_as_command(reply: &Value) -> bool {
+    reply["timedOut"].is_boolean()
+        && reply.get("exitCode").is_some()
+        && (reply["exitCode"].is_i64()
+            || (reply["exitCode"].is_null()
+                && (reply["timedOut"] == true
+                    || reply["signal"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
 }
 
 /// A reply that does not prove what the helper did, which is then not known.
@@ -355,7 +403,8 @@ impl Client {
             | Mutation::Logout { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
-            | Mutation::Release { .. } => (false, false),
+            | Mutation::Release { .. }
+            | Mutation::Environment { .. } => (false, false),
         };
         if stop_before && self.stop_marked() {
             return Err(Error::stopped());
@@ -494,9 +543,13 @@ impl Client {
             | Mutation::Restart
             | Mutation::Logout { .. } => daemon.clone(),
             // Only a VM's guest keeps copies of its own, removed through its
-            // keeper; and input on one is taken and let go of through it,
-            // where the helper's is taken under its caller's own claim.
-            Mutation::RemoveCopy { .. } | Mutation::Acquire { .. } | Mutation::Release { .. } => {
+            // keeper, and is handed its own environment worker's requests; and
+            // input on one is taken and let go of through it, where the
+            // helper's is taken under its caller's own claim.
+            Mutation::RemoveCopy { .. }
+            | Mutation::Acquire { .. }
+            | Mutation::Release { .. }
+            | Mutation::Environment { .. } => {
                 return Err(self.unreachable());
             }
         })
@@ -531,7 +584,8 @@ impl Client {
             | Mutation::JobStop { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
-            | Mutation::Release { .. } => false,
+            | Mutation::Release { .. }
+            | Mutation::Environment { .. } => false,
         };
         if callers {
             return Ok(None);
@@ -648,7 +702,7 @@ impl Client {
         let asking = json!({"op": "outcome", "change": change});
         if let Kind::Vm(_) = self.desktop().kind() {
             let mut reply = self.kept_on_vm(change).await?;
-            if matches!(mutation, Mutation::Run { .. }) {
+            if mutation.command() {
                 match reply["truncated"].as_bool() {
                     None => reply["output"] = json!("unavailable"),
                     // Said in the word a command's reply always cuts by.
@@ -667,7 +721,8 @@ impl Client {
             | Mutation::Logout { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
-            | Mutation::Release { .. } => {}
+            | Mutation::Release { .. }
+            | Mutation::Environment { .. } => {}
         }
         let mut transport = self.transport_for(mutation).ok()?;
         transport.timeout = OUTCOME_WAIT;
@@ -801,13 +856,14 @@ impl Client {
 
     /// [`Client::mutate`] on a VM, in the generation `generation` of its
     /// keeper's session its command's proof was taken in: a command, a job's
-    /// start or stop, a copy's removal, or input taken, sent or let go of on
-    /// its input service's lane, claimed as the guest's before anything
-    /// goes, said through its keeper, and settled with the guest once its
-    /// claim is cleared. An agent's change is cut short by the person's
-    /// Stop, its outcome left pending until the guest answers it. Input let
-    /// go of is cleanup: it goes after a signal's stop or the person's Stop
-    /// as well. Anything else is refused before it is claimed.
+    /// start or stop, a copy's removal, a request of its environment worker,
+    /// or input taken, sent or let go of on its input service's lane,
+    /// claimed as the guest's before anything goes, said through its keeper,
+    /// and settled with the guest once its claim is cleared. An agent's
+    /// change is cut short by the person's Stop, its outcome left pending
+    /// until the guest answers it. Input let go of is cleanup: it goes after
+    /// a signal's stop or the person's Stop as well. Anything else is refused
+    /// before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
         mutation: &Mutation<'_>,
@@ -816,7 +872,10 @@ impl Client {
     ) -> Result<Value> {
         self.reachable()?;
         let within = match (self.desktop().kind(), mutation) {
-            (Kind::Vm(_), Mutation::Run { timeout, .. }) => *timeout + RUN_MARGIN,
+            (
+                Kind::Vm(_),
+                Mutation::Run { timeout, .. } | Mutation::Environment { timeout, .. },
+            ) => *timeout + RUN_MARGIN,
             (Kind::Vm(_), Mutation::JobStart { .. }) => JOB_START,
             (Kind::Vm(_), Mutation::JobStop { .. }) => self.link.timeout(),
             (Kind::Vm(_), Mutation::RemoveCopy { .. }) => REMOVE_COPY,
@@ -835,12 +894,23 @@ impl Client {
         if !cleanup {
             self.controller.interrupt().check()?;
         }
-        let command = release.is_some();
+        // A read of the guest's environment takes no control: it is claimed
+        // as a command is, so other agents act beside it while it runs.
+        let command =
+            release.is_some() || matches!(mutation, Mutation::Environment { apply: false, .. });
         let agent = self.actor == Actor::Agent && self.doing.is_some();
-        if agent && !cleanup && self.stop_marked() {
+        // An agent's environment request heeds the person's Stop whatever its
+        // command records of itself: a plan's steps name no activity of their
+        // own.
+        let heeds_stop = agent
+            || (self.actor == Actor::Agent && matches!(mutation, Mutation::Environment { .. }));
+        if heeds_stop && !cleanup && self.stop_marked() {
             return Err(self.stopped());
         }
-        let change = Token::new();
+        let change = match mutation {
+            Mutation::Environment { change, .. } => (*change).clone(),
+            _ => Token::new(),
+        };
         let claim = if command {
             self.controller
                 .quarantine_command_by(change.as_str(), Executor::Guest)?
@@ -884,7 +954,10 @@ impl Client {
             // The guest ends every job on the person's Stop: what this change
             // came to is then the guest's to say. A copy's removal is the
             // guest's own to refuse under a Stop, and its answer is waited for.
-            Mutation::JobStart { .. } | Mutation::JobStop { .. } if agent => {
+            // The guest ends its environment worker on the Stop too.
+            Mutation::JobStart { .. } | Mutation::JobStop { .. } | Mutation::Environment { .. }
+                if heeds_stop =>
+            {
                 tokio::select! {
                     biased;
                     reply = self.answer_or_ask_for(through_keeper(sent), asked, started) => reply,

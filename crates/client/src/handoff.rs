@@ -486,7 +486,8 @@ pub(crate) enum CopyRemoval {
     /// Nothing is there under that token.
     AlreadyGone,
     Removed,
-    /// Kept: another host session made it.
+    /// Kept: another host session made it, or it holds a frozen plan's
+    /// payloads, which go only with that plan.
     AnotherSession,
     /// Kept: what is there is not a private folder of this account, its
     /// label cannot be read, or it was swapped while it was looked at.

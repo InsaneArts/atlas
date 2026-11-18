@@ -28,6 +28,19 @@ pub(super) enum RollbackState {
     Changed,
 }
 
+/// Set in a build made for live checks of an interrupted apply: the worker
+/// waits this many seconds (15 unless it names a number) once it applied
+/// its first file, so the command that asked for it can be ended first.
+/// `scripts/release.sh` refuses to release one.
+const PAUSE: Option<&str> = option_env!("ATLAS_TEST_WORKER_PAUSE");
+
+/// Wait as [`PAUSE`] says, in a build that sets it.
+fn pause() {
+    if let Some(seconds) = PAUSE {
+        std::thread::sleep(Duration::from_secs(seconds.parse().unwrap_or(15)));
+    }
+}
+
 /// One transaction being applied or undone in the helper's `home`, journaled
 /// in `store` under `guard`, with the ledger as that store holds it.
 pub(super) struct Changing<'a, G> {
@@ -162,6 +175,9 @@ impl<G: Fn() -> Result<()>> Changing<'_, G> {
 
         for index in 0..files {
             self.apply_file(index)?;
+            if index == 0 {
+                pause();
+            }
         }
 
         (self.guard)()?;

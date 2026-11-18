@@ -15,6 +15,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// What a profile's variables reach, and what they never change.
+pub(crate) const SCOPE: &str = "Selected exported values are frozen privately and used by \
+     environment run. Existing GUI apps and interactive shell startup files are not modified. \
+     Application logins remain separate.";
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Profile {
@@ -142,13 +147,20 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     atlas_core::own_folder::refuse(path)?;
     let path = fs::canonicalize(path)?;
     let profile = load(&path)?;
+    // A VM keeps its own files: a path on this Mac is refused before
+    // anything it names is read, and before anything is claimed or made.
+    if matches!(client.desktop().kind(), Kind::Vm(_)) && !profile.references.is_empty() {
+        return Err(crate::vm::environment::references_refused(client));
+    }
     refuse_credentials(&path, &profile)?;
     let bytes = selected_environment(&profile)?;
     match client.desktop().kind() {
         Kind::User(login) => {
             crate::user::environment::sync_in(client, login, path, profile, bytes, apply).await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => {
+            crate::vm::environment::profile_in(client, &path, profile, bytes, apply).await
+        }
     }
 }
 
