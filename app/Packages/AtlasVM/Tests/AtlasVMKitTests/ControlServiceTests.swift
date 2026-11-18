@@ -70,6 +70,71 @@ struct ControlServiceTests {
     #expect(said?["window"] as? String == "open")
   }
 
+  @Test("a change's reply names the run that did it, and its outcome replayed by a later run still names that run")
+  func doneBy() async throws {
+    let folders = try Folders()
+    let host = FakeHost(power: .running)
+    let (earlier, ledger) = try service(host, in: folders)
+    let opened = await earlier.answer(.window(change, input: true))
+    let current = try #require(Incarnation.current())
+    let later = Incarnation(
+      pid: current.pid,
+      startSeconds: current.startSeconds,
+      startMicroseconds: current.startMicroseconds,
+      id: "a later run"
+    )
+    let replaying = ControlService(ledger: ledger, host: host, incarnation: later)
+
+    let outcome = await replaying.answer(.outcome(change))
+    let again = await replaying.answer(.window(change, input: true))
+
+    let did = try #require(opened.incarnation?.id)
+    #expect(opened.by == did)
+    #expect(outcome.outcome == .done && outcome.by == did && outcome.incarnation?.id == "a later run")
+    #expect(again.outcome == .done && again.by == did)
+    #expect(await host.calls == ["openWindow"], "done once")
+  }
+
+  @Test("a change voided before it is asked is kept refused, and its request coming later is never done")
+  func voidBefore() async throws {
+    let folders = try Folders()
+    let host = FakeHost(power: .running)
+    let (service, ledger) = try service(host, in: folders)
+
+    let voided = await service.answer(.void(change))
+    let late = await service.answer(.window(change, input: true))
+    let again = await service.answer(.void(change))
+    let outcome = await service.answer(.outcome(change))
+
+    #expect(voided.ok && voided.outcome == ControlService.voided && voided.pending == false)
+    #expect(voided.by == voided.incarnation?.id)
+    #expect(!late.ok, "a request of a voided change is refused")
+    #expect(again.outcome == ControlService.voided)
+    #expect(outcome.outcome == ControlService.voided)
+    #expect(try ledger.record(change)?.operation == .void(change))
+    #expect(await host.calls.isEmpty, "no window opened")
+    #expect(await service.answer(.state).window == .closed)
+  }
+
+  @Test("a change voided once it was asked is answered as what it came to, naming the run that did it")
+  func voidAfter() async throws {
+    let folders = try Folders()
+    let host = FakeHost(power: .running)
+    let (service, _) = try service(host, in: folders)
+    let opened = await service.answer(.window(change, input: true))
+
+    let voided = await service.answer(.void(change))
+
+    #expect(opened.outcome == .done)
+    #expect(voided.ok && voided.outcome == .done && voided.by == opened.by)
+    #expect(await host.calls == ["openWindow"], "done once")
+  }
+
+  @Test("a hello declares that a change can be voided")
+  func helloDeclaresVoid() {
+    #expect(ControlHello.ours.capabilities.contains("void"))
+  }
+
   @Test("the window's input is off only once its window is seen gone")
   func windowOff() async throws {
     let folders = try Folders()

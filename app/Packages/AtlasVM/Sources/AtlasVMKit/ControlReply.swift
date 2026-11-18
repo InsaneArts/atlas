@@ -20,6 +20,9 @@ public struct ControlReply: Codable, Equatable, Sendable {
   public var fence: UInt64?
   /// The change answered.
   public var change: ChangeID?
+  /// The run that began the change answered, as its record keeps it: the
+  /// one that did it, whichever run answers now.
+  public var by: String?
   /// What the change came to; none while it is pending.
   public var outcome: ChangeOutcome?
   /// Whether the change is kept as asked and not yet settled.

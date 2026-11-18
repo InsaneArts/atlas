@@ -11,6 +11,7 @@ fn maintenance(phase: Phase) -> Maintenance {
         open: None,
         close: None,
         opened_by: None,
+        settled: false,
         ended: None,
     }
 }

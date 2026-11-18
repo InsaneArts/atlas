@@ -22,6 +22,7 @@ pub mod start;
 mod station;
 
 pub use agent::{install_agent, install_agent_held};
+pub use maintenance::{Maintain, maintain};
 pub use removal::{remove, remove_held};
 pub use station::{Facts, Refused, StationSocket, Untrusted, facts, trusted};
 

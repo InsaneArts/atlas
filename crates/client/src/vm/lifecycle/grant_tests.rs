@@ -9,6 +9,8 @@ fn operation(kind: Kind) -> Operation {
         name: "work".to_owned(),
         settings: PathBuf::from("/Users/someone/.config/atlas.toml"),
         cancel: false,
+        restart: false,
+        end: false,
     }
 }
 
@@ -423,5 +425,46 @@ fn a_grant_to_call_an_uninstall_off_is_never_one_to_uninstall_and_atlas_app_read
             .get("cancel")
             .is_none(),
         "said only when it calls one off"
+    );
+}
+
+#[test]
+fn a_grant_to_begin_a_maintenance_is_never_one_to_end_it_and_atlas_app_reads_which() {
+    let (_home, lifecycle) = lifecycle();
+    let ending = Operation {
+        end: true,
+        ..operation(Kind::Maintain)
+    };
+    let opened = Opened::new(&lifecycle);
+    let answering = lifecycle.clone();
+    let requests = lifecycle.inner(REQUESTS).unwrap();
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = shown.clone();
+    let clock = Manual::at(0).meanwhile(move || {
+        let id = only_request(&requests);
+        *seen.borrow_mut() = Some(request_at(&answering, &id, 0).unwrap());
+        answer_at(&answering, &id, true, 0).unwrap();
+    });
+    let grant = ask_with(&lifecycle, &opened, &clock, ending, "a terminal").unwrap();
+
+    let refused = grant.take_at(&operation(Kind::Maintain), 1).unwrap_err();
+
+    assert!(refused.error.contains("another kind"), "{}", refused.error);
+    let shown = serde_json::to_value(shown.borrow_mut().take().unwrap()).unwrap();
+    assert_eq!(shown["kind"], "maintain");
+    assert_eq!(shown["end"], true);
+    assert!(shown.get("restart").is_none(), "{shown}");
+    let (_elsewhere, other) = crate::vm::lifecycle::tests::lifecycle();
+    let beginning = granted(&other, Kind::Maintain);
+    let restarting = Operation {
+        restart: true,
+        ..operation(Kind::Maintain)
+    };
+    assert!(
+        beginning
+            .take_at(&restarting, 1)
+            .unwrap_err()
+            .error
+            .contains("another kind")
     );
 }

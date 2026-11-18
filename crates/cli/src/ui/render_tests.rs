@@ -1706,6 +1706,38 @@ fn desktops_are_listed_by_kind_a_vms_power_apart_from_whether_atlas_reaches_it()
 }
 
 #[test]
+fn a_vms_maintenance_says_whether_its_window_takes_your_input_and_how_it_ends() {
+    let on = show(
+        View::DesktopMaintain,
+        json!({"ok": true, "desktop": "work", "maintenance": "on", "window": "open",
+               "already": false, "next": "End it with atlas desktop maintain work --end."}),
+    );
+    let ended = show(
+        View::DesktopMaintain,
+        json!({"ok": true, "desktop": "work", "maintenance": "none", "input": "off"}),
+    );
+    let none = show(
+        View::DesktopMaintain,
+        json!({"ok": true, "desktop": "work", "maintenance": "none", "already": true}),
+    );
+
+    assert_eq!(
+        on.out,
+        "✓ The window of the VM \u{201c}work\u{201d} takes your keyboard and mouse; agents \
+         wait.\n  End it with atlas desktop maintain work --end."
+    );
+    assert_eq!(
+        ended.out,
+        "✓ Maintenance of the VM \u{201c}work\u{201d} ended: its window takes no input, and \
+         agents may go on."
+    );
+    assert_eq!(
+        none.out,
+        "✓ No maintenance of the VM \u{201c}work\u{201d} is kept; agents may go on."
+    );
+}
+
+#[test]
 fn a_vm_removed_says_the_new_default_and_names_what_it_kept_and_left() {
     let clean = show(
         View::DesktopRemove,

@@ -267,8 +267,8 @@ async fn input_on_a_vm_without_accessibility_is_refused_in_the_guests_words_and_
     // Typing reports how much it typed: none.
     let typed = agent::type_text(&client, "hi", None).await.unwrap();
 
-    let allow =
-        "Ask the person to allow Atlas in Privacy & Security, Accessibility, in work's window.";
+    let allow = "Ask the person to open work's window with atlas desktop maintain work and allow Atlas \
+         in Privacy & Security, Accessibility, there.";
     for refused in refused {
         assert_eq!(refused.code, Code::Permission, "{refused:?}");
         assert_eq!(refused.error, ACCESSIBILITY);

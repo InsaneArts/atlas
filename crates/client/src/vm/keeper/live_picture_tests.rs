@@ -660,8 +660,8 @@ async fn a_vms_live_picture_waits_for_screen_recording_in_its_guests_words_and_a
         .unwrap();
     let looked = watching.client.looking_identity().await.err().unwrap();
 
-    let next = "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio \
-                Recording, in work's window.";
+    let next = "Ask the person to open work's window with atlas desktop maintain work and allow \
+                Atlas in Privacy & Security, Screen & System Audio Recording, there.";
     for refused in [refused, looked] {
         assert_eq!(refused.code, Code::Permission, "{refused:?}");
         assert_eq!(refused.error, CAPTURE_HELD);

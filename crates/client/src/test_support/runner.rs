@@ -4,7 +4,10 @@
 //! when asked again, one change is done at a time, and what a change never
 //! asked came to is answered with neither an outcome nor a pending. A test
 //! sets the VM's power, and how a start goes: how long it takes, whether it
-//! is refused and why, and whether its reply is lost after it is done.
+//! is refused and why, and whether its reply is lost after it is done. Its
+//! window opens and closes as a window change asks, each reply naming the
+//! run that began the change, and a test runs Atlas VM again as another
+//! run, its window gone with the earlier one.
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -21,15 +24,23 @@ use std::{
 /// What Atlas VM's control service says while another change is done.
 const BUSY: &str = "Another change is being done; ask again once it is.";
 
-/// A change as the stand-in keeps it: what was asked, and what it came to.
+/// A change as the stand-in keeps it: what was asked, by which run, and
+/// what it came to.
 #[derive(Clone, Debug)]
 struct Kept {
     op: String,
+    run: String,
     outcome: Option<Value>,
 }
 
+/// The run of Atlas VM a stand-in answers as first.
+pub const FIRST_RUN: &str = "0b0e1a5e-7a1d-4e3c-9a55-1a7a5f0e0001";
+
+/// What a test looks at as a window change comes.
+type Looking = Arc<dyn Fn() + Send + Sync>;
+
 /// What the stand-in knows, and how it is told to answer.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Known {
     power: String,
     ledger: BTreeMap<String, Kept>,
@@ -51,6 +62,23 @@ struct Known {
     slow_states: Option<(usize, Duration)>,
     /// How many power reads were asked.
     states: usize,
+    /// The run answering now.
+    run: String,
+    /// Whether its window is open.
+    window: bool,
+    /// Why each window change is refused; none lets it be done.
+    refuses_window: Option<String>,
+    /// How many window replies are lost once the change is done.
+    drops_window: usize,
+    /// Whether every request is taken and never read, as an Atlas VM that
+    /// does not answer.
+    silent: bool,
+    /// Whether it goes silent at the next window request, that one first.
+    silent_at_window: bool,
+    /// What is looked at as each window change comes, before it is read.
+    on_window: Option<Looking>,
+    /// Whether it is of a build before it could void a change.
+    older: bool,
 }
 
 /// Atlas VM, stood in for on a socket.
@@ -75,6 +103,7 @@ impl StandInRunner {
         let listener = UnixListener::bind(socket).expect("the VM's control socket");
         let known = Arc::new(Mutex::new(Known {
             power: power.to_owned(),
+            run: FIRST_RUN.to_owned(),
             ..Known::default()
         }));
         let done = Arc::new(AtomicBool::new(false));
@@ -140,6 +169,56 @@ impl StandInRunner {
         self.known().slow_states = Some((after, delay));
     }
 
+    /// Refuse each window change for `reason`, or let it be done again.
+    pub fn refusing_window(&self, reason: Option<&str>) {
+        self.known().refuses_window = reason.map(str::to_owned);
+    }
+
+    /// Lose the reply of the next `count` window changes, once each is done.
+    pub fn dropping_window(&self, count: usize) {
+        self.known().drops_window = count;
+    }
+
+    /// Take every request and never read it, or answer again.
+    pub fn silent(&self, silent: bool) {
+        self.known().silent = silent;
+    }
+
+    /// Answer as an Atlas VM of a build before it could void a change.
+    pub fn older(&self) {
+        self.known().older = true;
+    }
+
+    /// Look with `look` as each window change comes, before it is read.
+    pub fn on_window(&self, look: impl Fn() + Send + Sync + 'static) {
+        self.known().on_window = Some(Arc::new(look));
+    }
+
+    /// Go silent at the next window request, that one first.
+    pub fn silent_at_window(&self) {
+        self.known().silent_at_window = true;
+    }
+
+    /// Close its window as the person does by hand: nothing is asked of
+    /// Atlas VM.
+    pub fn close_by_hand(&self) {
+        self.known().window = false;
+    }
+
+    /// Whether its window is open.
+    #[must_use]
+    pub fn window_open(&self) -> bool {
+        self.known().window
+    }
+
+    /// Run Atlas VM again as the run `run`: its earlier run's window goes
+    /// with it, and what that run kept stays kept as that run's.
+    pub fn runs_again_as(&self, run: &str) {
+        let mut known = self.known();
+        run.clone_into(&mut known.run);
+        known.window = false;
+    }
+
     /// Every change begun, by its ID, in order: each was done once.
     #[must_use]
     pub fn begun(&self) -> Vec<String> {
@@ -149,10 +228,13 @@ impl StandInRunner {
     /// Keep the change `change` as the operation `op`, asked by an earlier
     /// command, and what it came to: none while it is being done.
     pub fn keep(&self, change: &str, op: &str, outcome: Option<Value>) {
-        self.known().ledger.insert(
+        let mut known = self.known();
+        let run = known.run.clone();
+        known.ledger.insert(
             change.to_owned(),
             Kept {
                 op: op.to_owned(),
+                run,
                 outcome,
             },
         );
@@ -177,18 +259,18 @@ impl Drop for StandInRunner {
     }
 }
 
-/// The run that answers, as Atlas VM names itself on every reply.
-fn incarnation() -> Value {
+/// The run `run` that answers, as Atlas VM names itself on every reply.
+fn incarnation(run: &str) -> Value {
     json!({"pid": std::process::id(), "startSeconds": 1_700_000_000, "startMicroseconds": 5,
-        "id": "0b0e1a5e-7a1d-4e3c-9a55-1a7a5f0e0001"})
+        "id": run})
 }
 
-fn served(op: &str) -> Value {
-    json!({"ok": true, "op": op, "incarnation": incarnation()})
+fn served(op: &str, run: &str) -> Value {
+    json!({"ok": true, "op": op, "incarnation": incarnation(run)})
 }
 
-fn refused(reason: &str) -> Value {
-    json!({"ok": false, "incarnation": incarnation(), "error": reason})
+fn refused(reason: &str, run: &str) -> Value {
+    json!({"ok": false, "incarnation": incarnation(run), "error": reason})
 }
 
 /// Answer one request line on `stream`, as Atlas VM's control service does.
@@ -198,17 +280,33 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
     if reader.read_line(&mut line).is_err() {
         return;
     }
+    let lock = || known.lock().unwrap_or_else(PoisonError::into_inner);
+    let run = lock().run.clone();
     let Ok(request) = serde_json::from_str::<Value>(&line) else {
         let _ = (&stream).write_all(
             format!(
                 "{}\n",
-                refused("That is not a request a VM's runner serves.")
+                refused("That is not a request a VM's runner serves.", &run)
             )
             .as_bytes(),
         );
         return;
     };
-    let lock = || known.lock().unwrap_or_else(PoisonError::into_inner);
+    if lock().silent {
+        return;
+    }
+    if request["op"] == "window" {
+        let look = lock().on_window.clone();
+        if let Some(look) = look {
+            look();
+        }
+        let mut known = lock();
+        if known.silent_at_window {
+            known.silent_at_window = false;
+            known.silent = true;
+            return;
+        }
+    }
     lock().asked.push(request.clone());
     let op = request["op"].as_str().unwrap_or_default().to_owned();
     let change = request["change"].as_str().unwrap_or_default().to_owned();
@@ -227,10 +325,16 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
     }
     let reply = match op.as_str() {
         "hello" => {
-            let mut reply = served("hello");
-            reply["hello"] = json!({"version": 1, "capabilities": ["window"]});
+            let mut reply = served("hello", &run);
+            let capabilities = if lock().older {
+                json!(["window-input"])
+            } else {
+                json!(["window-input", "void"])
+            };
+            reply["hello"] = json!({"version": 1, "capabilities": capabilities});
             reply
         }
+        "void" if !lock().older => voided(&mut lock(), &change, &run),
         "state" => {
             let held = {
                 let mut known = lock();
@@ -243,14 +347,15 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
             if let Some(delay) = held {
                 std::thread::sleep(delay);
             }
-            let mut reply = served("state");
-            reply["power"] = json!(lock().power);
+            let mut reply = served("state", &run);
+            let known = lock();
+            reply["power"] = json!(known.power);
             reply["confirmed"] = json!(true);
-            reply["window"] = json!("closed");
+            reply["window"] = json!(if known.window { "open" } else { "closed" });
             reply
         }
         "outcome" => {
-            let mut reply = served("outcome");
+            let mut reply = served("outcome", &run);
             reply["change"] = json!(change);
             let mut known = lock();
             if let Some(kept) = known.ledger.get(&change).cloned() {
@@ -258,22 +363,43 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
             }
             reply
         }
-        "start" | "stop" => match change_asked(known, &op, &change) {
+        "start" | "stop" | "window" => match change_asked(known, &request, &change) {
             Some(reply) => reply,
             // Its reply lost on its way, the change done.
             None => return,
         },
-        _ => refused("That is not a request a VM's runner serves."),
+        _ => refused("That is not a request a VM's runner serves.", &run),
     };
     let _ = (&stream).write_all(format!("{reply}\n").as_bytes());
+}
+
+/// The reply to a void of `change`, by the run `run`: kept refused when it
+/// was never asked, so a request of it that comes later is refused as
+/// another change asked with its ID; answered as what it came to when it was.
+fn voided(known: &mut Known, change: &str, run: &str) -> Value {
+    let mut reply = served("void", run);
+    reply["change"] = json!(change);
+    let kept = known
+        .ledger
+        .entry(change.to_owned())
+        .or_insert_with(|| Kept {
+            op: "void".to_owned(),
+            run: run.to_owned(),
+            outcome: Some(json!({"state": "refused",
+            "reason": "Voided before it was asked; it is never done."})),
+        });
+    let kept = kept.clone();
+    answered(known, change, &kept, &mut reply);
+    reply
 }
 
 /// `reply`, answering for `kept`: one left pending is looked at again first
 /// and settled when the VM's power tells, unless a change is being done.
 fn answered(known: &mut Known, change: &str, kept: &Kept, reply: &mut Value) {
     let mut outcome = kept.outcome.clone();
+    reply["by"] = json!(kept.run);
     if outcome.is_none() && !known.busy {
-        outcome = seen(&kept.op, &known.power);
+        outcome = seen(&kept.op, known);
         if let Some(entry) = known.ledger.get_mut(change) {
             entry.outcome.clone_from(&outcome);
         }
@@ -284,34 +410,49 @@ fn answered(known: &mut Known, change: &str, kept: &Kept, reply: &mut Value) {
     }
 }
 
-/// What the change `op` came to with the VM's power `power`; none while
-/// that cannot tell.
-fn seen(op: &str, power: &str) -> Option<Value> {
-    match (op, power) {
+/// What the change `op` came to as `known` has the VM now; none while that
+/// cannot tell.
+fn seen(op: &str, known: &Known) -> Option<Value> {
+    let done = json!({"state": "done"});
+    match (op, known.window) {
+        ("window-on", true) | ("window-off", false) => return Some(done),
+        ("window-on" | "window-off", _) => {
+            return Some(json!({"state": "refused", "reason": "It did not take effect."}));
+        }
+        _ => {}
+    }
+    match (op, known.power.as_str()) {
         ("start", "starting") | ("stop", "stopping") | (_, "unknown") => None,
         ("start", "running") | ("stop", "stopped" | "absent") => Some(json!({"state": "done"})),
         _ => Some(json!({"state": "refused", "reason": "It did not take effect."})),
     }
 }
 
-/// The reply to the change `op` with the ID `change`: answered from its
-/// record when it was asked before, refused unkept while another is done,
-/// and done otherwise. None when its reply is lost.
-fn change_asked(known: &Mutex<Known>, op: &str, change: &str) -> Option<Value> {
+/// The reply to the change `request` with the ID `change`: answered from
+/// its record when it was asked before, refused unkept while another is
+/// done, and done otherwise. None when its reply is lost.
+fn change_asked(known: &Mutex<Known>, request: &Value, change: &str) -> Option<Value> {
     let lock = || known.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut reply = served(op);
+    let op = match (request["op"].as_str(), request["input"].as_bool()) {
+        (Some("window"), Some(true)) => "window-on",
+        (Some("window"), _) => "window-off",
+        (Some(op), _) => op,
+        (None, _) => "",
+    };
+    let run = lock().run.clone();
+    let mut reply = served(request["op"].as_str().unwrap_or_default(), &run);
     reply["change"] = json!(change);
     let takes = {
         let mut known = lock();
         if let Some(kept) = known.ledger.get(change).cloned() {
             if kept.op != op {
-                return Some(refused("Another change was asked with this ID."));
+                return Some(refused("Another change was asked with this ID.", &run));
             }
             answered(&mut known, change, &kept, &mut reply);
             return Some(reply);
         }
         if known.busy {
-            return Some(refused(BUSY));
+            return Some(refused(BUSY, &run));
         }
         known.busy = true;
         known.begun.push(change.to_owned());
@@ -319,9 +460,11 @@ fn change_asked(known: &Mutex<Known>, op: &str, change: &str) -> Option<Value> {
             change.to_owned(),
             Kept {
                 op: op.to_owned(),
+                run: run.clone(),
                 outcome: None,
             },
         );
+        reply["by"] = json!(run);
         if op == "start" {
             known.power = "starting".to_owned();
         }
@@ -338,6 +481,13 @@ fn change_asked(known: &Mutex<Known>, op: &str, change: &str) -> Option<Value> {
             known.power = "running".to_owned();
             json!({"state": "done"})
         }
+        ("window-on" | "window-off", _) => match known.refuses_window.clone() {
+            Some(reason) => json!({"state": "refused", "reason": reason}),
+            None => {
+                known.window = op == "window-on";
+                json!({"state": "done"})
+            }
+        },
         _ => {
             known.power = "stopped".to_owned();
             json!({"state": "done"})
@@ -349,6 +499,10 @@ fn change_asked(known: &Mutex<Known>, op: &str, change: &str) -> Option<Value> {
     known.busy = false;
     if op == "start" && known.drops > 0 {
         known.drops -= 1;
+        return None;
+    }
+    if op.starts_with("window") && known.drops_window > 0 {
+        known.drops_window -= 1;
         return None;
     }
     reply["outcome"] = outcome;

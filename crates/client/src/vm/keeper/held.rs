@@ -12,6 +12,8 @@
 //! lane is admitted from then, every open one is cancelled, and it is
 //! answered only once each ended with its credit back. `release` lets agents
 //! in again only once the record says the maintenance ended, or keeps none.
+//! A hold asked so stays until its release, should the record go first; one
+//! the keeper took from the record alone goes with it.
 use super::{
     Keeper,
     change::unsent,
@@ -53,8 +55,10 @@ async fn kept(keeper: &Keeper) -> (Kept, Option<String>) {
 }
 
 /// Hold every lane now when the record keeps a maintenance, or cannot be
-/// read: what a keeper does at its start, so none is admitted until the
-/// person's maintenance is released.
+/// read: what a keeper does at its start, so none is admitted for as long
+/// as the record keeps it. Taken from the record alone, the hold lets go
+/// once the record keeps none, released or not: a keeper started while a
+/// release was being finished is never left holding.
 pub(super) async fn at_start(keeper: &Keeper) {
     let (kept, name) = kept(keeper).await;
     if kept != Kept::None {
@@ -63,6 +67,7 @@ pub(super) async fn at_start(keeper: &Keeper) {
                 .maintenance()
                 .map(|maintenance| maintenance.change.clone()),
             name,
+            asked: false,
         });
     }
 }
@@ -85,6 +90,9 @@ pub(super) fn unsent_now(keeper: &Keeper) -> Value {
 /// VM, certain that nothing of the request was sent.
 pub(super) async fn admitted(keeper: &Keeper, work: Work) -> Result<Ticket<'_>, Value> {
     let (kept, name) = kept(keeper).await;
+    if kept == Kept::None {
+        keeper.lanes.settled();
+    }
     if let Some(held) = kept.held(name.as_deref().unwrap_or(UNNAMED)) {
         return Err(unsent(held));
     }
@@ -98,7 +106,10 @@ pub(super) async fn admitted(keeper: &Keeper, work: Work) -> Result<Ticket<'_>, 
 /// VM, read afresh under the keeper's turn: none while nothing holds it.
 pub(super) async fn resume_refused(keeper: &Keeper) -> Option<Value> {
     let (kept, name) = kept(keeper).await;
-    // Lanes still held for a maintenance whose record went before its
+    if kept == Kept::None {
+        keeper.lanes.settled();
+    }
+    // Lanes the station held for a maintenance whose record went before its
     // release refuse it as one that is on.
     let refused = kept
         .resume_refused(name.as_deref().unwrap_or(UNNAMED))
@@ -132,6 +143,7 @@ pub(super) async fn hold(keeper: &Keeper, request: &Value, deadline: Duration) -
     let told = keeper.lanes.hold(Hold {
         change: Some(change.clone()),
         name,
+        asked: true,
     });
     if tokio::time::timeout(deadline, keeper.lanes.drained())
         .await

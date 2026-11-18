@@ -205,6 +205,8 @@ fn add_with(
         name: prospect.name.clone(),
         settings: settings.clone(),
         cancel: false,
+        restart: false,
+        end: false,
     };
     say(&format!(
         "Asking you in Atlas.app to allow adding the VM \u{201c}{}\u{201d}.",

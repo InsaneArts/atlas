@@ -5,6 +5,10 @@
 //! open one is told to stop, and the hold is answered only once the last of
 //! them is gone. Whatever else comes to carry an agent's work joins by taking
 //! a ticket of its own kind.
+//!
+//! A hold the station asked for stays until it is released. One the keeper
+//! took from the record alone, at its start or a request, follows the
+//! record: it lets go once the record is read and keeps no maintenance.
 use atlas_core::files::Token;
 use serde::Serialize;
 use std::{
@@ -30,11 +34,15 @@ pub(super) enum Work {
 }
 
 /// What holds every agent's lane: the person's maintenance, by its ID and
-/// the VM's name as its record says them, when they could be read.
+/// the VM's name as its record says them, when they could be read, and
+/// whether the station asked for it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Hold {
     pub(super) change: Option<Token>,
     pub(super) name: Option<String>,
+    /// Asked by the station's `hold`, so only its release lets it go; else
+    /// taken from the record, which it follows.
+    pub(super) asked: bool,
 }
 
 /// The lanes open now, and what holds them.
@@ -110,10 +118,12 @@ impl Lanes {
     }
 
     /// Hold every lane for `hold`: none admitted from now, and every open
-    /// one told to stop. How many of each work were open.
+    /// one told to stop. A hold the station asked for is never made one
+    /// that follows the record. How many of each work were open.
     pub(super) fn hold(&self, hold: Hold) -> BTreeMap<Work, usize> {
         let mut open = self.open();
-        open.held = Some(hold);
+        let asked = hold.asked || open.held.as_ref().is_some_and(|held| held.asked);
+        open.held = Some(Hold { asked, ..hold });
         let mut told = BTreeMap::new();
         for (work, stopping) in open.lanes.values() {
             stopping.send_replace(true);
@@ -138,6 +148,15 @@ impl Lanes {
     /// Let lanes be admitted again.
     pub(super) fn release(&self) {
         self.open().held = None;
+    }
+
+    /// The record was read and keeps no maintenance: a hold taken from it
+    /// lets go, and one the station asked for stays until released.
+    pub(super) fn settled(&self) {
+        let mut open = self.open();
+        if open.held.as_ref().is_some_and(|held| !held.asked) {
+            open.held = None;
+        }
     }
 
     /// How many lanes are open now.

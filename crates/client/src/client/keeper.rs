@@ -47,6 +47,23 @@ impl Leftovers {
     pub fn may_run(self) -> bool {
         self != Self::None
     }
+
+    /// What the keeper's `answer` to a read of the guest's leftover work
+    /// says: anything but `running` or `none` is unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns the keeper's or the guest's refusal.
+    pub(crate) fn of(answer: &Value) -> Result<Self> {
+        if answer["ok"] != true {
+            return Err(atlas_core::transport::refusal(answer));
+        }
+        Ok(match answer["leftovers"].as_str() {
+            Some("running") => Self::Running,
+            Some("none") => Self::None,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 /// A VM's proof as one command took it: what its keeper observed, and the
@@ -371,15 +388,7 @@ impl Client {
         keeper.timeout = keeper.timeout.min(LEFTOVERS_READ);
         let read = json!({"op": "read", "request": {"op": "leftovers"},
             "deadline_ms": keeper.timeout.as_millis()});
-        let answer = keeper.one(&read).await?;
-        if answer["ok"] != true {
-            return Err(atlas_core::transport::refusal(&answer));
-        }
-        Ok(match answer["leftovers"].as_str() {
-            Some("running") => Leftovers::Running,
-            Some("none") => Leftovers::None,
-            _ => Leftovers::Unknown,
-        })
+        Leftovers::of(&keeper.one(&read).await?)
     }
 
     /// Why the VM's guest holds agents now, as its own hello read through

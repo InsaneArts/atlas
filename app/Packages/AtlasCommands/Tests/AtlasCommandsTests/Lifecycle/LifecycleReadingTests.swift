@@ -68,6 +68,24 @@ struct LifecycleReadingTests {
     #expect(!uninstalling.cancel)
   }
 
+  @Test("a maintain request is read with whether it restarts the VM or ends maintenance")
+  func maintaining() {
+    let with = { (fields: String) in
+      Self.reply(kind: "maintain")
+        .replacingOccurrences(of: "\"until\": 1700000600000", with: "\"until\": 1700000600000\(fields)")
+    }
+    guard case .request(let opening) = Self.reading(with("")),
+      case .request(let restarting) = Self.reading(with(", \"restart\": true")),
+      case .request(let ending) = Self.reading(with(", \"end\": true"))
+    else {
+      Issue.record("a maintain request did not read")
+      return
+    }
+    #expect(opening.kind == .maintain && !opening.restart && !opening.end)
+    #expect(restarting.restart && !restarting.end)
+    #expect(ending.end && !ending.restart)
+  }
+
   @Test("a refused read says the command line's own sentence")
   func refused() {
     let reply = #"{"ok": false, "error": "This request has expired."}"#

@@ -5,7 +5,33 @@ fn hold() -> Hold {
     Hold {
         change: Some(Token::new()),
         name: Some("work".to_owned()),
+        asked: true,
     }
+}
+
+#[test]
+fn a_hold_taken_from_the_record_lets_go_once_it_keeps_none_and_an_asked_one_only_when_released() {
+    let lanes = Lanes::default();
+    let from_record = Hold {
+        asked: false,
+        ..hold()
+    };
+
+    lanes.hold(from_record.clone());
+    lanes.settled();
+    let followed = lanes.admit(Work::Read).is_ok();
+    lanes.hold(hold());
+    lanes.hold(from_record);
+    lanes.settled();
+    let stays = lanes.admit(Work::Read).err();
+    lanes.release();
+
+    assert!(followed, "the record's hold let go with it");
+    assert!(
+        stays.is_some_and(|held| held.asked),
+        "never made the record's"
+    );
+    assert!(lanes.admit(Work::Read).is_ok(), "released");
 }
 
 #[tokio::test]

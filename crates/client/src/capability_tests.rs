@@ -90,8 +90,8 @@ fn a_vm_that_may_not_record_says_so_first_in_its_guests_own_words_never_the_help
     assert_eq!(said.error, held);
     assert_eq!(
         said.details["next"],
-        "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio Recording, \
-         in work's window."
+        "Ask the person to open work's window with atlas desktop maintain work and allow Atlas \
+         in Privacy & Security, Screen & System Audio Recording, there."
     );
     assert!(unsaid.error.contains("In the VM's window"), "{unsaid:?}");
     for step in [said, unsaid] {

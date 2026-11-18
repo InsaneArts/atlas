@@ -209,6 +209,14 @@ impl Keeper {
         }
     }
 
+    /// This keeper, reached at `socket`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn at_socket(mut self, socket: PathBuf) -> Self {
+        self.socket = socket;
+        self
+    }
+
     /// This keeper, its VM's pairing kept in `records`.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_pairing(mut self, records: Arc<dyn StationRecords>) -> Self {

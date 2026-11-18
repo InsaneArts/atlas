@@ -121,6 +121,12 @@ pub struct ScriptedKeeper {
     /// How the keeper's every observation differs from what it says
     /// otherwise, as when its guest reconnected since its hello.
     pub observing: Arc<Mutex<Observing>>,
+    /// What the guest says of work agents started there: `none`,
+    /// `running`, or anything else for a guest that cannot say.
+    pub leftovers: Arc<Mutex<&'static str>>,
+    /// Whether the keeper acknowledges a hold of every agent's lane: else
+    /// it answers that not every lane ended in time.
+    pub holds: Arc<Mutex<bool>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -151,9 +157,10 @@ pub const GENERATION: u64 = 7;
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
 /// runs no app and keeps no copy, gives a picture of its whole display for
-/// a screenshot, and settles whatever it is asked to. The
-/// VM is added, its lifecycle record kept in `directory`, and runs, as
-/// Atlas VM, stood in for there too, says.
+/// a screenshot, settles whatever it is asked to, and cannot say whether
+/// work agents started runs there; its keeper holds and releases agents'
+/// lanes whenever it is asked. The VM is added, its lifecycle record kept in `directory`,
+/// and runs, as Atlas VM, stood in for there too, says.
 #[must_use]
 pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let (station, guest) = (
@@ -176,6 +183,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let answering = Arc::new(Mutex::new(None));
     let refusing_once: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
     let observing: Arc<Mutex<Observing>> = Arc::new(Mutex::new(None));
+    let leftovers = Arc::new(Mutex::new("unknown"));
+    let holds = Arc::new(Mutex::new(true));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
         let (asked, stop, away, held, answering, refusing_once, observing) = (
@@ -187,6 +196,7 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             refusing_once.clone(),
             observing.clone(),
         );
+        let (leftovers, holds) = (leftovers.clone(), holds.clone());
         async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let observing = *observing.lock().unwrap_or_else(PoisonError::into_inner);
@@ -200,6 +210,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                     peer.clone(),
                     own.clone(),
                 );
+                let leftovers = *leftovers.lock().unwrap_or_else(PoisonError::into_inner);
+                let holds = *holds.lock().unwrap_or_else(PoisonError::into_inner);
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
                     let mut line = String::new();
@@ -244,6 +256,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                             stop,
                             held,
                             answering,
+                            leftovers,
+                            holds,
                             peer: &peer,
                             own: &own,
                         };
@@ -299,6 +313,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             answering,
             refusing_once,
             observing,
+            leftovers,
+            holds,
             serving,
         },
     )
@@ -370,6 +386,7 @@ pub fn under_maintenance(
         open: None,
         close: None,
         opened_by: None,
+        settled: false,
         ended: None,
     });
     lifecycle
@@ -465,6 +482,10 @@ struct Guest<'a> {
     /// What it answers every read and change but its hello, when a test
     /// says.
     answering: Option<Value>,
+    /// What it says of work agents started there.
+    leftovers: &'a str,
+    /// Whether its keeper acknowledges a hold.
+    holds: bool,
     /// Its key, and the station's.
     peer: &'a Value,
     own: &'a Value,
@@ -523,6 +544,9 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
             "runner": {"ok": true, "power": "running", "confirmed": true,
                 "window": "closed", "incarnation": "6f1c0de2-run", "fence": 0}}),
         Some("read") if request["request"]["op"] == "hello" => guest.hello(),
+        Some("read") if request["request"]["op"] == "leftovers" => {
+            json!({"ok": true, "leftovers": guest.leftovers})
+        }
         Some("read") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)
         }
@@ -570,6 +594,12 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
             "signal": null, "truncated": false,
             "events": [{"event": "started", "pid": 321}, {"event": "output", "data": "aGkK"}]}),
         Some("settle") => json!({"ok": true, "op": "settle", "settled": request["changes"]}),
+        Some("hold") if guest.holds => {
+            json!({"ok": true, "op": "hold", "change": request["change"], "cancelled": {}})
+        }
+        Some("hold") => json!({"ok": false, "code": "not-ready",
+            "error": "Not every agent's lane on this VM ended in time; agents stay held."}),
+        Some("release") => json!({"ok": true, "op": "release", "change": request["change"]}),
         Some("picture") if request["request"]["op"] == "screenshot" => {
             json!([{"ok": true, "op": "picture"}, screenshot(&request["request"])])
         }

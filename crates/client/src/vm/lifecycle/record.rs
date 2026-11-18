@@ -126,6 +126,11 @@ pub struct Maintenance {
     /// none while it is not known.
     #[serde(default)]
     pub opened_by: Option<String>,
+    /// Whether its window-on is settled for good, by what it came to or
+    /// voided before Atlas VM ever saw it: only a window-off kept from then
+    /// proves its end.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
     /// Kept once Atlas VM confirmed the window takes no input.
     #[serde(default)]
     pub ended: Option<Ended>,
@@ -249,6 +254,15 @@ impl Record {
         if self.starts.contains(change) {
             self.starts.retain(|kept| kept != change);
             self.operations.retain(|sent| sent.change != *change);
+        }
+    }
+
+    /// Forget the person's maintenance once it ended, each change of it
+    /// settled: it, and every window change sent, which only a maintenance
+    /// asks.
+    pub(in crate::vm) fn maintenance_settled(&mut self) {
+        if self.maintenance.take().is_some() {
+            self.operations.retain(|sent| sent.op != "window");
         }
     }
 

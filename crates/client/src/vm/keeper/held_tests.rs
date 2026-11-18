@@ -4,15 +4,22 @@
 //! only once every agent's lane it cancelled is gone.
 use super::*;
 use crate::{
-    test_support::under_maintenance,
+    client::Client,
+    link::Link,
+    test_support::{StandInRunner, under_maintenance},
     vm::{
         keeper::{
             change::tests::{live, proven},
-            clients::tests::{Serving, asked, serving},
+            clients::{
+                Grant, bind, serve,
+                tests::{Admitting, Serving, asked, serving},
+            },
             picture::tests::{begun, picture, rest, session},
-            tests::{next, until},
+            tests::{Saying, next, until},
         },
         lifecycle::record::{Ended, Phase},
+        maintenance::{Maintain, maintained_by},
+        runner::socket_in,
     },
 };
 use atlas_session::credit::BULK;
@@ -602,4 +609,232 @@ async fn an_observation_paused_on_an_open_lane_is_cancelled_at_a_hold_and_asks_n
     assert!(held_on(&observed), "{observed}");
     assert_eq!(saying.challenges.lock().unwrap().len(), proofs);
     assert_eq!(serving.fixture.keeper.lanes.open_now(), 0);
+}
+
+/// Make `client`, an agent's client of `serving`, the station the person's
+/// maintenance is begun from: the keeper's own lifecycle records, the VM
+/// added there, its guest saying no work agents started runs there, and
+/// Atlas VM stood in for beside them, the VM running.
+fn station_of(serving: &Serving, saying: &Saying, client: &mut Client) -> StandInRunner {
+    let keeper = &serving.fixture.keeper;
+    under_maintenance(keeper.lifecycle.home(), &keeper.vm, Phase::Holding);
+    let mut record = keeper.lifecycle.record(&keeper.vm).unwrap().unwrap();
+    record.maintenance = None;
+    keeper.lifecycle.keep_record(&record).unwrap();
+    client.lifecycle = Some(keeper.lifecycle.clone());
+    if let Link::Keeper(link) = &client.link {
+        client.link = Link::Keeper(link.clone().with_lifecycle(client.lifecycle.clone()));
+    }
+    *saying.otherwise.lock().unwrap() = Some(Arc::new(|_, request| {
+        if request["op"] == "leftovers" {
+            json!({"ok": true, "op": "leftovers", "leftovers": "none"})
+        } else {
+            json!({"ok": true, "echo": request})
+        }
+    }));
+    StandInRunner::at(&socket_in(keeper.lifecycle.home(), &keeper.vm), "running")
+}
+
+/// The person's maintenance of `client`'s VM begun, every grant allowed.
+async fn begin(client: &Client) -> atlas_core::error::Result<Value> {
+    let client = client.clone();
+    tokio::task::spawn_blocking(move || {
+        maintained_by(
+            &client,
+            Maintain::default(),
+            Duration::from_secs(10),
+            &|_| Ok(Token::new()),
+            &|_| {},
+        )
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_collection_paused_mid_file_across_a_begin_is_cancelled_before_atlas_vm_is_asked_for_the_window()
+ {
+    let (serving, saying, mut client, _directory) = proven().await;
+    let runner = station_of(&serving, &saying, &mut client);
+    let bytes: Vec<u8> = (0..1_536 * 1024).map(|at| (at % 251) as u8).collect();
+    let standin = serving.fixture.guest.standin.clone();
+    standin.pictures.set(Arc::new(move |_| Some(bytes.clone())));
+    let read = json!({"op": "read", "path": "big.bin", "offset": 0, "length": 1_572_864,
+        "maxSize": 1_572_864, "session": session()});
+    let (mut paused, first) = begun(&serving, &picture(read, live(&serving))).await;
+    let credit = standin.bulk_credit().unwrap();
+    until("part of the file on its way", || {
+        credit.left() < BULK as usize
+    })
+    .await;
+    let keeper = serving.fixture.keeper.clone();
+    let at_window = Arc::new(Mutex::new(None));
+    runner.on_window({
+        let (keeper, seen) = (keeper.clone(), at_window.clone());
+        move || *seen.lock().unwrap() = Some(keeper.lanes.open_now())
+    });
+
+    let begun = begin(&client).await.unwrap();
+
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(begun["maintenance"], "on", "{begun}");
+    assert_eq!(runner.asked_for("window").len(), 1);
+    assert_eq!(
+        *at_window.lock().unwrap(),
+        Some(0),
+        "every lane gone before the window was asked"
+    );
+    let left = rest(&mut paused, Duration::from_secs(10)).await;
+    assert!(left.len() < 1_572_864, "{} bytes came", left.len());
+    until("every credit back", || credit.left() == BULK as usize).await;
+    assert!(
+        keeper.lanes.held().is_some(),
+        "agents held while it is open"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_begin_kept_at_holding_goes_on_through_its_keeper_started_again_which_admits_nothing_before_the_window_is_asked()
+ {
+    let (serving, saying, mut client, directory) = proven().await;
+    let runner = station_of(&serving, &saying, &mut client);
+    let bytes: Vec<u8> = (0..1_536 * 1024).map(|at| (at % 251) as u8).collect();
+    let standin = serving.fixture.guest.standin.clone();
+    standin.pictures.set(Arc::new(move |_| Some(bytes.clone())));
+    let read = json!({"op": "read", "path": "big.bin", "offset": 0, "length": 1_572_864,
+        "maxSize": 1_572_864, "session": session()});
+    let (mut paused, _) = begun(&serving, &picture(read, live(&serving))).await;
+    // A begin kept its maintenance at holding, and the keeper ended before
+    // it was asked to hold: its generation goes with it, launchd starts the
+    // next on a socket of its own, and the begin is asked again.
+    let change = maintained(&serving, Phase::Holding);
+    serving.fixture.keeper.shared.live().unwrap().retire();
+    let started = next(&serving.fixture.keeper);
+    at_start(&started).await;
+    let socket = directory.path().join("next.sock");
+    let listener = bind(&socket).unwrap();
+    let answering = tokio::spawn(serve(
+        listener,
+        started.clone(),
+        Grant::new(serving.capability.clone()),
+        Arc::new(Admitting(true)),
+    ));
+    let Link::Keeper(link) = &client.link else {
+        panic!("a keeper's client");
+    };
+    client.link = Link::Keeper(link.clone().at_socket(socket));
+    let at_window = Arc::new(Mutex::new(None));
+    runner.on_window({
+        let (started, seen) = (started.clone(), at_window.clone());
+        move || *seen.lock().unwrap() = Some(started.lanes.admit(Work::Read).is_err())
+    });
+
+    let begun = begin(&client).await.unwrap();
+    answering.abort();
+
+    let left = rest(&mut paused, Duration::from_secs(10)).await;
+    assert!(left.len() < 1_572_864, "{} bytes came", left.len());
+    assert_eq!(begun["change"], json!(change), "{begun}");
+    assert_eq!(
+        *at_window.lock().unwrap(),
+        Some(true),
+        "held from its start, through the window's opening"
+    );
+    let kept = serving
+        .fixture
+        .keeper
+        .lifecycle
+        .record(&serving.fixture.keeper.vm)
+        .unwrap()
+        .unwrap()
+        .maintenance
+        .unwrap();
+    assert_eq!(kept.phase, Phase::Open);
+}
+
+/// Forget the maintenance in the keeper's VM's record, as the station does
+/// once it ended.
+fn forgotten(serving: &Serving) {
+    let keeper = &serving.fixture.keeper;
+    let mut record = keeper.lifecycle.record(&keeper.vm).unwrap().unwrap();
+    record.maintenance = None;
+    keeper.lifecycle.keep_record(&record).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_keeper_started_after_its_release_was_answered_and_before_the_record_went_lets_agents_in_once_it_goes()
+ {
+    let serving = serving(true).await;
+    let change = maintained(&serving, Phase::Holding);
+    assert_eq!(
+        one(&serving, &json!({"op": "hold", "change": change})).await["ok"],
+        true
+    );
+    ended(&serving);
+    let released = one(&serving, &json!({"op": "release", "change": change})).await;
+    // The keeper ends here, and launchd starts the next, which reads the
+    // record still keeping the maintenance ended.
+    let started = next(&serving.fixture.keeper);
+    at_start(&started).await;
+
+    let while_kept = admitted(&started, Work::Read).await.err();
+    forgotten(&serving);
+    let once_gone = admitted(&started, Work::Read).await.is_ok();
+
+    assert_eq!(released["ok"], true, "{released}");
+    assert!(while_kept.is_some(), "held while the record keeps it");
+    assert!(once_gone, "no release needed");
+    assert!(started.lanes.held().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_keeper_that_read_the_record_before_its_socket_was_bound_lets_agents_in_once_it_goes() {
+    let serving = serving(true).await;
+    maintained(&serving, Phase::Open);
+    let started = next(&serving.fixture.keeper);
+    at_start(&started).await;
+    let held_from_start = started.lanes.held();
+    // The record goes before the keeper listens: no release ever reaches it.
+    forgotten(&serving);
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let socket = folder.path().join("next.sock");
+    let listener = bind(&socket).unwrap();
+    let answering = tokio::spawn(serve(
+        listener,
+        started.clone(),
+        Grant::new(serving.capability.clone()),
+        Arc::new(Admitting(true)),
+    ));
+
+    let apps = asked(&socket, &json!({"op": "read", "request": {"op": "copies"}})).await;
+    answering.abort();
+
+    assert!(
+        held_from_start.is_some_and(|hold| !hold.asked),
+        "held from the record"
+    );
+    assert!(!held_on(&apps[0]), "{apps:?}");
+    assert!(started.lanes.held().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hold_the_station_asked_for_outlives_the_records_removal_until_it_is_released() {
+    let serving = serving(true).await;
+    let change = maintained(&serving, Phase::Holding);
+    let started = next(&serving.fixture.keeper);
+    at_start(&started).await;
+    let held = hold(&started, &json!({"change": change}), Duration::from_secs(5)).await;
+    forgotten(&serving);
+
+    let after_removal = admitted(&started, Work::Read).await.err();
+    let released = release(&started, &json!({"change": change})).await;
+    let after_release = admitted(&started, Work::Read).await.is_ok();
+
+    assert_eq!(held["ok"], true, "{held}");
+    assert!(
+        after_removal.as_ref().is_some_and(held_on),
+        "{after_removal:?}"
+    );
+    assert_eq!(released["ok"], true, "{released}");
+    assert!(after_release);
 }

@@ -13,7 +13,7 @@ enum ApprovalPresenter {
       return ApprovalState(operation: nil, desktop: "", session: "", phase: snapshot.phase)
     }
     return ApprovalState(
-      operation: operation(of: request.kind, cancel: request.cancel),
+      operation: operation(of: request),
       desktop: request.name,
       session: request.session,
       phase: snapshot.phase
@@ -32,17 +32,16 @@ enum ApprovalPresenter {
     }
   }
 
-  /// What the window asks for a request of `kind`.
+  /// What the window asks for `request`.
   ///
-  /// - Parameters:
-  ///   - kind: The request's kind.
-  ///   - cancel: Whether it calls an uninstall under way off.
+  /// - Parameter request: The request as the command line read it.
   /// - Returns: The operation the window shows.
-  static func operation(of kind: LifecycleKind, cancel: Bool) -> ApprovalOperation {
-    switch kind {
+  static func operation(of request: LifecycleRequest) -> ApprovalOperation {
+    switch request.kind {
     case .add: .add
     case .remove: .remove
-    case .uninstall: cancel ? .cancelUninstall : .uninstall
+    case .uninstall: request.cancel ? .cancelUninstall : .uninstall
+    case .maintain: request.end ? .endMaintenance : .maintain(restart: request.restart)
     }
   }
 }

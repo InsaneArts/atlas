@@ -1254,8 +1254,8 @@ async fn targeted_input_and_looks_on_a_vm_wait_for_accessibility_in_its_guests_w
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
     let config = dir.path().join("settings.toml");
     *keeper.held.lock().unwrap() = Some(ACCESSIBILITY);
-    let allow =
-        "Ask the person to allow Atlas in Privacy & Security, Accessibility, in work's window.";
+    let allow = "Ask the person to open work's window with atlas desktop maintain work and allow \
+                 Atlas in Privacy & Security, Accessibility, there.";
 
     for args in [
         &["click", "10", "10", "--app", "Finder"][..],

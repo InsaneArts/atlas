@@ -31,6 +31,10 @@ public enum ControlOperation: Equatable, Sendable {
   /// The VM removed: from its asking no other change is taken, the VM is
   /// stopped and its passwords deleted, and then its runner exits.
   case forget(ChangeID)
+  /// Make sure the change with this ID is never done from now: one not yet
+  /// asked is kept as refused, so a request of it that comes later is never
+  /// done, and one asked is answered as what it came to.
+  case void(ChangeID)
 
   /// The change it is; none for a read.
   public var change: ChangeID? {
@@ -39,7 +43,7 @@ public enum ControlOperation: Equatable, Sendable {
       nil
     case .create(let change), .start(let change), .stop(let change), .window(let change, _),
       .install(let change, _), .installResume(let change), .paired(let change, _, _), .closed(let change, _),
-      .forget(let change):
+      .forget(let change), .void(let change):
       change
     }
   }
@@ -59,6 +63,7 @@ public enum ControlOperation: Equatable, Sendable {
     case .paired: "paired"
     case .closed: "closed"
     case .forget: "forget"
+    case .void: "void"
     }
   }
 
@@ -123,6 +128,8 @@ extension ControlOperation: Codable {
       self = .stop(try fields.decode(ChangeID.self, forKey: .change))
     case "forget":
       self = .forget(try fields.decode(ChangeID.self, forKey: .change))
+    case "void":
+      self = .void(try fields.decode(ChangeID.self, forKey: .change))
     case "install-resume":
       self = .installResume(try fields.decode(ChangeID.self, forKey: .change))
     case "window":
@@ -167,7 +174,7 @@ extension ControlOperation: Codable {
     case .hello, .state:
       break
     case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change),
-      .installResume(let change):
+      .installResume(let change), .void(let change):
       try fields.encode(change, forKey: .change)
     case .window(let change, let input):
       try fields.encode(change, forKey: .change)

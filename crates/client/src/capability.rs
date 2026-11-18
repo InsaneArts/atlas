@@ -270,7 +270,8 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
     // Asked of the person in the VM's own window, never the helper's.
     let allow = |setting: &str| {
         json!(format!(
-            "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s window."
+            "Ask the person to open {name}'s window with atlas desktop maintain {name} and allow \
+             Atlas in Privacy & Security, {setting}, there."
         ))
     };
     if guest["permissions"]["screenCapture"] != true {

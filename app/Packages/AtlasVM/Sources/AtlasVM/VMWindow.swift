@@ -15,7 +15,9 @@ final class VMWindow {
     let view = VZVirtualMachineView()
     view.virtualMachine = machine
     view.capturesSystemKeys = true
-    view.automaticallyReconfiguresDisplay = true
+    // The guest's display keeps its mode while the window shows it, scaled:
+    // a mode changed by the window would be a new display to its station.
+    view.automaticallyReconfiguresDisplay = false
     window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],

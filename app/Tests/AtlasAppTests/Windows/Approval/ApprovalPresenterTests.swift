@@ -50,6 +50,30 @@ struct ApprovalPresenterTests {
     #expect(callingOff.operation == .cancelUninstall)
   }
 
+  @Test("a maintain request asks to open the VM's window, restarting it first when it says so, or to end it")
+  func maintainAsks() {
+    let request = { (restart: Bool, end: Bool) in
+      LifecycleRequest(
+        id: "a",
+        kind: .maintain,
+        name: "work",
+        vm: "b",
+        settings: "~/.config/atlas.toml",
+        session: "a terminal",
+        until: Date(timeIntervalSince1970: 0),
+        restart: restart,
+        end: end
+      )
+    }
+    let operation = { (restart: Bool, end: Bool) in
+      ApprovalPresenter.state(ApprovalSnapshot(request: request(restart, end), phase: .asking))
+        .operation
+    }
+    #expect(operation(false, false) == .maintain(restart: false))
+    #expect(operation(true, false) == .maintain(restart: true))
+    #expect(operation(false, true) == .endMaintenance)
+  }
+
   @Test("before a request is read the window names no VM")
   func unreadNamesNone() {
     let state = ApprovalPresenter.state(ApprovalSnapshot())

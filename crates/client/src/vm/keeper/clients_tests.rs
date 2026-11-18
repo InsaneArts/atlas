@@ -3,7 +3,7 @@ use crate::vm::keeper::tests::{Fixture, fixture, next, until};
 use std::sync::atomic::Ordering::SeqCst;
 
 /// A client admitted or not, whoever it is.
-struct Admitting(bool);
+pub(in crate::vm::keeper) struct Admitting(pub(in crate::vm::keeper) bool);
 
 impl Admit for Admitting {
     fn admits(&self, _: BorrowedFd<'_>) -> bool {
@@ -670,7 +670,8 @@ async fn a_vm_with_no_input_hello_is_proven_with_input_false_and_its_advice_firs
     );
     assert_eq!(
         first.details["next"],
-        "Ask the person to allow Atlas in Privacy & Security, Accessibility, in work's window."
+        "Ask the person to open work's window with atlas desktop maintain work and allow Atlas \
+         in Privacy & Security, Accessibility, there."
     );
     let shown = serde_json::to_string(&first).unwrap();
     assert!(!shown.contains("helper"), "{shown}");
@@ -1133,8 +1134,8 @@ async fn a_vm_without_screen_recording_asks_for_it_in_its_own_window_never_the_h
     assert_eq!(first.code, Code::Permission);
     assert_eq!(
         first.details["next"],
-        "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio Recording, \
-         in work's window."
+        "Ask the person to open work's window with atlas desktop maintain work and allow Atlas \
+         in Privacy & Security, Screen & System Audio Recording, there."
     );
     let shown = serde_json::to_string(&first).unwrap();
     assert!(!shown.contains("helper"), "{shown}");

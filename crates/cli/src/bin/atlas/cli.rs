@@ -1605,6 +1605,20 @@ pub(super) enum Desktop {
     /// Every desktop, by kind: a VM's power, whether Atlas reaches it, and
     /// whether it is still being added.
     List,
+    /// Open a VM's window for your own maintenance, once you allow it in
+    /// Atlas.app: it takes your keyboard and mouse, and agents wait until
+    /// you end it with --end.
+    Maintain {
+        /// The VM's name, as atlas desktop list shows it.
+        name: String,
+        /// End the maintenance: the window takes no input again, and agents
+        /// may go on.
+        #[arg(long)]
+        end: bool,
+        /// Stop the VM and start it again first, ending any work there.
+        #[arg(long, conflicts_with = "end")]
+        restart: bool,
+    },
 }
 
 /// The kind of desktop to add.
@@ -1657,6 +1671,8 @@ pub(super) enum GrantKind {
     Add,
     Remove,
     Uninstall,
+    Maintain,
+    EndMaintenance,
 }
 
 /// What the station asks of a VM desktop on this Mac.

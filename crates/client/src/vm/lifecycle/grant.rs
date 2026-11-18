@@ -1,12 +1,12 @@
-//! The person's grant of one lifecycle operation. Adding, removing and
-//! uninstalling are the person's, never an agent's, and a terminal does not
-//! prove who typed, so a command asks through Atlas.app: its request is kept
-//! here, Atlas.app is opened with the request's ID, and its approval window,
-//! a native window of the person's own session, shows what, which VM and
-//! from which session. The person allows or refuses it there, through a
-//! command only Atlas.app may run. An allowed request is a grant bound to
-//! that one operation and its change, used once, and gone after
-//! [`LIFE`]. No flag, variable, actor or terminal stands in for it.
+//! The person's grant of one lifecycle operation. Adding, removing,
+//! uninstalling and maintaining a VM are the person's, never an agent's, and
+//! a terminal does not prove who typed, so a command asks through Atlas.app:
+//! its request is kept here, Atlas.app is opened with the request's ID, and
+//! its approval window, a native window of the person's own session, shows
+//! what, which VM and from which session. The person allows or refuses it
+//! there, through a command only Atlas.app may run. An allowed request is a
+//! grant bound to that one operation and its change, used once, and gone
+//! after [`LIFE`]. No flag, variable, actor or terminal stands in for it.
 //!
 //! In `requests/`, each request is `<id>.json`, made by the command that
 //! asks; `<id>.shown` once Atlas.app has read it, `<id>.answer` once the
@@ -55,11 +55,14 @@ pub enum Kind {
     Remove,
     /// Uninstall Atlas, its VMs with it.
     Uninstall,
+    /// Open a VM's window for the person's maintenance, or end it.
+    Maintain,
 }
 
 /// The one operation a grant is for: its kind, the VM's identifier and
 /// name (for an uninstall, every VM it removes, by name), the settings file
-/// it changes, by its path, and whether it calls an uninstall off.
+/// it changes, by its path, whether it calls an uninstall off, and for a
+/// maintenance whether the VM is started again first or it is ended.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Operation {
@@ -70,6 +73,12 @@ pub struct Operation {
     /// Calls the uninstall under way off, rather than uninstalling.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancel: bool,
+    /// Stops the VM and starts it again before its maintenance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+    /// Ends the maintenance, rather than beginning it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub end: bool,
 }
 
 /// A request as kept.
@@ -122,6 +131,12 @@ pub struct Shown {
     /// Whether it calls the uninstall under way off.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cancel: bool,
+    /// Whether the VM is stopped and started again before its maintenance.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+    /// Whether it ends a maintenance.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub end: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answered: Option<Answered>,
 }
@@ -174,16 +189,19 @@ impl Grant {
     }
 
     fn take_at(self, operation: &Operation, now: u64) -> Result<Token> {
-        let mismatch =
-            if operation.kind != self.operation.kind || operation.cancel != self.operation.cancel {
-                Some("another kind of change")
-            } else if operation.vm != self.operation.vm {
-                Some("another VM")
-            } else if operation != &self.operation {
-                Some("another name or settings file")
-            } else {
-                None
-            };
+        let mismatch = if operation.kind != self.operation.kind
+            || operation.cancel != self.operation.cancel
+            || operation.restart != self.operation.restart
+            || operation.end != self.operation.end
+        {
+            Some("another kind of change")
+        } else if operation.vm != self.operation.vm {
+            Some("another VM")
+        } else if operation != &self.operation {
+            Some("another name or settings file")
+        } else {
+            None
+        };
         if let Some(other) = mismatch {
             return Err(refusal(format!(
                 "The person's grant is for {other}; nothing was done."
@@ -389,6 +407,8 @@ fn request_at(lifecycle: &Lifecycle, id: &Token, now: u64) -> Result<Shown> {
         settings: atlas_core::config::tilde(&request.operation.settings),
         session: request.session,
         cancel: request.operation.cancel,
+        restart: request.operation.restart,
+        end: request.operation.end,
         until: request.until,
         answered,
     })

@@ -810,6 +810,37 @@ fn a_vm_is_added_named_or_not_removed_by_its_name_and_the_desktops_listed() {
 }
 
 #[test]
+fn a_vms_maintenance_is_begun_or_ended_by_its_name_and_never_both_restarted_and_ended() {
+    assert!(matches!(
+        parse(&["desktop", "maintain", "work"]).unwrap().command,
+        Some(Command::Desktop(Desktop::Maintain { ref name, end: false, restart: false }))
+            if name == "work"
+    ));
+    assert!(matches!(
+        parse(&["desktop", "maintain", "work", "--end"])
+            .unwrap()
+            .command,
+        Some(Command::Desktop(Desktop::Maintain {
+            end: true,
+            restart: false,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        parse(&["desktop", "maintain", "work", "--restart"])
+            .unwrap()
+            .command,
+        Some(Command::Desktop(Desktop::Maintain {
+            end: false,
+            restart: true,
+            ..
+        }))
+    ));
+    assert!(parse(&["desktop", "maintain"]).is_err());
+    assert!(parse(&["desktop", "maintain", "work", "--end", "--restart"]).is_err());
+}
+
+#[test]
 fn uninstall_is_called_off_with_cancel_alone() {
     assert!(matches!(
         parse(&["uninstall", "--cancel"]).unwrap().command,

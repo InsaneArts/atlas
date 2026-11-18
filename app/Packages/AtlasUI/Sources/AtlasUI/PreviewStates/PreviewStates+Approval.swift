@@ -8,6 +8,9 @@
         PreviewState(name: "Remove", value: approvalRemove),
         PreviewState(name: "Uninstall", value: approvalUninstall),
         PreviewState(name: "Call off", value: approvalCancelUninstall),
+        PreviewState(name: "Maintain", value: approvalMaintain),
+        PreviewState(name: "Maintain, restarting", value: approvalMaintainRestarting),
+        PreviewState(name: "End maintenance", value: approvalEndMaintenance),
         PreviewState(name: "Allowing", value: approvalAllowing),
         PreviewState(name: "Allowed", value: approvalAllowed),
         PreviewState(name: "Not allowed", value: approvalRefused),
@@ -45,6 +48,30 @@
     static let approvalCancelUninstall = ApprovalState(
       operation: .cancelUninstall,
       desktop: "spare",
+      session: "a terminal",
+      phase: .asking
+    )
+
+    /// Opening the VM `work`'s window for maintenance.
+    static let approvalMaintain = ApprovalState(
+      operation: .maintain(restart: false),
+      desktop: "work",
+      session: "a terminal",
+      phase: .asking
+    )
+
+    /// Opening it after stopping it and starting it again: a destructive alert, as work there ends.
+    static let approvalMaintainRestarting = ApprovalState(
+      operation: .maintain(restart: true),
+      desktop: "work",
+      session: "a terminal",
+      phase: .asking
+    )
+
+    /// Ending its maintenance.
+    static let approvalEndMaintenance = ApprovalState(
+      operation: .endMaintenance,
+      desktop: "work",
       session: "a terminal",
       phase: .asking
     )

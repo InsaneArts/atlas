@@ -802,11 +802,16 @@ fn lifecycle(asked: cli::Lifecycle, settings: &std::path::Path) -> ExitCode {
                         cli::GrantKind::Add => grant::Kind::Add,
                         cli::GrantKind::Remove => grant::Kind::Remove,
                         cli::GrantKind::Uninstall => grant::Kind::Uninstall,
+                        cli::GrantKind::Maintain | cli::GrantKind::EndMaintenance => {
+                            grant::Kind::Maintain
+                        }
                     },
                     vm,
                     name,
                     settings,
                     cancel: false,
+                    restart: false,
+                    end: matches!(kind, cli::GrantKind::EndMaintenance),
                 };
                 let change = grant::ask(operation.clone())?.take(&operation)?;
                 Ok(json!({

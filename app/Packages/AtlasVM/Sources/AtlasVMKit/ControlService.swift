@@ -84,10 +84,45 @@ public actor ControlService {
         return .refused("Its runner is being replaced; ask again in a moment.", by: incarnation)
       }
       return await resume(install)
+    case .void(let change):
+      return await void(change)
     case .create, .start, .stop, .window, .install, .paired, .closed, .forget:
       return await change(operation)
     }
   }
+
+  /// Make sure the change `change` is never done from now. Kept as refused
+  /// when it was never asked, in the one step that would have kept it, so a
+  /// request of it still on its way is answered as another change asked
+  /// with its ID and never done; answered as what it came to when it was.
+  /// Nothing of the VM is touched, so it waits for no change being done.
+  private func void(_ change: ChangeID) async -> ControlReply {
+    var reply = ControlReply.served(ControlOperation.void(change).name, by: incarnation)
+    reply.change = change
+    let record = ChangeRecord(operation: .void(change), run: incarnation.id)
+    do {
+      switch try ledger.begin(.void(change), by: incarnation.id) {
+      case .new:
+        try ledger.settle(record, as: Self.voided)
+        reply.by = record.run
+        reply.outcome = Self.voided
+        reply.pending = false
+        return reply
+      case .asked(let kept):
+        return await answered(kept, in: reply)
+      case .conflicting:
+        guard let kept = try ledger.record(change) else {
+          return .refused("What the change came to cannot be read.", by: incarnation)
+        }
+        return await answered(kept, in: reply)
+      }
+    } catch {
+      return .refused("The change could not be kept, so nothing was voided.", by: incarnation)
+    }
+  }
+
+  /// What a change voided before it was asked came to.
+  static let voided = ChangeOutcome.refused("Voided before it was asked; it is never done.")
 
   /// Go on with the install `install`, asked again without its secret: an
   /// install left pending alone, by this run or, once recovered, an earlier
@@ -217,6 +252,7 @@ public actor ControlService {
     -> ControlReply
   {
     var reply = reply
+    reply.by = record.run
     let guarded = !operation.isReport
     if guarded { busy = true }
     inFlight += 1
@@ -253,6 +289,7 @@ public actor ControlService {
   private func answered(_ record: ChangeRecord, in reply: ControlReply) async -> ControlReply {
     var reply = reply
     var record = record
+    reply.by = record.run
     if record.outcome == nil, record.run == incarnation.id || lock != nil, !busy, !retiring {
       busy = true
       defer { busy = false }
@@ -292,7 +329,7 @@ public actor ControlService {
     }
     do {
       switch operation {
-      case .hello, .state, .outcome:
+      case .hello, .state, .outcome, .void:
         return .refused("It is not a change.")
       case .create:
         try await host.create()
@@ -344,6 +381,8 @@ public actor ControlService {
     switch operation {
     case .hello, .state, .outcome:
       return refusal
+    case .void:
+      return Self.voided
     case .create, .start, .stop:
       let power = await host.power()
       guard power.confirmed else { return nil }
@@ -387,6 +426,8 @@ public actor ControlService {
     switch operation {
     case .hello, .state, .outcome:
       return nil
+    case .void:
+      return Self.voided
     case .create, .start, .stop:
       let power = await host.power()
       guard power.confirmed, let held = effect(of: operation, on: power.value) else { return nil }

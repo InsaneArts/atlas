@@ -267,6 +267,8 @@ fn operation(settings: &Path, names: &[String], cancel: bool) -> Result<grant::O
         name: atlas_core::name::listed(names),
         settings: settings.to_owned(),
         cancel,
+        restart: false,
+        end: false,
     })
 }
 

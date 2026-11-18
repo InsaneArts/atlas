@@ -67,6 +67,32 @@ struct ApprovalStateTests {
     #expect(card.buttons.map(\.id) == [.close])
   }
 
+  @Test("a maintenance request asks to open the VM's window, and an end asks to close it")
+  func maintenanceAsks() {
+    let opening = Self.state(.maintain(restart: false)).card
+    let ending = Self.state(.endMaintenance).card
+    #expect(opening.title == "Open the VM “work” for maintenance?")
+    #expect(
+      opening.message
+        == "Asked from a terminal. Its window takes your keyboard and mouse; agents wait until you end it. Allow it "
+        + "only if you asked for this."
+    )
+    #expect(opening.buttons.map(\.title) == ["Open Window", "Don't Allow"])
+    #expect(opening.buttons.map(\.role) == [.action, .cancel])
+    #expect(ending.title == "End maintenance of “work”?")
+    #expect(ending.message == "Asked from a terminal. Its window closes. Allow it only if you asked for this.")
+    #expect(ending.buttons.map(\.title) == ["End Maintenance", "Don't Allow"])
+    #expect(!opening.message.contains("helper") && !ending.message.contains("helper"))
+  }
+
+  @Test("a maintenance request with a restart says the work running there ends, and asks as a destructive alert")
+  func maintenanceRestartWarns() {
+    let card = Self.state(.maintain(restart: true)).card
+    #expect(card.message.contains("Atlas VM stops it and starts it again first; work running there ends."))
+    #expect(card.buttons.map(\.id) == [.refuse, .allow])
+    #expect(card.buttons.map(\.role) == [.safeCancel, .destructive])
+  }
+
   @Test("while the request is read, the one way out refuses it")
   func loadingRefusesOnly() {
     let card = ApprovalState.loading.card

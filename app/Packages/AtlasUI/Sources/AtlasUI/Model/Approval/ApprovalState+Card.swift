@@ -86,6 +86,8 @@ extension ApprovalState {
     case .remove: "Remove the VM “\(desktop)”?"
     case .uninstall: "Uninstall Atlas and its VMs?"
     case .cancelUninstall: "Call off uninstalling Atlas?"
+    case .maintain: "Open the VM “\(desktop)” for maintenance?"
+    case .endMaintenance: "End maintenance of “\(desktop)”?"
     case nil: "Reading the request…"
     }
   }
@@ -101,6 +103,11 @@ extension ApprovalState {
       return "\(asked) Atlas is removed, and these VMs are deleted with everything in them: \(desktop). \(allow)"
     case .cancelUninstall:
       return "\(asked) Atlas stays and nothing more is removed. VMs it removed stay removed. \(allow)"
+    case .maintain(let restart):
+      let window = "Its window takes your keyboard and mouse; agents wait until you end it."
+      let first = restart ? " Atlas VM stops it and starts it again first; work running there ends." : ""
+      return "\(asked) \(window)\(first) \(allow)"
+    case .endMaintenance: return "\(asked) Its window closes. \(allow)"
     case nil: return asked
     }
   }
@@ -114,6 +121,8 @@ extension ApprovalState {
     case .remove: action = "Remove VM"
     case .uninstall: action = "Uninstall"
     case .cancelUninstall: action = "Call Off"
+    case .maintain: action = "Open Window"
+    case .endMaintenance: action = "End Maintenance"
     }
     guard operation?.isDestructive == true else {
       return [
@@ -134,6 +143,8 @@ extension ApprovalState {
     case .remove: "Atlas goes on removing “\(desktop)”."
     case .uninstall: "Atlas goes on uninstalling."
     case .cancelUninstall: "Atlas calls the uninstall off."
+    case .maintain: "Atlas opens the window of the VM “\(desktop)”."
+    case .endMaintenance: "Atlas closes the window of the VM “\(desktop)”."
     }
   }
 }

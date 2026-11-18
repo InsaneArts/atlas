@@ -21,7 +21,7 @@ pub use keeper::{
     lifecycle_record, machine_hello, screen, under_maintenance, vm_through_keeper,
 };
 pub use requester::{Requester, WATCHDOG};
-pub use runner::StandInRunner;
+pub use runner::{FIRST_RUN, StandInRunner};
 
 use crate::{
     client::Client,

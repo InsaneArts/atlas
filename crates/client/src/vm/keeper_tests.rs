@@ -440,7 +440,8 @@ pub(super) fn fixture() -> Fixture {
         lanes_gate: Mutex::default(),
         lanes_waiting: AtomicUsize::new(0),
     });
-    let state = tempfile::tempdir().unwrap();
+    // Short, so Atlas VM's control socket stood in for under it fits.
+    let state = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let vm = standin.desktop.clone();
     let kept = Arc::new(Kept::default());
     let stop = Controller::of_at(

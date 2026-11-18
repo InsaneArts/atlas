@@ -294,6 +294,29 @@ pub(super) fn desktop_added(value: &Value) -> String {
     )
 }
 
+pub(super) fn desktop_maintained(value: &Value) -> String {
+    let name = text::printable(value["desktop"].as_str().unwrap_or("the VM")).into_owned();
+    if value["maintenance"] == "on" {
+        return format!(
+            "{} The window of the VM \u{201c}{name}\u{201d} takes your keyboard and mouse; \
+             agents wait.\n  {}",
+            style::ok(),
+            style::dim(text::printable(value["next"].as_str().unwrap_or_default()))
+        );
+    }
+    if value["already"] == true {
+        return format!(
+            "{} No maintenance of the VM \u{201c}{name}\u{201d} is kept; agents may go on.",
+            style::ok()
+        );
+    }
+    format!(
+        "{} Maintenance of the VM \u{201c}{name}\u{201d} ended: its window takes no input, and \
+         agents may go on.",
+        style::ok()
+    )
+}
+
 pub(super) fn desktop_removed(value: &Value) -> String {
     let name = text::printable(value["removed"]["name"].as_str().unwrap_or("the VM")).into_owned();
     let mut lines = vec![format!(

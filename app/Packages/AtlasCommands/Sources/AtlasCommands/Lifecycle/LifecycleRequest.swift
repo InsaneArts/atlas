@@ -23,6 +23,10 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
   /// Whether it calls an uninstall under way off rather than uninstalling; for an uninstall, `name` lists the VMs it
   /// removes, or, calling one off, the VMs left.
   public let cancel: Bool
+  /// For a maintenance, whether the VM is stopped and started again before its window opens.
+  public let restart: Bool
+  /// For a maintenance, whether it ends it rather than opening the window.
+  public let end: Bool
 
   private enum Key: String, CodingKey {
     case id
@@ -34,6 +38,8 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     case until
     case answered
     case cancel
+    case restart
+    case end
   }
 
   /// Creates a request, as a test or a preview builds one.
@@ -48,6 +54,8 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
   ///   - until: When it must be answered by.
   ///   - answered: What the person answered already, or nil.
   ///   - cancel: Whether it calls an uninstall under way off.
+  ///   - restart: For a maintenance, whether the VM is started again first.
+  ///   - end: For a maintenance, whether it ends it.
   public init(
     id: String,
     kind: LifecycleKind,
@@ -57,7 +65,9 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     session: String,
     until: Date,
     answered: LifecycleAnswered? = nil,
-    cancel: Bool = false
+    cancel: Bool = false,
+    restart: Bool = false,
+    end: Bool = false
   ) {
     self.id = id
     self.kind = kind
@@ -68,6 +78,8 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     self.until = until
     self.answered = answered
     self.cancel = cancel
+    self.restart = restart
+    self.end = end
   }
 
   /// Read from the command's reply, its deadline in milliseconds since 1970.
@@ -86,5 +98,7 @@ public struct LifecycleRequest: Decodable, Equatable, Sendable {
     until = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
     answered = try fields.decodeIfPresent(LifecycleAnswered.self, forKey: .answered)
     cancel = try fields.decodeIfPresent(Bool.self, forKey: .cancel) ?? false
+    restart = try fields.decodeIfPresent(Bool.self, forKey: .restart) ?? false
+    end = try fields.decodeIfPresent(Bool.self, forKey: .end) ?? false
   }
 }

@@ -217,12 +217,12 @@ impl Client {
         if code == Code::Permission && !uncertain {
             return Some(match setting {
                 Some(setting) => format!(
-                    "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s \
-                     window."
+                    "Ask the person to open {name}'s window with atlas desktop maintain {name} \
+                     and allow Atlas in Privacy & Security, {setting}, there."
                 ),
                 None => format!(
-                    "Ask the person to allow what Atlas asks for in Privacy & Security, in \
-                     {name}'s window."
+                    "Ask the person to open {name}'s window with atlas desktop maintain {name} \
+                     and allow what Atlas asks for in Privacy & Security there."
                 ),
             });
         }

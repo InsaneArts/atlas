@@ -4,6 +4,13 @@
 //! window takes no input. Every admission of an agent reads it here, the
 //! station's and the keeper's, and says what holds them in the VM's own
 //! words. A record that cannot be read holds agents as a kept one does.
+mod maintain;
+
+pub use maintain::{Maintain, maintain};
+
+#[cfg(test)]
+pub(in crate::vm) use maintain::maintained_by;
+
 use super::lifecycle::{Lifecycle, record::Maintenance};
 use atlas_core::{
     desktop::DesktopId,

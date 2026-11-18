@@ -1131,8 +1131,8 @@ async fn a_vms_screenshot_and_collect_refusals_and_their_next_steps_name_the_vm_
     let unrecorded_next = unrecorded.as_ref().unwrap_err().details["next"].clone();
     assert_eq!(
         unrecorded_next,
-        "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio Recording, \
-         in work's window."
+        "Ask the person to open work's window with atlas desktop maintain work and allow Atlas \
+         in Privacy & Security, Screen & System Audio Recording, there."
     );
     assert_eq!(changed.as_ref().unwrap_err().code, Code::SessionChanged);
     assert!(changed.as_ref().unwrap_err().details.contains_key("next"));

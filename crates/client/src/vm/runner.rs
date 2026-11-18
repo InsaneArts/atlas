@@ -92,6 +92,11 @@ pub enum Operation {
     Closed { change: Token, install: Token },
     /// The VM removed: stopped, its passwords deleted, its runner gone.
     Forget(Token),
+    /// Make sure the change with this ID is never done from now: kept
+    /// refused when Atlas VM has not seen it, answered as what it came to
+    /// when it has. No change of its own, so it is asked as a read is, as
+    /// often as needed.
+    Void(Token),
 }
 
 impl Operation {
@@ -111,6 +116,7 @@ impl Operation {
             Self::Paired { .. } => "paired",
             Self::Closed { .. } => "closed",
             Self::Forget(_) => "forget",
+            Self::Void(_) => "void",
         }
     }
 
@@ -118,7 +124,7 @@ impl Operation {
     #[must_use]
     pub fn change(&self) -> Option<&Token> {
         match self {
-            Self::Hello | Self::State | Self::Outcome(_) => None,
+            Self::Hello | Self::State | Self::Outcome(_) | Self::Void(_) => None,
             Self::Create(change)
             | Self::Start(change)
             | Self::Stop(change)
@@ -161,6 +167,7 @@ impl Operation {
         match self {
             Self::Hello | Self::State => json!({"op": op}),
             Self::Outcome(change)
+            | Self::Void(change)
             | Self::Create(change)
             | Self::Start(change)
             | Self::Stop(change)
@@ -277,6 +284,11 @@ pub struct Reply {
     pub fence: Option<u64>,
     /// The change answered.
     pub change: Option<Token>,
+    /// The run of Atlas VM that began the change answered, as its ledger
+    /// keeps it: the one that did it, whichever run answers. None from a
+    /// runner of a build before it said so.
+    #[serde(default)]
+    pub by: Option<String>,
     /// What the change came to; none while it is pending.
     pub outcome: Option<Outcome>,
     /// Whether the change is kept as asked and not yet settled.
