@@ -389,7 +389,7 @@ fn marker(change: &Token) -> String {
 }
 
 /// Remove the file at `path`; one already gone is removed.
-fn remove(path: &Path) -> Result<()> {
+pub(super) fn remove(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             Err(Error::writing(path, error))

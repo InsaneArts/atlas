@@ -1,10 +1,12 @@
-//! `atlas install-app`: put an app from this Mac into the helper's
+//! `atlas install-app`: put an app from this Mac into the desktop's
 //! `~/Applications` for the current task, never over anything already
 //! there, and record it so `atlas cleanup --apply` moves it aside once the
 //! task is done, unless it changed meanwhile. The install is claimed for
-//! the task before the helper is asked, so a crash on the way leaves it
+//! the task before the desktop is asked, so a crash on the way leaves it
 //! findable by its ID; and it is the task's own install that `open --app
-//! NAME` falls back to when LaunchServices does not know the name yet.
+//! NAME` falls back to when LaunchServices does not know the name yet. A
+//! VM's guest reads nothing of this disk: the bundle is staged into it
+//! first, and installed from where the guest placed it.
 use crate::{
     client::Client,
     environment,
@@ -23,16 +25,15 @@ use std::{
     sync::Arc,
 };
 
-/// Install the app at `path` into the helper for the current task.
+/// Install the app at `path` into the desktop for the current task.
 ///
 /// # Errors
 ///
-/// Rejects an invalid bundle, unsafe destination or changed helper identity, and returns
-/// copy or registration failures. Unknown installation retains its ownership record.
+/// Rejects an invalid bundle, unsafe destination, changed desktop identity or a VM
+/// whose guest has no environment worker, and returns copy or registration failures.
+/// Unknown installation retains its ownership record.
 pub async fn install(client: &Client, path: &Path) -> Result<Value> {
-    // Installing goes through the desktop's environment, which a VM does not
-    // take yet: refused before anything is asked or made.
-    client.second_login_only()?;
+    client.reachable()?;
     let (bundle, name) = bundle(path)?;
     let task = client.task.clone().ok_or_else(|| {
         Error::new(
@@ -60,6 +61,14 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
         )
         .with("installId", serde_json::json!(earlier)));
     }
+    // A VM is proved once, its guest's worker offered, before anything is
+    // made: the bundle is staged, installed and its copy removed in that
+    // proof's generation.
+    let verified = if copies.in_a_guest() {
+        Some(crate::vm::environment::verified(client).await?)
+    } else {
+        None
+    };
 
     // Copying, installing and removing the copy happen under one ownership,
     // so no other open, close or cleanup interleaves.
@@ -74,7 +83,8 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     };
     claims.claim(&install, State::Intent)?;
 
-    let handed = match handoff::hand_over(client, &ownership, vec![target], (running, None)).await {
+    let handing = (running, verified.as_ref());
+    let handed = match handoff::hand_over(client, &ownership, vec![target], handing).await {
         Ok(handed) => handed,
         Err(error) => {
             let _ = claims.settle_all(&[(install, State::Gone)]);
@@ -84,7 +94,8 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     let source = PathBuf::from(handed.paths.first().cloned().unwrap_or_default());
     let transport = handed.copied.first().map(|copied| copied.token.clone());
 
-    let result = environment::install_app(client, &ownership, &id, &source, &name).await;
+    let result =
+        environment::install_app(client, &ownership, &id, &source, &name, verified.as_ref()).await;
     let made = match &result {
         // Its outcome is not known: the install and the copy it came from
         // stay claimed, for cleanup to settle by their IDs.
@@ -95,8 +106,11 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     let mut settled = vec![(install, if made { State::Made } else { State::Gone })];
     if let Some(token) = transport {
         let session = task.session().clone();
+        let removal = copies
+            .remove_with(client, &token, (&session, verified.as_ref()), running)
+            .await;
         let gone = matches!(
-            copies.remove(&token, &session, running),
+            removal,
             handoff::CopyRemoval::Removed | handoff::CopyRemoval::AlreadyGone
         );
         if gone {
@@ -161,8 +175,9 @@ fn install_named(
 }
 
 /// Where the current task's own install of the app named `app` is in the
-/// helper, while the helper says its folder there is still the one Atlas
-/// placed; none for any other app, or when that cannot be told.
+/// desktop, as the desktop names its paths, while the desktop says its
+/// folder there is still the one Atlas placed; none for any other app, or
+/// when that cannot be told.
 pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String> {
     let task = client.task.as_ref()?;
     let tasks = Tasks::at(client.output_dir().ok()?);

@@ -107,11 +107,6 @@ impl Homes {
     }
 }
 
-/// [`install`], registering nothing with LaunchServices.
-fn install_unregistered(home: &Path, id: &str, source: &Path, name: &str) -> Result<Value> {
-    install_moving(home, id, source, name, &|| Ok(()), &move_between, &|_| true)
-}
-
 /// What macOS would say, with `processes` as the helper's process list and
 /// no translocated app traced anywhere.
 fn looks<'a>(processes: &'a dyn Fn() -> Result<Vec<(u32, String)>>) -> Looks<'a> {

@@ -175,9 +175,7 @@ impl Hands for Live<'_> {
     }
 
     async fn remove_install(&self, install: &Token) -> Result<RemovalReply> {
-        environment::remove_app(self.client, self.held()?, install)
-            .await
-            .map(RemovalReply::read)
+        environment::remove_app(self.client, self.held()?, install).await
     }
 
     fn intact(&self, collection: &Collection) -> Intact {

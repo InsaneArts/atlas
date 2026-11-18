@@ -1130,7 +1130,6 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         &["apps"],
         &["screenshot"],
         &["start-input"],
-        &["install-app", "/Applications/Probe.app"],
         &["environment", "discover", "--tool", "cat"],
     ] {
         let command = parse(args).unwrap().command.unwrap();
@@ -1457,6 +1456,57 @@ async fn an_environment_change_on_a_vm_goes_through_dispatch_and_is_held_by_eith
     }
     assert_eq!(keeper.asked_for("change").len(), asked, "nothing more went");
     assert!(keeper.asked_for("stage").is_empty(), "nothing staged");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_install_on_a_vm_is_admitted_through_dispatch_starts_a_stopped_vm_and_is_held_by_either_stop()
+ {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    keeper.runner.set_power("stopped");
+    let host = HostSession::new(atlas_core::host::Host::Codex, "installing").unwrap();
+    client.task = Some(atlas_client::task::Task::of(host.key(), Some("probe")).unwrap());
+    client.host_session = Some(host);
+    let config = dir.path().join("settings.toml");
+    let app = dir.path().join("Probe.app");
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::write(app.join("Contents/Info.plist"), "<plist/>").unwrap();
+    let install = || {
+        parse(&["install-app", app.to_str().unwrap()])
+            .unwrap()
+            .command
+            .unwrap()
+    };
+
+    let reply = executed(&config, install(), &client).await;
+    client.controller.note_stop(true).unwrap();
+    let station = executed(&config, install(), &client).await;
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+    *keeper.stop.lock().unwrap() = "stopped";
+    let guest = executed(&config, install(), &client).await;
+
+    assert_eq!(keeper.runner.asked_for("start").len(), 1);
+    assert_eq!(keeper.runner.power(), "running");
+    // Its guest keeps no copy here, so the stage is refused for certain:
+    // the install went as far as staging its bundle.
+    let refused = reply.unwrap_err();
+    assert_ne!(refused.error, client.unreachable().error, "{refused:?}");
+    assert!(!refused.uncertain, "{refused:?}");
+    assert_eq!(refused.details["started"]["desktop"], "work", "{refused:?}");
+    let stages = keeper.asked_for("stage");
+    assert_eq!(stages.len(), 1, "{stages:?}");
+    assert_eq!(
+        stages[0]["generation"],
+        atlas_client::test_support::GENERATION
+    );
+    for held in [station, guest] {
+        let held = held.unwrap_err();
+        assert_eq!(held.code, Code::Stopped, "{held:?}");
+        assert!(held.error.contains("work"), "{held:?}");
+    }
+    assert_eq!(keeper.asked_for("stage").len(), 1, "nothing more staged");
     assert!(client.controller.pending().unwrap().is_empty());
 }
 

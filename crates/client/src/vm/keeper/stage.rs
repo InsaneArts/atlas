@@ -473,3 +473,7 @@ mod copies_tests;
 #[cfg(test)]
 #[path = "environment_tests.rs"]
 mod environment_tests;
+
+#[cfg(test)]
+#[path = "installs_tests.rs"]
+mod installs_tests;

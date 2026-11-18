@@ -362,6 +362,19 @@ pub(super) fn install(
 /// did; tests stand in for it, so nothing they make is registered.
 type Registrar<'a> = &'a dyn Fn(&Path) -> bool;
 
+/// [`install`], registering nothing with LaunchServices: what any test's
+/// worker installs, a desktop's stand-in's included, is never known to this
+/// Mac's LaunchServices.
+#[cfg(test)]
+pub(crate) fn install_unregistered(
+    home: &Path,
+    id: &str,
+    source: &Path,
+    name: &str,
+) -> Result<Value> {
+    install_moving(home, id, source, name, &|| Ok(()), &move_between, &|_| true)
+}
+
 /// [`install`], moving with `mover` and registering with `registrar`.
 fn install_moving(
     home: &Path,

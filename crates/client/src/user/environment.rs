@@ -18,7 +18,6 @@ use crate::{
         reply::{InstallState, ShownFile, TransactionSummary, Transactions, WorkerReply},
         runner::ENVIRONMENT_TARGET,
         stage::*,
-        undo::PlanPhase,
         *,
     },
     task::{self, Claims},
@@ -368,37 +367,11 @@ pub(crate) async fn plan_states_in(
         transactions.extend(there.known().cloned());
     }
 
-    Ok(ids
-        .iter()
-        .map(|id| {
-            let plan = here.iter().find(|plan| plan.id == id.as_str());
-            let started = transactions
-                .iter()
-                .find(|transaction| transaction.plan_id == id.as_str());
-            match (started, plan) {
-                (Some(transaction), _) => PlanState {
-                    phase: if plan.is_some_and(|plan| plan.running) {
-                        PlanPhase::Running
-                    } else {
-                        PlanPhase::started(&transaction.phase).unwrap_or(PlanPhase::Unknown)
-                    },
-                    targets: transaction
-                        .files
-                        .iter()
-                        .map(|file| file.target.to_string_lossy().into_owned())
-                        .collect(),
-                },
-                (None, Some(plan)) => PlanState {
-                    phase: plan.state(),
-                    targets: plan.targets(),
-                },
-                (None, None) => PlanState {
-                    phase: PlanPhase::Gone,
-                    targets: Vec::new(),
-                },
-            }
-        })
-        .collect())
+    Ok(crate::environment::undo::states_of(
+        ids,
+        &here,
+        &transactions,
+    ))
 }
 
 /// [`undo_plan`] of plan `id` in the second login `login`.

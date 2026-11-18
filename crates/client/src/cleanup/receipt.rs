@@ -280,6 +280,9 @@ pub(super) enum Reason {
     OtherVolume,
     /// Kept: Atlas cannot read its own record of it.
     Unreadable,
+    /// Kept: the desktop has no record of what may have reached it, and
+    /// Atlas keeps its own.
+    Forgotten,
     /// Failed: what it waited for did not end in time.
     Timeout,
     /// Failed: something still runs from it.
@@ -328,6 +331,7 @@ impl Reason {
             | Self::KeptTargets
             | Self::OtherVolume
             | Self::Unreadable
+            | Self::Forgotten
             | Self::Stopped
             | Self::Identity
             | Self::OtherAccount

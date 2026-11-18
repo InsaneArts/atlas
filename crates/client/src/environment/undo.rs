@@ -3,7 +3,12 @@
 //! control the cleanup holds. Every plan is looked at by its own ID only;
 //! nothing here lists the helper's store or the plans beside the shared
 //! command for anything else.
-use super::{model::*, reply::WorkerReply, *};
+use super::{
+    list::Frozen,
+    model::*,
+    reply::{TransactionSummary, WorkerReply},
+    *,
+};
 use atlas_core::{files::Token, lenient::Lenient};
 
 /// How far a plan got, as a cleanup reads it before it undoes anything.
@@ -63,8 +68,49 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     }
     match client.desktop().kind() {
         Kind::User(login) => crate::user::environment::plan_states_in(client, login, ids).await,
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::plan_states_in(client, ids).await,
     }
+}
+
+/// How far each of `ids` got: the desktop's word in `transactions` for
+/// those it started, and the plans frozen on this Mac in `here` for those
+/// it never did, as one a command holds now, one with an outcome not
+/// known, or one only previewed.
+pub(crate) fn states_of(
+    ids: &[Token],
+    here: &[Frozen],
+    transactions: &[TransactionSummary],
+) -> Vec<PlanState> {
+    ids.iter()
+        .map(|id| {
+            let plan = here.iter().find(|plan| plan.id == id.as_str());
+            let started = transactions
+                .iter()
+                .find(|transaction| transaction.plan_id == id.as_str());
+            match (started, plan) {
+                (Some(transaction), _) => PlanState {
+                    phase: if plan.is_some_and(|plan| plan.running) {
+                        PlanPhase::Running
+                    } else {
+                        PlanPhase::started(&transaction.phase).unwrap_or(PlanPhase::Unknown)
+                    },
+                    targets: transaction
+                        .files
+                        .iter()
+                        .map(|file| file.target.to_string_lossy().into_owned())
+                        .collect(),
+                },
+                (None, Some(plan)) => PlanState {
+                    phase: plan.state(),
+                    targets: plan.targets(),
+                },
+                (None, None) => PlanState {
+                    phase: PlanPhase::Gone,
+                    targets: Vec::new(),
+                },
+            }
+        })
+        .collect()
 }
 
 /// What undoing one plan for a cleanup came to.
@@ -84,6 +130,10 @@ pub(crate) enum Undone {
     },
     /// The helper could not finish it, and said why; trying again may.
     Unfinished(String),
+    /// The desktop has no record of it, though an apply of it may have
+    /// reached the desktop: nothing was undone, and this Mac keeps its own
+    /// record of it, as these words say.
+    Forgotten(String),
 }
 
 /// Undo plan `id` under the control the cleanup holds: ask the helper,
@@ -100,7 +150,7 @@ pub(crate) async fn undo_plan(
         Kind::User(login) => {
             crate::user::environment::undo_plan_in(client, login, ownership, id).await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::undo_plan_in(client, id).await,
     }
 }
 

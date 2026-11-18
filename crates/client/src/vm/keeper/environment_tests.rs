@@ -47,11 +47,11 @@ use std::{
 
 /// The guest's account, as its proof names it, and its home.
 const GUEST_UID: u32 = 502;
-const GUEST_HOME: &str = "/Users/guest";
+pub(super) const GUEST_HOME: &str = "/Users/guest";
 
 /// How the guest's worker ends a request it carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ending {
+pub(super) enum Ending {
     /// Answered as the guest's daemon answers it.
     Answered,
     /// Ended once it applied its first file: no answer, and nothing kept.
@@ -67,20 +67,20 @@ enum Ending {
 /// The guest's disk as its worker sees it: the copies staged into it,
 /// placed where the guest names them, and its account's home, which is
 /// this test's own account on a folder of the test's own.
-struct Disk {
+pub(super) struct Disk {
     _root: tempfile::TempDir,
     /// Where the guest's copies are, on this disk.
     open: PathBuf,
     /// Where the guest's home is, on this disk.
-    home: PathBuf,
+    pub(super) home: PathBuf,
     standin: Arc<StandIn>,
     /// Every environment request the guest was asked, as it came.
-    asked: Mutex<Vec<Value>>,
+    pub(super) asked: Mutex<Vec<Value>>,
     /// How the worker's requests end.
-    ending: Mutex<Ending>,
+    pub(super) ending: Mutex<Ending>,
     /// Run once a request was carried out and ended as it ends, before its
     /// answer, if any, is said.
-    during: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    pub(super) during: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// While set, a preview's answer is padded past what one request holds.
     inflating: AtomicBool,
 }
@@ -105,7 +105,7 @@ impl Disk {
     }
 
     /// Every packet the worker was handed, as the station sent it.
-    fn packets(&self) -> Vec<Value> {
+    pub(super) fn packets(&self) -> Vec<Value> {
         self.asked
             .lock()
             .unwrap()
@@ -199,7 +199,13 @@ impl Disk {
             }
             Ok(())
         };
-        let answered = carry_out_in(&self.home, packet, request["apply"] == true, &guard);
+        // Installed as the guest's worker installs, but never registered
+        // with this Mac's LaunchServices.
+        let answered = if let Request::InstallApp { id, source, name } = &packet.request {
+            crate::environment::installs::install_unregistered(&self.home, id, source, name)
+        } else {
+            carry_out_in(&self.home, packet, request["apply"] == true, &guard)
+        };
         if killing {
             return Value::Null;
         }
@@ -265,7 +271,7 @@ impl Disk {
     }
 
     /// The file `target` of the guest's home.
-    fn file(&self, target: &str) -> Option<Vec<u8>> {
+    pub(super) fn file(&self, target: &str) -> Option<Vec<u8>> {
         fs::read(self.home.join(target)).ok()
     }
 }
@@ -292,7 +298,7 @@ fn worker(serving: &Serving, saying: &Saying) -> Arc<Disk> {
 /// A keeper serving a guest that proves itself and has a worker of its
 /// own, an agent's client of it, and the guest's disk. The client records
 /// no activity of its own, as the CLI's policy gives a plan's steps none.
-async fn environment() -> (Serving, Arc<Saying>, Client, Arc<Disk>, tempfile::TempDir) {
+pub(super) async fn environment() -> (Serving, Arc<Saying>, Client, Arc<Disk>, tempfile::TempDir) {
     let (serving, saying, mut client, directory) = proven().await;
     client.doing = None;
     let disk = worker(&serving, &saying);
@@ -300,7 +306,7 @@ async fn environment() -> (Serving, Arc<Saying>, Client, Arc<Disk>, tempfile::Te
 }
 
 /// A manifest of two files, one executable, in a folder of its own.
-fn manifest() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn manifest() -> (tempfile::TempDir, PathBuf) {
     let folder = tempfile::tempdir().unwrap();
     fs::write(folder.path().join("notes.txt"), b"notes\n").unwrap();
     fs::write(folder.path().join("probe.sh"), b"#!/bin/sh\necho probe\n").unwrap();
@@ -315,12 +321,12 @@ fn manifest() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// The plan `reply`, a preview's, names.
-fn plan_id(reply: &Value) -> String {
+pub(super) fn plan_id(reply: &Value) -> String {
     reply["planId"].as_str().unwrap().to_owned()
 }
 
 /// Where plan `id` is frozen in `client`'s records.
-fn frozen(client: &Client, id: &str) -> PathBuf {
+pub(super) fn frozen(client: &Client, id: &str) -> PathBuf {
     client
         .output_dir()
         .unwrap()
@@ -329,7 +335,7 @@ fn frozen(client: &Client, id: &str) -> PathBuf {
 }
 
 /// The guest copy plan `id` keeps of its payloads.
-fn plan_copy(client: &Client, id: &str) -> Token {
+pub(super) fn plan_copy(client: &Client, id: &str) -> Token {
     serde_json::from_slice(&fs::read(frozen(client, id).join("copy.json")).unwrap()).unwrap()
 }
 
@@ -352,7 +358,7 @@ fn aged(path: &Path, age: Duration) {
 }
 
 /// A preview of [`manifest`] through `client`: its reply.
-async fn previewed(client: &Client) -> Value {
+pub(super) async fn previewed(client: &Client) -> Value {
     let (_folder, manifest) = manifest();
     let reply = crate::environment::sync(client, &manifest, false)
         .await
@@ -363,13 +369,13 @@ async fn previewed(client: &Client) -> Value {
 
 /// What the guest answers when it proves its work ended without knowing
 /// what it came to.
-fn ended() -> Value {
+pub(super) fn ended() -> Value {
     json!({"ok": false, "code": "uncertain", "error": "Its work is proven ended",
         "uncertain": true, "ended": true})
 }
 
 /// The keeper's recovery in the live generation.
-async fn recover(serving: &Serving) -> Value {
+pub(super) async fn recover(serving: &Serving) -> Value {
     asked(
         &serving.socket,
         &json!({"op": "recover", "generation": live(serving)}),
@@ -379,7 +385,7 @@ async fn recover(serving: &Serving) -> Value {
 }
 
 /// The one environment change the guest was asked for last.
-fn last_change(disk: &Disk) -> Token {
+pub(super) fn last_change(disk: &Disk) -> Token {
     let asked = disk.asked.lock().unwrap();
     Token::parse(asked.last().unwrap()["change"].as_str().unwrap()).unwrap()
 }
@@ -1099,7 +1105,7 @@ async fn forgotten_then_pruned(client: &Client, disk: &Disk, id: &str) {
 }
 
 /// What this Mac keeps of an apply of plan `id` that may have happened.
-fn applied_record(client: &Client, id: &str) -> Value {
+pub(super) fn applied_record(client: &Client, id: &str) -> Value {
     serde_json::from_slice(&fs::read(frozen(client, id).join("applied.json")).unwrap()).unwrap()
 }
 

@@ -155,21 +155,6 @@ async fn the_reads_open_close_and_cleanup_need_are_carried_and_every_other_read_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn install_app_is_still_refused_on_a_vm_before_anything_is_asked() {
-    let (serving, _saying, client, _directory) = proven().await;
-    let (_folder, tree) = tree();
-    let before = admitted(&serving).len();
-
-    let refused = crate::install_app::install(&client, &tree)
-        .await
-        .unwrap_err();
-
-    assert_eq!(refused.error, client.unreachable().error);
-    assert_eq!(admitted(&serving).len(), before, "no lane opened");
-    assert!(client.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sixty_five_copies_of_one_session_are_none_of_another_sessions_to_close() {
     let (serving, saying, client, _directory) = proven().await;
     answering_reads(&saying);

@@ -15,10 +15,17 @@
 //! that it changed nothing, or once an undo is acknowledged. A change whose
 //! outcome is unknown keeps a marker beside its plan while its claim is
 //! pending; while one stands, the plan is never discarded, pruned or
-//! undone, and the same frozen plan, sent again, resumes it.
+//! undone, and the same frozen plan, sent again, resumes it. An app is
+//! installed, taken away and looked at the same way, as a change the
+//! guest's worker carries out, and this Mac keeps its own record of an
+//! install that may have reached the guest.
 mod frozen;
+mod installs;
+mod undo;
 
 pub(in crate::vm) use frozen::Payloads;
+pub(crate) use installs::{install_app_in, install_states_in, remove_app_in};
+pub(crate) use undo::{plan_states_in, undo_plan_in};
 
 use crate::{
     client::{Client, Mutation, RUN_TIMEOUT, Verified},
@@ -78,7 +85,7 @@ fn older(vm: &str) -> String {
 }
 
 /// The VM `client` acts on, proved now, its guest's worker offered.
-async fn verified(client: &Client) -> Result<Verified> {
+pub(crate) async fn verified(client: &Client) -> Result<Verified> {
     client.verify_vm_offering(ENVIRONMENT, older).await
 }
 
@@ -477,6 +484,17 @@ async fn transactions(
         .take(ASKED)
         .map(|plan| plan.id.clone())
         .collect();
+    ask(client, verified, all, ids).await
+}
+
+/// The guest's own list of its transactions, with those rolled back when
+/// `all`, and whatever it has of each of `ids` whatever its phase and age.
+async fn ask(
+    client: &Client,
+    verified: &Verified,
+    all: bool,
+    ids: Vec<String>,
+) -> Result<Transactions> {
     let malformed = "The VM's list of its copies was malformed";
     let answer = send(
         client,

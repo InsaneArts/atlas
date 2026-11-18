@@ -1,13 +1,15 @@
-//! Requests sent to the environment worker through a request folder of
-//! their own, beside the shared command, that goes once the outcome is
-//! known: the helper's list of its copies, and installing an app, removing
-//! one or asking how installs stand. A change runs under the control its
-//! caller holds; its folder stays while its outcome is not known, as every
-//! change's does.
+//! One-off requests of a desktop's environment worker: the helper's list of
+//! its copies, and installing an app, removing one or asking how installs
+//! stand. A second login's go through a request folder of their own, beside
+//! the shared command, that goes once the outcome is known; a VM's, as
+//! changes its guest's own worker carries out. A change runs under the
+//! control its caller holds and stays pending while its outcome is not
+//! known, as every change does.
 use super::{
-    reply::{InstallState, Installed, InstalledApp, WorkerReply},
+    reply::{InstallState, Installed, InstalledApp, RemovalReply, WorkerReply},
     *,
 };
+use crate::client::Verified;
 use atlas_core::files::Token;
 
 /// The most of an install's output read for the app it placed: an install's
@@ -27,21 +29,26 @@ pub(crate) fn read(answer: Value, field: &str, malformed: &str) -> Result<Value>
     Ok(answer)
 }
 
-/// Install the bundle at `source`, which the helper can read, as
-/// `~/Applications/NAME` for install `id`, under `ownership`.
+/// Install the bundle at `source`, which the desktop can read, as
+/// `~/Applications/NAME` for install `id`, under `ownership`: on a VM, in
+/// the generation of `verified`, the proof its bundle was staged on.
 pub(crate) async fn install_app(
     client: &Client,
     ownership: &Ownership,
     id: &Token,
     source: &Path,
     name: &str,
+    verified: Option<&Verified>,
 ) -> Result<Value> {
     match client.desktop().kind() {
         Kind::User(login) => {
             crate::user::environment::install_app_in(client, login, ownership, id, source, name)
                 .await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => {
+            let verified = verified.ok_or_else(|| client.unreachable())?;
+            crate::vm::environment::install_app_in(client, verified, id, source, name).await
+        }
     }
 }
 
@@ -65,17 +72,17 @@ pub(crate) fn installed_app(reply: &Value) -> Option<InstalledApp> {
 }
 
 /// Remove install `id`, when it is unchanged and nothing runs from it,
-/// under `ownership`.
+/// under `ownership`: what the desktop answered.
 pub(crate) async fn remove_app(
     client: &Client,
     ownership: &Ownership,
     id: &Token,
-) -> Result<Value> {
+) -> Result<RemovalReply> {
     match client.desktop().kind() {
-        Kind::User(login) => {
-            crate::user::environment::remove_app_in(client, login, ownership, id).await
-        }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::User(login) => crate::user::environment::remove_app_in(client, login, ownership, id)
+            .await
+            .map(RemovalReply::read),
+        Kind::Vm(_) => crate::vm::environment::remove_app_in(client, id).await,
     }
 }
 
@@ -96,7 +103,7 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
         Kind::User(login) => {
             crate::user::environment::install_states_in(client, login, &unique).await
         }
-        Kind::Vm(_) => Err(client.unreachable()),
+        Kind::Vm(_) => crate::vm::environment::install_states_in(client, &unique).await,
     }
 }
 

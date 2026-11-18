@@ -309,6 +309,10 @@ pub(crate) enum RemovalReply {
     Unfinished(String),
     /// It said it finished, in a shape this build cannot read.
     Unread,
+    /// The desktop has no record of it, though this Mac keeps one of an
+    /// install that may have reached it: nothing was moved aside, and this
+    /// Mac keeps its record, as these words say.
+    Forgotten(String),
 }
 
 impl RemovalReply {

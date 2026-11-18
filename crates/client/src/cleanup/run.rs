@@ -343,6 +343,9 @@ async fn act(hands: &impl Hands, step: &Step, receipt: &Receipt, session: &Key) 
             Ok(Undone::Unfinished(said)) => {
                 Outcome::failed(Reason::Helper).with(CameTo::failed(&said))
             }
+            Ok(Undone::Forgotten(said)) => {
+                Outcome::kept(Reason::Forgotten).with(CameTo::failed(&said))
+            }
             Err(error) => helper_erred(error),
         },
         Step::RemoveInstall { install, .. } => remove_install(hands, install)
@@ -641,6 +644,9 @@ async fn remove_install(hands: &impl Hands, install: &Token) -> Result<Outcome> 
             return Ok(Outcome::failed(Reason::Helper).with(CameTo::failed(&said)));
         }
         RemovalReply::Unread => return Ok(Outcome::failed(Reason::Helper)),
+        RemovalReply::Forgotten(said) => {
+            return Ok(Outcome::kept(Reason::Forgotten).with(CameTo::failed(&said)));
+        }
     };
     let (outcome, held) = match removal.outcome {
         Removed::Held { held_path } => (

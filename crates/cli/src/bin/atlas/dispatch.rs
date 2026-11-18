@@ -293,11 +293,11 @@ async fn execute_with(
 }
 
 /// Whether `command` is a change this build makes on a VM desktop: a
-/// command, a background job's start or stop, `open` and `close`, a
-/// cleanup of what they left, an environment's plans and their commands
-/// (never a discovery), and an agent's input at a point or of keys and
-/// text. Input checked against an app, a window or a field, and a click on
-/// an element, are not built for a VM.
+/// command, a background job's start or stop, `open` and `close`, an app's
+/// install, a cleanup of what they left, an environment's plans and their
+/// commands (never a discovery), and an agent's input at a point or of keys
+/// and text. Input checked against an app, a window or a field, and a click
+/// on an element, are not built for a VM.
 fn changes_on_vm(command: &Command) -> bool {
     match command {
         Command::Environment(environment) => !matches!(
@@ -307,6 +307,7 @@ fn changes_on_vm(command: &Command) -> bool {
         Command::Run(_)
         | Command::Open(_)
         | Command::Close { .. }
+        | Command::InstallApp { .. }
         | Command::Cleanup(_)
         | Command::Job {
             command: JobCommand::Start { .. } | JobCommand::Stop { .. },
@@ -332,8 +333,9 @@ fn changes_on_vm(command: &Command) -> bool {
 }
 
 /// Whether `command`, one this build carries out on a VM desktop, needs the
-/// VM running: a command, a background job's start, `open`, an agent's
-/// input, and an environment's preview, apply, undo and commands. A close,
+/// VM running: a command, a background job's start, `open`, an app's
+/// install, an agent's input, and an environment's preview, apply, undo and
+/// commands. A close,
 /// a cleanup, a job's stop, an environment's list and a look at what
 /// undoing would do never start it.
 fn starts_vm(command: &Command) -> bool {

@@ -1363,6 +1363,19 @@ fn a_cleanup_says_where_an_install_is_held_and_when_one_was_already_gone() {
 }
 
 #[test]
+fn a_cleanup_kept_because_its_vm_lost_its_record_says_so_in_words_naming_the_vm() {
+    let words = "work has no record of this install, though it may have been made there, so \
+                 Atlas moved nothing aside and keeps its own record of it until work is removed";
+    let run = show(
+        View::Cleanup,
+        json!({"ok": true, "preview": false, "state": "complete", "steps": [
+            {"n": 1, "do": "remove-install", "app": "Probe", "state": "kept",
+             "reason": "forgotten", "error": words}], "left": []}),
+    );
+    assert!(run.out.contains(&format!("kept: {words}")), "{}", run.out);
+}
+
+#[test]
 fn an_install_says_where_it_went_and_only_when_macos_has_not_registered_it() {
     let installed = |registered: bool| {
         show(

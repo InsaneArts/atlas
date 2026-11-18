@@ -131,6 +131,11 @@ fn step(step: &Value) -> String {
             text::printable(step["held"].as_str().unwrap_or_default()),
             atlas_client::environment::HELD_DAYS
         ),
+        // Kept, in the words a step that named its desktop gave.
+        (Some("kept"), _) if step["error"].is_string() => format!(
+            " · kept: {}",
+            text::printable(step["error"].as_str().unwrap_or_default())
+        ),
         (Some("kept"), Some(reason)) => format!(" · kept: {reason}"),
         (Some("failed"), Some(reason)) if step["retry"] == true => {
             format!(" · couldn't: {reason}; try again")
@@ -168,6 +173,7 @@ fn reason(reason: &str) -> &str {
         "kept-targets" => "the helper changed some of its files since",
         "other-volume" => "it could not be moved aside without copying",
         "unreadable" => "Atlas cannot read its record of it",
+        "forgotten" => "the desktop has no record of it",
         "timeout" => "it did not quit in time",
         "in-use" => "still in use",
         "io" => "the file system refused",
