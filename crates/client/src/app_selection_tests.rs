@@ -174,3 +174,52 @@ fn closing_everything_spares_macos_and_atlas() {
         "bundleId": "com.insanearts.atlasish"});
     assert!(!protected(&app_row(other), None));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn second_login_still_looks_in_this_macs_applications_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let names = ["Safari", "Google Chrome", "Firefox", "No Such App Here"];
+
+    let installed = installed(&client, &names).await.unwrap();
+
+    for name in names {
+        let shared = std::path::Path::new("/Applications")
+            .join(format!("{name}.app"))
+            .is_dir();
+        assert_eq!(installed[name], shared, "{name}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_without_installed_v1_is_told_to_update_and_asked_nothing() {
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = crate::test_support::vm_through_keeper(directory.path());
+    *keeper.observing.lock().unwrap() = Some(|answer| {
+        let older: Vec<&str> = atlas_session::compatibility::MACHINE
+            .into_iter()
+            .filter(|name| *name != INSTALLED)
+            .collect();
+        // Its control hello and its read hello, as a real guest's, say one
+        // thing.
+        answer["declared"]["capabilities"] = json!(older);
+        answer["status"]["hello"]["daemon"]["capabilities"] = json!(older);
+    });
+
+    let refused = installed(&client, &["Firefox"]).await.unwrap_err();
+
+    assert_eq!(refused.code, Code::Update, "{refused:?}");
+    assert_eq!(
+        refused.error,
+        "work's Atlas is from an older build and cannot say which apps it has."
+    );
+    assert!(!refused.error.contains("helper"));
+    assert!(
+        keeper
+            .asked_for("read")
+            .iter()
+            .all(|read| read["request"]["op"] != "installed"),
+        "{:?}",
+        keeper.asked_for("read")
+    );
+}

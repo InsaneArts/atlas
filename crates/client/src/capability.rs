@@ -4,6 +4,7 @@
 //! are in [`crate::user::capability`].
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,15 +203,97 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
         "nativeDialogs": not_checked(format!(
             "Atlas does not check native Save/Open panels on {name} yet."
         )),
-        "installedApps": not_checked(format!(
-            "Atlas does not check which apps are installed on {name} yet."
-        )),
+        "installedApps": installed_unasked(&name, &status),
         "maintenance": maintenance(&name, &status["station"]["maintenance"]),
     });
     status["checks"] = json!(checks);
     status["nextSteps"] = json!(next_steps);
     status["warnings"] = json!(warnings);
     status
+}
+
+/// The browsers a sign-in opens, which doctor asks a VM after.
+const BROWSERS: [&str; 2] = ["Google Chrome", "Firefox"];
+
+/// Doctor's report of the VM `client` names, whose status is `status`:
+/// [`vm_report`], and which browsers its guest says it has, asked once its
+/// status shows it proven, serving the read and under no maintenance.
+/// "Not checked" when it cannot be asked, never passed.
+pub async fn vm_doctor_report(client: &crate::client::Client, status: Value) -> Value {
+    let name = client.selected.name.clone();
+    let asked = status["ok"] == true
+        && status["proven"] == true
+        && status["station"]["maintenance"]["state"] == "none"
+        && declares_installed(&status);
+    let mut report = vm_report(status, client.unreachable());
+    if asked && report["capabilities"].is_object() {
+        report["capabilities"]["installedApps"] =
+            match crate::app_selection::installed(client, &BROWSERS).await {
+                Ok(apps) => installed_checked(&name, &apps),
+                Err(refused) if refused.code == atlas_core::error::Code::Update => {
+                    not_checked_apps(older_apps(&name))
+                }
+                // The guest could not look: in its words, said of the VM.
+                Err(refused) if refused.code == atlas_core::error::Code::Apps => {
+                    not_checked_apps(refused.error)
+                }
+                Err(_) => not_checked_apps(unproven_apps(&name)),
+            };
+    }
+    report
+}
+
+/// Whether the guest of the VM whose status is `status` declared, where
+/// its proof was taken, that it says which apps it has.
+fn declares_installed(status: &Value) -> bool {
+    status["declared"]["capabilities"]
+        .as_array()
+        .is_some_and(|declared| {
+            declared
+                .iter()
+                .any(|name| name == atlas_session::compatibility::INSTALLED)
+        })
+}
+
+/// Doctor's word on which apps the VM `name`, whose status is `status`,
+/// has before its guest is asked: not checked, as its Atlas cannot say
+/// when its proof shows so, else until it is proven again.
+fn installed_unasked(name: &str, status: &Value) -> Value {
+    let proven = status["ok"] == true && status["proven"] == true;
+    if proven && status["declared"].is_object() && !declares_installed(status) {
+        not_checked_apps(older_apps(name))
+    } else {
+        not_checked_apps(unproven_apps(name))
+    }
+}
+
+fn not_checked_apps(reason: String) -> Value {
+    json!({"state": NativeState::NotChecked, "reason": reason})
+}
+
+fn older_apps(name: &str) -> String {
+    format!("{name}'s Atlas is from an older build and cannot say which apps it has.")
+}
+
+fn unproven_apps(name: &str) -> String {
+    format!("Which apps {name} has is asked once it is proven again.")
+}
+
+/// Doctor's word on the browsers the VM `name` has, as its guest said
+/// `apps`: each by its name, and what that means for a sign-in there.
+fn installed_checked(name: &str, apps: &BTreeMap<String, bool>) -> Value {
+    let has = |app: &str| apps.get(app).copied().unwrap_or(false);
+    let [chrome, firefox] = BROWSERS;
+    let reason = match (has(chrome), has(firefox)) {
+        (false, false) => format!(
+            "Neither {chrome} nor {firefox} is installed in {name}; sign-ins there need one of \
+             them."
+        ),
+        (true, false) => format!("{chrome} is installed in {name}; {firefox} is not."),
+        (false, true) => format!("{firefox} is installed in {name}; {chrome} is not."),
+        (true, true) => format!("{chrome} and {firefox} are installed in {name}."),
+    };
+    json!({"state": "checked", "apps": apps, "reason": reason})
 }
 
 /// Doctor's word on the person's maintenance of the VM `name`, as its

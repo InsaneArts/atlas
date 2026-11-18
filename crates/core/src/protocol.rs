@@ -371,6 +371,12 @@ requests! { request =>
     /// Whether work a machine desktop's daemon started may still run:
     /// `running`, `none` or `unknown`.
     "leftovers" Leftovers = Ok(Request::Leftovers),
+    /// Whether each app `names` names is installed in the desktop's
+    /// Applications folder.
+    "installed" Installed { names: Vec<String>, pin: Option<SessionPin> } = Ok(Request::Installed {
+        names: installed_names(request)?,
+        pin: pin(request)?,
+    }),
     /// The copies a machine desktop keeps: the one `copy` names, or a page
     /// of them in order, after the one `after` names.
     "copies" Copies { copy: Option<Token>, after: Option<Token> } = Ok(Request::Copies {
@@ -462,6 +468,7 @@ impl Request {
             Self::Sound { muted: Some(_) } => (Any, None, Mutation("sound")),
             Self::Outcome { .. } => (Any, None, Read("outcome")),
             Self::Leftovers => (Any, None, Read("leftovers")),
+            Self::Installed { pin, .. } => (Any, *pin, Read("installed")),
             Self::Copies { .. } => (Any, None, Read("copies")),
             Self::RemoveCopy { .. } => (Any, None, Mutation("remove-copy")),
             Self::Update { .. } => (Any, None, Mutation("update")),
@@ -669,6 +676,30 @@ fn argv(request: &Value, operation: &str) -> Result<Vec<String>, Value> {
         return Err(empty());
     }
     Ok(argv)
+}
+
+/// The apps an `installed` read names: 1 to [`crate::apps::MOST_NAMES`]
+/// names, each one an Applications folder lists ([`crate::apps::plain`]).
+fn installed_names(request: &Value) -> Result<Vec<String>, Value> {
+    let refused = || {
+        bad(
+            "installed names apps as Applications lists them: 1 to 16 names, none empty, with a \
+             slash or a NUL, or . or ..",
+        )
+    };
+    let names = request["names"]
+        .as_array()
+        .filter(|names| (1..=crate::apps::MOST_NAMES).contains(&names.len()))
+        .ok_or_else(refused)?;
+    names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .filter(|name| crate::apps::plain(name))
+                .map(str::to_owned)
+                .ok_or_else(refused)
+        })
+        .collect()
 }
 
 /// `request[field]` as milliseconds within `range`, or `default` when it is

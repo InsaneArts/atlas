@@ -1,10 +1,15 @@
-//! Shared application-selection policy for close-all and held logout.
-use crate::client::{AppList, AppRow};
+//! Shared application-selection policy for close-all and held logout, and
+//! which apps a desktop has installed.
+use crate::client::{AppList, AppRow, Client};
 use atlas_core::{
     desktop::{Desktop, Kind},
+    error::{Code, Error, Result},
     name::same_text,
+    transport::accepted,
 };
+use atlas_session::compatibility::INSTALLED;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
@@ -58,14 +63,56 @@ pub(crate) fn atlas_bundle_in(desktop: &Desktop) -> Option<String> {
     }
 }
 
-/// Whether the app `name` is installed in `desktop`'s Applications folder.
-/// Apps elsewhere are not looked for.
-pub fn installed(desktop: &Desktop, name: &str) -> bool {
-    match desktop.kind() {
-        Kind::User(login) => crate::user::shared::in_applications(login, name),
-        // Not looked for, so never taken as installed.
-        Kind::Vm(_) => false,
+/// Whether each app `names` names is installed in the Applications folder
+/// of `client`'s desktop, by its name. Apps elsewhere are not looked for.
+/// A VM is proved afresh and asked in that proof's session and generation:
+/// its guest looks for each app without following a link.
+///
+/// # Errors
+///
+/// On a VM: refuses one that does not prove, is under the person's
+/// maintenance or being handed over by an update, and one whose Atlas
+/// cannot say (`update`), asking it nothing; fails when it cannot be asked,
+/// refuses, or answers in a way this build does not read.
+pub async fn installed(client: &Client, names: &[&str]) -> Result<BTreeMap<String, bool>> {
+    match client.desktop().kind() {
+        Kind::User(login) => Ok(names
+            .iter()
+            .map(|name| {
+                let installed = crate::user::shared::in_applications(login, name);
+                ((*name).to_owned(), installed)
+            })
+            .collect()),
+        Kind::Vm(_) => installed_in_vm(client, names).await,
     }
+}
+
+/// [`installed`] on a VM: its guest's word, read in the generation and
+/// session of a fresh proof that takes no input.
+async fn installed_in_vm(client: &Client, names: &[&str]) -> Result<BTreeMap<String, bool>> {
+    let verified = client.verify_vm_reading().await?;
+    let generation = client.generation_offering(&verified, INSTALLED, |name| {
+        format!("{name}'s Atlas is from an older build and cannot say which apps it has.")
+    })?;
+    let request = json!({"op": "installed", "names": names, "session": verified.pin()?});
+    let asked = client.link.call_in(&request, Some(generation)).await;
+    let reply = accepted(asked.map_err(Error::certain)?)?;
+    let unread = || {
+        Error::new(
+            Code::Protocol,
+            format!(
+                "{} did not say which apps it has in a way this Atlas reads.",
+                client.selected.name
+            ),
+        )
+    };
+    names
+        .iter()
+        .map(|name| {
+            let installed = reply["installed"][*name].as_bool().ok_or_else(unread)?;
+            Ok(((*name).to_owned(), installed))
+        })
+        .collect()
 }
 
 /// Which running apps `close` quits.

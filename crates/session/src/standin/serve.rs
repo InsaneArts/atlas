@@ -151,6 +151,7 @@ where
             }
         }
         LaneKind::Read if request["op"] == "copies" => stand_in.inventory(&request),
+        LaneKind::Read if request["op"] == "installed" => stand_in.installed(&request),
         LaneKind::Read if request["op"] == "outcome" => {
             let kept = request["change"]
                 .as_str()

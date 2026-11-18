@@ -78,6 +78,11 @@ fn agents_requests(generation: u64) -> Vec<(&'static str, Value)> {
             json!({"op": "read", "request": {"op": "apps", "session": session()},
                 "generation": generation}),
         ),
+        (
+            "an installed read",
+            json!({"op": "read", "request": {"op": "installed", "names": ["Firefox"],
+                "session": session()}, "generation": generation}),
+        ),
         ("a proof", json!({"op": "observe", "challenge": "c1"})),
         (
             "a run",

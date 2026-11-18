@@ -854,3 +854,69 @@ fn an_environment_request_hands_its_packet_whole_within_the_run_bounds() {
         );
     }
 }
+
+#[test]
+fn an_installed_read_names_one_to_sixteen_apps_pinned_to_its_session() {
+    let pin = SessionPin {
+        security_session_id: 42,
+        display_id: 7,
+    };
+
+    let asked = parse(
+        json!({"op": "installed", "names": ["Google Chrome", "Firefox"],
+            "session": {"securitySessionId": 42, "displayId": 7}})
+        .to_string()
+        .as_bytes(),
+    );
+
+    assert_eq!(
+        asked,
+        Ok(Request::Installed {
+            names: vec!["Google Chrome".to_owned(), "Firefox".to_owned()],
+            pin: Some(pin),
+        })
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        asked.unwrap().policy().phase,
+        ConnectionPhase::Read("installed")
+    );
+    let sixteen: Vec<String> = (0..16).map(|app| format!("App {app}")).collect();
+    assert!(
+        parse(
+            json!({"op": "installed", "names": sixteen})
+                .to_string()
+                .as_bytes()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn installed_names_with_a_slash_dot_dot_nul_or_too_many_are_refused_before_anything_is_looked_at() {
+    let seventeen: Vec<String> = (0..17).map(|app| format!("App {app}")).collect();
+    for names in [
+        json!(["Google Chrome/../../Users"]),
+        json!(["/Applications/Firefox"]),
+        json!([".."]),
+        json!(["."]),
+        json!(["Fire\u{0}fox"]),
+        json!([""]),
+        json!([]),
+        json!(seventeen),
+        json!("Firefox"),
+        json!([7]),
+        Value::Null,
+    ] {
+        let refusal = refused(&json!({"op": "installed", "names": names}).to_string());
+
+        assert_eq!(refusal["code"], "bad-request", "{names}");
+        assert_eq!(
+            refusal["error"],
+            "installed names apps as Applications lists them: 1 to 16 names, none empty, with \
+             a slash or a NUL, or . or ..",
+            "{names}"
+        );
+        assert_eq!(refusal["uncertain"], false);
+    }
+}

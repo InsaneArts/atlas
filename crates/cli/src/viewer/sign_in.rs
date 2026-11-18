@@ -112,8 +112,9 @@ impl Viewer {
                 Error::new(Code::Input, "Atlas opens Google Chrome or Firefox for this")
             })?,
             None => {
-                let desktop = self.client().desktop();
-                Browser::first_installed(|app| app_selection::installed(&desktop, app))
+                let apps = [Browser::Chrome.app(), Browser::Firefox.app()];
+                let installed = app_selection::installed(&self.client(), &apps).await?;
+                Browser::first_installed(|app| installed.get(app).copied().unwrap_or(false))
             }
             .ok_or_else(|| {
                 Error::new(

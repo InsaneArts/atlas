@@ -1707,12 +1707,14 @@ async fn a_ready_vms_status_and_doctor_say_it_is_ready_and_doctor_checks_nothing
         verbose["capabilities"]["maintenance"],
         json!({"state": "none"})
     );
-    for unchecked in ["nativeDialogs", "installedApps"] {
-        assert_eq!(
-            verbose["capabilities"][unchecked]["state"], "notChecked",
-            "{unchecked}: {verbose}"
-        );
-    }
+    assert_eq!(
+        verbose["capabilities"]["nativeDialogs"]["state"], "notChecked",
+        "{verbose}"
+    );
+    assert_eq!(
+        verbose["capabilities"]["installedApps"]["state"], "checked",
+        "{verbose}"
+    );
     assert!(!verbose["capabilities"].to_string().contains("passed"));
     let shown = atlas_cli::ui::render::render(
         &atlas_cli::ui::render::View::Doctor { verbose: true },
@@ -1722,6 +1724,83 @@ async fn a_ready_vms_status_and_doctor_say_it_is_ready_and_doctor_checks_nothing
     assert!(shown.contains("VM work"), "{shown}");
     assert!(shown.contains("notChecked"), "{shown}");
     assert!(!shown.to_lowercase().contains("helper"), "{shown}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_doctor_of_a_vm_says_which_browsers_it_has_and_not_checked_before_it_can_ask() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+    let doctor = async || {
+        executed(&config, command(&["doctor", "--verbose"]), &client)
+            .await
+            .unwrap()
+    };
+    let installed_reads = || {
+        keeper
+            .asked_for("read")
+            .into_iter()
+            .filter(|read| read["request"]["op"] == "installed")
+            .collect::<Vec<_>>()
+    };
+
+    let checked = doctor().await;
+    let asked = installed_reads();
+    // Its window is open, so its proof is refused and it cannot be asked.
+    *keeper.observing.lock().unwrap() = Some(|answer| answer["runner"]["window"] = json!("open"));
+    let unproven = doctor().await;
+    // An older guest's proof says it cannot tell.
+    *keeper.observing.lock().unwrap() = Some(|answer| {
+        let older: Vec<Value> = answer["declared"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|name| *name != "installed-v1")
+            .cloned()
+            .collect();
+        answer["declared"]["capabilities"] = json!(older);
+        answer["status"]["hello"]["daemon"]["capabilities"] = json!(older);
+    });
+    let older = doctor().await;
+
+    assert_eq!(
+        checked["capabilities"]["installedApps"],
+        json!({"state": "checked", "apps": {"Google Chrome": false, "Firefox": false},
+            "reason": "Neither Google Chrome nor Firefox is installed in work; sign-ins there \
+                need one of them."}),
+        "{checked}"
+    );
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(
+        asked[0]["request"]["names"],
+        json!(["Google Chrome", "Firefox"])
+    );
+    assert!(asked[0]["request"]["session"].is_object(), "{asked:?}");
+    assert_eq!(
+        asked[0]["generation"],
+        atlas_client::test_support::GENERATION
+    );
+    assert_eq!(
+        unproven["capabilities"]["installedApps"],
+        json!({"state": "notChecked",
+            "reason": "Which apps work has is asked once it is proven again."}),
+        "{unproven}"
+    );
+    assert_eq!(
+        older["capabilities"]["installedApps"],
+        json!({"state": "notChecked",
+            "reason": "work's Atlas is from an older build and cannot say which apps it has."}),
+        "{older}"
+    );
+    assert_eq!(installed_reads().len(), 1, "asked nothing more");
+    for report in [&checked, &unproven, &older] {
+        let said = report["capabilities"]["installedApps"].to_string();
+        assert!(
+            !said.contains("passed") && !said.contains("helper"),
+            "{said}"
+        );
+    }
 }
 
 /// A manifest of one file, and a profile of it, in `folder`.

@@ -2227,6 +2227,17 @@ async fn only_a_machine_desktop_s_daemon_says_what_work_it_left() {
 }
 
 #[tokio::test]
+async fn the_helper_login_never_says_which_apps_it_has() {
+    let reply = answered_elsewhere(r#"{"op":"installed","names":["Firefox"]}"#).await;
+
+    assert_eq!(
+        reply,
+        json!({"ok": false, "code": "platform", "uncertain": false,
+            "error": "Only a machine desktop's daemon says which apps it has"})
+    );
+}
+
+#[tokio::test]
 async fn a_resume_never_waits_on_a_recovery_already_under_way() {
     let daemon = daemon(false);
     let _recovering = daemon.keepers.recovering.lock().await;

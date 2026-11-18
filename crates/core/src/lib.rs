@@ -10,6 +10,7 @@ pub mod account;
 pub mod acl;
 pub mod actions;
 pub mod app_bundle;
+pub mod apps;
 pub mod bounded;
 pub mod buffer;
 pub mod checked;

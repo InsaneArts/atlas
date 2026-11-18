@@ -168,14 +168,26 @@ impl Served {
         Self::built(records, None, true, seeing).await
     }
 
+    /// A guest serving, its apps installed in the folders `applications`.
+    async fn looking_in(applications: &[&std::path::Path]) -> Self {
+        let applications = applications
+            .iter()
+            .map(|folder| folder.to_path_buf())
+            .collect();
+        Self::built(records(), None, true, move |daemon| {
+            daemon.applications = applications;
+        })
+        .await
+    }
+
     /// A guest serving with `records`, its input service `input` if any,
-    /// stages if `staging`, and its screen, which may be recorded, as
-    /// `seeing` makes it.
+    /// stages if `staging`, and its screen, which may be recorded, and its
+    /// Applications folder, as `seeing` makes them.
     async fn built(
         records: Records,
         input: Option<crate::machine::input::Input>,
         staging: bool,
-        seeing: fn(&mut Daemon),
+        seeing: impl FnOnce(&mut Daemon),
     ) -> Self {
         let (records, vault, changes) = records;
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
@@ -5380,12 +5392,132 @@ fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_o
     assert_eq!(everything.declared(), atlas_session::compatibility::MACHINE);
     assert_eq!(
         Serving::default().declared(),
-        atlas_session::compatibility::MACHINE[..4]
+        [
+            &atlas_session::compatibility::MACHINE[..4],
+            &[atlas_session::compatibility::INSTALLED]
+        ]
+        .concat()
     );
     assert!(
         !everything.serves(atlas_core::protocol::JOBS),
         "a helper's name"
     );
+}
+
+#[test]
+fn a_machine_guest_declares_installed_v1_in_machines_order() {
+    use atlas_session::compatibility::{INSTALLED, MACHINE, PICTURES};
+    let serving = Serving {
+        pictures: true,
+        ..Serving::default()
+    };
+
+    let declared = serving.declared();
+
+    assert_eq!(MACHINE.last(), Some(&INSTALLED));
+    assert_eq!(declared[declared.len() - 2..], [PICTURES, INSTALLED]);
+    assert!(
+        Serving::default().serves(INSTALLED),
+        "whatever else it serves"
+    );
+}
+
+#[tokio::test]
+async fn an_installed_read_says_which_named_apps_are_in_the_guests_applications_folder() {
+    let (applications, home, elsewhere) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let own = home.path().join("Applications");
+    std::fs::create_dir_all(applications.path().join("Firefox.app/Contents")).unwrap();
+    // Where the guest's own Atlas installs an app.
+    std::fs::create_dir_all(own.join("Probe.app/Contents")).unwrap();
+    std::fs::create_dir(elsewhere.path().join("Safari.app")).unwrap();
+    for linked in [applications.path().join("Fake.app"), own.join("Other.app")] {
+        std::os::unix::fs::symlink(elsewhere.path().join("Safari.app"), linked).unwrap();
+    }
+    std::fs::write(applications.path().join("Notes.app"), b"a file").unwrap();
+    let served = Served::looking_in(&[applications.path(), &own]).await;
+    let (_controlling, desktop) = served.control().await;
+
+    let replies = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "installed",
+            "names": ["Google Chrome", "Firefox", "Probe", "Fake", "Other", "Notes"]}),
+    )
+    .await;
+
+    assert_eq!(
+        replies.last().unwrap(),
+        &json!({"ok": true, "op": "installed", "installed":
+            {"Google Chrome": false, "Firefox": true, "Probe": true, "Fake": false,
+                "Other": false, "Notes": false}}),
+        "{replies:?}"
+    );
+}
+
+#[test]
+fn a_guest_looks_for_apps_in_this_macs_applications_folder_and_its_accounts_own() {
+    let daemon = Daemon::new("Aqua".into(), synthetic, || true, own_session);
+
+    assert_eq!(
+        daemon.applications,
+        atlas_core::apps::folders(atlas_core::config::home().ok().as_deref())
+    );
+    assert_eq!(daemon.applications.len(), 2, "{:?}", daemon.applications);
+}
+
+#[tokio::test]
+async fn installed_names_with_a_slash_dot_dot_nul_or_too_many_are_refused_by_the_guest_before_anything_is_looked_at()
+ {
+    // A folder that is there but cannot be read: any look at it would say so.
+    let unreadable = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        unreadable.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o000),
+    )
+    .unwrap();
+    let served = Served::looking_in(&[unreadable.path()]).await;
+    let (_controlling, desktop) = served.control().await;
+    let seventeen: Vec<String> = (0..17).map(|app| format!("App {app}")).collect();
+
+    for names in [
+        json!(["../Users"]),
+        json!([".."]),
+        json!(["Fire\u{0}fox"]),
+        json!(seventeen),
+    ] {
+        let replies = ask(
+            &desktop,
+            LaneKind::Read,
+            &json!({"op": "installed", "names": names}),
+        )
+        .await;
+
+        let refused = replies.last().unwrap();
+        assert_eq!(refused["code"], "bad-request", "{names}: {refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("installed names apps as Applications lists them"),
+            "{refused}"
+        );
+    }
+    let looked = ask(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "installed", "names": ["Firefox"]}),
+    )
+    .await;
+    std::fs::set_permissions(
+        unreadable.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    assert_eq!(looked.last().unwrap()["code"], "apps", "{looked:?}");
 }
 
 #[tokio::test]

@@ -24,6 +24,7 @@ use atlas_core::{desktop::DesktopId, error::Result, files::Token, session::key::
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
@@ -174,6 +175,10 @@ pub struct StandIn {
     pub dials_begun: Arc<AtomicUsize>,
     /// The dials' work, ended when the stand-in goes.
     dial_work: Tasks,
+    /// The folders its `installed` reads look in, as a machine guest looks
+    /// in this Mac's Applications folder and its account's own; none for a
+    /// fresh VM, which has no app a test asks after.
+    pub applications: Mutex<Vec<PathBuf>>,
 }
 
 /// A generation the stand-in is live in. Dropping it ends its control
@@ -248,6 +253,7 @@ impl StandIn {
             )),
             dials_begun: Arc::new(AtomicUsize::new(0)),
             dial_work: Tasks::default(),
+            applications: Mutex::default(),
         })
     }
 
@@ -385,6 +391,28 @@ impl StandIn {
             None => atlas_core::outcomes::Outcome::Unknown,
         };
         Some(outcome.answer())
+    }
+
+    /// Its answer to the `installed` read `request`, by a machine guest's
+    /// own code: refused as it refuses a bad one, before anything is looked
+    /// at, else each app named looked for in its Applications folder.
+    pub fn installed(&self, request: &Value) -> Value {
+        let line = serde_json::to_vec(request).unwrap_or_default();
+        match atlas_core::protocol::parse(&line).map(|asked| asked.request) {
+            Ok(atlas_core::protocol::Request::Installed { names, .. }) => {
+                let applications = self
+                    .applications
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                atlas_core::apps::answer(&applications, &names)
+            }
+            Ok(_) => atlas_core::protocol::failure(
+                atlas_core::error::Code::BadRequest,
+                "This is not an installed read.",
+            ),
+            Err(refusal) => refusal,
+        }
     }
 }
 

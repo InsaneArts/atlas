@@ -50,11 +50,14 @@ pub const ENVIRONMENT: &str = "environment-v1";
 /// by the bulk credit: a screenshot, a frame and a stream, each pinned to
 /// the session it was asked for, and a pinned read.
 pub const PICTURES: &str = "pictures-v1";
+/// Which named apps the guest's Applications folder holds, each a real
+/// folder there, never through a link.
+pub const INSTALLED: &str = "installed-v1";
 
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 14] = [
+pub const MACHINE: [&str; 15] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
@@ -69,6 +72,7 @@ pub const MACHINE: [&str; 14] = [
     UPDATES,
     ENVIRONMENT,
     PICTURES,
+    INSTALLED,
 ];
 
 /// What a guest declares in its hello.

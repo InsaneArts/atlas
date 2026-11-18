@@ -156,11 +156,12 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// runs no app and keeps no copy, gives a picture of its whole display for
-/// a screenshot, settles whatever it is asked to, and cannot say whether
-/// work agents started runs there; its keeper holds and releases agents'
-/// lanes whenever it is asked. The VM is added, its lifecycle record kept in `directory`,
-/// and runs, as Atlas VM, stood in for there too, says.
+/// runs no app, has none of the apps asked after installed and keeps no
+/// copy, gives a picture of its whole display for a screenshot, settles
+/// whatever it is asked to, and cannot say whether work agents started runs
+/// there; its keeper holds and releases agents' lanes whenever it is asked.
+/// The VM is added, its lifecycle record kept in `directory`, and runs, as
+/// Atlas VM, stood in for there too, says.
 #[must_use]
 pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let (station, guest) = (
@@ -571,6 +572,17 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
         }
         Some("read") if request["request"]["op"] == "copies" => {
             json!({"ok": true, "op": "copies", "copies": [], "next": null, "unknown": []})
+        }
+        // A fresh VM: none of the apps asked after is installed.
+        Some("read") if request["request"]["op"] == "installed" => {
+            let installed: serde_json::Map<String, Value> = request["request"]["names"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|name| (name.to_owned(), json!(false)))
+                .collect();
+            json!({"ok": true, "op": "installed", "installed": installed})
         }
         Some("read") => json!({"ok": true, "outcome": "unknown"}),
         Some("change") if request["request"]["op"] == "job" => {

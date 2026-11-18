@@ -80,14 +80,19 @@ const LONGEST: Duration = Duration::from_secs(120);
 /// of its may still run. `open`, `close` and a cleanup read the guest's
 /// apps, and a screenshot of an app or a window its windows, always in the
 /// session their proof pinned, and its copies; a live picture asks whether
-/// its capture stopped and drained, naming the session it was proved in.
-/// On the input service's own lane, only a look at an app's elements, held
-/// to the epoch the command's proof pinned and naming its app.
+/// its capture stopped and drained, naming the session it was proved in;
+/// doctor asks which apps its Applications folder holds, naming them, in
+/// the session its proof pinned. On the input service's own lane, only a
+/// look at an app's elements, held to the epoch the command's proof pinned
+/// and naming its app.
 pub(crate) fn carries(kind: &LaneKind, request: &Value) -> bool {
     match (kind, request["op"].as_str()) {
         (LaneKind::Read, Some("hello" | "outcome" | "leftovers" | "copies")) => true,
         (LaneKind::Read, Some("apps" | "windows" | "stream-drain-status")) => {
             request["session"].is_object()
+        }
+        (LaneKind::Read, Some("installed")) => {
+            request["names"].is_array() && request["session"].is_object()
         }
         (LaneKind::Read, Some("job")) => {
             matches!(request["action"].as_str(), Some("show" | "log"))
@@ -592,3 +597,7 @@ async fn say(writing: &mut UnixStream, said: &Value) -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "clients_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+#[path = "installed_tests.rs"]
+mod installed_tests;

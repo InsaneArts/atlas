@@ -219,6 +219,7 @@ fn a_machine_guest_declares_exactly_these_names_in_this_order() {
             "updates-v1",
             "environment-v1",
             "pictures-v1",
+            "installed-v1",
         ]
     );
 }

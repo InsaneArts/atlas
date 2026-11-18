@@ -796,7 +796,7 @@ async fn a_change_the_stand_in_carried_out_is_named_at_each_hello_until_the_stat
 }
 
 #[tokio::test]
-async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_pictures_last() {
+async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_installed_last() {
     let link = Link::new(Conditions::default());
     let (standin, station) = (
         StandIn::new(desktop(), Duration::ZERO),
@@ -809,8 +809,39 @@ async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_pictur
         controlling.declared.capabilities,
         crate::compatibility::MACHINE
     );
+    let last: Vec<&str> = controlling.declared.capabilities[13..]
+        .iter()
+        .map(String::as_str)
+        .collect();
     assert_eq!(
-        controlling.declared.capabilities.last().map(String::as_str),
-        Some(crate::compatibility::PICTURES)
+        last,
+        [
+            crate::compatibility::PICTURES,
+            crate::compatibility::INSTALLED
+        ]
     );
+}
+
+#[test]
+fn a_stand_ins_installed_read_is_answered_by_a_machine_guests_own_code() {
+    let standin = StandIn::new(desktop(), Duration::ZERO);
+    let asked = serde_json::json!({"op": "installed", "names": ["Google Chrome", "Firefox"]});
+
+    let fresh = standin.installed(&asked);
+    let applications = tempfile::tempdir().unwrap();
+    std::fs::create_dir(applications.path().join("Firefox.app")).unwrap();
+    *standin.applications.lock().unwrap() = vec![applications.path().to_owned()];
+    let firefox = standin.installed(&asked);
+    let refused = standin.installed(&serde_json::json!({"op": "installed", "names": [".."]}));
+
+    assert_eq!(
+        fresh["installed"],
+        serde_json::json!({"Google Chrome": false, "Firefox": false}),
+        "{fresh}"
+    );
+    assert_eq!(
+        firefox["installed"],
+        serde_json::json!({"Google Chrome": false, "Firefox": true})
+    );
+    assert_eq!(refused["code"], "bad-request", "{refused}");
 }

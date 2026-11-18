@@ -260,6 +260,9 @@ pub struct Daemon {
     /// admitted before a Stop ends with it, a Resume after or not. Never
     /// raised for the helper login, whose station stops agents itself.
     halted: watch::Sender<Halt>,
+    /// The folders its `installed` reads look in: this Mac's Applications
+    /// folder and its account's own, where `install-app` puts an app.
+    applications: Vec<PathBuf>,
 }
 
 /// Whether agents are stopped on a machine desktop.
@@ -341,6 +344,7 @@ impl Daemon {
             input: None,
             stages: None,
             halted: watch::Sender::new(Halt::default()),
+            applications: atlas_core::apps::folders(atlas_core::config::home().ok().as_deref()),
         }
     }
 
@@ -1235,6 +1239,25 @@ pub(super) async fn answer(
                 json!({"ok": true, "op": "leftovers", "leftovers": leftovers})
             }
         },
+        // The helper login's apps are this Mac's, which its station looks
+        // for itself: refused before either folder is opened.
+        Request::Installed { .. } if asker.gate.is_none() => failure(
+            Code::Platform,
+            "Only a machine desktop's daemon says which apps it has",
+        ),
+        // Each app is looked for beside its folder opened once, never
+        // through a link: an app linked in from elsewhere is not installed.
+        Request::Installed { names, .. } => {
+            let applications = daemon.applications.clone();
+            tokio::task::spawn_blocking(move || atlas_core::apps::answer(&applications, &names))
+                .await
+                .unwrap_or_else(|_| {
+                    failure(
+                        Code::Apps,
+                        "Which apps are installed could not be looked up.",
+                    )
+                })
+        }
         Request::Copies { copy, after } => match daemon.stages.clone() {
             // The helper login's copies are the station's, in its shared folder.
             None => failure(

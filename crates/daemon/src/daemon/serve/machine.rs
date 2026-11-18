@@ -763,11 +763,12 @@ impl Serving {
     /// Whether it serves `capability`: one it does not know it never does.
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
-            ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, JOBS, LEFTOVERS,
-            MACHINE_PROOF, MIRRORS, PICTURES, STAGE, STOP_REPORT, UPDATES,
+            ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, INSTALLED, JOBS,
+            LEFTOVERS, MACHINE_PROOF, MIRRORS, PICTURES, STAGE, STOP_REPORT, UPDATES,
         };
         match capability {
-            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF => true,
+            // Its Applications folder is read by the daemon itself.
+            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF | INSTALLED => true,
             // What a change whose outcome is unknown came to is proven by its
             // supervisors, and the environment worker runs under one.
             LEFTOVERS | ENDED | ENVIRONMENT => self.supervising,

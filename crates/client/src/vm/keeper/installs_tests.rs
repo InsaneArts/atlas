@@ -269,6 +269,30 @@ async fn a_tasks_install_on_a_vm_is_where_open_finds_it_in_the_guest() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_install_app_put_in_a_vms_own_applications_reads_as_installed() {
+    let (serving, _saying, client, disk, _directory) = environment().await;
+    let (client, _task) = tasked(client, "installing");
+    let (_folder, app) = bundle();
+    // This Mac's Applications folder in the guest, holding nothing, then
+    // the guest account's own, where its worker installs.
+    let system = tempfile::tempdir().unwrap();
+    *serving.fixture.guest.standin.applications.lock().unwrap() =
+        vec![system.path().to_owned(), disk.home.join("Applications")];
+    let before = crate::app_selection::installed(&client, &["Probe"])
+        .await
+        .unwrap();
+
+    installed(&client, &app).await;
+    let after = crate::app_selection::installed(&client, &["Probe", "Firefox"])
+        .await
+        .unwrap();
+
+    assert!(!before["Probe"], "nothing there yet");
+    assert!(after["Probe"], "{after:?}");
+    assert!(!after["Firefox"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tasks_cleanup_on_a_vm_moves_its_install_aside_and_undoes_its_plan() {
     let (serving, _saying, client, disk, _directory) = environment().await;
     let (client, task) = tasked(client, "cleaned");

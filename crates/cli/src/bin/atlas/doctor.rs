@@ -146,7 +146,7 @@ async fn vm_report(client: &Client, verbose: bool) -> atlas_core::error::Result<
             None => refused,
         });
     }
-    let report = atlas_client::capability::vm_report(status, client.unreachable());
+    let report = atlas_client::capability::vm_doctor_report(client, status).await;
     Ok(if verbose || ui::human() {
         report
     } else {
