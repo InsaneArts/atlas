@@ -192,29 +192,39 @@ impl Client {
         self.read_apps(None).await.map_err(Error::certain)
     }
 
-    /// The app observation in the helper session `verified` names.
+    /// The app observation in the helper session `verified` names, and a
+    /// VM's in the generation its proof was taken in.
     pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<AppList> {
-        self.read_apps(Some(verified.pin()?)).await
+        let generation = verified.machine().map(|machine| machine.generation);
+        self.read_apps(Some((verified.pin()?, generation))).await
     }
 
-    /// One app list, in the session `pin` names, or after verifying the helper
-    /// when there is no pin. Only the read itself is made certain here.
-    async fn read_apps(&self, pin: Option<SessionPin>) -> Result<AppList> {
+    /// One app list, in the session `pinned` names and a VM's generation it
+    /// names, or after verifying the helper when there is none. Only the
+    /// read itself is made certain here.
+    async fn read_apps(&self, pinned: Option<(SessionPin, Option<u64>)>) -> Result<AppList> {
         let mut request = json!({"op": "apps"});
-        // A VM's guest is proved afresh, and read in the session its proof
-        // pinned.
-        let pin = match pin {
+        // A VM's guest is proved afresh, and read in the session and the
+        // generation its proof pinned.
+        let pinned = match pinned {
             None if matches!(self.desktop().kind(), Kind::Vm(_)) => {
-                Some(self.verify_vm().await?.pin()?)
+                let verified = self.verify_vm().await?;
+                let generation = verified.machine().map(|machine| machine.generation);
+                Some((verified.pin()?, generation))
             }
-            pin => pin,
+            pinned => pinned,
         };
-        if let Some(pin) = pin {
-            request["session"] = json!(pin);
-        } else {
-            self.identity().await?;
-        }
-        let read = async { AppList::decode(self.link.call(&request).await?) };
+        let generation = match pinned {
+            Some((pin, generation)) => {
+                request["session"] = json!(pin);
+                generation
+            }
+            None => {
+                self.identity().await?;
+                None
+            }
+        };
+        let read = async { AppList::decode(self.link.call_in(&request, generation).await?) };
         read.await.map_err(Error::certain)
     }
 }

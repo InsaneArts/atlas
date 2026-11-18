@@ -21,6 +21,33 @@ pub(crate) struct Runner {
     pub(crate) confirmed: Option<bool>,
     #[serde(default)]
     pub(crate) window: Option<Window>,
+    /// The run of Atlas VM that said it.
+    #[serde(default)]
+    pub(crate) incarnation: Option<String>,
+    /// Its picture fence, which moves on each time the window is opened
+    /// with input.
+    #[serde(default)]
+    pub(crate) fence: Option<u64>,
+}
+
+impl Runner {
+    /// Its picture fence, bound to the run that keeps it; none from an
+    /// Atlas VM that keeps none.
+    pub(crate) fn fence(&self) -> Option<Fence> {
+        Some(Fence {
+            incarnation: self.incarnation.clone()?,
+            count: self.fence?,
+        })
+    }
+}
+
+/// What tells whether a VM's window was opened between two proofs: Atlas
+/// VM's run and its picture fence. Two proofs that show the same, each with
+/// the window closed, saw no opening between them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Fence {
+    pub(crate) incarnation: String,
+    pub(crate) count: u64,
 }
 
 /// A keeper's observation of one generation of the VM's session.

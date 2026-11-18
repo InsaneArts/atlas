@@ -1363,7 +1363,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/client/src/collect.rs",
-        &["collect"],
+        &["collect_from"],
         "owner: which paths are the person's own rather than the desktop's",
     ),
     (

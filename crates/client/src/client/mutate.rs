@@ -61,6 +61,22 @@ fn gated(reply: &Value) -> bool {
             && reply["uncertain"] != true
 }
 
+/// Whether any of an input may have been sent, as its `reply` says: done,
+/// done in part, or of an outcome not known. A certain refusal, a check
+/// that sent nothing, and whatever says it was never sent prove none was.
+fn may_have_gone(reply: &Result<Value>) -> bool {
+    match reply {
+        Err(error) => error.uncertain && error.details.get("sent") != Some(&json!(false)),
+        Ok(reply) if reply["sent"] == false || reply["dry"] == true => false,
+        Ok(reply) if reply["ok"] == false => {
+            reply["uncertain"] == true
+                || reply["partial"] == true
+                || reply["performed"].as_u64().unwrap_or(0) > 0
+        }
+        Ok(_) => true,
+    }
+}
+
 /// One change to the helper. Its wire request, completion proof, destination
 /// and ownership all come from this one value, independently of the tolerant
 /// activity-log vocabulary, so they cannot disagree.
@@ -458,36 +474,8 @@ impl Client {
         } else {
             self.answer_or_ask(sent, &mutation, &change, started).await
         };
-        // A request the person must be asked about, or that a Look Only
-        // account refused, sent nothing: no picture is kept for it, and the
-        // attempt allowed after it takes its own. A lost reply may follow
-        // input that was sent, so its picture is kept.
-        if let Some((picture, admitted)) = picture
-            && let Mutation::Input {
-                actions,
-                epoch,
-                expect,
-                ..
-            } = &mutation
-        {
-            if reply.as_ref().is_ok_and(gated) {
-                if let Some(doing) = &self.doing {
-                    doing.before().reset();
-                }
-                // What the person is asked about shows it, in their question
-                // alone: never in activity. Not when the input service brought
-                // an app or window forward first, for a target or a
-                // referenced element: then the screen is taken afresh.
-                let prepared = expect.is_some()
-                    || actions.actions().iter().any(|action| {
-                        matches!(action, atlas_core::actions::Action::Reference { .. })
-                    });
-                if crate::asking::asks_person(&reply) && !prepared {
-                    self.keep_for_ask(picture, admitted);
-                }
-            } else {
-                self.keep_picture(picture, actions.actions(), epoch);
-            }
+        if let Some(picture) = picture {
+            self.keep_before(picture, &mutation, &reply);
         }
         let reply = reply?;
         mutation.validate(&reply)?;
@@ -504,6 +492,69 @@ impl Client {
             self.keep_from_reply(&mut reply);
         }
         Ok(reply)
+    }
+
+    /// Keep `picture`, taken before the input `mutation` sent, as its
+    /// `reply` says. A request the person must be asked about, or that a
+    /// Look Only account refused, sent nothing: no picture is kept for it,
+    /// and the attempt allowed after it takes its own. A lost reply may
+    /// follow input that was sent, so its picture is kept.
+    fn keep_before(
+        &self,
+        (picture, admitted): (crate::before::Raw, atlas_control::Visible),
+        mutation: &Mutation<'_>,
+        reply: &Result<Value>,
+    ) {
+        let Mutation::Input {
+            actions,
+            epoch,
+            expect,
+            ..
+        } = mutation
+        else {
+            return;
+        };
+        if reply.as_ref().is_ok_and(gated) {
+            if let Some(doing) = &self.doing {
+                doing.before().reset();
+            }
+            // What the person is asked about shows it, in their question
+            // alone: never in activity. Not when the input service brought
+            // an app or window forward first, for a target or a
+            // referenced element: then the screen is taken afresh.
+            let prepared = expect.is_some()
+                || actions
+                    .actions()
+                    .iter()
+                    .any(|action| matches!(action, atlas_core::actions::Action::Reference { .. }));
+            if crate::asking::asks_person(reply) && !prepared {
+                self.keep_for_ask(picture, admitted);
+            }
+        } else {
+            self.keep_picture(picture, actions.actions(), epoch);
+        }
+    }
+
+    /// [`Client::keep_before`] on a VM, only for input that may have gone,
+    /// and once a proof after it shows what the input's own proof `proved`
+    /// showed: a picture the person may have been in, or one of input proven
+    /// never sent, is never kept, nor put to them.
+    async fn keep_before_on_vm(
+        &self,
+        picture: (crate::before::Raw, atlas_control::Visible),
+        proved: Option<&super::Pinned>,
+        mutation: &Mutation<'_>,
+        reply: &Result<Value>,
+    ) {
+        let unchanged = match proved {
+            Some(proved) if may_have_gone(reply) => self.reproved(proved).await.is_ok(),
+            _ => false,
+        };
+        if unchanged {
+            self.keep_before(picture, mutation, reply);
+        } else if let Some(doing) = &self.doing {
+            doing.before().reset();
+        }
     }
 
     /// Take from an input's `reply`, its row written, what is for that row
@@ -866,12 +917,12 @@ impl Client {
     /// before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
-        mutation: &Mutation<'_>,
+        mut mutation: Mutation<'_>,
         generation: u64,
         release: Option<Ownership>,
     ) -> Result<Value> {
         self.reachable()?;
-        let within = match (self.desktop().kind(), mutation) {
+        let within = match (self.desktop().kind(), &mutation) {
             (
                 Kind::Vm(_),
                 Mutation::Run { timeout, .. } | Mutation::Environment { timeout, .. },
@@ -907,9 +958,22 @@ impl Client {
         if heeds_stop && !cleanup && self.stop_marked() {
             return Err(self.stopped());
         }
-        let change = match mutation {
+        let change = match &mutation {
             Mutation::Environment { change, .. } => (*change).clone(),
             _ => Token::new(),
+        };
+        // The picture before an agent's input is in hand before the input
+        // is sent, or given up and cancelled then: a frame later than this
+        // is never read.
+        let (picture, proved) = match &mut mutation {
+            Mutation::Input { picture, .. } => match picture.take() {
+                Some(taking) => {
+                    let proved = taking.proved().cloned();
+                    (taking.taken().await, proved)
+                }
+                None => (None, None),
+            },
+            _ => (None, None),
         };
         let claim = if command {
             self.controller
@@ -924,7 +988,7 @@ impl Client {
             .link
             .clone()
             .with_timeout(self.link.timeout().max(within));
-        let route = match mutation {
+        let route = match &mutation {
             Mutation::Input { .. } | Mutation::Acquire { .. } | Mutation::Release { .. } => {
                 Route::Input(Some(change.clone()))
             }
@@ -938,8 +1002,8 @@ impl Client {
         drop(release);
 
         let mut claim = Some(claim);
-        let asked = (mutation, &change);
-        let reply = match mutation {
+        let asked = (&mutation, &change);
+        let reply = match &mutation {
             Mutation::Run { .. } if agent => {
                 self.run_to_its_end(
                     through_keeper(sent),
@@ -969,6 +1033,10 @@ impl Client {
                     .await
             }
         };
+        if let Some(picture) = picture {
+            self.keep_before_on_vm(picture, proved.as_ref(), &mutation, &reply)
+                .await;
+        }
         let reply = reply.map_err(|error| self.pending_on_vm(error))?;
         mutation.validate(&reply)?;
         let mut reply = self

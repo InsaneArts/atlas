@@ -1,7 +1,8 @@
 //! The keeper's clients: Atlas's own processes, on `keeper.sock` in the VM's
 //! private station folder. One request per connection, one JSON line each
-//! way (a read's reply lines as they come), and the client admitted on that
-//! very request: this account's, its running code signed as Atlas.
+//! way (a read's reply lines as they come, and a picture's bytes after the
+//! keeper's own first line), and the client admitted on that very request:
+//! this account's, its running code signed as Atlas.
 //!
 //! Resume is the person's alone: it is taken only with the capability the
 //! keeper made at its start and keeps in its station folder, which the
@@ -40,7 +41,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(super) const CAPABILITIES: [&str; 8] = [
+pub(super) const CAPABILITIES: [&str; 9] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
@@ -49,6 +50,7 @@ pub(super) const CAPABILITIES: [&str; 8] = [
     super::change::CAPABILITY,
     super::recover::CAPABILITY,
     super::stage::CAPABILITY,
+    super::picture::CAPABILITY,
 ];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
@@ -66,13 +68,14 @@ const LONGEST: Duration = Duration::from_secs(120);
 /// keeper's own; a job's reads are a list or one job (`show`) and its log,
 /// never a stop of every job; `leftovers` is the guest's word on what work
 /// of its may still run. `open`, `close` and a cleanup read the guest's
-/// apps, always in the session their proof pinned, and its copies. On the
+/// apps, and a screenshot of an app or a window its windows, always in the
+/// session their proof pinned, and its copies. On the
 /// input service's own lane, only a look at an app's elements, held to the
 /// epoch the command's proof pinned and naming its app.
 pub(crate) fn carries(kind: &LaneKind, request: &Value) -> bool {
     match (kind, request["op"].as_str()) {
         (LaneKind::Read, Some("hello" | "outcome" | "leftovers" | "copies")) => true,
-        (LaneKind::Read, Some("apps")) => request["session"].is_object(),
+        (LaneKind::Read, Some("apps" | "windows")) => request["session"].is_object(),
         (LaneKind::Read, Some("job")) => {
             matches!(request["action"].as_str(), Some("show" | "log"))
         }
@@ -315,6 +318,7 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
         }
         Some("change") => super::change::changed(keeper, &request, writing).await,
         Some("stage") => super::stage::staged(keeper, &request, writing, early).await,
+        Some("picture") => super::picture::pictured(keeper, &request, writing, early).await,
         Some("settle") => {
             let settled = super::change::settled(keeper, &request).await;
             let _ = say(&mut writing, &settled).await;

@@ -144,6 +144,12 @@ where
             };
             reply
         }
+        LaneKind::Picture => {
+            match super::pictures::pictured(stand_in, lanes, &header, &request, &mut secure).await {
+                Some(pictured) => return pictured,
+                None => answer(&header, request),
+            }
+        }
         LaneKind::Read if request["op"] == "copies" => stand_in.inventory(&request),
         LaneKind::Read if request["op"] == "outcome" => {
             let kept = request["change"]

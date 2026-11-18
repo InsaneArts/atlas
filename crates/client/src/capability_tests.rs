@@ -72,3 +72,30 @@ fn a_legacy_null_report_keeps_its_existing_summary_fields() {
         json!({"display": null, "helper": {"name": null, "uid": null}})
     );
 }
+
+#[test]
+fn a_vm_that_may_not_record_says_so_first_in_its_guests_own_words_never_the_helpers() {
+    let held = "Allow Atlas in Privacy & Security, Screen & System Audio Recording, in the VM's \
+                window: agents' pictures wait for it.";
+    let status = |capture: serde_json::Value| {
+        json!({"ok": true, "proven": true, "desktop": {"name": "work"},
+            "proof": {"capture": false, "input": true},
+            "guest": {"permissions": {"screenCapture": false}, "capture": capture}})
+    };
+
+    let said = vm_first_step(&status(json!({"held": held}))).unwrap();
+    let unsaid = vm_first_step(&status(json!({}))).unwrap();
+
+    assert_eq!(said.code, atlas_core::error::Code::Permission);
+    assert_eq!(said.error, held);
+    assert_eq!(
+        said.details["next"],
+        "Ask the person to allow Atlas in Privacy & Security, Screen & System Audio Recording, \
+         in work's window."
+    );
+    assert!(unsaid.error.contains("In the VM's window"), "{unsaid:?}");
+    for step in [said, unsaid] {
+        let shown = serde_json::to_string(&step).unwrap();
+        assert!(!shown.contains("helper"), "{shown}");
+    }
+}

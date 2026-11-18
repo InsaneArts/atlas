@@ -1,19 +1,20 @@
-//! Copies of chosen files from the helper, kept in Atlas's private output
-//! folder with their size and digest, and the receipts that the task's
-//! record and cleanup read. The files in the helper are never changed.
+//! Copies of chosen files from the helper, or a VM, kept in Atlas's private
+//! output folder with their size and digest, and the receipts that the
+//! task's record and cleanup read. The files there are never changed.
 //!
-//! Each file comes over the helper daemon's own socket in parts, each part
-//! written to a private partial file as its events arrive, so a large file
-//! is never held whole. A copy is kept only once its size and SHA-256 match
-//! what the helper read, and under a name nothing else has: it is linked
-//! into place, never written over anything.
+//! Each file comes over the helper daemon's own socket in parts, or a VM's
+//! through its keeper on picture lanes of the generation its proof was
+//! taken in, each part written to a private partial file as its events
+//! arrive, so a large file is never held whole. A copy is kept only once
+//! its size and SHA-256 match what the desktop read, and under a name
+//! nothing else has: it is linked into place, never written over anything.
 mod receipt;
 mod scavenge;
 
 pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
-    client::Client,
+    client::{Client, Pinned},
     link::Link,
     task::{Task, record::OutputEntry, store::Store},
 };
@@ -27,6 +28,7 @@ use atlas_core::{
     time::now_ms,
     transport::{OutputError, append_event, refusal},
 };
+use atlas_session::compatibility::PICTURES;
 use receipt::{Receipt, VERSION, owner_folder};
 use scavenge::remove_abandoned;
 use serde_json::{Map, Value, json};
@@ -67,17 +69,25 @@ struct Failure {
 }
 
 impl Failure {
-    fn new(reason: ReadRefusal, source: &str) -> Self {
+    /// The failure of `source` for `reason`, said of a VM when `on_vm`.
+    fn new(reason: ReadRefusal, source: &str, on_vm: bool) -> Self {
+        let said = if on_vm {
+            reason.said_on_vm()
+        } else {
+            reason.said()
+        };
         Self {
             reason,
-            error: format!("{source}: {}", reason.said()),
+            error: format!("{source}: {said}"),
         }
     }
 }
 
 /// Copy `files` out of the helper into a private folder of their own, each
-/// a regular file the helper owns of at most `max_size` bytes. The reply
-/// names each copy's path, size and SHA-256, never its contents; files
+/// a regular file the helper owns of at most `max_size` bytes; or out of a
+/// VM, proved afresh and held by neither Stop, as its guest reads them,
+/// whether or not it may record its screen. The reply names each copy's
+/// path, size and SHA-256, never its contents; files
 /// collected before one that fails stay collected. Nothing here is ever of
 /// unknown outcome: it changes nothing in the helper, and here it either
 /// kept a verified copy or removed what it began.
@@ -88,6 +98,13 @@ impl Failure {
 /// failures. Per-file refusals remain in the reply; only verified size and digest
 /// completion publishes a collected copy.
 pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
+    // What an agent does about a VM's refusal names the VM, never the helper.
+    let collected = collect_from(client, files, max_size).await;
+    client.advised_on_vm_for(collected, "Files and Folders")
+}
+
+/// [`collect`], as the desktop answered it.
+async fn collect_from(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
     let started = Instant::now();
     if files.is_empty() || files.len() > MAX_FILES {
         return Err(Error::new(Code::Usage, "Give 1 to 16 files to collect"));
@@ -98,18 +115,35 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
             "Give a size such as 200M, at most 1G",
         ));
     }
-    let person = match client.desktop().kind() {
-        Kind::User(login) => crate::user::shared::person_home(login),
-        Kind::Vm(_) => return Err(client.unreachable()),
+    let (person, on_vm) = match client.desktop().kind() {
+        Kind::User(login) => (crate::user::shared::person_home(login), false),
+        Kind::Vm(_) => (None, true),
     };
     for source in files {
-        if let Some(refused) = given(source, person.as_deref()) {
+        if let Some(refused) = given(source, person.as_deref(), on_vm) {
             return Err(
                 Error::new(Code::Collect, refused.error).with("reason", json!(refused.reason))
             );
         }
     }
 
+    if on_vm {
+        let verified = client.verify_vm_reading().await?;
+        client.generation_offering(&verified, PICTURES, |name| {
+            format!("{name}'s Atlas is from an older build that hands this Mac no files.")
+        })?;
+        let pinned = verified.machine().ok_or_else(|| client.unreachable())?;
+        client.fenced(pinned)?;
+        return collected_in(
+            client,
+            verified.pin()?,
+            Some(pinned.clone()),
+            files,
+            max_size,
+            started,
+        )
+        .await;
+    }
     let verified = client.verify_offering(READ, OLDER).await?;
     collected(client, verified.pin()?, files, max_size, started).await
 }
@@ -124,12 +158,29 @@ async fn collected(
     max_size: u64,
     started: Instant,
 ) -> Result<Value> {
+    collected_in(client, pin, None, files, max_size, started).await
+}
+
+/// [`collected`], a VM's reads pinned to the generation its proof
+/// `pinned` was taken in too, and kept only once a proof after them shows
+/// what that one did.
+async fn collected_in(
+    client: &Client,
+    pin: SessionPin,
+    pinned: Option<Pinned>,
+    files: &[String],
+    max_size: u64,
+    started: Instant,
+) -> Result<Value> {
     let Collected {
         receipt,
         kept,
         failed,
         warning,
-    } = Collection::of(client, pin, files, max_size)?.run().await?;
+    } = Collection::of(client, pin, files, max_size)?
+        .proved_by(client, pinned)
+        .run()
+        .await?;
     let total: u64 = kept.iter().map(|file| file.size).sum();
 
     let _ = client
@@ -158,12 +209,17 @@ enum Step {
 type Fault = dyn Fn(Step) -> std::io::Result<()> + Send + Sync;
 
 /// One call's collection on this Mac: the files it reads from the helper,
-/// pinned to the session verified, and where it keeps their copies.
+/// pinned to the session verified, or from a VM, pinned to the generation
+/// its proof was taken in too and held back until a proof after them
+/// shows what that one did, and where it keeps their copies.
 struct Collection {
     link: Link,
     output: PathBuf,
     task: Option<Task>,
     pin: SessionPin,
+    /// A VM's client and the proof its reads were admitted on; none for
+    /// the helper.
+    proof: Option<(Client, Pinned)>,
     files: Vec<String>,
     max_size: u64,
     #[cfg(test)]
@@ -187,11 +243,26 @@ impl Collection {
             output: client.output_dir()?.to_owned(),
             task: client.task.clone(),
             pin,
+            proof: None,
             files: files.to_vec(),
             max_size,
             #[cfg(test)]
             fault: Arc::new(|_| Ok(())),
         })
+    }
+
+    /// This collection, from the VM `client` proved as `pinned`, when it
+    /// is one: each read goes through its keeper in that proof's
+    /// generation, and what is read is kept only once `client` proves the
+    /// VM again as it was.
+    fn proved_by(mut self, client: &Client, pinned: Option<Pinned>) -> Self {
+        self.proof = pinned.map(|pinned| (client.clone(), pinned));
+        self
+    }
+
+    /// The generation a VM's reads are pinned to; none for the helper.
+    fn generation(&self) -> Option<u64> {
+        self.proof.as_ref().map(|(_, pinned)| pinned.generation)
     }
 
     /// Collect every file into a folder of its own, write its receipt and
@@ -254,7 +325,8 @@ impl Collection {
     /// Collect each file in turn, its partial file in `folder` and its copy
     /// in `copies`: the copies kept, and the files that failed and why.
     /// Once the helper itself changed, every later file is refused unread;
-    /// once the caller left, none is.
+    /// once the caller left, none is. A VM's files are each read whole and
+    /// held back, then kept only once the VM is proved again as it was.
     fn copy_each(
         &self,
         folder: &Path,
@@ -263,9 +335,11 @@ impl Collection {
         left: &AtomicBool,
     ) -> (Vec<Kept>, Vec<(String, Failure)>) {
         let mut kept: Vec<Kept> = Vec::new();
+        let mut held: Vec<Held> = Vec::new();
         let mut failed: Vec<(String, Failure)> = Vec::new();
         let mut total = 0;
         let mut changed = false;
+        let on_vm = self.proof.is_some();
         for (n, source) in self.files.iter().enumerate() {
             if left.load(Ordering::SeqCst) {
                 break;
@@ -273,13 +347,14 @@ impl Collection {
             if changed {
                 failed.push((
                     source.clone(),
-                    Failure::new(ReadRefusal::SessionChanged, source),
+                    Failure::new(ReadRefusal::SessionChanged, source, on_vm),
                 ));
                 continue;
             }
             let names: Vec<&str> = kept
                 .iter()
                 .filter_map(|kept| kept.path.file_name()?.to_str())
+                .chain(held.iter().map(|held| held.name.as_str()))
                 .collect();
             let plan = One {
                 source,
@@ -292,17 +367,44 @@ impl Collection {
                 runtime,
                 left,
                 pin: self.pin,
+                generation: self.generation(),
                 #[cfg(test)]
                 fault: &*self.fault,
             };
-            match plan.collect() {
-                Ok(file) => {
+            let collected = if on_vm {
+                plan.fetch().map(Got::Held)
+            } else {
+                plan.collect().map(Got::Kept)
+            };
+            match collected {
+                Ok(Got::Kept(file)) => {
                     total += file.size;
                     kept.push(file);
                 }
+                Ok(Got::Held(file)) => {
+                    total += file.kept.size;
+                    held.push(file);
+                }
                 Err(failure) => {
+                    let _ = fs::remove_file(&plan.partial);
                     changed |= failure.reason.ends_the_call();
                     failed.push((source.clone(), failure));
+                }
+            }
+        }
+        if let Some((client, pinned)) = &self.proof {
+            let proved = (!held.is_empty() && !left.load(Ordering::SeqCst))
+                .then(|| runtime.block_on(client.reproved(pinned)));
+            for file in held {
+                let outcome = match &proved {
+                    Some(Ok(())) => file.kept_in(copies),
+                    Some(Err(refused)) => Err(changed_while_read(client, &file.source, refused)),
+                    None => Err(Failure::new(ReadRefusal::Gone, &file.source, true)),
+                };
+                let _ = fs::remove_file(&file.partial);
+                match outcome {
+                    Ok(copy) => kept.push(copy),
+                    Err(failure) => failed.push((file.source, failure)),
                 }
             }
         }
@@ -408,14 +510,14 @@ fn reply(
 
 /// Why `source` is refused before it is sent: a path, not a pattern, with
 /// no `.` or `..` part, of at most 1024 bytes, and not in `person`'s own
-/// home, which the shell gives for `~`.
-fn given(source: &str, person: Option<&Path>) -> Option<Failure> {
+/// home, which the shell gives for `~`; said of a VM when `on_vm`.
+fn given(source: &str, person: Option<&Path>, on_vm: bool) -> Option<Failure> {
     let path = Path::new(source);
     let dotted = path
         .components()
         .any(|part| matches!(part, Component::CurDir | Component::ParentDir));
     if source.is_empty() || source.len() > READ_PATH_MAX || source.contains('\0') || dotted {
-        return Some(Failure::new(ReadRefusal::Outside, source));
+        return Some(Failure::new(ReadRefusal::Outside, source, on_vm));
     }
     if person.is_some_and(|home| path.is_absolute() && path.starts_with(home)) {
         return Some(Failure {
@@ -426,6 +528,63 @@ fn given(source: &str, person: Option<&Path>) -> Option<Failure> {
         });
     }
     None
+}
+
+/// A file read whole and checked, in its partial file, not yet kept.
+struct Held {
+    source: String,
+    /// The name its copy takes.
+    name: String,
+    partial: PathBuf,
+    /// Whether it was read from a VM, as its refusals say.
+    on_vm: bool,
+    /// What its copy is once kept, its path aside.
+    kept: Kept,
+}
+
+impl Held {
+    /// Keep it: its partial file linked into `copies` under its name, never
+    /// over anything.
+    fn kept_in(&self, copies: &Path) -> std::result::Result<Kept, Failure> {
+        let path = copies.join(&self.name);
+        match fs::hard_link(&self.partial, &path) {
+            Ok(()) => Ok(Kept {
+                path,
+                ..self.kept.clone()
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(Failure::new(ReadRefusal::Exists, &self.source, self.on_vm))
+            }
+            Err(_) => Err(Failure::new(ReadRefusal::Space, &self.source, self.on_vm)),
+        }
+    }
+}
+
+/// What reading one file came to: kept, or, from a VM, held until the VM
+/// is proved again.
+enum Got {
+    Kept(Kept),
+    Held(Held),
+}
+
+/// Why `source`, read from the VM `client` acts on, was not kept: the
+/// proof after its read, `refused`, showed the VM changed or its window
+/// opened since, or the window open still.
+fn changed_while_read(client: &Client, source: &str, refused: &Error) -> Failure {
+    if refused.code == Code::OnConsole {
+        return Failure {
+            reason: ReadRefusal::OnConsole,
+            error: format!("{source}: {}", refused.error),
+        };
+    }
+    Failure {
+        reason: ReadRefusal::SessionChanged,
+        error: format!(
+            "{source}: {} changed, or its window was opened, while its files were read, so \
+             nothing read was kept",
+            client.selected.name
+        ),
+    }
 }
 
 /// One file to collect, and where.
@@ -447,6 +606,8 @@ struct One<'a> {
     left: &'a AtomicBool,
     /// The session every read is pinned to.
     pin: SessionPin,
+    /// A VM's generation every read is pinned to; none for the helper.
+    generation: Option<u64>,
     #[cfg(test)]
     fault: &'a Fault,
 }
@@ -469,7 +630,7 @@ struct ReadReply {
 
 impl One<'_> {
     fn fail(&self, reason: ReadRefusal) -> Failure {
-        Failure::new(reason, self.source)
+        Failure::new(reason, self.source, self.generation.is_some())
     }
 
     fn decoded(&self, reply: &Value) -> ReadReply {
@@ -495,46 +656,54 @@ impl One<'_> {
 
     /// Collect it, removing whatever was begun when it fails.
     fn collect(&self) -> std::result::Result<Kept, Failure> {
-        let collected = || {
-            let name = self.name()?;
+        let collected = self.fetch().and_then(|held| held.kept_in(self.copies));
+        let _ = fs::remove_file(&self.partial);
+        collected
+    }
 
-            let started = now_ms();
-            let mut partial = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&self.partial)
-                .map_err(|_| self.fail(ReadRefusal::Space))?;
-            let mut hasher = Sha256::new();
-            let Received {
-                identity,
-                real,
-                in_home,
-            } = self.receive(&mut partial, &mut hasher)?;
-            let sha256 = atlas_core::name::hex(&hasher.finalize());
-            self.confirm(identity, &mut partial, &sha256)?;
-            self.sync(&partial)
-                .map_err(|_| self.fail(ReadRefusal::Space))?;
-            drop(partial);
-            self.staying()?;
+    /// Read it whole into its partial file, checked against what the
+    /// desktop read and made durable, and hold it there, not yet kept.
+    fn fetch(&self) -> std::result::Result<Held, Failure> {
+        let name = self.name()?;
 
-            let path = self.link(name)?;
-            Ok(Kept {
+        let started = now_ms();
+        let mut partial = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.partial)
+            .map_err(|_| self.fail(ReadRefusal::Space))?;
+        let mut hasher = Sha256::new();
+        let Received {
+            identity,
+            real,
+            in_home,
+        } = self.receive(&mut partial, &mut hasher)?;
+        let sha256 = atlas_core::name::hex(&hasher.finalize());
+        self.confirm(identity, &mut partial, &sha256)?;
+        self.sync(&partial)
+            .map_err(|_| self.fail(ReadRefusal::Space))?;
+        drop(partial);
+        self.staying()?;
+
+        Ok(Held {
+            source: self.source.to_owned(),
+            name: name.to_owned(),
+            partial: self.partial.clone(),
+            on_vm: self.generation.is_some(),
+            kept: Kept {
                 source: real,
                 in_home,
-                path,
+                path: PathBuf::new(),
                 size: identity.size,
                 sha256,
                 read: Some(ReadSpan {
                     started,
                     finished: now_ms(),
                 }),
-            })
-        };
-        let collected = collected();
-        let _ = fs::remove_file(&self.partial);
-        collected
+            },
+        })
     }
 
     /// The name its copy takes: the source's own, when it can be a file
@@ -655,19 +824,6 @@ impl One<'_> {
         partial.sync_all()
     }
 
-    /// Link the finished partial file into the copies folder as `name`,
-    /// never over anything: the copy's path.
-    fn link(&self, name: &str) -> std::result::Result<PathBuf, Failure> {
-        let path = self.copies.join(name);
-        match fs::hard_link(&self.partial, &path) {
-            Ok(()) => Ok(path),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(self.fail(ReadRefusal::Exists))
-            }
-            Err(_) => Err(self.fail(ReadRefusal::Space)),
-        }
-    }
-
     /// Send one read `request` and write the bytes of its `data` events to
     /// `partial` as they arrive, hashing them: the final reply, and how many
     /// bytes came. A refusal is the reason it gives.
@@ -682,7 +838,14 @@ impl One<'_> {
         let mut received = 0_u64;
         let mut written = Ok(());
         let reply = self.runtime.block_on(async {
-            let (sent, unanswered) = self.link.send(request).await?;
+            // A VM's keeper cancels a read whose client goes before its end.
+            let (sent, unanswered) = match self.generation {
+                Some(generation) => (
+                    self.link.send_bulk(request, generation).await?,
+                    crate::link::Unanswered::none(),
+                ),
+                None => self.link.send(request).await?,
+            };
             let reply = sent
                 .finish_each(&mut |event| {
                     if event["event"] != "data" {

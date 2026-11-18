@@ -91,15 +91,65 @@ actor FakeHost: VMHost {
 
   func openWindow() async throws {
     try call("openWindow")
+    if holdsWindow {
+      await withCheckedContinuation { continuation in
+        heldWindow = continuation
+        for waiter in waitingWindow {
+          waiter.resume()
+        }
+        waitingWindow = []
+      }
+    }
     windowIsOpen = true
+  }
+
+  /// Whether each window opening is held, the window not yet open, until
+  /// let go.
+  var holdsWindow = false
+  var heldWindow: CheckedContinuation<Void, Never>?
+  var waitingWindow: [CheckedContinuation<Void, Never>] = []
+
+  /// Hold the next window openings until let go.
+  func holdingWindow() { holdsWindow = true }
+
+  /// Return once a window opening is held.
+  func untilWindowHeld() async {
+    guard heldWindow == nil else { return }
+    await withCheckedContinuation { waitingWindow.append($0) }
+  }
+
+  /// Let the held window opening go on, and open the next ones at once.
+  func releaseWindow() {
+    holdsWindow = false
+    heldWindow?.resume()
+    heldWindow = nil
   }
 
   func closeWindow() async throws {
     try call("closeWindow")
     windowIsOpen = windowSticks
+    windowMinimized = windowSticks && windowMinimized
   }
 
-  func windowOpen() async -> Bool { windowIsOpen }
+  /// Whether the window is minimized: off the screen, and restored with
+  /// its input from the Dock, as the person may.
+  var windowMinimized = false
+
+  /// Minimize the window, as the person may.
+  func minimizeWindow() {
+    windowIsOpen = false
+    windowMinimized = true
+  }
+
+  /// Restore the minimized window, its input with it, as the person may.
+  func restoreWindow() {
+    windowIsOpen = true
+    windowMinimized = false
+  }
+
+  func windowOpen() async -> Bool {
+    WindowState(visible: windowIsOpen, minimized: windowMinimized) == .open
+  }
 
   var earlierAreGone = true
 

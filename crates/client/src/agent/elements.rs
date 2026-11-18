@@ -558,7 +558,7 @@ async fn referenced(client: &Client, target: Option<&Target>, action: &Value) ->
 /// `region`, of window number `window` alone, or of `target`'s part of
 /// `region`; or name the earlier file when nothing changed (unless
 /// `new_file`). The app is found as `elements` finds it; a window or an
-/// app's part of a region is cropped by the helper as its windows are when
+/// app's part of a region is cropped by the desktop as its windows are when
 /// it captures, naming what covers it.
 ///
 /// # Errors
@@ -576,11 +576,27 @@ pub async fn screenshot(
     size: crate::client::Size,
     new_file: bool,
 ) -> Result<Value> {
+    // What an agent does about a VM's refusal names the VM, never the helper.
+    let taken = screenshot_taken(client, target, region, window, size, new_file).await;
+    client.advised_on_vm_for(taken, "Screen & System Audio Recording")
+}
+
+/// [`screenshot`], as the desktop answered it.
+async fn screenshot_taken(
+    client: &Client,
+    target: Option<&Target>,
+    region: Option<Region>,
+    window: Option<i64>,
+    size: crate::client::Size,
+    new_file: bool,
+) -> Result<Value> {
     // An app is found in the helper verified first, and captured only if
-    // the helper is still that one: its pid means nothing in another.
+    // the helper is still that one: its pid means nothing in another. A
+    // VM's is found and captured on one proof, which looks and changes
+    // nothing, so neither Stop holds it.
     let verified = match (target, window) {
         (None, None) => None,
-        _ => Some(client.verify().await?),
+        _ => Some(client.verify_looking().await?),
     };
     let pid = match (target, &verified) {
         (Some(target), Some(verified)) => {
@@ -617,6 +633,11 @@ pub async fn screenshot(
     };
 
     let captured = match &verified {
+        Some(verified) if verified.machine().is_some() => {
+            client
+                .capture_looked(verified, size, crop.as_ref(), new_file)
+                .await
+        }
         Some(verified) => {
             client
                 .capture_expecting(

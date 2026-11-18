@@ -181,6 +181,9 @@ impl Server {
     /// the person, while they sign the helper in to an account, and when a
     /// sign-in began or ended while it was read.
     pub(super) async fn screen(&self, since: Option<&str>, drawn: Option<u32>) -> Result<Value> {
+        if let Some(withheld) = crate::watch::pictures_withheld(&self.client) {
+            return Err(withheld);
+        }
         let status = self.recent_status().await?;
         let admitted = self.client.controller.screen_visible()?;
         let (shot, shared, streaming) = match self.streamed().await {
@@ -274,6 +277,9 @@ impl Server {
     /// image comes back even when the command says it is unchanged: the last
     /// screenshot of that part may have been another session's.
     pub(super) async fn take_screenshot(&self, arguments: &Value) -> Result<Value> {
+        if let Some(withheld) = crate::watch::pictures_withheld(&self.client) {
+            return Err(withheld);
+        }
         let argv = screenshot_argv(arguments)?;
         let program = std::env::current_exe().map_err(|error| {
             Error::new(Code::Capture, "Atlas could not find itself").with_source(error)

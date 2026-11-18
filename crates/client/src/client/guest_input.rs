@@ -7,8 +7,10 @@
 //! guest's input lanes, all in the generation the command's proof was
 //! taken in, each claimed as the guest's under a token of its own, which
 //! its lane and its request name too. Nothing is sent while the guest's
-//! input service is not ready for agents, an action naming an element is
-//! not built for a VM, and no picture is taken before it.
+//! input service is not ready for agents, and an action naming an element
+//! is not built for a VM. The picture before it is taken in the generation
+//! and session its proof pinned, and kept only once a proof after it shows
+//! the same.
 use super::{
     Client, Mutation, Verified,
     input::{native_refusal, released},
@@ -96,6 +98,10 @@ impl Client {
         self.controller.interrupt().check()?;
 
         let epoch = pinned.epoch.input_epoch();
+        // The picture before it is asked for once its session is known,
+        // beside taking the guest's input, and the input waits for it no
+        // longer than the helper's.
+        let picture = self.picture_before_on_vm(verified);
         let (owner, barrier) = self.taken_on_vm(&epoch, generation).await?;
         // An agent's input is judged by the person's accounts while they
         // list any.
@@ -104,12 +110,12 @@ impl Client {
             actions,
             owner: owner.as_str(),
             epoch,
-            picture: None,
+            picture,
             app: self.doing.is_some(),
             expect: None,
             asking,
         };
-        let result = self.mutate_vm(&mutation, generation, None).await;
+        let result = self.mutate_vm(mutation, generation, None).await;
         // A permit is spent by the request that took it, unless that request
         // is proven to have sent nothing.
         crate::asking::return_permits(self, permits, &result);
@@ -124,9 +130,20 @@ impl Client {
     /// about a failure in this VM's own words wherever the step every
     /// desktop shares would name the helper or its settings.
     pub(super) fn advised_on_vm(&self, outcome: Result<Value>) -> Result<Value> {
+        self.advised_on_vm_for(outcome, "Accessibility")
+    }
+
+    /// [`Client::advised_on_vm`] of a command that needs `setting` in the
+    /// guest's Privacy & Security, for a `permission` refusal; a Second
+    /// Login's outcome as it is.
+    pub(crate) fn advised_on_vm_for(&self, outcome: Result<Value>, setting: &str) -> Result<Value> {
+        if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+            return outcome;
+        }
         match outcome {
             Err(error) if error.details.contains_key("next") => Err(error),
-            Err(error) => match self.next_on_vm(error.code, error.holder, error.uncertain) {
+            Err(error) => match self.next_on_vm(error.code, error.holder, error.uncertain, setting)
+            {
                 Some(next) => Err(error.with("next", json!(next))),
                 None => Err(error),
             },
@@ -136,7 +153,9 @@ impl Client {
                     && let Some(code) = reply["code"].as_str().and_then(Code::parse)
                 {
                     let holder = reply["holder"].as_str().and_then(Holder::parse);
-                    if let Some(next) = self.next_on_vm(code, holder, reply["uncertain"] == true) {
+                    if let Some(next) =
+                        self.next_on_vm(code, holder, reply["uncertain"] == true, setting)
+                    {
                         reply["next"] = json!(next);
                     }
                 }
@@ -147,19 +166,35 @@ impl Client {
 
     /// What an agent does about a failure with `code` on this VM, when the
     /// step every desktop shares would name the helper: a permission is
-    /// the guest's Accessibility, allowed in the VM's own window.
-    fn next_on_vm(&self, code: Code, holder: Option<Holder>, uncertain: bool) -> Option<String> {
+    /// the guest's `setting`, allowed in the VM's own window.
+    fn next_on_vm(
+        &self,
+        code: Code,
+        holder: Option<Holder>,
+        uncertain: bool,
+        setting: &str,
+    ) -> Option<String> {
         let name = &self.selected.name;
         if code == Code::Permission && !uncertain {
             return Some(format!(
-                "Ask the person to allow Atlas in Privacy & Security, Accessibility, in {name}'s \
+                "Ask the person to allow Atlas in Privacy & Security, {setting}, in {name}'s \
                  window."
             ));
         }
         let step = atlas_core::error::advice::step(Some(code), holder, uncertain);
         step.contains("helper").then(|| {
-            step.replace("the helper's", &format!("{name}'s"))
-                .replace("the helper", name)
+            let owned = format!("{name}'s");
+            [
+                ("the helper account", name.as_str()),
+                ("the helper's", owned.as_str()),
+                ("the helper", name.as_str()),
+                ("The helper's", owned.as_str()),
+                ("The helper", name.as_str()),
+            ]
+            .into_iter()
+            .fold(step.to_owned(), |step, (helper, vm)| {
+                step.replace(helper, vm)
+            })
         })
     }
 
@@ -199,7 +234,7 @@ impl Client {
                 owner: owner.as_str(),
                 epoch: epoch.clone(),
             };
-            let refused = match self.mutate_vm(&acquire, generation, None).await {
+            let refused = match self.mutate_vm(acquire, generation, None).await {
                 Ok(reply) if reply["ok"] == true => return Ok((owner, barrier)),
                 Ok(reply) => self.pending_on_vm(native_refusal(&reply)),
                 Err(error) => error,
@@ -241,7 +276,7 @@ impl Client {
     /// its answer: the owner is not known to be let go of then.
     async fn release_on_vm(&self, owner: &str, generation: u64) -> Result<Value> {
         let reply = self
-            .mutate_vm(&Mutation::Release { owner }, generation, None)
+            .mutate_vm(Mutation::Release { owner }, generation, None)
             .await?;
         if reply["ok"] != true {
             return Err(native_refusal(&reply));

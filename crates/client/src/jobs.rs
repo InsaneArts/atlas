@@ -436,11 +436,7 @@ async fn mutate(
     machine: Option<&Pinned>,
 ) -> Result<Value> {
     let reply = match machine {
-        Some(machine) => {
-            client
-                .mutate_vm(&mutation, machine.generation, None)
-                .await?
-        }
+        Some(machine) => client.mutate_vm(mutation, machine.generation, None).await?,
         None => client.mutate(mutation, None, None, None).await?,
     };
     accepted(reply)

@@ -23,6 +23,9 @@ public actor ControlService {
   /// The lock this run serves under, once it recovered: its proof that
   /// every earlier run has ended.
   private var lock: RunnerLock?
+  /// What tells the station whether the window was opened between two of
+  /// its states.
+  private var fence = PictureFence()
 
   /// A runner serving `host` as `incarnation`, its changes kept in `ledger`.
   public init(ledger: ChangeLedger, host: any VMHost, incarnation: Incarnation) {
@@ -54,11 +57,16 @@ public actor ControlService {
       reply.hello = .ours
       return reply
     case .state:
+      // Read before the window: an opening begun since moves it on, and one
+      // under way or ended meanwhile says the window open.
+      let reading = fence
       let power = await host.power()
       var reply = ControlReply.served("state", by: incarnation)
       reply.power = power.value
       reply.confirmed = power.confirmed
-      reply.window = await host.windowOpen() ? .open : .closed
+      let shown = await host.windowOpen()
+      reply.window = shown || fence.mayHaveOpened(since: reading) ? .open : .closed
+      reply.fence = reading.value
       return reply
     case .outcome(let change):
       let record: ChangeRecord?
@@ -293,6 +301,9 @@ public actor ControlService {
       case .stop:
         try await host.stop()
       case .window(_, input: true):
+        // Moved on before the window can take any input.
+        fence.beginOpening()
+        defer { fence.endOpening() }
         try await host.openWindow()
       case .window(_, input: false):
         try await host.closeWindow()

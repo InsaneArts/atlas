@@ -4,6 +4,7 @@
 //! every kind of desktop passes.
 pub mod copies;
 pub mod link;
+pub mod pictures;
 pub mod serve;
 
 use link::Tasks;
@@ -153,6 +154,15 @@ pub struct StandIn {
     withheld: Mutex<BTreeMap<LaneId, u64>>,
     /// Where the live generation's control messages go, for credit.
     outbox: Mutex<Option<Arc<Outbox>>>,
+    /// The live generation's credit, which its picture lanes spend.
+    credit: Mutex<Option<Arc<Credit>>>,
+    /// How its picture lanes answer, paced by that credit, when a test
+    /// says.
+    pub pictures: pictures::Picturing,
+    /// What the station said on each picture lane after its request.
+    heard: Mutex<BTreeMap<LaneId, Vec<u8>>>,
+    /// Every picture lane's pump that ended.
+    pumped: Mutex<Vec<pictures::Pumped>>,
     /// Every generation that retired, and why.
     pub retired: Arc<Mutex<Vec<(Generation, Retired)>>>,
     /// The generation live now: a newer one retires it.
@@ -227,6 +237,10 @@ impl StandIn {
             partial: Mutex::default(),
             withheld: Mutex::default(),
             outbox: Mutex::new(None),
+            credit: Mutex::new(None),
+            pictures: pictures::Picturing::default(),
+            heard: Mutex::default(),
+            pumped: Mutex::default(),
             retired: Arc::new(Mutex::new(Vec::new())),
             current: Mutex::new(None),
             dial_gate: Arc::new(tokio::sync::Semaphore::new(
@@ -295,6 +309,7 @@ impl StandIn {
             tasks: Tasks::default(),
         };
         *self.outbox.lock().unwrap_or_else(PoisonError::into_inner) = Some(live.outbox.clone());
+        *self.credit.lock().unwrap_or_else(PoisonError::into_inner) = Some(live.credit.clone());
         let (reading, writing) = tokio::io::split(secure);
         let sending = tokio::spawn(control::send(writing, live.outbox.clone())).abort_handle();
         *live.sending.lock().unwrap_or_else(PoisonError::into_inner) = Some(sending.clone());

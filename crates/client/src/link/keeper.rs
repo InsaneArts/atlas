@@ -365,20 +365,69 @@ impl Keeper {
     }
 
     /// Send `request`, a read, to the guest through the keeper, when it is
-    /// one the keeper carries: what comes back is its reply to read.
+    /// one the keeper carries, in the generation `generation` its command
+    /// proved when it names one: the keeper refuses it unread in any other.
+    /// What comes back is its reply to read.
     ///
     /// # Errors
     ///
     /// Refuses any other read in the one wording for what this build cannot
     /// do on a VM, before anything is said; fails when the keeper cannot be
     /// reached or told.
-    pub(crate) async fn send_read(&self, request: &Value) -> Result<Pending<Stream>> {
+    pub(crate) async fn send_read(
+        &self,
+        request: &Value,
+        generation: Option<u64>,
+    ) -> Result<Pending<Stream>> {
         if !crate::vm::keeper::carries(&LaneKind::Read, request) {
             return Err(self.selected.unreachable());
         }
-        let asked = json!({"op": "read", "request": request,
+        let asked = json!({"op": "read", "request": request, "generation": generation,
             "deadline_ms": duration_ms(self.timeout)});
         self.connected().await?.dispatch(&asked).await
+    }
+
+    /// Send `request`, a pinned picture or file read, to the guest through
+    /// the keeper on a picture lane of the generation `generation` its
+    /// command proved, once the keeper says it was asked: what comes back
+    /// is the guest's own, exactly as it sent it. Going before its end
+    /// cancels it on the guest.
+    ///
+    /// # Errors
+    ///
+    /// Refuses anything else in the one wording for what this build cannot
+    /// do on a VM, before anything is said; returns the keeper's refusal,
+    /// and fails when the keeper cannot be reached or told.
+    pub(crate) async fn send_bulk(
+        &self,
+        request: &Value,
+        generation: u64,
+    ) -> Result<Pending<Stream>> {
+        if !crate::vm::keeper::carries_bulk(request) {
+            return Err(self.selected.unreachable());
+        }
+        let asked = json!({"op": "picture", "generation": generation, "request": request,
+            "deadline_ms": duration_ms(self.timeout)});
+        let (mut stream, left) = self
+            .connected()
+            .await?
+            .dispatch(&asked)
+            .await?
+            .into_stream();
+        let until = tokio::time::Instant::now() + left;
+        let first = tokio::time::timeout_at(until, first_line(&mut stream))
+            .await
+            .map_err(|_| {
+                Error::new(
+                    Code::Transport,
+                    format!("{}'s session keeper did not answer.", self.selected.name),
+                )
+            })??;
+        if first["ok"] != true || first["op"] != "picture" {
+            return Err(atlas_core::transport::refusal(&first));
+        }
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        Ok(Pending::over_authenticated(stream, left))
     }
 
     /// What the keeper is asked to carry `request` to the guest in the
@@ -426,6 +475,46 @@ impl Keeper {
             )
         })
     }
+}
+
+/// The longest first line a keeper says before a picture's bytes.
+const FIRST_LINE: usize = 64 * 1024;
+
+/// The keeper's first line on `stream`, read a byte at a time so nothing of
+/// what follows it, the guest's own bytes, is taken.
+///
+/// # Errors
+///
+/// Fails when the connection ends or fails first, the line is longer than
+/// [`FIRST_LINE`], or it is not JSON.
+async fn first_line(stream: &mut Stream) -> Result<Value> {
+    use tokio::io::AsyncReadExt;
+    let mut line = Vec::new();
+    loop {
+        let byte = stream.read_u8().await.map_err(|error| {
+            Error::new(
+                Code::Transport,
+                "The session keeper closed before it answered.",
+            )
+            .with_source(error)
+        })?;
+        if byte == b'\n' {
+            break;
+        }
+        if line.len() >= FIRST_LINE {
+            return Err(Error::new(
+                Code::Protocol,
+                "The session keeper's first line is too long.",
+            ));
+        }
+        line.push(byte);
+    }
+    serde_json::from_slice(&line).map_err(|_| {
+        Error::new(
+            Code::Protocol,
+            "The session keeper said something not understood.",
+        )
+    })
 }
 
 /// Why a keeper's `hello` is not one this build speaks with; none when it

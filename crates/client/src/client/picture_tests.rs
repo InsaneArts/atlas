@@ -506,6 +506,7 @@ fn cancellable_picture() -> (Taking, oneshot::Receiver<()>, oneshot::Sender<()>)
             deadline: (tokio::time::Instant::now() + WAIT).into_std(),
             cancel: Some(cancel),
             admitted,
+            proved: None,
         },
         notice,
         answer,

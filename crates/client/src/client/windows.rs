@@ -47,13 +47,16 @@ impl Client {
         limit: Duration,
     ) -> Result<Shown> {
         let read = async {
-            let pin = match verified {
-                Some(verified) => verified.pin()?,
-                None => self.verify().await?.pin()?,
+            let (pin, generation) = match verified {
+                Some(verified) => (
+                    verified.pin()?,
+                    verified.machine().map(|machine| machine.generation),
+                ),
+                None => (self.verify().await?.pin()?, None),
             };
             let request = json!({"op": "windows", "dock": dock, "session": pin});
             let link = self.link.clone().with_timeout(limit);
-            window_list(link.call(&request).await?)
+            window_list(link.call_in(&request, generation).await?)
         };
         read.await.map_err(Error::certain)
     }

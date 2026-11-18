@@ -574,7 +574,7 @@ async fn send(
         }
     };
     let reply = client
-        .mutate_vm(&mutation, generation, None)
+        .mutate_vm(mutation, generation, None)
         .await
         .map_err(named)?;
     if reply["ok"] != true {

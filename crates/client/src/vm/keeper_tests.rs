@@ -368,6 +368,15 @@ impl Guest {
     }
 }
 
+/// What Atlas VM says of a running VM, its window `window`, its picture
+/// fence at `fence`, from one run of it.
+pub(super) fn atlas_vm_state(window: &str, fence: u64) -> Value {
+    json!({"ok": true, "op": "state", "power": "running", "confirmed": true,
+        "window": window, "fence": fence,
+        "incarnation": {"pid": 4242, "startSeconds": 1_700_000_000, "startMicroseconds": 5,
+            "id": "6f1c0de2-run"}})
+}
+
 /// A keeper of a VM not paired yet, its enrolment kept, and its guest.
 pub(super) struct Fixture {
     pub(super) keeper: Arc<Keeper>,
@@ -404,8 +413,7 @@ pub(super) fn fixture() -> Fixture {
         stop: Arc::new(Mutex::new("clear")),
         work: Arc::new(Mutex::new(json!({"state": "none"}))),
         answering: Arc::default(),
-        runner: Mutex::new(json!({"ok": true, "op": "state", "power": "running",
-            "confirmed": true, "window": "closed"})),
+        runner: Mutex::new(atlas_vm_state("closed", 0)),
         runner_held: Mutex::new(None),
         runner_asked: AtomicUsize::new(0),
         runner_socket: Mutex::new(None),
@@ -437,6 +445,7 @@ pub(super) fn fixture() -> Fixture {
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
         recovering: tokio::sync::Mutex::new(()),
+        progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
@@ -474,6 +483,7 @@ fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
         recovering: tokio::sync::Mutex::new(()),
+        progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
     })
 }

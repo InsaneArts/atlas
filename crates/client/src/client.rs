@@ -88,6 +88,9 @@ pub(crate) struct Pinned {
     /// Why its guest takes no input from agents in this session, with the
     /// code it is refused by; none while it does.
     pub(crate) input_held: Option<(Code, String)>,
+    /// Atlas VM's picture fence as the proof read it, its window closed;
+    /// none from an Atlas VM that keeps none.
+    pub(crate) fence: Option<crate::vm::proof::Fence>,
 }
 
 impl Verified {
@@ -588,6 +591,17 @@ impl Client {
     pub(crate) async fn verify_either(&self) -> Result<Verified> {
         if matches!(self.desktop().kind(), Kind::Vm(_)) {
             self.verify_vm().await
+        } else {
+            self.verify().await
+        }
+    }
+
+    /// The desktop proved for a look at its screen: Second Login through
+    /// [`Client::verify`], a VM afresh through its keeper, held by neither
+    /// Stop, its guest allowed to record.
+    pub(crate) async fn verify_looking(&self) -> Result<Verified> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            self.verify_vm_looking().await
         } else {
             self.verify().await
         }

@@ -3326,3 +3326,17 @@ async fn letting_go_is_never_turned_away_while_renewals_are_full() {
 
     assert_ne!(body["code"], "busy", "{status} {body}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_viewers_shared_picture_of_a_vm_is_refused_before_its_keeper_is_asked_for_one() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let one_wording = client.unreachable().error;
+    let (_listener, viewer) = bind(client, 0, None).await.unwrap();
+
+    let refused = viewer.frame().await.err().unwrap();
+
+    assert_eq!(refused.error, one_wording, "{refused:?}");
+    assert!(keeper.asked_for("picture").is_empty());
+    assert!(keeper.asked_for("observe").is_empty());
+}

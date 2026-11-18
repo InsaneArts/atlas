@@ -364,7 +364,7 @@ async fn a_job_start_for_a_generation_that_ended_is_refused_unsaid_and_its_claim
         },
     };
 
-    let refused = client.mutate_vm(&mutation, stale, None).await.unwrap();
+    let refused = client.mutate_vm(mutation, stale, None).await.unwrap();
 
     assert_eq!(refused["code"], "session-changed", "{refused}");
     assert_eq!(refused["sent"], false);

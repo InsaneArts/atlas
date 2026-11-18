@@ -15,7 +15,9 @@
 //! came to only once the station holds no claim on it: at each hello, and
 //! every [`WATCH`] for the changes it carried. A change whose command ended
 //! without its answer is recovered from what the guest says it came to
-//! ([`recover`]).
+//! ([`recover`]). A command's pictures and file reads go on picture lanes
+//! of the generation it proved, what the guest sends passed back only as
+//! fast as the command takes it ([`picture`]).
 //!
 //! An update of Atlas replaces its program while it runs; it does nothing
 //! on its own then. The update hands it over ([`super::handover`]): asked,
@@ -26,12 +28,14 @@ mod agent;
 mod change;
 mod clients;
 mod observe;
+mod picture;
 mod program;
 mod recover;
 mod stage;
 
 pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{PROTOCOL, RESUME_KEY, carries};
+pub(crate) use picture::carries_bulk;
 use program::Program;
 pub(crate) use stage::deadline as stage_deadline;
 
@@ -245,6 +249,7 @@ async fn started(
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
         recovering: tokio::sync::Mutex::new(()),
+        progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
     });
     keeper.finish_handover()?;
@@ -421,6 +426,8 @@ struct Keeper {
     observing: tokio::sync::Semaphore,
     /// Held through each recovery of the changes no command holds.
     recovering: tokio::sync::Mutex<()>,
+    /// How long a picture's client is given to take each chunk.
+    progress: Mutex<Duration>,
     shared: Shared,
 }
 
@@ -459,6 +466,23 @@ struct Session {
     /// The changes carried in it, settled once the station holds no claim
     /// on them.
     carried: change::Carried,
+    /// Set once the keeper left it, for what it relays to end with it.
+    retired: tokio::sync::watch::Sender<bool>,
+}
+
+impl Session {
+    /// Leave it for good: its control retired, and everything relayed in it
+    /// told to end.
+    fn retire(&self) {
+        self.control.retire();
+        self.retired.send_replace(true);
+    }
+
+    /// Completes once the keeper left it.
+    async fn ended(&self) {
+        let mut retired = self.retired.subscribe();
+        let _ = retired.wait_for(|retired| *retired).await;
+    }
 }
 
 /// How an attempt at a generation ended.
@@ -526,6 +550,12 @@ impl Keeper {
         }
     }
 
+    /// How long a picture's client is given to take each chunk the guest
+    /// sends.
+    fn progress(&self) -> Duration {
+        *self.progress.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn unlive(&self, why: String) {
         let mut state = self.shared.state();
         state.session = None;
@@ -583,6 +613,7 @@ impl Keeper {
             desktop,
             guest,
             carried,
+            retired: tokio::sync::watch::Sender::new(false),
         });
         {
             let mut state = self.shared.state();
@@ -618,7 +649,7 @@ impl Keeper {
         };
         // Left for good, whatever a client still holds of it: no heartbeat of
         // it renews the guest's lease from here.
-        session.control.retire();
+        session.retire();
         ended
     }
 
@@ -712,7 +743,7 @@ impl Keeper {
         self.handing
             .store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(session) = self.shared.live() {
-            session.control.retire();
+            session.retire();
         }
         self.unlive("This keeper handed the session over to the next.".to_owned());
     }

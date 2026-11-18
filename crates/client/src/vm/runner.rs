@@ -270,6 +270,11 @@ pub struct Reply {
     /// Whether its window is open, for a state; none from a runner of a
     /// build before it said so.
     pub window: Option<Window>,
+    /// Its picture fence, for a state: moved on each time its window is
+    /// opened with input, before the window takes any, and read before the
+    /// window is. None from a runner of a build before it kept one.
+    #[serde(default)]
+    pub fence: Option<u64>,
     /// The change answered.
     pub change: Option<Token>,
     /// What the change came to; none while it is pending.

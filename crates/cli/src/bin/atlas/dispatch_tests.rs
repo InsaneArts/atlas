@@ -1128,7 +1128,6 @@ async fn a_command_not_built_for_a_vm_is_refused_through_dispatch_before_its_kee
         &["element", "press", "--ref", "8123abc.12"],
         &["elements", "--app", "Finder"],
         &["apps"],
-        &["screenshot"],
         &["start-input"],
         &["environment", "discover", "--tool", "cat"],
     ] {

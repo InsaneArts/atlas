@@ -210,7 +210,7 @@ impl Client {
             pin,
         };
         if let Some(generation) = generation {
-            return self.mutate_vm(&mutation, generation, taken).await;
+            return self.mutate_vm(mutation, generation, taken).await;
         }
 
         match run.mode {

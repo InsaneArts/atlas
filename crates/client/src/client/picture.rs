@@ -1,12 +1,15 @@
 //! The picture right before an agent's input: one raw frame of the helper's
-//! screen from its daemon, asked for beside the input's own preflight, and
-//! encoded and saved only after the input is sent.
+//! screen from its daemon, or of a VM's from its guest through its keeper,
+//! asked for beside the input's own preflight, and encoded and saved only
+//! after the input is sent.
 //!
 //! The input goes only once the picture is in hand, or once the daemon has
 //! answered that it was cancelled: no capture for it begins after that, and
 //! one already begun has ended. A daemon that answers neither in time is
-//! left, and the input goes then too.
-use super::{Actor, Client, live::read_header};
+//! left, and the input goes then too. A VM's is kept only once a proof
+//! after it shows what the input's own proof showed, its window closed both
+//! times and Atlas VM's picture fence where it was.
+use super::{Actor, Client, Pinned, Verified, live::read_header};
 use crate::{
     before::{self, Raw},
     link::Link,
@@ -17,12 +20,16 @@ use atlas_core::{
     error::{Code, Error, Result},
     protocol::SessionPin,
     screen::elements::Element,
-    session::InputEpoch,
+    session::{Console, InputEpoch},
 };
+use atlas_session::compatibility::PICTURES;
 use serde_json::json;
-use std::time::{Duration, Instant};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::oneshot,
     task::JoinHandle,
 };
@@ -49,6 +56,9 @@ pub(crate) struct Taking {
     cancel: Option<oneshot::Sender<()>>,
     /// The screen's privacy when it was asked for.
     admitted: Visible,
+    /// The proof of the VM it is taken on, which a proof after it must show
+    /// again before it is kept; none for the helper.
+    proved: Option<Pinned>,
 }
 
 impl std::fmt::Debug for Taking {
@@ -67,6 +77,11 @@ impl Drop for Taking {
 }
 
 impl Taking {
+    /// The proof of the VM it is taken on; none for the helper.
+    pub(super) fn proved(&self) -> Option<&Pinned> {
+        self.proved.as_ref()
+    }
+
     /// The picture, when it is in hand by its deadline, with the screen's
     /// privacy when it was asked for: it is cancelled [`CANCEL`] before,
     /// and may still come while the daemon answers. None when it failed,
@@ -97,6 +112,41 @@ impl Client {
     /// input stops waiting for it [`WAIT`] after that. None is taken while
     /// the person signs the helper in to an account.
     pub(super) fn picture_before(&self, epoch: &InputEpoch, capture_pid: u32) -> Option<Taking> {
+        let (link, epoch) = (self.link.clone(), epoch.clone());
+        self.picture_taken(None, move |cancelled| {
+            frame(link, epoch, capture_pid, cancelled)
+        })
+    }
+
+    /// [`Client::picture_before`] an input to the VM `verified` proved, from
+    /// its guest through its keeper, in that very proof's session and
+    /// generation: none while its guest may not record or gives no
+    /// pictures, or Atlas VM keeps no picture fence to hold it to.
+    pub(super) fn picture_before_on_vm(&self, verified: &Verified) -> Option<Taking> {
+        let pinned = verified.machine()?;
+        if !verified.session().capture
+            || !verified.observation.has_capability(PICTURES)
+            || pinned.fence.is_none()
+        {
+            return None;
+        }
+        let (link, epoch) = (self.link.clone(), pinned.epoch.input_epoch());
+        let (generation, daemon) = (pinned.generation, pinned.epoch.capture_pid);
+        self.picture_taken(Some(pinned.clone()), move |cancelled| {
+            frame_on_vm(link, generation, epoch, daemon, cancelled)
+        })
+    }
+
+    /// Start taking the picture before an input with `frame`, as
+    /// [`Client::picture_before`] says when, on the VM's proof `proved`.
+    fn picture_taken<F>(
+        &self,
+        proved: Option<Pinned>,
+        frame: impl FnOnce(oneshot::Receiver<()>) -> F,
+    ) -> Option<Taking>
+    where
+        F: Future<Output = Result<Raw>> + Send + 'static,
+    {
         let deadline = Instant::now() + WAIT;
         let doing = self.doing.as_ref().filter(|_| self.actor == Actor::Agent)?;
         let admitted = self.controller.screen_visible().ok()?;
@@ -104,17 +154,13 @@ impl Client {
             return None;
         }
         let (cancel, cancelled) = oneshot::channel();
-        let task = tokio::spawn(frame(
-            self.link.clone(),
-            epoch.clone(),
-            capture_pid,
-            cancelled,
-        ));
+        let task = tokio::spawn(frame(cancelled));
         Some(Taking {
             task,
             deadline,
             cancel: Some(cancel),
             admitted,
+            proved,
         })
     }
 
@@ -295,15 +341,51 @@ async fn frame(
             "The picture did not come from the verified helper daemon",
         ));
     };
+    let mut request = serde_json::to_vec(&frame_request(&epoch))?;
+    request.push(b'\n');
+    socket.write_all(&request).await?;
+    received(socket, epoch, daemon, Console::kept(), cancelled).await
+}
+
+/// One raw frame of a VM's screen from its guest's daemon `daemon`,
+/// through its keeper on `link` in the generation `generation` its proof
+/// was taken in, proved to come from the session and display `epoch`
+/// names, on the guest's own console. Once `cancelled` is sent, the guest
+/// is asked to cancel it, as [`frame`] asks the helper.
+async fn frame_on_vm(
+    link: Link,
+    generation: u64,
+    epoch: InputEpoch,
+    daemon: u32,
+    cancelled: oneshot::Receiver<()>,
+) -> Result<Raw> {
+    let (socket, _) = link
+        .send_bulk(&frame_request(&epoch), generation)
+        .await?
+        .into_stream();
+    received(socket, epoch, daemon, Console::Own, cancelled).await
+}
+
+/// The request of a frame for the picture before an input, in the session
+/// of `epoch`.
+fn frame_request(epoch: &InputEpoch) -> serde_json::Value {
     let pin = SessionPin {
         security_session_id: epoch.security_session_id,
         display_id: epoch.display_id,
     };
-    let mut request =
-        serde_json::to_vec(&json!({"op": "frame", "maxDimension": before::SIDE, "session": pin}))?;
-    request.push(b'\n');
-    socket.write_all(&request).await?;
+    json!({"op": "frame", "maxDimension": before::SIDE, "session": pin})
+}
 
+/// The frame asked for on `socket`, from the daemon `daemon`, proved to
+/// come from the session and display `epoch` names, its screen where
+/// `console` says. Once `cancelled` is sent, one byte asks to cancel it.
+async fn received<S: AsyncRead + AsyncWrite + Unpin>(
+    mut socket: S,
+    epoch: InputEpoch,
+    daemon: u32,
+    console: Console,
+    cancelled: oneshot::Receiver<()>,
+) -> Result<Raw> {
     let header = tokio::select! {
         header = read_header(&mut socket) => header?,
         Ok(()) = cancelled => {
@@ -326,7 +408,7 @@ async fn frame(
     if header["daemonPID"] != daemon {
         return Err(invalid());
     }
-    let proof = InputEpoch::from_proof(&header["session"], daemon)?;
+    let proof = InputEpoch::from_proof_kept(&header["session"], daemon, console)?;
     if proof
         != (InputEpoch {
             process_id: daemon,

@@ -1,10 +1,16 @@
-//! Screenshots of the helper's display: a frame read and checked
+//! Screenshots of the helper's display, or a VM's: a frame read and checked
 //! against the session it came from, a crop checked against the one asked
 //! for, and the saved capture that says where its pixels lie on the
 //! display. Captures are kept for a week.
-use super::{Client, record::recorded_code};
+//!
+//! A VM's picture is taken between two proofs of it, each with its window
+//! closed, that show the same epoch, the same generation of its keeper's
+//! session and Atlas VM's same picture fence: no opening of the window came
+//! between them, so nothing the person did there is in it.
+use super::{Client, Verified, record::recorded_code};
 use crate::last_capture;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     protocol::{APP_PARTS, Crop, Part, Region},
     screen::{
@@ -13,6 +19,7 @@ use atlas_core::{
     },
     session::{Display, Epoch},
 };
+use atlas_session::compatibility::PICTURES;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -20,6 +27,33 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
+
+/// The longest side, in pixels, of a picture a VM's guest sends.
+const VM_SIDE: u32 = 1600;
+
+/// Who sent a screenshot, as what is refused of it names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sender {
+    Helper,
+    Vm,
+}
+
+impl Sender {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Helper => "The helper",
+            Self::Vm => "The VM",
+        }
+    }
+}
+
+/// What a screenshot is taken on: a proof made for it, refused unless still
+/// in the epoch named, when one is; or the proof its target was found in.
+#[derive(Clone, Copy, Debug)]
+enum Proof<'a> {
+    Fresh(Option<&'a Epoch>),
+    Looked(&'a Verified),
+}
 
 /// What a cropped screenshot's reply says it shows.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,14 +82,24 @@ pub(super) fn cropped(
     crop: Option<&Crop>,
     display: &Display,
 ) -> Result<Option<Cropped>> {
+    cropped_from(reply, crop, display, Sender::Helper)
+}
+
+/// [`cropped`], of a reply `sender` sent.
+fn cropped_from(
+    reply: &Value,
+    crop: Option<&Crop>,
+    display: &Display,
+    sender: Sender,
+) -> Result<Option<Cropped>> {
+    let malformed =
+        |what: &str| Error::new(Code::Protocol, format!("{} sent {what}", sender.name()));
     let sent = reply.get("region").filter(|region| !region.is_null());
     let (crop, sent) = match (crop, sent) {
         (None, None) => return Ok(None),
-        (None, Some(_)) => {
-            return Err(Error::new(
-                Code::Protocol,
-                "The helper sent a crop that was not asked for",
-            ));
+        (None, Some(_)) => return Err(malformed("a crop that was not asked for")),
+        (Some(_), None) if sender == Sender::Vm => {
+            return Err(malformed("the whole display for a crop"));
         }
         (Some(_), None) => {
             return Err(Error::new(
@@ -67,7 +111,6 @@ pub(super) fn cropped(
         (Some(crop), Some(sent)) => (crop, sent),
     };
 
-    let malformed = |what: &str| Error::new(Code::Protocol, format!("The helper sent {what}"));
     let region: Region = serde_json::from_value(sent.clone())
         .map_err(|cause| malformed("a crop that could not be read").with_source(cause))?;
     let (left, top) = (i64::from(region.x), i64::from(region.y));
@@ -141,6 +184,35 @@ pub(super) fn placement(
     }
 }
 
+/// The PNG a screenshot's `reply` carries, and its width and height, which
+/// its own header and the reply must agree on.
+fn png_of(reply: &Value) -> Result<(Vec<u8>, u32, u32)> {
+    let encoded = reply["png"]
+        .as_str()
+        .ok_or_else(|| Error::new(Code::Capture, "Missing PNG"))?;
+    let png = STANDARD
+        .decode(encoded)
+        .map_err(|cause| Error::new(Code::Capture, "Invalid PNG encoding").with_source(cause))?;
+    let (width, height) = png_dimensions(&png)?;
+    if reply["width"].as_u64() != Some(width.into())
+        || reply["height"].as_u64() != Some(height.into())
+    {
+        return Err(Error::new(
+            Code::Capture,
+            "PNG dimensions disagree with metadata",
+        ));
+    }
+    Ok((png, width, height))
+}
+
+/// Whether a picture of `width` × `height` pixels has the shape of
+/// `display`, to within a pixel: each of its pixels spans as many points
+/// across as down, so a point read off it lands where it shows.
+fn shaped_as(display: &Display, width: u32, height: u32) -> bool {
+    let expected = f64::from(width) * display.height / display.width;
+    (f64::from(height) - expected).abs() <= 1.0
+}
+
 /// The helper's request for a screenshot of `size`, before any crop.
 pub(super) fn screenshot_request(size: Size) -> Value {
     let mut request = json!({"op": "screenshot"});
@@ -195,23 +267,43 @@ impl Client {
     pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
         let size = maximum.map_or(Size::Full, Size::Longest);
 
-        self.framed(size, None, None).await.map(|(frame, _)| frame)
+        self.framed(size, None, Proof::Fresh(None))
+            .await
+            .map(|(frame, _)| frame)
     }
 
     /// A frame of the whole display, or of the crop asked for, with what the
-    /// helper says the crop shows. With `expected`, the helper must still be
-    /// in that epoch when the capture starts, as when the crop names a
-    /// process found in it.
+    /// desktop says the crop shows, taken on `proof`. When it names an
+    /// epoch, the desktop must still be in it when the capture starts, as
+    /// when the crop names a process found in it.
     async fn framed(
         &self,
         size: Size,
         crop: Option<&Crop>,
-        expected: Option<&Epoch>,
+        proof: Proof<'_>,
     ) -> Result<(Frame, Option<Cropped>)> {
         let maximum = size.longest();
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new(Code::Input, "Maximum dimension must be 1–8192"));
         }
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            let fresh;
+            let verified = match proof {
+                Proof::Looked(verified) => verified,
+                Proof::Fresh(expected) => {
+                    fresh = self.verify_vm_looking().await?;
+                    if expected.is_some_and(|epoch| *epoch != fresh.session().epoch) {
+                        return Err(self.vm_changed());
+                    }
+                    &fresh
+                }
+            };
+            return self.framed_on_vm(verified, size, crop).await;
+        }
+        let expected = match proof {
+            Proof::Fresh(expected) => expected,
+            Proof::Looked(verified) => Some(&verified.session().epoch),
+        };
 
         let verified = self.verify().await?;
         let before = verified.session();
@@ -267,21 +359,7 @@ impl Client {
             let shows = cropped(&reply, crop, &before.epoch.display)?;
 
             let at = Instant::now();
-            let encoded = reply["png"]
-                .as_str()
-                .ok_or_else(|| Error::new(Code::Capture, "Missing PNG"))?;
-            let png = STANDARD.decode(encoded).map_err(|cause| {
-                Error::new(Code::Capture, "Invalid PNG encoding").with_source(cause)
-            })?;
-            let (width, height) = png_dimensions(&png)?;
-            if reply["width"].as_u64() != Some(width.into())
-                || reply["height"].as_u64() != Some(height.into())
-            {
-                return Err(Error::new(
-                    Code::Capture,
-                    "PNG dimensions disagree with metadata",
-                ));
-            }
+            let (png, width, height) = png_of(&reply)?;
 
             let after = self.identity().await?;
             if before.epoch != after.epoch {
@@ -300,6 +378,93 @@ impl Client {
             ))
         })
         .await
+    }
+
+    /// A frame of a VM's whole display, or of the crop asked for, taken on
+    /// the proof `verified` and kept only once a proof after it shows the
+    /// same epoch, generation and picture fence: at most [`VM_SIDE`] pixels
+    /// on its longer side, its crop of the guest's own pictures' contract.
+    async fn framed_on_vm(
+        &self,
+        verified: &Verified,
+        size: Size,
+        crop: Option<&Crop>,
+    ) -> Result<(Frame, Option<Cropped>)> {
+        let pinned = verified.machine().ok_or_else(|| self.unreachable())?;
+        let generation = self.generation_offering(verified, PICTURES, |name| {
+            format!("{name}'s Atlas is from an older build that gives this Mac no pictures.")
+        })?;
+        self.fenced(pinned)?;
+        let before = verified.session();
+        let display = &before.epoch.display;
+        let mut request = screenshot_request(size);
+        request["maxDimension"] = json!(size.longest().map_or(VM_SIDE, |side| side.min(VM_SIDE)));
+        match crop {
+            None => {}
+            Some(Crop::App { pid }) => request["pid"] = json!(pid),
+            Some(Crop::Part { pid, part }) => {
+                request["pid"] = json!(pid);
+                match part {
+                    Part::Window(number) => request["window"] = json!(number),
+                    Part::Within(within) => request["within"] = json!(within),
+                }
+            }
+            Some(Crop::Region(region)) => {
+                if !meets(region, display) {
+                    return Err(Error::new(
+                        Code::Usage,
+                        format!(
+                            "The region lies outside the display, which is {} × {} points",
+                            display.width, display.height
+                        ),
+                    ));
+                }
+                request["region"] = json!(region);
+            }
+        }
+        request["session"] = json!(verified.pin()?);
+
+        let reply = self
+            .link
+            .send_bulk(&request, generation)
+            .await?
+            .finish()
+            .await?;
+        if reply["ok"] != true {
+            if reply["code"].is_string() {
+                return Err(atlas_core::transport::refusal(&reply));
+            }
+            return Err(Error::new(
+                Code::Capture,
+                reply["error"].as_str().unwrap_or("Capture failed"),
+            ));
+        }
+        let shows = cropped_from(&reply, crop, display, Sender::Vm)?;
+        let at = Instant::now();
+        let (png, width, height) = png_of(&reply)?;
+        if width > VM_SIDE || height > VM_SIDE {
+            return Err(Error::new(
+                Code::Protocol,
+                "The VM sent a picture larger than was asked for",
+            ));
+        }
+        if shows.is_none() && !shaped_as(display, width, height) {
+            return Err(Error::new(
+                Code::Protocol,
+                "The VM sent a picture of another shape than its display",
+            ));
+        }
+        self.reproved(pinned).await?;
+        Ok((
+            Frame {
+                png: png.into(),
+                width,
+                height,
+                epoch: before.epoch.clone(),
+                at,
+            },
+            shows,
+        ))
     }
 
     /// Save a screenshot of the whole display, or of `crop`, and say where
@@ -324,10 +489,34 @@ impl Client {
         crop: Option<&Crop>,
         new_file: bool,
     ) -> Result<Value> {
+        self.capture_on(Proof::Fresh(expected), size, crop, new_file)
+            .await
+    }
+
+    /// [`Client::capture`] of a VM, taken on `looked`, the proof its crop's
+    /// target was found in, and kept only once a proof after it shows the
+    /// same.
+    pub(crate) async fn capture_looked(
+        &self,
+        looked: &Verified,
+        size: Size,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
+        self.capture_on(Proof::Looked(looked), size, crop, new_file)
+            .await
+    }
+
+    /// [`Client::capture`], taken on `proof`, and recorded.
+    async fn capture_on(
+        &self,
+        proof: Proof<'_>,
+        size: Size,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
         let started = Instant::now();
-        let captured = self
-            .capture_unrecorded(expected, size, crop, new_file)
-            .await;
+        let captured = self.capture_unrecorded(proof, size, crop, new_file).await;
 
         // An agent's look at the screen is activity too, naming the file it
         // gave; a recording that fails never fails the capture.
@@ -346,7 +535,7 @@ impl Client {
     /// account, and never kept when a sign-in began or ended while it ran.
     async fn capture_unrecorded(
         &self,
-        expected: Option<&Epoch>,
+        proof: Proof<'_>,
         size: Size,
         crop: Option<&Crop>,
         new_file: bool,
@@ -355,7 +544,7 @@ impl Client {
             super::Actor::Agent => Some(self.controller.screen_visible()?),
             super::Actor::Viewer => None,
         };
-        let (frame, shows) = self.framed(size, crop, expected).await?;
+        let (frame, shows) = self.framed(size, crop, proof).await?;
         if let Some(admitted) = admitted {
             self.controller.still_visible(admitted)?;
         }

@@ -170,40 +170,111 @@ impl Client {
         if let Some(held) = guest_held(&self.selected.name, status) {
             return Err(held);
         }
-        if status["agents"]["admitted"] != true {
-            let held = status["agents"]["held"]
-                .as_str()
-                .unwrap_or("Agents wait until the desktop is closed to anyone but Atlas.");
-            return Err(Error::new(Code::Platform, held));
+        admitted(status)?;
+        Ok(verified_vm(machine, &proved.observed))
+    }
+
+    /// A VM verified now for a look at its screen: as [`Client::verify_vm_reading`],
+    /// and its guest allowed to record its screen, else refused in its own
+    /// words.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::verify_vm_reading`], and `permission` while the guest may
+    /// not record.
+    pub(crate) async fn verify_vm_looking(&self) -> Result<Verified> {
+        self.vm_looking(true).await
+    }
+
+    /// A VM verified now for a look that changes nothing, a file's read
+    /// among them: proved afresh in one generation of its keeper's session,
+    /// open to no one but Atlas, and no update handing its session over.
+    /// Neither the person's Stop nor the guest's holds it, and it never
+    /// starts the VM.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM that does not prove, is open to more than Atlas, or is
+    /// being handed over by an update.
+    pub(crate) async fn verify_vm_reading(&self) -> Result<Verified> {
+        self.vm_looking(false).await
+    }
+
+    /// [`Client::verify_vm_reading`], and the guest allowed to record its
+    /// screen when `capture`.
+    async fn vm_looking(&self, capture: bool) -> Result<Verified> {
+        if let Some(why) = self.handover_unfinished() {
+            return Err(Error::new(Code::Busy, why));
         }
-        let epoch = &machine.epoch;
-        let session = Session {
-            epoch: atlas_core::session::Epoch {
-                uid: epoch.uid,
-                capture_pid: epoch.capture_pid,
-                display: epoch.display.clone(),
-                security_session_id: epoch.security_session_id,
-                display_id: epoch.display_id,
-                input_pid: epoch.input_pid,
-            },
-            capture: machine.capture,
-            input: machine.input,
-        };
-        // Commands that need no input run whether or not it is held; input
-        // is refused in the guest's own words before anything is claimed.
-        let input_held = (!machine.input).then(|| {
-            let held = crate::capability::vm_input_held(status);
-            (held.code, held.error)
-        });
-        Ok(Verified {
-            session,
-            observation: Observation::decode(status),
-            machine: Some(Pinned {
-                epoch: machine.epoch,
-                generation: proved.observed.generation,
-                input_held,
-            }),
-        })
+        let keeper = self.keeper().await?;
+        let proved = self.verify_machine(&keeper).await?;
+        let machine = proved.session?;
+        let status = &proved.observed.status;
+        admitted(status)?;
+        if capture && !machine.capture {
+            return Err(crate::capability::vm_capture_held(status));
+        }
+        Ok(verified_vm(machine, &proved.observed))
+    }
+
+    /// Prove the VM again once a picture was taken on the proof `before`:
+    /// refused unless this proof shows the same epoch, the same generation
+    /// and Atlas VM's same run and picture fence, its window closed again,
+    /// so no opening of the window came between the two.
+    ///
+    /// # Errors
+    ///
+    /// The proof's own refusal; `session-changed` when anything named above
+    /// differs, or Atlas VM keeps no fence.
+    pub(crate) async fn reproved(&self, before: &Pinned) -> Result<()> {
+        let keeper = self.keeper().await?;
+        let proved = self.verify_machine(&keeper).await?;
+        let machine = proved.session?;
+        let fence = proved.observed.runner.fence();
+        let same = machine.epoch == before.epoch
+            && proved.observed.generation == before.generation
+            && fence.is_some()
+            && fence == before.fence;
+        if !same {
+            return Err(self.vm_changed());
+        }
+        Ok(())
+    }
+
+    /// Refuse a look at this VM, proved as `pinned`, while Atlas VM keeps
+    /// no picture fence: no proof could then tell whether its window was
+    /// opened while it was looked at.
+    ///
+    /// # Errors
+    ///
+    /// `update`, in the VM's words, when Atlas VM keeps none.
+    pub(crate) fn fenced(&self, pinned: &Pinned) -> Result<()> {
+        if pinned.fence.is_some() {
+            return Ok(());
+        }
+        Err(Error::new(
+            Code::Update,
+            format!(
+                "Atlas VM, which runs {}, is from an older build that cannot say whether its \
+                 window was opened, so agents look at nothing there.",
+                self.selected.name
+            ),
+        )
+        .with(
+            "next",
+            json!("Update Atlas so Atlas VM and this command are one build."),
+        ))
+    }
+
+    /// The refusal of a picture of this VM whose two proofs differ.
+    pub(super) fn vm_changed(&self) -> Error {
+        Error::new(
+            Code::SessionChanged,
+            format!(
+                "{} changed, or its window was opened, since Atlas checked it; look again",
+                self.selected.name
+            ),
+        )
     }
 
     /// [`Client::verify_vm`], refusing a guest whose daemon does not offer
@@ -551,6 +622,54 @@ fn resumption(told: &Value) -> Value {
         reply["warnings"] = json!([why]);
     }
     reply
+}
+
+/// Refuse a VM whose guest's `status` says it is open to more than Atlas,
+/// in its own words.
+fn admitted(status: &Value) -> Result<()> {
+    if status["agents"]["admitted"] == true {
+        return Ok(());
+    }
+    let held = status["agents"]["held"]
+        .as_str()
+        .unwrap_or("Agents wait until the desktop is closed to anyone but Atlas.");
+    Err(Error::new(Code::Platform, held))
+}
+
+/// The VM `observed` proved as `machine`, as a command verified it: its
+/// session, what its guest said, and the proof's epoch, generation and
+/// Atlas VM's picture fence.
+fn verified_vm(machine: MachineSession, observed: &Observed) -> Verified {
+    let status = &observed.status;
+    let epoch = &machine.epoch;
+    let session = Session {
+        epoch: atlas_core::session::Epoch {
+            uid: epoch.uid,
+            capture_pid: epoch.capture_pid,
+            display: epoch.display.clone(),
+            security_session_id: epoch.security_session_id,
+            display_id: epoch.display_id,
+            input_pid: epoch.input_pid,
+        },
+        capture: machine.capture,
+        input: machine.input,
+    };
+    // Commands that need no input run whether or not it is held; input
+    // is refused in the guest's own words before anything is claimed.
+    let input_held = (!machine.input).then(|| {
+        let held = crate::capability::vm_input_held(status);
+        (held.code, held.error)
+    });
+    Verified {
+        session,
+        observation: Observation::decode(status),
+        machine: Some(Pinned {
+            epoch: machine.epoch,
+            generation: observed.generation,
+            input_held,
+            fence: observed.runner.fence(),
+        }),
+    }
 }
 
 /// The keeper's refusal `refused` of an observation of the VM `name`, its

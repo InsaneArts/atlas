@@ -511,8 +511,27 @@ fn unseen() -> Error {
     Error::new(Code::Capture, "The helper's screen could not be read")
 }
 
-/// [`screen`], whatever the screen's privacy.
+/// Why pictures of the VM `client` acts on are not shown through Atlas's
+/// own tools yet, in plain words; none for Second Login.
+pub(crate) fn pictures_withheld(client: &Client) -> Option<Error> {
+    if !matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        return None;
+    }
+    let name = &client.selected.name;
+    Some(Error::new(
+        Code::Platform,
+        format!(
+            "Pictures of {name} are not shown through the Atlas tools yet; use atlas screenshot \
+             --desktop {name}."
+        ),
+    ))
+}
+
+/// [`screen`], whatever the screen's privacy. A VM's is not shown here yet.
 async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen> {
+    if pictures_withheld(client).is_some() {
+        return None;
+    }
     let output = output.to_path_buf();
     let shared = tokio::task::spawn_blocking(move || {
         let url = crate::viewer::local(&output, port)?;

@@ -306,7 +306,7 @@ async fn a_change_for_a_generation_that_ended_is_refused_unsaid_and_its_claim_cl
         pin: None,
     };
 
-    let refused = client.mutate_vm(&mutation, stale, None).await.unwrap();
+    let refused = client.mutate_vm(mutation, stale, None).await.unwrap();
 
     assert_eq!(refused["code"], "session-changed", "{refused}");
     assert_eq!(refused["sent"], false);
@@ -533,10 +533,6 @@ async fn every_command_not_built_for_a_vm_is_refused_in_one_wording_before_anyth
         client.start_input().await.unwrap_err(),
         client.identity().await.unwrap_err(),
         client.apps().await.unwrap_err(),
-        client
-            .capture(crate::client::Size::Standard, None, false)
-            .await
-            .unwrap_err(),
         crate::agent::list(&client, &crate::agent::WindowFilter::default())
             .await
             .unwrap_err(),

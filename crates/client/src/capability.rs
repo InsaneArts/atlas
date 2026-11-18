@@ -154,14 +154,7 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
         ))
     };
     if guest["permissions"]["screenCapture"] != true {
-        return Some(
-            Error::new(
-                Code::Permission,
-                "In the VM's window, open System Settings › Privacy & Security › Screen & \
-                 System Audio Recording and turn Atlas on.",
-            )
-            .with("next", allow("Screen & System Audio Recording")),
-        );
+        return Some(vm_capture_held(guest).with("next", allow("Screen & System Audio Recording")));
     }
     if status["proof"]["input"] != true {
         let held = vm_input_held(guest);
@@ -172,6 +165,19 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
         });
     }
     None
+}
+
+/// Why a VM whose guest's status is `guest` gives agents no pictures now, in
+/// the guest's own words where it says why.
+pub(crate) fn vm_capture_held(guest: &Value) -> atlas_core::error::Error {
+    use atlas_core::error::{Code, Error};
+    Error::new(
+        Code::Permission,
+        guest["capture"]["held"].as_str().unwrap_or(
+            "In the VM's window, open System Settings › Privacy & Security › Screen & System \
+             Audio Recording and turn Atlas on.",
+        ),
+    )
 }
 
 /// Why a VM whose guest's status is `guest` takes no input from agents now,

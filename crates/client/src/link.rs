@@ -175,17 +175,71 @@ impl Link {
     /// refuses a change to a machine desktop before anything is opened: it
     /// does not keep the records changes need yet.
     pub async fn send(&self, request: &Value) -> Result<(Pending<Stream>, Unanswered)> {
+        self.send_in(request, None).await
+    }
+
+    /// [`Link::send`], a VM's read carried only in the generation
+    /// `generation` its command proved, when it names one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Link::send`]; a VM's keeper refuses the read unread in another
+    /// generation.
+    pub(crate) async fn send_in(
+        &self,
+        request: &Value,
+        generation: Option<u64>,
+    ) -> Result<(Pending<Stream>, Unanswered)> {
         let kind = match self {
             Self::Unix(_) => LaneKind::Read,
             Self::Session(session) => lane_for(session, request)?,
             // Its keeper carries its cancel, and only the reads it serves.
             Self::Keeper(keeper) => {
-                return Ok((keeper.send_read(request).await?, Unanswered(None)));
+                return Ok((
+                    keeper.send_read(request, generation).await?,
+                    Unanswered(None),
+                ));
             }
             Self::Unreachable(unreachable) => return Err(unreachable.selected.unreachable()),
         };
         let (pending, unanswered) = self.connect(kind).await?;
         Ok((pending.dispatch(request).await?, unanswered))
+    }
+
+    /// Send `request`, a picture or a file's read that sends a lot: to the
+    /// helper login's socket as any request goes, or through a VM's keeper
+    /// on a picture lane of the generation `generation` its command proved.
+    /// What comes back is the reply as its desktop sent it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a machine desktop reached any other way, and a VM's request
+    /// its keeper does not carry, before anything is said; fails when the
+    /// desktop cannot be reached or told.
+    pub(crate) async fn send_bulk(
+        &self,
+        request: &Value,
+        generation: u64,
+    ) -> Result<Pending<Stream>> {
+        match self {
+            Self::Unix(transport) => {
+                transport
+                    .connect()
+                    .await?
+                    .map(Stream::Unix)
+                    .dispatch(request)
+                    .await
+            }
+            Self::Keeper(keeper) => keeper.send_bulk(request, generation).await,
+            Self::Session(session) => Err(Error::new(
+                Code::Platform,
+                format!(
+                    "Desktop {} cannot do this yet.",
+                    session.desktop.id().as_str()
+                ),
+            )),
+            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
+        }
     }
 
     /// A connection to a VM desktop's keeper for `request`, the change
@@ -225,7 +279,17 @@ impl Link {
     /// Returns connection, framing, timeout or reply failures. A failure
     /// after dispatch can be uncertain, and is never safe to replay.
     pub async fn call(&self, request: &Value) -> Result<Value> {
-        let (sent, unanswered) = self.send(request).await?;
+        self.call_in(request, None).await
+    }
+
+    /// [`Link::call`], a VM's read carried only in the generation
+    /// `generation` its command proved, when it names one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Link::call`].
+    pub(crate) async fn call_in(&self, request: &Value, generation: Option<u64>) -> Result<Value> {
+        let (sent, unanswered) = self.send_in(request, generation).await?;
         let reply = sent.finish().await?;
         unanswered.answered();
         Ok(reply)
@@ -277,6 +341,12 @@ pub(crate) enum Route {
 pub struct Unanswered(Option<(Arc<Desktop>, LaneId)>);
 
 impl Unanswered {
+    /// A request with nothing to cancel here: the VM's keeper it went
+    /// through cancels it on the guest should its client go first.
+    pub(crate) fn none() -> Self {
+        Self(None)
+    }
+
     /// The final reply came: nothing to cancel.
     pub fn answered(mut self) {
         self.0 = None;

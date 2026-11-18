@@ -149,3 +149,16 @@ async fn the_helper_logins_socket_is_refused_for_a_machine_desktop() {
 
     assert_eq!(error.code, Code::Platform);
 }
+
+#[tokio::test]
+async fn a_picture_on_a_desktops_own_session_is_refused_before_any_lane_opens() {
+    let (reached, link) = reached().await;
+    let pin = json!({"securitySessionId": 42, "displayId": 7});
+
+    let refused = link
+        .send_bulk(&json!({"op": "screenshot", "session": pin}), 1)
+        .await;
+
+    assert!(matches!(refused, Err(error) if error.code == Code::Platform));
+    assert!(reached.admitted.lock().unwrap().is_empty());
+}

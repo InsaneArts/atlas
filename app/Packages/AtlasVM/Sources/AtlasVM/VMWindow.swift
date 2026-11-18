@@ -1,4 +1,5 @@
 import AppKit
+import AtlasVMKit
 import Virtualization
 
 /// A VM's window, with its input: shown only while the person's hands are
@@ -33,8 +34,11 @@ final class VMWindow {
   /// Whether it shows `machine`.
   func shows(_ machine: VZVirtualMachine) -> Bool { self.machine === machine }
 
-  /// Whether it is on screen.
-  var isOpen: Bool { window.isVisible }
+  /// Whether it is open: on screen, or minimized, from where the person
+  /// restores it with its input. Only its close makes it closed.
+  var isOpen: Bool {
+    WindowState(visible: window.isVisible, minimized: window.isMiniaturized) == .open
+  }
 
   /// Close it.
   func close() {

@@ -432,7 +432,7 @@ pub(crate) async fn remove(
         format!("{vm} is running an older Atlas that removes no copies")
     })?;
     let mutation = crate::client::Mutation::RemoveCopy { copy, node };
-    client.mutate_vm(&mutation, generation, None).await
+    client.mutate_vm(mutation, generation, None).await
 }
 
 /// Remove the guest's copy `copy` for a command of host session `session`,

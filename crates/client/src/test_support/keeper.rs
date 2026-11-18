@@ -347,7 +347,7 @@ fn answered(request: &Value, stop: &str, peer: &Value, own: &Value, job_stopped:
                 "sessionProof": {"ok": true, "challenge": request["challenge"],
                     "proof": screen()}},
             "runner": {"ok": true, "power": "running", "confirmed": true,
-                "window": "closed"}}),
+                "window": "closed", "incarnation": "6f1c0de2-run", "fence": 0}}),
         Some("read") if request["request"]["op"] == "hello" => machine_hello(stop),
         Some("read") if request["request"]["op"] == "job" => {
             job_answered(&request["request"], job_stopped)

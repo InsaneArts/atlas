@@ -47,6 +47,22 @@ read_refusals! {
 }
 
 impl ReadRefusal {
+    /// Why a file was not collected from a VM, in words that name the VM
+    /// wherever [`ReadRefusal::said`] names the helper.
+    pub fn said_on_vm(self) -> &'static str {
+        match self {
+            Self::Outside => {
+                "Only files in the VM's home, its temporary folder or /tmp are collected"
+            }
+            Self::Dataless => "The file's contents are not in the VM yet",
+            Self::Owner => "The file does not belong to the VM's account",
+            Self::Missing => "No such file in the VM",
+            Self::SessionChanged => "The VM changed since Atlas checked it",
+            Self::OnConsole => "The VM's window may be taking the person's input",
+            other => other.said(),
+        }
+    }
+
     /// Unknown future reasons retain the caller's compatibility fallback.
     pub fn of(reply: &Value) -> Option<Self> {
         Self::deserialize(&reply["reason"]).ok()

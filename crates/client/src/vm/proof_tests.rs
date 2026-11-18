@@ -282,6 +282,7 @@ fn only_a_running_confirmed_virtual_machine_is_eligible_and_only_a_closed_window
         power: Some(Power::Running),
         confirmed: Some(true),
         window: Some(Window::Closed),
+        ..Runner::default()
     };
 
     assert!(eligible(&running, &observation(json!(true))));

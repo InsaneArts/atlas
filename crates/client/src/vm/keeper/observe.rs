@@ -90,6 +90,8 @@ pub(super) async fn observed(
             "power": reply.power,
             "confirmed": reply.confirmed,
             "window": reply.window,
+            "incarnation": reply.incarnation.map(|incarnation| incarnation.id),
+            "fence": reply.fence,
             "error": reply.error,
         }),
         Err(error) => json!({"ok": false, "error": error.error}),
