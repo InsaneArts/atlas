@@ -239,7 +239,8 @@ impl Reach for Guest {
                         if request["op"] == "hello" {
                             json!({"ok": true, "op": "hello",
                                 "stop": {"state": *stop.lock().unwrap()},
-                                "work": work.lock().unwrap().clone()})
+                                "work": work.lock().unwrap().clone(),
+                                "system": {"version": "27.2.1", "build": "27C101"}})
                         } else {
                             json!({"ok": true, "echo": request})
                         }
@@ -749,6 +750,24 @@ async fn the_guests_own_stop_is_read_on_each_new_generation() {
     })
     .await;
     assert_eq!(fixture.guest.standin.resumes.load(SeqCst), 0);
+    running.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_guests_macos_is_kept_with_its_report_of_the_generation() {
+    let fixture = fixture();
+    let running = tokio::spawn({
+        let keeper = fixture.keeper.clone();
+        async move { keeper.run().await }
+    });
+    until("reported", || reported(&fixture.keeper).is_some()).await;
+
+    let report = fixture.keeper.shared.state().report.clone().unwrap();
+    assert_eq!(
+        report["system"],
+        json!({"version": "27.2.1", "build": "27C101"})
+    );
+    assert_eq!(fixture.keeper.hello()["report"]["system"], report["system"]);
     running.abort();
 }
 

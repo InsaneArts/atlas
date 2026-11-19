@@ -1,5 +1,6 @@
 import AtlasVMKit
 import Foundation
+import Virtualization
 
 /// One run of Atlas VM serving one VM: the one lock taken, the earlier
 /// runs' changes settled by what is there, and then its two sockets served
@@ -43,7 +44,19 @@ enum Runner {
     try record.write(to: folder.incarnation)
     let machine = Machine(folder: folder, desktop: desktop, record: record)
     let installer = GuestInstaller(folder: folder, desktop: desktop, machine: machine)
-    let host = VirtualMachineHost(machine: machine, installer: installer, desktop: desktop)
+    let images = RestoreImage.folder(in: folder.parent)
+    try? VMFolder.makePrivate(images)
+    let newest = LatestMacOS(file: images.appending(path: "Latest.json")) {
+      let image = try await VZMacOSRestoreImage.latestSupported
+      let version = image.operatingSystemVersion
+      return MacOSRelease(
+        major: version.majorVersion,
+        minor: version.minorVersion,
+        patch: version.patchVersion,
+        build: image.buildVersion
+      )
+    }
+    let host = VirtualMachineHost(machine: machine, installer: installer, desktop: desktop, newest: newest)
     let service = ControlService(ledger: ChangeLedger(folder: folder.changes), host: host, incarnation: incarnation)
     await service.recover(holding: lock, vmGone: vmGone)
     ControlServer.start(try UnixListener(at: folder.control), service: service)

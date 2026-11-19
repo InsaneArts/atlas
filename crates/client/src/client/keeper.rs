@@ -570,10 +570,7 @@ impl Client {
         });
         // Whether its Atlas is this Mac's build, or what brings it there,
         // and how an update its keeper owns stands.
-        let update = crate::vm::update::with_owner(
-            crate::vm::update::said(&self.selected.name, &update_facts(&status)),
-            &status["keeper"]["update"],
-        );
+        let update = guest_update(&self.selected.name, &status);
         if let Some(guest) = status["guest"].as_object_mut() {
             guest.insert("update".to_owned(), update);
         }
@@ -581,6 +578,13 @@ impl Client {
         status["ready"] = json!(judged.is_ok());
         if let Err(why) = judged {
             status["notReady"] = json!(why);
+        }
+        // What the app needs to know of the VM, built where the listing's
+        // are.
+        if let Some(Value::Object(facts)) = crate::vm::facts::of_status(self, &status).await
+            && let Some(said) = status.as_object_mut()
+        {
+            said.extend(facts);
         }
         Ok(status)
     }
@@ -1096,6 +1100,17 @@ fn declared_of(status: &Value) -> Declared {
 /// unsaid stays unknown, never filled from what the keeper heard in another
 /// generation. With no hello of its own, it is judged on what its keeper
 /// heard in the generation live now, and on nothing once none is.
+/// Whether the Atlas in the VM `name` is this Mac's build, or what brings it
+/// there, and how an update its keeper owns stands, as `status` says: a
+/// status read through its keeper, or its keeper's hello alone as
+/// `{"keeper": hello}`.
+pub(crate) fn guest_update(name: &str, status: &Value) -> Value {
+    crate::vm::update::with_owner(
+        crate::vm::update::said(name, &update_facts(status)),
+        &status["keeper"]["update"],
+    )
+}
+
 fn update_facts(status: &Value) -> crate::vm::update::Facts {
     let (daemon, keeper) = (&status["guest"]["daemon"], &status["keeper"]);
     let said = if daemon.is_object() {

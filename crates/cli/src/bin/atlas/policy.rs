@@ -251,6 +251,7 @@ impl Policy {
                 View::DesktopRemove,
             ),
             Command::Desktop(cli::Desktop::List) => Self::local(View::Desktops),
+            Command::Desktop(cli::Desktop::Start { .. }) => Self::local(View::DesktopStart),
             Command::Desktop(cli::Desktop::Maintain { .. }) => Self::passive(
                 Local,
                 Prompt("Stopped. Run atlas desktop maintain again to go on."),

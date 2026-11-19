@@ -7,19 +7,31 @@ final class VirtualMachineHost: VMHost {
   private let machine: Machine
   private let installer: GuestInstaller
   private let desktop: String
+  private let newest: LatestMacOS
 
-  /// The VM `machine` is, put Atlas inside by `installer`.
-  init(machine: Machine, installer: GuestInstaller, desktop: String) {
+  /// The VM `machine` is, put Atlas inside by `installer`, the newest
+  /// macOS for it asked of `newest`.
+  init(machine: Machine, installer: GuestInstaller, desktop: String, newest: LatestMacOS) {
     self.machine = machine
     self.installer = installer
     self.desktop = desktop
+    self.newest = newest
   }
 
   /// Its power now, seen just now.
   func power() async -> Observed<PowerState> { await machine.power() }
 
-  /// Make the VM.
-  func create() async throws { try await machine.create() }
+  /// Make the VM for the make change `change`.
+  func create(_ change: ChangeID) async throws { try await machine.create(change) }
+
+  /// How far making it got.
+  func making() async -> MakingProgress? { await machine.making }
+
+  /// How much of its disk is used.
+  func disk() async -> DiskUse { await machine.disk }
+
+  /// The newest macOS the framework supports here.
+  func latest() async -> MacOSRelease? { await newest.release() }
 
   /// Start it.
   func start() async throws { try await machine.start() }

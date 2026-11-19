@@ -18,6 +18,13 @@ public struct ControlReply: Codable, Equatable, Sendable {
   /// Its picture fence, for a state: read before its window, so a window
   /// opened since shows as open there or as a fence moved on in the next.
   public var fence: UInt64?
+  /// How far making the VM got, for a state, once a make was asked.
+  public var making: MakingProgress?
+  /// How much of the VM's disk is used, for a state.
+  public var disk: DiskUse?
+  /// The newest macOS Apple's framework supports here, for a latest; none
+  /// when it cannot be told.
+  public var latest: MacOSRelease?
   /// Whether every earlier run's VM is gone, for a state: true only once
   /// this run recovered under its lock and sees each gone.
   public var earlierGone: Bool?

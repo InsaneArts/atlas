@@ -53,10 +53,32 @@ actor FakeHost: VMHost {
     heldPower = nil
   }
 
-  func create() async throws {
+  func create(_ change: ChangeID) async throws {
     try call("create")
     powered = Observed(.stopped, confirmed: true)
   }
+
+  /// How far making the VM got, as a test says.
+  var made: MakingProgress?
+
+  func making() async -> MakingProgress? { made }
+
+  /// The disk file whose use is said, and the size its VM was made with.
+  var diskFile: URL?
+  var diskSize: UInt64 = 128_000_000_000
+
+  func disk() async -> DiskUse {
+    guard let diskFile else { return DiskUse(used: nil, size: diskSize) }
+    return DiskUse.of(diskFile, size: diskSize)
+  }
+
+  /// Say the VM's disk is the file `file`.
+  func disk(at file: URL) { diskFile = file }
+
+  /// The newest macOS, as a test says.
+  var newest: MacOSRelease?
+
+  func latest() async -> MacOSRelease? { newest }
 
   /// Why each start is refused, in its own words; none lets it start.
   var startRefusal: String?

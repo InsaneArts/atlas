@@ -810,6 +810,15 @@ fn a_vm_is_added_named_or_not_removed_by_its_name_and_the_desktops_listed() {
 }
 
 #[test]
+fn a_vm_is_started_by_its_name() {
+    assert!(matches!(
+        parse(&["desktop", "start", "work"]).unwrap().command,
+        Some(Command::Desktop(Desktop::Start { ref name })) if name == "work"
+    ));
+    assert!(parse(&["desktop", "start"]).is_err());
+}
+
+#[test]
 fn a_vms_maintenance_is_begun_or_ended_by_its_name_and_never_both_restarted_and_ended() {
     assert!(matches!(
         parse(&["desktop", "maintain", "work"]).unwrap().command,

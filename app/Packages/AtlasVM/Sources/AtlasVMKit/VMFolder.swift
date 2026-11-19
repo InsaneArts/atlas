@@ -70,6 +70,8 @@ public struct VMFolder: Equatable, Sendable {
   public var changes: URL { root.appending(path: "Changes", directoryHint: .isDirectory) }
   /// The lock the run serving it holds.
   public var lock: URL { root.appending(path: "Runner.lock") }
+  /// How far making it got, as its station reads it.
+  public var making: URL { root.appending(path: "Making.json") }
   /// The run of its runner it was last served by.
   public var incarnation: URL { root.appending(path: "Incarnation.json") }
   /// The socket its station controls it on.

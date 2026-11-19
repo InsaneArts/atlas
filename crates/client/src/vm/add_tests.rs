@@ -540,6 +540,18 @@ fn an_add_goes_through_every_step_to_created_and_says_each_as_a_plain_line() {
 }
 
 #[test]
+fn an_add_keeps_the_process_making_it_in_the_vms_record() {
+    let world = World::new();
+
+    let (added, _) = world.add(Some("work"), Kill::Never);
+
+    added.unwrap();
+    let adder = world.record().adder.unwrap();
+    assert!(adder.is_this_one(), "{adder:?}");
+    assert_eq!(Some(adder), atlas_core::process::Instance::current());
+}
+
+#[test]
 fn an_add_killed_at_any_point_goes_on_from_there_when_asked_again_never_sending_the_secret_after_the_pairing()
  {
     let clean = World::new();

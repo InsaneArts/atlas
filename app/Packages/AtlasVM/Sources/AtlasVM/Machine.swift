@@ -87,15 +87,18 @@ final class Machine {
     }
   }
 
-  /// Make it: this Mac checked first, then its identity and an ASIF disk,
-  /// then macOS installed from the newest restore image. It is absent until
-  /// all of that is done.
-  func create() async throws {
+  /// Make it for the make change `change`: this Mac checked first, then
+  /// its identity and an ASIF disk, then macOS installed from the newest
+  /// restore image, how far it got kept as it goes. It is absent until all
+  /// of that is done.
+  func create(_ change: ChangeID) async throws {
     let parent = folder.root.deletingLastPathComponent()
+    let log = MakingLog(file: folder.making, change: change)
+    log.checking()
     // Chosen first, so the room checked is for the image that will be used.
     let choice = try await RestoreImage.choose(in: RestoreImage.folder(in: parent))
     try Preflight.check(home: folder.root, cached: choice.source == nil, among: parent)
-    let image = try await RestoreImage.fetch(choice)
+    let image = try await RestoreImage.fetch(choice, log: log)
     let restore = try await VZMacOSRestoreImage.image(from: image)
     guard let requirements = restore.mostFeaturefulSupportedConfiguration, requirements.hardwareModel.isSupported else {
       throw AtlasVMError.unsupported("This Mac cannot run that version of macOS.")
@@ -118,19 +121,41 @@ final class Machine {
       options: []
     )
     try makeDisk()
+    let installing = try await RestoreImage.installing(in: RestoreImage.folder(in: parent))
+    defer { withExtendedLifetime(installing) {} }
     let before = MachineProcess.running() ?? []
-    try await install(from: image)
-    // The process that installed it holds its storage until it ends, and a
-    // start before then fails: it is made once that process is seen gone.
-    await installerEnded(since: before)
+    try await InstallScratch.cleaning(in: InstallScratch.temporaryFolder, image: image) {
+      try await install(from: image, log: log)
+      // The process that installed it holds its storage until it ends, and a
+      // start before then fails: it is made once that process is seen gone.
+      await installerEnded(since: before)
+    }
     try PrivateFile.write(Data(), to: made)
+    log.done()
   }
 
-  /// Install macOS from `image` on a VM of its own, which goes once done.
-  private func install(from image: URL) async throws {
+  /// Install macOS from `image` on a VM of its own, which goes once done,
+  /// how far it got told to `log`.
+  private func install(from image: URL, log: MakingLog) async throws {
     let machine = VZVirtualMachine(configuration: try MachineConfiguration.make(folder, settings: settings))
     let installer = VZMacOSInstaller(virtualMachine: machine, restoringFromImageAt: image)
+    let watching = installer.progress
+      .observe(\.fractionCompleted, options: [.initial]) { progress, _ in
+        log.installing(fraction: progress.fractionCompleted)
+      }
+    defer { watching.invalidate() }
     try await installer.install()
+  }
+
+  /// How far making it got, as last kept; none before a make was asked, or
+  /// while that cannot be read.
+  var making: MakingProgress? {
+    try? MakingProgress.read(from: folder.making)
+  }
+
+  /// How much of its disk its guest filled.
+  var disk: DiskUse {
+    DiskUse.of(folder.disk, size: settings.diskBytes)
   }
 
   /// Wait, bounded, until no framework VM process started since `before` is

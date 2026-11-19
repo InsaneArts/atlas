@@ -2,8 +2,10 @@
 //! the settings list, by kind, and each VM whose add has not reached the
 //! settings yet, as being added. A VM's power is Atlas VM's word, seen just
 //! now or last known, apart from whether its keeper holds a session to its
-//! guest; and its lifecycle is its record's.
+//! guest; its lifecycle is its record's; and the rest of what is known of
+//! it, its facts, is built where a status builds them.
 use super::{
+    facts::{Seen, Word, facts, reported_system},
     lifecycle::{
         Lifecycle,
         record::{Record, State},
@@ -24,10 +26,11 @@ const ASKING: Duration = Duration::from_secs(3);
 
 /// What the listing asks of the system, given apart so tests stand in.
 trait Looks {
-    /// Atlas VM's word on `vm`'s power.
-    fn power(&self, vm: &DesktopId) -> Result<Reply>;
-    /// Whether `vm`'s keeper, as `selected` names it, holds a session.
-    fn reach(&self, selected: &Selected, vm: &DesktopId) -> Value;
+    /// Atlas VM's answer to the read `operation` of `vm`.
+    fn ask(&self, vm: &DesktopId, operation: &Operation) -> Result<Reply>;
+    /// Whether `vm`'s keeper, as `selected` names it, holds a session, and
+    /// its hello when it answered one.
+    fn reach(&self, selected: &Selected, vm: &DesktopId) -> (Value, Value);
 }
 
 /// Every desktop the settings at `settings` list, and every VM being added
@@ -66,12 +69,20 @@ fn list_with(lifecycle: &Lifecycle, looks: &impl Looks, path: &Path) -> Result<V
                     if record.is_some_and(|record| record.state == State::Adding) {
                         selected.adding.set(Admission::Adding);
                     }
-                    vm(&mut shown, &config.id, record, true, looks);
-                    shown["reach"] = if selected.adding.get() == Admission::Adding {
-                        json!({"reachable": false, "why": selected.unreachable().error})
+                    let (reach, keeper) = if selected.adding.get() == Admission::Adding {
+                        let why = selected.unreachable().error;
+                        (json!({"reachable": false, "why": why}), Value::Null)
                     } else {
                         looks.reach(&selected, &config.id)
                     };
+                    let vm = Vm {
+                        id: &config.id,
+                        name: &listed.name,
+                        record,
+                        listed: true,
+                    };
+                    vm.show(&mut shown, lifecycle, &keeper, looks);
+                    shown["reach"] = reach;
                 }
             }
             desktops.push(shown);
@@ -87,7 +98,13 @@ fn list_with(lifecycle: &Lifecycle, looks: &impl Looks, path: &Path) -> Result<V
     };
     for record in records.iter().filter(|record| !listed(&record.id)) {
         let mut shown = json!({"name": record.name, "default": false});
-        vm(&mut shown, &record.id, Some(record), false, looks);
+        let vm = Vm {
+            id: &record.id,
+            name: &record.name,
+            record: Some(record),
+            listed: false,
+        };
+        vm.show(&mut shown, lifecycle, &Value::Null, looks);
         shown["reach"] = json!({"reachable": false, "why": "It is not in the settings yet."});
         desktops.push(shown);
     }
@@ -98,53 +115,74 @@ fn list_with(lifecycle: &Lifecycle, looks: &impl Looks, path: &Path) -> Result<V
     }))
 }
 
-/// Fill `shown` with what is known of the VM `id`: its record's lifecycle
-/// (being added when it has a record but is not `listed`), and its power.
-fn vm(
-    shown: &mut Value,
-    id: &DesktopId,
-    record: Option<&Record>,
+/// A VM as the listing shows it: its record, when it has one, and whether
+/// the settings list it.
+struct Vm<'a> {
+    id: &'a DesktopId,
+    name: &'a str,
+    record: Option<&'a Record>,
     listed: bool,
-    looks: &impl Looks,
-) {
-    shown["kind"] = json!("vm");
-    shown["id"] = json!(id);
-    shown["listed"] = json!(listed);
-    shown["lifecycle"] = match record.map(|record| record.state) {
-        Some(State::Adding) => json!("adding"),
-        Some(State::Created) => json!("created"),
-        Some(State::Removing) => json!("removing"),
-        None => Value::Null,
-    };
-    if let Some(failure) = record.and_then(|record| record.failure.as_ref()) {
-        shown["failure"] = json!(failure.error);
+}
+
+impl Vm<'_> {
+    /// Fill `shown` with what is known of it: its record's lifecycle (being
+    /// added when it has a record but is not listed), its power, and its
+    /// facts, its keeper's hello `keeper` among what they are built from.
+    fn show(&self, shown: &mut Value, lifecycle: &Lifecycle, keeper: &Value, looks: &impl Looks) {
+        shown["kind"] = json!("vm");
+        shown["id"] = json!(self.id);
+        shown["listed"] = json!(self.listed);
+        shown["lifecycle"] = match self.record.map(|record| record.state) {
+            Some(State::Adding) => json!("adding"),
+            Some(State::Created) => json!("created"),
+            Some(State::Removing) => json!("removing"),
+            None => Value::Null,
+        };
+        if let Some(failure) = self.record.and_then(|record| record.failure.as_ref()) {
+            shown["failure"] = json!(failure.error);
+        }
+        let word = Word::asked(|operation| looks.ask(self.id, operation));
+        shown["power"] = match &word.state {
+            Ok(reply) if reply.ok && reply.power.is_some() => json!({
+                "state": reply.power,
+                "confirmed": reply.confirmed == Some(true),
+            }),
+            Ok(reply) => json!({
+                "state": "unknown",
+                "why": reply.error.as_deref().unwrap_or("Atlas VM did not say."),
+            }),
+            Err(error) => json!({"state": "unknown", "why": error.error}),
+        };
+        let status = json!({"keeper": keeper});
+        let built = facts(&Seen {
+            lifecycle,
+            vm: self.id,
+            name: self.name,
+            record: self.record,
+            word: &word,
+            system: &reported_system(&status),
+            atlas: crate::client::guest_update(self.name, &status),
+        });
+        if let (Some(shown), Value::Object(built)) = (shown.as_object_mut(), built) {
+            shown.extend(built);
+        }
     }
-    shown["power"] = match looks.power(id) {
-        Ok(reply) if reply.ok && reply.power.is_some() => json!({
-            "state": reply.power,
-            "confirmed": reply.confirmed == Some(true),
-        }),
-        Ok(reply) => json!({
-            "state": "unknown",
-            "why": reply.error.unwrap_or_else(|| "Atlas VM did not say.".to_owned()),
-        }),
-        Err(error) => json!({"state": "unknown", "why": error.error}),
-    };
 }
 
 /// The system as it is.
 struct Looking;
 
 impl Looks for Looking {
-    fn power(&self, vm: &DesktopId) -> Result<Reply> {
-        Runner::of(vm)?.read(&Operation::State)
+    fn ask(&self, vm: &DesktopId, operation: &Operation) -> Result<Reply> {
+        Runner::of(vm)?.read_within(operation, ASKING)
     }
 
-    fn reach(&self, selected: &Selected, vm: &DesktopId) -> Value {
+    fn reach(&self, selected: &Selected, vm: &DesktopId) -> (Value, Value) {
         match crate::link::probe(selected, vm, ASKING) {
             Link::Keeper(keeper) => match keeper.exchange(&json!({"op": "hello"}), ASKING) {
                 Ok(mut lines) => {
-                    let live = lines.pop().is_some_and(|hello| hello["live"] == true);
+                    let hello = lines.pop().unwrap_or(Value::Null);
+                    let live = hello["live"] == true;
                     let mut reach = json!({"reachable": live});
                     if !live {
                         reach["why"] = json!(format!(
@@ -152,14 +190,15 @@ impl Looks for Looking {
                             selected.name
                         ));
                     }
-                    reach
+                    (reach, hello)
                 }
-                Err(error) => json!({"reachable": false, "why": error.error}),
+                Err(error) => (json!({"reachable": false, "why": error.error}), Value::Null),
             },
-            Link::Unreachable(unreachable) => {
-                json!({"reachable": false, "why": unreachable.why})
-            }
-            Link::Unix(_) | Link::Session(_) => json!({"reachable": false}),
+            Link::Unreachable(unreachable) => (
+                json!({"reachable": false, "why": unreachable.why}),
+                Value::Null,
+            ),
+            Link::Unix(_) | Link::Session(_) => (json!({"reachable": false}), Value::Null),
         }
     }
 }

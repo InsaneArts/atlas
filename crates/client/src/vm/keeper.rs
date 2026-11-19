@@ -874,10 +874,10 @@ impl Keeper {
     }
 }
 
-/// The guest's own report of its Stop and work, and the build and version
-/// its daemon says it is, read on a lane of the generation and named by it;
-/// its Stop is unknown, and its build and version none, when the guest does
-/// not report them or the read fails.
+/// The guest's own report of its Stop and work, the build and version its
+/// daemon says it is, and its macOS, read on a lane of the generation and
+/// named by it; its Stop is unknown, and its build, version and macOS none,
+/// when the guest does not report them or the read fails.
 async fn report(session: &Session) -> Value {
     let mut report = reported(session).await;
     report["generation"] = json!(session.control.generation());
@@ -887,7 +887,7 @@ async fn report(session: &Session) -> Value {
 /// [`report`], before it is named by its generation.
 async fn reported(session: &Session) -> Value {
     let unknown = json!({"stop": {"state": "unknown"}, "work": {"state": "unknown"},
-        "build": null, "version": null});
+        "build": null, "version": null, "system": null});
     let declared = session.control.declared();
     if judge(declared, &[STOP_REPORT]).refusal().is_some() {
         return unknown;
@@ -912,8 +912,14 @@ async fn reported(session: &Session) -> Value {
                     .as_str()
                     .map_or(Value::Null, |said| json!(said))
             };
+            let system = &hello["system"];
+            let system = if system.is_object() {
+                json!({"version": system["version"], "build": system["build"]})
+            } else {
+                Value::Null
+            };
             json!({"stop": hello["stop"], "work": hello["work"],
-                "build": said("build"), "version": said("version")})
+                "build": said("build"), "version": said("version"), "system": system})
         })
 }
 

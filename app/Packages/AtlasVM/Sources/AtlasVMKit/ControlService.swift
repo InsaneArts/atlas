@@ -72,6 +72,12 @@ public actor ControlService {
       // Only a run that recovered holding the lock knows every earlier run
       // ended, so only it can say their VMs, and windows, are gone.
       reply.earlierGone = hasRecovered ? await host.earlierGone() : false
+      reply.making = await host.making()
+      reply.disk = await host.disk()
+      return reply
+    case .latest:
+      var reply = ControlReply.served("latest", by: incarnation)
+      reply.latest = await host.latest()
       return reply
     case .outcome(let change):
       let record: ChangeRecord?
@@ -335,10 +341,10 @@ public actor ControlService {
     }
     do {
       switch operation {
-      case .hello, .state, .outcome, .void:
+      case .hello, .state, .latest, .outcome, .void:
         return .refused("It is not a change.")
-      case .create:
-        try await host.create()
+      case .create(let change):
+        try await host.create(change)
       case .start:
         try await host.start()
       case .stop:
@@ -385,7 +391,7 @@ public actor ControlService {
   private func seen(_ operation: ControlOperation, failure: String?) async -> ChangeOutcome? {
     let refusal = ChangeOutcome.refused(failure ?? "It did not take effect.")
     switch operation {
-    case .hello, .state, .outcome:
+    case .hello, .state, .latest, .outcome:
       return refusal
     case .void:
       return Self.voided
@@ -430,7 +436,7 @@ public actor ControlService {
   /// there shows; none when it cannot be told.
   private func recovered(_ operation: ControlOperation, vmGone: Bool) async -> ChangeOutcome? {
     switch operation {
-    case .hello, .state, .outcome:
+    case .hello, .state, .latest, .outcome:
       return nil
     case .void:
       return Self.voided

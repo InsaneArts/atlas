@@ -190,6 +190,7 @@ pub(super) fn machine_hello(
         },
         "capture": capture,
         "machine": {"mode": "machine", "boot": itself.boot, "virtual": itself.virtual_machine},
+        "system": itself.system,
         "daemon": {"protocol": declared.protocol, "pid": std::process::id(),
             "version": declared.version, "capabilities": declared.capabilities,
             "build": itself.build},
@@ -223,12 +224,13 @@ pub(super) fn machine_hello(
 
 /// What a machine desktop's daemon says of the machine it runs on and of
 /// itself: the boot, whether the machine is a virtual one, each none when
-/// it cannot be told, the digest of the executable it started from, and
-/// whether it may record its screen.
+/// it cannot be told, its macOS, the digest of the executable it started
+/// from, and whether it may record its screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Itself {
     pub(super) boot: Option<String>,
     pub(super) virtual_machine: Option<bool>,
+    pub(super) system: atlas_core::process::System,
     pub(super) build: Option<String>,
     pub(super) recording: bool,
 }
@@ -240,6 +242,7 @@ impl Itself {
         Self {
             boot: atlas_core::process::boot().ok(),
             virtual_machine: atlas_core::process::in_virtual_machine(),
+            system: atlas_core::process::System::now(),
             build,
             recording,
         }

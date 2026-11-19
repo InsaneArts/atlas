@@ -118,6 +118,43 @@ async fn a_running_vm_goes_on_with_nothing_asked_of_atlas_vm_but_its_power() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_start_starts_a_stopped_vm_and_never_past_a_removal() {
+    let dir = tempdir();
+    let (client, keeper) = vm(dir.path(), "stopped");
+
+    let started = start_within(&client, QUICK).await.unwrap();
+    let again = start_within(&client, QUICK).await.unwrap();
+
+    assert_eq!(started["running"], true, "{started}");
+    assert_eq!(started["desktop"], "work", "{started}");
+    let change = started["started"]["change"].clone();
+    assert_eq!(keeper.runner.asked_for("start").len(), 1);
+    assert_eq!(keeper.runner.asked_for("start")[0]["change"], change);
+    assert_eq!(again["started"], Value::Null, "running already: {again}");
+
+    for removal in ["its removal's change kept", "its record being removed"] {
+        let dir = tempdir();
+        let (client, keeper) = vm(dir.path(), "stopped");
+        let mut kept = record(&client, dir.path());
+        if removal == "its removal's change kept" {
+            kept.removal = Some(Token::new());
+        } else {
+            kept.state = State::Removing;
+        }
+        lifecycle(dir.path()).keep_record(&kept).unwrap();
+
+        let refused = start_within(&client, QUICK).await.unwrap_err();
+
+        assert!(
+            refused.error.contains("work is being removed"),
+            "{removal}: {refused:?}"
+        );
+        assert!(keeper.runner.asked_for("start").is_empty(), "{removal}");
+        assert_eq!(keeper.runner.power(), "stopped", "{removal}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_vm_is_never_started_while_the_station_is_stopped_removed_uninstalled_or_handed_over() {
     let cases: [(&str, Holding); 4] = [
         ("stopped", |client, _| {

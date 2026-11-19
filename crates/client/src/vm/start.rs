@@ -143,6 +143,38 @@ async fn ensure_running_within(client: &Client, patience: Patience) -> Result<Op
     Ok(started)
 }
 
+/// Start the VM `client` acts on, as `atlas desktop start` asks: the very
+/// start a command that needs it running asks, so it is never started past
+/// a removal, an update's handover or the person's maintenance; one running
+/// already is let be.
+///
+/// # Errors
+///
+/// Refuses Second Login, which is no VM, and anything
+/// [`ensure_running`] refuses; fails as it does.
+pub async fn start(client: &Client) -> Result<Value> {
+    start_within(client, Patience::REAL).await
+}
+
+async fn start_within(client: &Client, patience: Patience) -> Result<Value> {
+    if !matches!(client.selected.desktop, Chosen::Vm(_)) {
+        return Err(Error::new(
+            Code::Usage,
+            format!(
+                "{} is Second Login, not a VM; only a VM is started.",
+                client.selected.name
+            ),
+        ));
+    }
+    let started = ensure_running_within(client, patience).await?;
+    Ok(json!({
+        "ok": true,
+        "desktop": client.selected.name,
+        "running": true,
+        "started": started.as_ref().map(Started::said),
+    }))
+}
+
 /// What settling Atlas VM's changes from its answers came to: each change
 /// whose claim it cleared, and what stopped it short, when anything did.
 #[derive(Debug, Default)]

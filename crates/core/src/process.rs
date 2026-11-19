@@ -400,6 +400,55 @@ pub fn in_virtual_machine() -> Option<bool> {
     (status == 0 && size == std::mem::size_of_val(&present)).then_some(present != 0)
 }
 
+/// This Mac's macOS, as its kernel says: its version, as 27.2.1
+/// (`kern.osproductversion`), and its build, as 27C101 (`kern.osversion`),
+/// each none when it does not say.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct System {
+    pub version: Option<String>,
+    pub build: Option<String>,
+}
+
+impl System {
+    /// This Mac's, now.
+    #[must_use]
+    pub fn now() -> Self {
+        Self {
+            version: text(c"kern.osproductversion"),
+            build: text(c"kern.osversion"),
+        }
+    }
+}
+
+/// The text the kernel keeps under `name`; none when it does not say, or
+/// says what is no text.
+#[allow(unsafe_code, reason = "FFI: macOS's text sysctls have no safe binding")]
+fn text(name: &CStr) -> Option<String> {
+    // Far more than any version or build the kernel names.
+    let mut said = [0_u8; 256];
+    let mut size = said.len();
+    // SAFETY: NUL-terminated name and a writable buffer of the declared
+    // size, which the kernel fills no further; no input buffer.
+    let status = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            said.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 || size == 0 || size > said.len() {
+        return None;
+    }
+    CStr::from_bytes_until_nul(&said[..size])
+        .ok()?
+        .to_str()
+        .ok()
+        .map(str::to_owned)
+        .filter(|text| !text.is_empty())
+}
+
 fn invalid_boot(cause: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::new(Code::State, "Invalid boot session UUID").with_source(cause)
 }

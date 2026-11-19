@@ -3,9 +3,17 @@
 public protocol VMHost: Sendable {
   /// The VM's power now. A VM whose making was cut short is absent.
   func power() async -> Observed<PowerState>
-  /// Make the VM: its disk installed from a restore image, its identity
-  /// kept in its folder.
-  func create() async throws
+  /// Make the VM for the make change `change`: its disk installed from a
+  /// restore image, its identity kept in its folder, and how far it got
+  /// kept as it goes.
+  func create(_ change: ChangeID) async throws
+  /// How far making the VM got, as last kept; none before a make was asked.
+  func making() async -> MakingProgress?
+  /// How much of the VM's disk is used.
+  func disk() async -> DiskUse
+  /// The newest macOS Apple's framework supports on this Mac; none when it
+  /// cannot be told.
+  func latest() async -> MacOSRelease?
   /// Start the VM, headless.
   func start() async throws
   /// Stop the VM.

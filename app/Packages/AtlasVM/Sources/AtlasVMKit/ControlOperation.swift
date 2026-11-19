@@ -3,8 +3,11 @@
 public enum ControlOperation: Equatable, Sendable {
   /// The runner's version and what it can do.
   case hello
-  /// The VM's power, as the runner sees it.
+  /// The VM's power, as the runner sees it, how far its making got and
+  /// how much of its disk is used.
   case state
+  /// The newest macOS Apple's framework supports on this Mac.
+  case latest
   /// What the change with this ID came to.
   case outcome(ChangeID)
   /// Make the VM.
@@ -39,7 +42,7 @@ public enum ControlOperation: Equatable, Sendable {
   /// The change it is; none for a read.
   public var change: ChangeID? {
     switch self {
-    case .hello, .state, .outcome:
+    case .hello, .state, .latest, .outcome:
       nil
     case .create(let change), .start(let change), .stop(let change), .window(let change, _),
       .install(let change, _), .installResume(let change), .paired(let change, _, _), .closed(let change, _),
@@ -53,6 +56,7 @@ public enum ControlOperation: Equatable, Sendable {
     switch self {
     case .hello: "hello"
     case .state: "state"
+    case .latest: "latest"
     case .outcome: "outcome"
     case .create: "create"
     case .start: "start"
@@ -118,6 +122,8 @@ extension ControlOperation: Codable {
       self = .hello
     case "state":
       self = .state
+    case "latest":
+      self = .latest
     case "outcome":
       self = .outcome(try fields.decode(ChangeID.self, forKey: .change))
     case "create":
@@ -171,7 +177,7 @@ extension ControlOperation: Codable {
     var fields = encoder.container(keyedBy: Key.self)
     try fields.encode(name, forKey: .op)
     switch self {
-    case .hello, .state:
+    case .hello, .state, .latest:
       break
     case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change),
       .installResume(let change), .void(let change):

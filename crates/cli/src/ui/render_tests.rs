@@ -1738,6 +1738,25 @@ fn a_vms_maintenance_says_whether_its_window_takes_your_input_and_how_it_ends() 
 }
 
 #[test]
+fn a_vm_started_says_whether_it_was_started_or_running_already() {
+    let started = show(
+        View::DesktopStart,
+        json!({"ok": true, "desktop": "work", "running": true,
+               "started": {"desktop": "work", "change": "ab"}}),
+    );
+    let already = show(
+        View::DesktopStart,
+        json!({"ok": true, "desktop": "work", "running": true, "started": null}),
+    );
+
+    assert_eq!(started.out, "✓ The VM \u{201c}work\u{201d} is started.");
+    assert_eq!(
+        already.out,
+        "✓ The VM \u{201c}work\u{201d} is running already."
+    );
+}
+
+#[test]
 fn a_restarts_maintenance_says_a_change_still_pending_on_its_vm() {
     let on = show(
         View::DesktopMaintain,

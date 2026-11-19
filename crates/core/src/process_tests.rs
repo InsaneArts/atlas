@@ -141,6 +141,22 @@ fn whether_this_mac_is_a_virtual_machine_is_what_its_kernel_says() {
 }
 
 #[test]
+fn this_macs_version_and_build_are_what_its_kernel_says() {
+    let said = |name: &str| {
+        crate::spawn::output(std::process::Command::new("/usr/sbin/sysctl").args(["-n", name]))
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+
+    let system = System::now();
+
+    assert_eq!(system.version, said("kern.osproductversion"));
+    assert_eq!(system.build, said("kern.osversion"));
+    assert!(system.version.is_some_and(|version| version.contains('.')));
+}
+
+#[test]
 fn only_this_accounts_live_processes_are_described() {
     let this = Instance::current().unwrap();
     assert!(this.is_this_one());

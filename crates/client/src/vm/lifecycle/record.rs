@@ -203,6 +203,11 @@ pub struct Record {
     /// wait for as long as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Maintenance>,
+    /// The process making its add, as the last run of the add kept it:
+    /// whether the add still goes on is that process's running, never a
+    /// guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adder: Option<atlas_core::process::Instance>,
 }
 
 impl Record {
@@ -230,6 +235,7 @@ impl Record {
             starts: Vec::new(),
             refused_start: None,
             maintenance: None,
+            adder: None,
         }
     }
 

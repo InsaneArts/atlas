@@ -324,6 +324,17 @@ pub(super) fn desktop_maintained(value: &Value) -> String {
     )
 }
 
+pub(super) fn desktop_started(value: &Value) -> String {
+    let name = text::printable(value["desktop"].as_str().unwrap_or("the VM")).into_owned();
+    if value["started"].is_null() {
+        return format!(
+            "{} The VM \u{201c}{name}\u{201d} is running already.",
+            style::ok()
+        );
+    }
+    format!("{} The VM \u{201c}{name}\u{201d} is started.", style::ok())
+}
+
 pub(super) fn desktop_removed(value: &Value) -> String {
     let name = text::printable(value["removed"]["name"].as_str().unwrap_or("the VM")).into_owned();
     let mut lines = vec![format!(

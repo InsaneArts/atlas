@@ -230,10 +230,13 @@ fn add_with(
     let reservation = lifecycle.claim(&prospect)?;
     // Read again under the hold: another add of this VM may have gone on
     // since, and what it kept is never written over.
-    let record = match begun(lifecycle, &prospect.id, &own, &settings)? {
+    let mut record = match begun(lifecycle, &prospect.id, &own, &settings)? {
         Some(record) => record,
         None => Record::adding(&reservation, settings, own),
     };
+    // This run makes the add from now: whether it still does is said by
+    // this process's running.
+    record.adder = atlas_core::process::Instance::current();
     lifecycle.keep_record(&record)?;
     if reservation.resumed {
         say(&format!(

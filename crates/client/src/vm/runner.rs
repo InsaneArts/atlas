@@ -60,8 +60,11 @@ impl std::fmt::Debug for Install {
 pub enum Operation {
     /// Its version and what it can do.
     Hello,
-    /// The VM's power, as it sees it.
+    /// The VM's power, as it sees it, how far its making got and how much
+    /// of its disk is used.
     State,
+    /// The newest macOS Apple's framework supports on this Mac.
+    Latest,
     /// What the change with this ID came to.
     Outcome(Token),
     /// Make the VM.
@@ -106,6 +109,7 @@ impl Operation {
         match self {
             Self::Hello => "hello",
             Self::State => "state",
+            Self::Latest => "latest",
             Self::Outcome(_) => "outcome",
             Self::Create(_) => "create",
             Self::Start(_) => "start",
@@ -124,7 +128,7 @@ impl Operation {
     #[must_use]
     pub fn change(&self) -> Option<&Token> {
         match self {
-            Self::Hello | Self::State | Self::Outcome(_) | Self::Void(_) => None,
+            Self::Hello | Self::State | Self::Latest | Self::Outcome(_) | Self::Void(_) => None,
             Self::Create(change)
             | Self::Start(change)
             | Self::Stop(change)
@@ -165,7 +169,7 @@ impl Operation {
     fn written(&self, secret: impl Fn(&Install) -> String) -> Value {
         let op = self.name();
         match self {
-            Self::Hello | Self::State => json!({"op": op}),
+            Self::Hello | Self::State | Self::Latest => json!({"op": op}),
             Self::Outcome(change)
             | Self::Void(change)
             | Self::Create(change)
@@ -252,6 +256,52 @@ pub enum Window {
     Unknown,
 }
 
+/// Where making a VM stands, as Atlas VM says it: anything it says that
+/// this build does not know is unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    Checking,
+    Downloading,
+    Installing,
+    Done,
+    #[serde(other)]
+    Unknown,
+}
+
+/// How far making a VM got, as Atlas VM keeps it for the make change
+/// `change`: its phase, the bytes of a download received of its whole, and
+/// the fraction of the phase done, each none while it is not known.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Making {
+    pub change: Token,
+    pub phase: Phase,
+    #[serde(default)]
+    pub received: Option<u64>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub fraction: Option<f64>,
+}
+
+/// How much of a VM's disk is used, as Atlas VM reads it from the blocks
+/// its file takes, apart from the size its disk was made with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct Disk {
+    #[serde(default)]
+    pub used: Option<u64>,
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+/// A release of macOS: its version, as 27.2.1, and its build.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Release {
+    pub version: String,
+    #[serde(default)]
+    pub build: Option<String>,
+}
+
 /// What a change came to.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
@@ -261,7 +311,7 @@ pub enum Outcome {
 }
 
 /// A runner's answer to one request.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Reply {
     /// Whether the request was served.
     pub ok: bool,
@@ -287,6 +337,18 @@ pub struct Reply {
     /// runner of a build before it said so, which cannot tell.
     #[serde(default, rename = "earlierGone")]
     pub earlier_gone: Option<bool>,
+    /// How far making the VM got, for a state, once a make was asked; none
+    /// from a runner that does not say.
+    #[serde(default)]
+    pub making: Option<Making>,
+    /// How much of the VM's disk is used, for a state; none from a runner
+    /// that does not say.
+    #[serde(default)]
+    pub disk: Option<Disk>,
+    /// The newest macOS Apple's framework supports here, for a latest; none
+    /// when it cannot be told.
+    #[serde(default)]
+    pub latest: Option<Release>,
     /// The change answered.
     pub change: Option<Token>,
     /// The run of Atlas VM that began the change answered, as its ledger

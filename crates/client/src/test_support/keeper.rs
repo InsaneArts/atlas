@@ -48,6 +48,7 @@ pub fn machine_hello(stop: &str) -> Value {
         "display": {"width": 1440.0, "height": 900.0, "scale": 2.0},
         "permissions": {"accessibility": true, "postEvents": true, "screenCapture": true},
         "machine": {"mode": "machine", "boot": "boot-1", "virtual": true},
+        "system": {"version": "27.2.1", "build": "27C101"},
         "daemon": {"protocol": 1, "pid": 123, "version": "1.0.0", "build": "b1",
             "capabilities": atlas_session::compatibility::MACHINE},
         "remoteLogin": "off", "account": {"admin": false},

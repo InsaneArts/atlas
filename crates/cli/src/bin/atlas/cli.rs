@@ -1619,6 +1619,12 @@ pub(super) enum Desktop {
     /// Every desktop, by kind: a VM's power, whether Atlas reaches it, and
     /// whether it is still being added.
     List,
+    /// Start a VM, as a command that needs it running does: never while it
+    /// is being removed, handed to a new build or under maintenance.
+    Start {
+        /// The VM's name, as atlas desktop list shows it.
+        name: String,
+    },
     /// Open a VM's window for your own maintenance, once you allow it in
     /// Atlas.app: it takes your keyboard and mouse, and agents wait until
     /// you end it with --end.

@@ -37,42 +37,44 @@ enum RestoreImage {
     return RestoreImageChoice(file: file, source: present ? nil : latest.url)
   }
 
-  /// The chosen image, downloaded first when it is not kept: one run at a
-  /// time, so two never write or check one image together.
-  static func fetch(_ choice: RestoreImageChoice) async throws -> URL {
+  /// The chosen image, downloaded first when it is not kept, its bytes
+  /// told to `log` as they come: one run at a time, so two never write or
+  /// check one image together.
+  static func fetch(_ choice: RestoreImageChoice, log: MakingLog) async throws -> URL {
     guard let source = choice.source else { return choice.file }
-    let lock = try await cacheLock(in: choice.file.deletingLastPathComponent())
+    let cache = choice.file.deletingLastPathComponent()
+    let lock = try await FileLock.waited(at: cache.appending(path: ".lock"))
     defer { withExtendedLifetime(lock) {} }
     // Another run may have kept it while this one waited.
     if FileManager.default.fileExists(atPath: choice.file.path(percentEncoded: false)) {
       return choice.file
     }
-    try await download(source, to: choice.file)
+    try await download(source, to: choice.file, log: log)
     return choice.file
   }
 
-  /// The cache's lock, waited for.
-  private static func cacheLock(in folder: URL) async throws -> FileLock {
-    let file = folder.appending(path: ".lock")
-    while true {
-      if let lock = FileLock(at: file) { return lock }
-      try await Task.sleep(for: .seconds(1))
-    }
+  /// The lock every install of macOS in a VM holds from before it begins
+  /// until its scratch is removed, kept beside the images in `folder`: one
+  /// install of Atlas VM's at a time, so each tells its own scratch apart.
+  static func installing(in folder: URL) async throws -> FileLock {
+    try await FileLock.waited(at: folder.appending(path: "Installing.lock"))
   }
 
-  /// Download `url` to `file`, resuming from what a cut download kept, and
-  /// keep it only once it is whole and loads as a restore image.
-  private static func download(_ url: URL, to file: URL) async throws {
+  /// Download `url` to `file`, resuming from what a cut download kept, its
+  /// bytes told to `log` on either path, and keep it only once it is whole
+  /// and loads as a restore image.
+  private static func download(_ url: URL, to file: URL, log: MakingLog) async throws {
     let resuming = file.appendingPathExtension("resume")
     let downloaded: URL
     let response: URLResponse
+    let watch = DownloadWatch(log: log)
     do {
       if let data = try? Data(contentsOf: resuming) {
         (downloaded, response) = try await URLSession.shared
-          .download(resumeFrom: data)
+          .download(resumeFrom: data, delegate: watch)
       } else {
         (downloaded, response) = try await URLSession.shared
-          .download(from: url)
+          .download(from: url, delegate: watch)
       }
     } catch {
       if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {

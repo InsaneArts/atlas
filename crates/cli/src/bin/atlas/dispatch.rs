@@ -1165,8 +1165,8 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
 }
 
 /// Add or remove a desktop, or begin or end a VM's maintenance, once the
-/// person allows it, each step said as it goes ([`said`]), or list the
-/// desktops of the settings at `config`. Each waits on files, launchd and
+/// person allows it, each step said as it goes ([`said`]), start a VM, or
+/// list the desktops of the settings at `config`. Each waits on files, launchd and
 /// Atlas VM, so they run off the runtime.
 async fn desktop(config: &Path, asked: cli::Desktop) -> Result<Value> {
     let config = config.to_owned();
@@ -1217,6 +1217,19 @@ async fn desktop(config: &Path, asked: cli::Desktop) -> Result<Value> {
         }
         cli::Desktop::List => {
             tokio::task::spawn_blocking(move || atlas_client::vm::listing::list(&config)).await
+        }
+        cli::Desktop::Start { name } => {
+            as_yourself("desktop start")?;
+            let client = tokio::task::spawn_blocking(move || {
+                let settings = atlas_core::config::desktops::Settings::load(&config)?;
+                let listed = settings.resolve(
+                    &atlas_core::config::desktops::Selection::from_env(Some(name)),
+                )?;
+                Client::new(settings.selected(listed))
+            })
+            .await
+            .map_err(|_| Error::new(Code::Interrupted, "The desktop command stopped."))??;
+            return atlas_client::vm::start::start(&client).await;
         }
         cli::Desktop::Maintain { name, end, restart } => {
             as_yourself("desktop maintain")?;

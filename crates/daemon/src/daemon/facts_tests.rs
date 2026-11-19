@@ -240,6 +240,10 @@ fn itself() -> Itself {
     Itself {
         boot: Some("boot-1".to_owned()),
         virtual_machine: Some(true),
+        system: atlas_core::process::System {
+            version: Some("27.2.1".to_owned()),
+            build: Some("27C101".to_owned()),
+        },
         build: Some("b1".to_owned()),
         recording: true,
     }
@@ -267,6 +271,10 @@ fn the_machine_hello_says_what_the_station_proves_it_by() {
         hello["machine"],
         json!({"mode": "machine", "boot": "boot-1", "virtual": true})
     );
+    assert_eq!(
+        hello["system"],
+        json!({"version": "27.2.1", "build": "27C101"})
+    );
     assert_eq!(hello["daemon"]["build"], "b1");
     assert_eq!(hello["daemon"]["capabilities"], json!(["machine-proof-v1"]));
     for side in ["width", "height", "scale"] {
@@ -289,6 +297,7 @@ fn a_machine_finds_itself_in_this_boot_as_its_kernel_says() {
         found.virtual_machine,
         atlas_core::process::in_virtual_machine()
     );
+    assert_eq!(found.system, atlas_core::process::System::now());
     assert_eq!(found.build.as_deref(), Some("b1"));
     assert!(!found.recording);
 }

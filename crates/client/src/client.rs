@@ -29,7 +29,7 @@ pub use apps::{AppList, AppRow};
 pub(crate) use capture::prune_captures;
 pub(crate) use input::require_looks;
 pub use keeper::Leftovers;
-pub(crate) use keeper::{readiness_checks, readiness_of, under_way};
+pub(crate) use keeper::{guest_update, readiness_checks, readiness_of, under_way};
 pub(crate) use mutate::Mutation;
 pub use record::PersonInput;
 pub(crate) use record::{NOT_RECORDED, logged_at};

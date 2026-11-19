@@ -9,6 +9,9 @@ public struct ControlHello: Codable, Equatable, Sendable {
   /// What this runner declares.
   public static let ours = ControlHello(
     version: 1,
-    capabilities: ["changes", "outcomes", "power", "window-input", "install", "install-resume", "void"]
+    capabilities: [
+      "changes", "outcomes", "power", "window-input", "install", "install-resume", "void", "progress", "disk",
+      "latest-macos",
+    ]
   )
 }
