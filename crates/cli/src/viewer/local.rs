@@ -103,10 +103,21 @@ pub(crate) fn local(output: &Path, port: u16) -> Option<String> {
 ///
 /// Returns a menu bar error saying to restart Atlas.
 pub(crate) fn local_checked(output: &Path, port: u16) -> Result<Option<String>> {
+    local_serving(output, port).map(|found| found.map(|(url, _)| url))
+}
+
+/// [`local_checked`], with the record key of the desktop the viewer says
+/// it serves, when it says.
+///
+/// # Errors
+///
+/// As [`local_checked`].
+pub(crate) fn local_serving(output: &Path, port: u16) -> Result<Option<(String, Option<String>)>> {
     match identified(&output.join(MENUBAR_RECORD), port) {
-        Some((running, identity)) if compatible(&identity) => {
-            Ok(address(&running).map(str::to_owned))
-        }
+        Some((running, identity)) if compatible(&identity) => Ok(address(&running).map(|url| {
+            let served = identity["desktopKey"].as_str().map(str::to_owned);
+            (url.to_owned(), served)
+        })),
         Some(_) => Err(Error::new(
             Code::Menubar,
             "Atlas in the menu bar is from another version. Restart Atlas: atlas menubar \

@@ -91,6 +91,9 @@ struct Server {
     /// The host session the server's environment names, read once: the
     /// view says "This chat" only when it is certainly this one.
     host_session: Option<HostSession>,
+    /// The settings list more than one desktop, so the status's words name
+    /// this server's.
+    several: bool,
 }
 
 /// Serve requests from standard input until it closes.
@@ -288,6 +291,7 @@ impl Server {
             held: Mutex::new(None),
             stream: Arc::default(),
             host_session,
+            several: crate::ui::desktop::named().is_some(),
         }
     }
 
@@ -353,9 +357,15 @@ impl Server {
         self.presented(self.run(tool, arguments).await).await
     }
 
-    /// Do what `tool` does.
+    /// Do what `tool` does. The person's control of a VM is not taken
+    /// through these tools yet: it is refused before anything is asked.
     async fn run(&self, tool: Tool, arguments: &Value) -> Result<Value> {
         match tool {
+            Tool::TakeControl | Tool::KeepControl | Tool::GiveBack | Tool::SendInput
+                if self.on_vm() =>
+            {
+                Err(self.client.unreachable())
+            }
             Tool::Status | Tool::ShowScreen => self.status_result().await,
             Tool::TakeScreenshot => self.take_screenshot(arguments).await,
             Tool::ScreenFrame => {
@@ -391,7 +401,8 @@ impl Server {
         }
     }
 
-    /// `outcome` as a tool result, with what the view may offer.
+    /// `outcome` as a tool result, naming its desktop when more than one is
+    /// listed, with what the view may offer.
     async fn presented(&self, outcome: Result<Value>) -> Value {
         let mut result = outcome.unwrap_or_else(|error| {
             let mut failed = tool_result(&error.error, json!({"error": error}));
@@ -399,12 +410,46 @@ impl Server {
             failed
         });
         // The view offers Resume and control only where this client may
-        // call them, and knows whether the control shown is its own.
+        // call them, and knows whether the control shown is its own. A
+        // VM's control is not offered.
         let can_control = self.can_control();
+        self.name_desktop(&mut result);
         result["structuredContent"]["canResume"] = json!(can_control);
-        result["structuredContent"]["canControl"] = json!(can_control);
+        result["structuredContent"]["canControl"] = json!(can_control && !self.on_vm());
         result["structuredContent"]["control"] = json!(self.controlling().await);
         result
+    }
+
+    /// The desktop this server serves, by its settings name and its kind.
+    fn desktop(&self) -> Value {
+        crate::ui::desktop::of(&self.client.selected.name, &self.client.desktop())
+    }
+
+    /// Name, in `result`'s facts, the desktop it came from, when the
+    /// settings list more than one: the one its producer named, a refusal's
+    /// included, else this server's. A command this server ran named its
+    /// desktop by its own choice, which a rename since may have moved.
+    fn name_desktop(&self, result: &mut Value) {
+        let facts = &mut result["structuredContent"];
+        if !self.several || facts.get("desktop").is_some() {
+            return;
+        }
+        let named = facts
+            .get("error")
+            .and_then(|error| error.get("desktop"))
+            .cloned();
+        facts["desktop"] = named.unwrap_or_else(|| self.desktop());
+    }
+
+    /// The desktop's name, for the words that name it: only when the
+    /// settings list more than one.
+    fn named(&self) -> Option<&str> {
+        self.several.then_some(self.client.selected.name.as_str())
+    }
+
+    /// Whether this server serves a VM.
+    fn on_vm(&self) -> bool {
+        matches!(self.client.desktop().kind(), Kind::Vm(_))
     }
 
     /// The tools this client is offered: Resume only to one that draws

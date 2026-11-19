@@ -316,10 +316,10 @@ async fn result_flags_match_offered_tools_on_successful_and_failed_calls() {
         .unwrap();
         let app = Router::new()
             .route("/viewer/", get(|| async {
-                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1, "desktopKey": "user"}))
             }))
             .route("/viewer/status.json", get(|| async {
-                Json(json!({"overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}}))
+                Json(json!({"desktopKey": "user", "overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}}))
             }));
         let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -549,15 +549,15 @@ fn the_model_sees_session_names_only_when_two_sessions_acted() {
     assert_eq!(two["activity"][0]["session"], "Claude Code · left");
     assert_eq!(two["activity"][1]["session"], "Codex · right");
     assert!(two["activity"][2].get("session").is_none());
-    let text = two.to_string() + &said(&two).to_string();
+    let text = two.to_string() + &said(&two, None).to_string();
     assert!(
         !text.contains(claude.as_str()) && !text.contains(codex.as_str()),
         "{text}"
     );
     assert!(!text.contains("hostSession") && !text.contains("hostSessions"));
     assert_eq!(
-        said(&two)["content"],
-        said(&alone)["content"],
+        said(&two, None)["content"],
+        said(&alone, None)["content"],
         "the model's words are as before"
     );
 }
@@ -590,7 +590,10 @@ fn the_models_text_is_unchanged_by_sessions() {
 
     let before = summary(&plain, &named, None);
     let after = summary(&with_sessions, &named, Some(&claude));
-    assert_eq!(said(&before)["content"], said(&after)["content"]);
+    assert_eq!(
+        said(&before, None)["content"],
+        said(&after, None)["content"]
+    );
     assert_eq!(before["sessionsShown"], false);
     assert_eq!(after["sessionsShown"], true);
     assert_eq!(after["holder"], claude.as_str());
@@ -774,7 +777,7 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
         "no commands for the person"
     );
 
-    let result = said(&status);
+    let result = said(&status, None);
     assert_eq!(
         result["content"][0]["text"],
         "Atlas: Working. Clicked Save in TextEdit. Recent: clicked Save in TextEdit; opened TextEdit."
@@ -808,7 +811,7 @@ fn a_line_that_ends_with_an_ellipsis_gets_no_full_stop_after_it() {
         ],
     });
     assert_eq!(
-        said(&status)["content"][0]["text"],
+        said(&status, None)["content"][0]["text"],
         "Atlas: Working. Running a command… Recent: running a command…; opened TextEdit."
     );
 
@@ -818,12 +821,12 @@ fn a_line_that_ends_with_an_ellipsis_gets_no_full_stop_after_it() {
         "activity": [{"actor": "agent", "says": "running a command…"}],
     });
     assert_eq!(
-        said(&last)["content"][0]["text"],
+        said(&last, None)["content"][0]["text"],
         "Atlas: Working. Clicked Save. Recent: running a command…"
     );
 
     let quiet = json!({"label": "Idle", "headline": "", "activity": []});
-    assert_eq!(said(&quiet)["content"][0]["text"], "Atlas: Idle.");
+    assert_eq!(said(&quiet, None)["content"][0]["text"], "Atlas: Idle.");
 }
 
 #[test]
@@ -838,7 +841,7 @@ fn a_running_command_keeps_its_ellipsis_through_the_status_summary() {
         &BTreeMap::new(),
         None,
     );
-    let reply = said(&status);
+    let reply = said(&status, None);
     assert_eq!(
         reply["content"][0]["text"],
         "Atlas: Working. Running a command… Recent: running a command…"
@@ -1373,7 +1376,7 @@ fn reply_cost_counts_utf8_bytes_and_escaping() {
         status_rows,
     ) {
         let status = summary(&fixture["input"], &BTreeMap::new(), None);
-        let reply = said(&status);
+        let reply = said(&status, None);
         let serialized = reply.to_string();
         if fixture["id"] != "status-pending" {
             assert!(serialized.len() > serialized.chars().count());
@@ -1391,7 +1394,7 @@ fn reply_cost_refuses_larger_bytes_rows_and_duplicate_content() {
         include_str!("../../../tests/fixtures/reply-cost/status.json"),
         status_rows,
     )[1];
-    let reply = said(&summary(&fixture["input"], &BTreeMap::new(), None));
+    let reply = said(&summary(&fixture["input"], &BTreeMap::new(), None), None);
     for field in ["bytes", "rows"] {
         let mut changed = fixture.clone();
         changed[field] = json!(fixture[field].as_u64().unwrap() + 1);
@@ -1643,21 +1646,309 @@ async fn the_activity_keeps_only_the_marks_of_a_steps_facts_and_where_its_elemen
     );
 }
 
+/// A server for the VM `work`, through a stand-in for its keeper.
+fn on_the_vm(dir: &std::path::Path) -> (Server, atlas_client::test_support::ScriptedKeeper) {
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir);
+    (
+        Server::new(client, dir.join("u.toml"), 1, false, None),
+        keeper,
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_vms_pictures_are_refused_through_the_atlas_tools_in_plain_words_and_nothing_is_asked() {
+async fn an_mcp_result_names_its_desktop_only_when_more_than_one_is_listed() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
-    let server = Server::new(client, dir.path().join("u.toml"), 1, false, None);
-    let words = "Pictures of work are not shown through the Atlas tools yet; use atlas screenshot \
-                 --desktop work.";
+    let mut second_login = server(dir.path());
+    let vm_folder = dir.path().join("vm");
+    std::fs::create_dir(&vm_folder).unwrap();
+    let (mut vm, _keeper) = on_the_vm(&vm_folder);
+    let said = || Ok(tool_result("Done.", json!({"done": true})));
+    let refused = || Err(Error::new(Code::BadRequest, "No."));
 
-    let screenshot = server.take_screenshot(&json!({})).await.unwrap_err();
-    let screen = server.screen(None, None).await.unwrap_err();
-
-    for refused in [screenshot, screen] {
-        assert_eq!(refused.error, words, "{refused:?}");
-        assert_eq!(refused.code, Code::Platform);
+    // One desktop listed: every byte as before.
+    assert_eq!(
+        second_login.presented(said()).await.to_string(),
+        r#"{"content":[{"text":"Done.","type":"text"}],"structuredContent":{"canControl":false,"canResume":false,"control":false,"done":true}}"#
+    );
+    assert_eq!(
+        second_login.presented(refused()).await.to_string(),
+        r#"{"content":[{"text":"No.","type":"text"}],"isError":true,"structuredContent":{"canControl":false,"canResume":false,"control":false,"error":{"code":"bad-request","error":"No.","ok":false,"uncertain":false}}}"#
+    );
+    for outcome in [said(), refused()] {
+        let result = vm.presented(outcome).await;
+        assert!(
+            result["structuredContent"].get("desktop").is_none(),
+            "{result}"
+        );
     }
-    assert!(keeper.asked_for("picture").is_empty());
-    assert!(keeper.asked_for("observe").is_empty());
+
+    second_login.several = true;
+    vm.several = true;
+    for (server, desktop) in [
+        (
+            &second_login,
+            json!({"name": "second-login", "kind": "user"}),
+        ),
+        (&vm, json!({"name": "work", "kind": "vm"})),
+    ] {
+        for outcome in [said(), refused()] {
+            let result = server.presented(outcome).await;
+            assert_eq!(result["structuredContent"]["desktop"], desktop, "{result}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_result_keeps_the_desktop_its_command_named_after_a_rename() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut vm, _keeper) = on_the_vm(dir.path());
+    vm.several = true;
+    // The VM this server runs on was renamed archive since it started: its
+    // command's reply and refusal name it so, and keep that name.
+    let archive = json!({"name": "archive", "kind": "vm"});
+    let reply = json!({"ok": true, "desktop": archive});
+    let refused =
+        Error::new(Code::Platform, "archive is a VM desktop").with("desktop", archive.clone());
+
+    let said = vm
+        .presented(Ok(tool_result(&reply.to_string(), reply.clone())))
+        .await;
+    let failed = vm.presented(Err(refused)).await;
+    let own = vm.presented(Ok(tool_result("Done.", json!({})))).await;
+
+    assert_eq!(said["structuredContent"]["desktop"], archive);
+    let text: Value = serde_json::from_str(said["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text["desktop"], archive, "its words and its facts agree");
+    assert_eq!(failed["structuredContent"]["desktop"], archive, "{failed}");
+    assert_eq!(
+        own["structuredContent"]["desktop"],
+        json!({"name": "work", "kind": "vm"})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_status_names_its_desktop_in_words_only_when_more_than_one_is_listed() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut server, _keeper) = on_the_vm(dir.path());
+    let status = json!({"label": "Idle"});
+
+    assert_eq!(said(&status, None)["content"][0]["text"], "Atlas: Idle.");
+    assert_eq!(server.named(), None);
+    server.several = true;
+    assert_eq!(server.named(), Some("work"));
+    assert_eq!(
+        said(&status, server.named())["content"][0]["text"],
+        "Atlas on work: Idle."
+    );
+}
+
+#[test]
+fn a_vms_headline_that_names_a_command_names_the_vm_never_the_helper() {
+    let status = |desktop: Value| {
+        json!({
+            "desktop": desktop,
+            "overview": {"headline": "Run atlas desktop maintain work to look", "label": "Not ready"},
+        })
+    };
+    let vm = summary(
+        &status(json!({"kind": "vm", "name": "work"})),
+        &BTreeMap::new(),
+        None,
+    );
+    let second_login = summary(&status(Value::Null), &BTreeMap::new(), None);
+
+    assert_eq!(vm["headline"], "work isn't ready. Open Atlas to see why");
+    assert_eq!(
+        second_login["headline"],
+        "The helper isn't ready. Open Atlas to see why"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_mcp_screen_on_a_vm_never_reads_second_logins_frame_pipe() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (vm, keeper) = on_the_vm(dir.path());
+
+    let shown = vm.screen(None, None).await.unwrap();
+
+    assert_eq!(shown["structuredContent"]["streaming"], false, "{shown}");
+    assert!(
+        vm.stream.lock().await.untouched(),
+        "the frame pipe was asked"
+    );
+    let pictures = keeper.asked_for("picture");
+    assert_eq!(pictures.len(), 1, "{pictures:?}");
+    assert_eq!(pictures[0]["request"]["op"], "screenshot");
+
+    // Second Login's screen asks its frame pipe first.
+    let second_login_folder = dir.path().join("second-login");
+    std::fs::create_dir(&second_login_folder).unwrap();
+    let second_login = server(&second_login_folder);
+    let _ = second_login.screen(None, None).await;
+    assert!(!second_login.stream.lock().await.untouched());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_control_tools_on_a_vm_are_refused_in_the_one_wording() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut vm, keeper) = on_the_vm(dir.path());
+    vm.several = true;
+    vm.views.store(true, Ordering::Relaxed);
+    let words = vm.client.unreachable();
+    let input = json!({"frame": "shown", "actions": [{"kind": "click", "x": 1, "y": 1}]});
+
+    for tool in [
+        Tool::TakeControl,
+        Tool::KeepControl,
+        Tool::GiveBack,
+        Tool::SendInput,
+        Tool::SwitchHelper,
+    ] {
+        let refused = vm.run(tool, &input).await.unwrap_err();
+        assert_eq!(json!(refused), json!(words), "{tool:?}");
+
+        let result = vm.call(tool, &input).await;
+        assert_eq!(result["isError"], true, "{tool:?}");
+        assert_eq!(result["structuredContent"]["canControl"], false, "{tool:?}");
+        assert_eq!(
+            result["structuredContent"]["desktop"],
+            json!({"name": "work", "kind": "vm"})
+        );
+    }
+    assert!(vm.held.lock().await.is_none());
+    assert!(keeper.asked_for("input").is_empty());
+    assert!(keeper.asked_for("hold").is_empty());
+}
+
+/// A menu bar viewer recorded in `output`, saying it serves the desktop
+/// `identity` names and that its status, `overview`, is of the one `status`
+/// names; each only when given. How often its status was read.
+async fn viewer_serving(
+    output: &std::path::Path,
+    identity: Option<&str>,
+    status: Option<&str>,
+    overview: Value,
+) -> (
+    u16,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use axum::{Json, Router, routing::get};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/viewer/");
+    std::fs::write(
+        output.join(crate::viewer::MENUBAR_RECORD),
+        json!({"url": url, "pid": std::process::id()}).to_string(),
+    )
+    .unwrap();
+    let mut said = json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1});
+    if let Some(key) = identity {
+        said["desktopKey"] = json!(key);
+    }
+    let mut read = json!({"overview": overview});
+    if let Some(key) = status {
+        read["desktopKey"] = json!(key);
+    }
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = reads.clone();
+    let app = Router::new()
+        .route("/viewer/", get(move || async move { Json(said) }))
+        .route(
+            "/viewer/status.json",
+            get(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                async move { Json(read) }
+            }),
+        );
+    let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (port, reads, serving)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_mcp_status_on_a_vm_beside_a_viewer_of_another_desktop_is_the_vms_own() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (mut vm, _keeper) = on_the_vm(dir.path());
+    vm.several = true;
+    let output = vm.client.output_dir().unwrap().to_path_buf();
+    let own = vm.client.desktop().record_key().as_str().to_owned();
+
+    let working = json!({"state": "working", "label": "Working",
+        "headline": "Another desktop's agent is working"});
+
+    // Second Login's viewer, and one that said the VM's, then followed the
+    // settings to Second Login.
+    for (identity, status, read) in [
+        (Some("user"), Some("user"), 0),
+        (Some(own.as_str()), Some("user"), 1),
+    ] {
+        let (port, reads, serving) =
+            viewer_serving(&output, identity, status, working.clone()).await;
+        vm.port = port;
+
+        let said = vm.status_result().await.unwrap();
+
+        let state = &said["structuredContent"]["status"];
+        assert_eq!(state["state"], "idle", "{identity:?}: {said}");
+        assert_eq!(
+            state["reason"], "Nothing is happening in work",
+            "{identity:?}"
+        );
+        assert!(
+            said["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Atlas on work: Idle."),
+            "{said}"
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), read, "{identity:?}");
+        serving.abort();
+    }
+
+    // An older viewer, which does not say whose it is: nothing is guessed.
+    let (port, reads, serving) = viewer_serving(&output, None, None, working.clone()).await;
+    vm.port = port;
+    let refused = vm.status_result().await.unwrap_err();
+    assert_eq!(
+        refused.error,
+        "work's status can't be read while an older Atlas runs in the menu bar; restart Atlas"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    serving.abort();
+
+    // The VM's own viewer is read as before.
+    let (port, reads, serving) =
+        viewer_serving(&output, Some(&own), Some(&own), working.clone()).await;
+    vm.port = port;
+    let said = vm.status_result().await.unwrap();
+    assert_eq!(said["structuredContent"]["status"]["state"], "working");
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    serving.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_viewer_holding_control_with_one_desktop_listed_is_still_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut second_login = server(dir.path());
+    let output = second_login.client.output_dir().unwrap().to_path_buf();
+    let control = json!({"state": "control", "label": "You have control",
+        "headline": "Agents wait while you have control"});
+    let (port, reads, serving) = viewer_serving(&output, None, None, control).await;
+    second_login.port = port;
+
+    let said = second_login.status_result().await.unwrap();
+
+    let status = &said["structuredContent"]["status"];
+    assert_eq!(status["state"], "control", "{said}");
+    assert_eq!(status["label"], "You have control");
+    assert!(
+        said["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Atlas: You have control."),
+        "{said}"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    serving.abort();
 }

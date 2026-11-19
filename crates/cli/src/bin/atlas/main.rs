@@ -207,27 +207,38 @@ fn main() -> ExitCode {
         };
     }
 
-    choose_desktop(&config, cli.desktop.take(), &command);
+    let names = choose_desktop(&config, cli.desktop.take(), &command);
 
-    run(config, command, policy, wait, cli.allow_disrupt, format)
+    run(
+        config,
+        command,
+        policy,
+        wait,
+        cli.allow_disrupt,
+        format,
+        names,
+    )
 }
 
 /// The session this command's desktop was chosen for, so a session the
 /// helper's verification finds later is held to its own binding.
 static CHOSEN_FOR: std::sync::OnceLock<Option<atlas_core::host::Key>> = std::sync::OnceLock::new();
 
-/// Choose this command's desktop, once, before it does anything: the one
-/// `flag` names, then the one its parent Atlas process chose, then
-/// `ATLAS_DESKTOP`, then its agent session's, then the default. An agent
-/// session is bound at its first command, whatever that command is. The process keeps the choice, or why there is none, for every
-/// later settings load. `atlas stop` chooses nothing: it stops every
-/// desktop. The Second Login's own setup, update and removal work on
-/// it, whatever is chosen.
-fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Command) {
-    use atlas_client::host_session::desktops::Bindings;
-    use atlas_core::config::desktops::{self, Selection, Settings};
+/// How a command's desktop is chosen.
+#[derive(Debug, PartialEq, Eq)]
+enum Choice {
+    /// Not at all: the command is for every desktop, or reads the settings
+    /// itself.
+    None,
+    /// Second Login, whatever is chosen.
+    SecondLogin,
+    /// From the settings' list, and named in its replies when they list
+    /// more than one.
+    Listed,
+}
 
-    let selection = Selection::from_env(flag);
+/// How `command`'s desktop is chosen.
+fn choice(command: &Command) -> Choice {
     match command {
         // A Stop is for every desktop. Workers that run inside the helper
         // never read the controller's settings, its bindings or its locks.
@@ -237,27 +248,50 @@ fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Comm
         | Command::EnvironmentWorker { .. }
         | Command::SessionInfo
         | Command::PermissionsInfo
-        | Command::ElementsInfo { .. } => return,
+        | Command::ElementsInfo { .. } => Choice::None,
         // Adding and listing desktops read the settings themselves, and
         // need none to be there.
-        Command::Desktop(_) => return,
+        Command::Desktop(_) => Choice::None,
         Command::Setup(_)
         | Command::Update(_)
         | Command::UpdateFinish
         | Command::Init
         | Command::Uninstall(_)
-        | Command::Onboarding { .. } => {
+        | Command::Onboarding { .. } => Choice::SecondLogin,
+        _ => Choice::Listed,
+    }
+}
+
+/// Choose this command's desktop, once, before it does anything: the one
+/// `flag` names, then the one its parent Atlas process chose, then
+/// `ATLAS_DESKTOP`, then its agent session's, then the default. An agent
+/// session is bound at its first command, whatever that command is. The
+/// process keeps the choice, or why there is none, for every later
+/// settings load. True when the settings list more than one desktop, so
+/// its replies name the one it runs on. `atlas stop` chooses nothing: it
+/// stops every desktop. The Second Login's own setup, update and removal
+/// work on it, whatever is chosen.
+fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Command) -> bool {
+    use atlas_client::host_session::desktops::Bindings;
+    use atlas_core::config::desktops::{self, Selection, Settings};
+
+    let selection = Selection::from_env(flag);
+    match choice(command) {
+        Choice::None => return false,
+        Choice::SecondLogin => {
             let user = Ok(atlas_core::desktop::RecordKey::user());
-            return desktops::choose_for_process(selection, user);
+            desktops::choose_for_process(selection, user);
+            return false;
         }
-        _ => {}
+        Choice::Listed => {}
     }
     // Settings that do not load are this command's refusal, kept so a file
     // that appears later in the process changes nothing; the commands that
     // set Atlas up are above. The lock is never taken for them, so a
     // helper-side command touches nothing of the helper's account.
     if let Err(error) = Settings::load(config) {
-        return desktops::choose_for_process(selection, Err(error));
+        desktops::choose_for_process(selection, Err(error));
+        return false;
     }
     // Every command of an agent session is held to its binding, whether or
     // not its work is attributed to the session. A child of another Atlas
@@ -285,7 +319,9 @@ fn choose_desktop(config: &std::path::Path, flag: Option<String>, command: &Comm
             chosen.name
         );
     }
+    let several = chosen.as_ref().is_ok_and(|chosen| chosen.several);
     desktops::choose_for_process(selection, chosen.map(|chosen| chosen.key));
+    several
 }
 
 /// Hold `verified`, the session the helper's verification settled on, to
@@ -318,6 +354,7 @@ fn run(
     wait: std::time::Duration,
     allow_disrupt: bool,
     format: Format,
+    names: bool,
 ) -> ExitCode {
     let machine = policy.machine_only();
     // A refusing environment worker exits distinctly, so its caller can tell
@@ -376,9 +413,15 @@ fn run(
 
             interrupt
                 .unless_stopped(async {
-                    let result =
-                        dispatch::execute(config.clone(), command, &policy, wait, allow_disrupt)
-                            .await;
+                    let result = dispatch::execute(
+                        config.clone(),
+                        command,
+                        &policy,
+                        wait,
+                        allow_disrupt,
+                        names,
+                    )
+                    .await;
 
                     // Being stopped: the stop ends Atlas in a moment and says
                     // so, so what the cut-short command gave is not reported.
@@ -463,10 +506,15 @@ fn picture_after(config: &std::path::Path, before: &str) {
 }
 
 /// Print a failure on stderr as `format` asks, with what to do about it
-/// when `advised`. A closed stderr loses it, and nothing else.
+/// when `advised`, naming the desktop this process chose among several. A
+/// closed stderr loses it, and nothing else.
 fn report_failure(format: Format, error: &Error, advised: bool) {
     let text = match format {
-        Format::Json => output::failure(error, advised).to_string(),
+        Format::Json => output::json_text(
+            &output::failure(error, advised),
+            false,
+            ui::desktop::named(),
+        ),
         Format::Human => render::error(error),
     };
     let _ = writeln!(std::io::stderr().lock(), "{text}");

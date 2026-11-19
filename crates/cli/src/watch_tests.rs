@@ -4,6 +4,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 fn status(state: &str, headline: &str, age: u64) -> Value {
     json!({
         "ready": true,
+        "desktopKey": "user",
         "overview": {
             "state": state,
             "headline": headline,
@@ -246,7 +247,7 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
         .route(
             "/viewer/",
             get(|| async {
-                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1, "desktopKey": "user"}))
             }),
         )
         .route(
@@ -281,6 +282,7 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
     let mut lines = Lines {
         stdout: std::io::stdout(),
         written: Instant::now(),
+        named: None,
     };
 
     assert!(watch.tick(&client, output, port, &mut lines).await);
@@ -295,7 +297,7 @@ async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() 
     watch.framed_at = Some(framed);
     watch.read_at = None;
     *observed.lock().await = (StatusCode::SERVICE_UNAVAILABLE, json!({}));
-    assert!(read(&client, output, port).await.is_none());
+    assert!(read(&client, output, port, false).await.unwrap().is_none());
     assert!(watch.tick(&client, output, port, &mut lines).await);
     assert_eq!(
         watch.said, said,
@@ -662,6 +664,7 @@ async fn a_watch_keeps_a_live_vms_screen_from_the_vm_itself_stopped_or_resumed()
     let mut lines = Lines {
         stdout: std::io::stdout(),
         written: Instant::now(),
+        named: None,
     };
 
     *keeper.stop.lock().unwrap() = "stopped";
@@ -700,7 +703,7 @@ async fn a_vms_status_read_with_no_viewer_says_it_came_from_the_vm() {
     let (client, _keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
     let output = client.output_dir().unwrap().to_path_buf();
 
-    let (status, source) = read(&client, &output, 1).await.unwrap();
+    let (status, source) = read(&client, &output, 1, false).await.unwrap().unwrap();
     let mut watch = Watch::new(None);
     let line = watch.fixture_news(&status, source, None).unwrap();
 
@@ -711,4 +714,94 @@ async fn a_vms_status_read_with_no_viewer_says_it_came_from_the_vm() {
         !line.to_string().contains("\"source\":\"helper\""),
         "{line}"
     );
+}
+
+#[test]
+fn a_watchs_streamed_events_name_their_desktop_only_when_more_than_one_is_listed() {
+    let events = [
+        json!({"type": "status", "source": "helper", "ready": true, "overview": {"state": "idle"}}),
+        json!({"type": "frame", "id": 3, "path": "/frames/frame.png", "width": 8, "height": 8}),
+    ];
+    let lines = |named: Option<Value>| Lines {
+        stdout: std::io::stdout(),
+        written: Instant::now(),
+        named,
+    };
+    let one = lines(None);
+    let two = lines(Some(json!({"name": "work", "kind": "vm"})));
+
+    for event in events {
+        assert_eq!(
+            one.text(&event),
+            format!("{event}\n"),
+            "unchanged byte for byte"
+        );
+        let mut named = event.clone();
+        named["desktop"] = json!({"name": "work", "kind": "vm"});
+        assert_eq!(two.text(&event), format!("{named}\n"));
+    }
+}
+
+#[tokio::test]
+async fn second_logins_screen_is_the_viewers_only_while_the_viewer_serves_second_login() {
+    use axum::{Json, Router, routing::get};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    for (served, shared) in [
+        (Some("vm-0123456789abcdef01234567"), 0),
+        (None, 0),
+        (Some("user"), 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let client = atlas_client::test_support::client_in(dir.path());
+        let output = client.output_dir().unwrap().to_path_buf();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/viewer/");
+        fs::write(
+            output.join(crate::viewer::MENUBAR_RECORD),
+            json!({"url": url, "pid": std::process::id()}).to_string(),
+        )
+        .unwrap();
+        let mut said = json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1});
+        if let Some(key) = served {
+            said["desktopKey"] = json!(key);
+        }
+        let frames = Arc::new(AtomicUsize::new(0));
+        let counted = frames.clone();
+        let png = atlas_native::native::capture::sample_png(8, 8);
+        let app = Router::new()
+            .route("/viewer/", get(move || async move { Json(said) }))
+            .route(
+                "/viewer/frame.png",
+                get(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let png = png.clone();
+                    async move {
+                        (
+                            [
+                                ("x-frame-id", "shown"),
+                                ("x-display-width", "8"),
+                                ("x-display-height", "8"),
+                            ],
+                            png,
+                        )
+                    }
+                }),
+            );
+        let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let seen = screen(&client, &output, port).await;
+
+        assert_eq!(frames.load(Ordering::SeqCst), shared, "{served:?}");
+        assert_eq!(
+            seen.is_some_and(|seen| seen.shared.is_some()),
+            shared == 1,
+            "{served:?}"
+        );
+        serving.abort();
+    }
 }

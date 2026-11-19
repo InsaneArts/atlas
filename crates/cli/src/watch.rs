@@ -94,6 +94,7 @@ pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: boo
     let mut lines = Lines {
         stdout: std::io::stdout(),
         written: Instant::now(),
+        named: crate::ui::desktop::named().cloned(),
     };
     // The host session this watch runs for, if any: only its own host id
     // is passed on, for the pane that shows "this session".
@@ -275,7 +276,12 @@ impl Watch {
 
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
-            let read = read_typed(client, output, port).await;
+            // A viewer that cannot say whose control it holds is as one that
+            // did not answer.
+            let read = read_typed(client, output, port, lines.named.is_some())
+                .await
+                .ok()
+                .flatten();
             if read.is_some() {
                 self.read_told = told;
                 self.unanswered = 0;
@@ -430,17 +436,28 @@ impl Watch {
     }
 }
 
-/// Lines to the reader, and when the last one went.
+/// Lines to the reader, when the last one went, and the desktop each names
+/// when the settings list more than one.
 struct Lines {
     stdout: Stdout,
     written: Instant,
+    named: Option<Value>,
 }
 
 impl Lines {
     /// Write one JSON line; false once the reader has gone. Lines are
     /// small, so writing them in place does not hold the runtime.
     fn line(&mut self, value: &Value) -> bool {
-        self.send(format!("{value}\n").as_bytes())
+        let text = self.text(value);
+        self.send(text.as_bytes())
+    }
+
+    /// `value` as its line says it.
+    fn text(&self, value: &Value) -> String {
+        format!(
+            "{}\n",
+            crate::ui::desktop::naming(value, self.named.as_ref())
+        )
     }
 
     fn blank(&mut self) -> bool {
@@ -455,18 +472,27 @@ impl Lines {
 }
 
 /// The status and where it came from: the menu bar's viewer when it runs
-/// (or the desktop, read here, when that viewer is from a build that does
-/// not say the state yet); the desktop when no viewer runs, by its kind:
-/// `helper` for Second Login, `vm` for a VM. None when a viewer runs but
-/// did not answer: only it knows who holds control.
+/// for this desktop (or the desktop, read here, when that viewer is from a
+/// build that does not say the state yet); the desktop when no viewer runs,
+/// or one runs for another desktop, by its kind: `helper` for Second Login,
+/// `vm` for a VM. None when a viewer runs but did not answer: only it knows
+/// who holds control. `several` says the settings list more than one
+/// desktop.
+///
+/// # Errors
+///
+/// Refuses while a viewer of an older Atlas, which does not say which
+/// desktop it serves, runs beside more than one desktop listed: whether it
+/// holds this one's control cannot be told.
 pub(crate) async fn read(
     client: &Client,
     output: &Path,
     port: u16,
-) -> Option<(Value, &'static str)> {
-    read_typed(client, output, port)
+    several: bool,
+) -> Result<Option<(Value, &'static str)>> {
+    read_typed(client, output, port, several)
         .await
-        .map(|(status, source)| (status.value, source))
+        .map(|read| read.map(|(status, source)| (status.value, source)))
 }
 
 /// Where a status read here, from the desktop `client` acts on, came from.
@@ -478,36 +504,76 @@ fn read_from(client: &Client) -> &'static str {
     }
 }
 
-async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Reading, &'static str)> {
+/// What the menu bar's viewer gave for a status of one desktop.
+enum Viewed {
+    /// Its status of that desktop.
+    Answered(Reading),
+    /// It runs, but did not answer.
+    Busy,
+    /// None runs, one of another version runs, or it serves another
+    /// desktop: the desktop is read directly.
+    Elsewhere,
+    /// One of an older Atlas, which does not say which desktop it serves,
+    /// beside more than one listed.
+    Older,
+}
+
+/// [`read`]. The viewer's status is taken only when the viewer serves the
+/// desktop `client` acts on: it says so in its answer and again in the
+/// status itself, as it may follow the settings to another desktop between
+/// the two. An older viewer, which says neither, can serve only the one
+/// desktop when one is listed.
+async fn read_typed(
+    client: &Client,
+    output: &Path,
+    port: u16,
+    several: bool,
+) -> Result<Option<(Reading, &'static str)>> {
     let output = output.to_path_buf();
-    let viewer = tokio::task::spawn_blocking(move || {
-        let url = match crate::viewer::local_checked(&output, port) {
-            Ok(Some(url)) => url,
+    let key = client.desktop().record_key().as_str().to_owned();
+    let viewed = tokio::task::spawn_blocking(move || {
+        let (url, served) = match crate::viewer::local_serving(&output, port) {
+            Ok(Some(found)) => found,
             // Recorded and running, but slow to answer: busy, not gone.
-            Ok(None) => return crate::viewer::recorded(&output, port).then_some(None),
-            // Of another version: the helper is read directly instead.
-            Err(_) => return None,
+            Ok(None) if crate::viewer::recorded(&output, port) => return Viewed::Busy,
+            // None, or of another version: the desktop is read directly.
+            Ok(None) | Err(_) => return Viewed::Elsewhere,
         };
+        match served.as_deref() {
+            Some(served) if served != key => return Viewed::Elsewhere,
+            None if several => return Viewed::Older,
+            Some(_) | None => {}
+        }
         let status = crate::viewer::fetch(&url, "status.json", VIEWER_DEADLINE, STATUS_LIMIT)
             .ok()
-            .and_then(|body| {
-                serde_json::from_slice::<Value>(&body)
-                    .ok()
-                    .map(Reading::decode)
-            });
-        Some(status)
+            .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+        match status {
+            None => Viewed::Busy,
+            // It followed the settings to another desktop since it answered.
+            Some(status) if served.is_some() && status["desktopKey"] != key.as_str() => {
+                Viewed::Elsewhere
+            }
+            Some(status) => Viewed::Answered(Reading::decode(status)),
+        }
     })
     .await
-    .ok()
-    .flatten();
+    .unwrap_or(Viewed::Elsewhere);
 
-    match viewer {
-        Some(Some(status)) if status.state.is_string() => Some((status, "viewer")),
-        Some(Some(_)) | None => Some((
+    match viewed {
+        Viewed::Answered(status) if status.state.is_string() => Ok(Some((status, "viewer"))),
+        Viewed::Busy => Ok(None),
+        Viewed::Older => Err(Error::new(
+            Code::Menubar,
+            format!(
+                "{}'s status can't be read while an older Atlas runs in the menu bar; restart \
+                 Atlas",
+                client.selected.name
+            ),
+        )),
+        Viewed::Answered(_) | Viewed::Elsewhere => Ok(Some((
             atlas_client::overview::read(client).await,
             read_from(client),
-        )),
-        Some(None) => None,
+        ))),
     }
 }
 
@@ -535,31 +601,20 @@ fn unseen() -> Error {
     Error::new(Code::Capture, "The helper's screen could not be read")
 }
 
-/// Why pictures of the VM `client` acts on are not shown through Atlas's
-/// own tools yet, in plain words; none for Second Login.
-pub(crate) fn pictures_withheld(client: &Client) -> Option<Error> {
-    if !matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
-        return None;
-    }
-    let name = &client.selected.name;
-    Some(Error::new(
-        Code::Platform,
-        format!(
-            "Pictures of {name} are not shown through the Atlas tools yet; use atlas screenshot \
-             --desktop {name}."
-        ),
-    ))
-}
-
 /// [`screen`], whatever the screen's privacy. A VM's is its own picture,
-/// taken between two proofs: no viewer shares one.
+/// taken between two proofs: no viewer shares one. Second Login's is the
+/// viewer's only while the viewer says it serves Second Login.
 async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen> {
     let shared = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
         None
     } else {
         let output = output.to_path_buf();
+        let key = client.desktop().record_key().as_str().to_owned();
         tokio::task::spawn_blocking(move || {
-            let url = crate::viewer::local(&output, port)?;
+            let (url, served) = crate::viewer::local_serving(&output, port).ok().flatten()?;
+            if served.as_deref() != Some(key.as_str()) {
+                return None;
+            }
             Some(crate::viewer::fetch_frame(&url, VIEWER_DEADLINE, FRAME_LIMIT).ok())
         })
         .await

@@ -50,6 +50,9 @@ pub struct Chosen {
     pub key: RecordKey,
     /// The desktop's name, for the person.
     pub name: String,
+    /// The settings list more than one desktop, so replies name the one
+    /// chosen.
+    pub several: bool,
     /// The session was bound just now to the default, with no evidence of
     /// an earlier desktop, while the settings offer a choice: worth telling.
     pub told: bool,
@@ -135,6 +138,7 @@ impl Bindings {
             return Ok(Chosen {
                 key: resolved.record_key(),
                 name: resolved.name.clone(),
+                several,
                 told: by_default && several && resolved.name == default.name,
             });
         }

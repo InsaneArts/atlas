@@ -26,6 +26,14 @@ pub(super) struct Stream {
     failed: Option<Instant>,
 }
 
+#[cfg(test)]
+impl Stream {
+    /// Whether nothing was ever asked of the service through it.
+    pub(super) fn untouched(&self) -> bool {
+        self.observer.is_none() && self.read.is_none() && self.failed.is_none()
+    }
+}
+
 /// A picture from the service: its packed RGB pixels and their width,
 /// height and row stride, the key input names it by, and the display's size
 /// in points.

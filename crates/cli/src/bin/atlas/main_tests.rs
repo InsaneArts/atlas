@@ -69,3 +69,11 @@ fn a_signal_gives_its_status_whatever_the_result() {
         );
     }
 }
+
+#[test]
+fn atlas_stop_and_desktop_list_name_no_single_desktop() {
+    assert_eq!(choice(&Command::Stop), Choice::None);
+    assert_eq!(choice(&Command::Desktop(cli::Desktop::List)), Choice::None);
+    assert_eq!(choice(&Command::UpdateFinish), Choice::SecondLogin);
+    assert_eq!(choice(&Command::Status), Choice::Listed);
+}

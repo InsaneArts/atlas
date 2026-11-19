@@ -2330,3 +2330,48 @@ async fn logout_on_a_vm_is_refused_in_its_own_words_and_claims_nothing() {
     let other = client.controller.clone().waiting(std::time::Duration::ZERO);
     assert!(other.acquire_for_executor().is_ok(), "no exclusion kept");
 }
+
+#[test]
+fn a_reply_names_the_desktop_it_ran_on_by_the_name_its_selection_had() {
+    use atlas_core::config::desktops::{Selection, Settings};
+
+    let vm = |name: &str, id: &str| {
+        format!("\n[[desktops]]\nname = \"{name}\"\nkind = \"vm\"\nid = \"{id}\"\n")
+    };
+    let (first, second) = ("0123456789abcdef01234567", "89abcdef0123456701234567");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("atlas.toml");
+    let chosen_from = format!(
+        "default = \"work\"\noutput_dir = \"out\"\n{}{}",
+        vm("work", first),
+        vm("archive", second)
+    );
+    // The names swapped once the command chose `work` by its record key.
+    let swapped = format!(
+        "default = \"work\"\noutput_dir = \"out\"\n{}{}",
+        vm("archive", first),
+        vm("work", second)
+    );
+    let settings = Settings::parse(chosen_from.as_bytes(), &path).unwrap();
+    let key = settings.default_desktop().record_key();
+
+    let settings = Settings::parse(swapped.as_bytes(), &path).unwrap();
+    let selection = Selection {
+        flag: None,
+        parent: Some(key.as_str().to_owned()),
+        named: None,
+        bound: None,
+    };
+    let selected = settings.selected(settings.resolve(&selection).unwrap());
+    let client = Client::new(selected).unwrap();
+
+    assert_eq!(
+        client.desktop().record_key(),
+        key,
+        "it ran on the chosen VM"
+    );
+    assert_eq!(
+        reply_desktop(&client),
+        json!({"name": "archive", "kind": "vm"})
+    );
+}

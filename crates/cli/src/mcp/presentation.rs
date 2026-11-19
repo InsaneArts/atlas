@@ -121,11 +121,19 @@ pub(super) fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option
         .collect::<Vec<_>>();
 
     // The view is the person's: a step that names a command reads as where
-    // to look instead.
+    // to look instead, naming a VM as itself.
     let headline = match overview["headline"].as_str() {
-        Some(text) if text.contains("atlas ") => "The helper isn't ready. Open Atlas to see why",
-        Some(text) => text,
-        None => "",
+        Some(text) if text.contains("atlas ") => {
+            let vm = (status["desktop"]["kind"] == "vm")
+                .then(|| status["desktop"]["name"].as_str())
+                .flatten();
+            match vm {
+                Some(name) => format!("{name} isn't ready. Open Atlas to see why"),
+                None => "The helper isn't ready. Open Atlas to see why".to_owned(),
+            }
+        }
+        Some(text) => text.to_owned(),
+        None => String::new(),
     };
 
     json!({
@@ -147,10 +155,14 @@ pub(super) fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option
 
 /// A tool result for `status`: its words and the facts it acts on for the
 /// model, and the whole status, history included, for the view in `_meta`.
-pub(super) fn said(status: &Value) -> Value {
+/// The words name `desktop`, given when the settings list more than one.
+pub(super) fn said(status: &Value, desktop: Option<&str>) -> Value {
     let label = status["label"].as_str().unwrap_or("Not ready");
     let headline = status["headline"].as_str().unwrap_or_default();
-    let mut text = format!("Atlas: {}", sentence(label));
+    let mut text = match desktop {
+        Some(name) => format!("Atlas on {name}: {}", sentence(label)),
+        None => format!("Atlas: {}", sentence(label)),
+    };
     if !headline.is_empty() {
         text.push_str(&format!(" {}", sentence(headline)));
     }

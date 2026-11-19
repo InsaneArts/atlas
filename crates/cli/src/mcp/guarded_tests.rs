@@ -300,7 +300,7 @@ impl Viewer {
             .route(
                 "/viewer/",
                 get(|| async {
-                    Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1}))
+                    Json(json!({"service": "atlas-viewer", "pid": std::process::id(), "protocol": 1, "desktopKey": "user"}))
                 }),
             )
             .route(
@@ -313,7 +313,7 @@ impl Viewer {
                         } else {
                             (
                                 StatusCode::OK,
-                                Json(json!({"overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}})),
+                                Json(json!({"desktopKey": "user", "overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}})),
                             )
                         }
                     }
@@ -562,4 +562,32 @@ async fn refused_cleanup_keeps_its_lease_and_retries_without_touching_another_vi
     drop(other);
     serving.abort();
     let _ = serving.await;
+}
+
+#[tokio::test]
+async fn closing_a_view_names_its_desktop_only_when_more_than_one_is_listed_byte_for_byte() {
+    for (several, expected) in [
+        (
+            false,
+            r#"{"content":[],"structuredContent":{"closed":true}}"#,
+        ),
+        (
+            true,
+            r#"{"content":[],"structuredContent":{"closed":true,"desktop":{"kind":"user","name":"second-login"}}}"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = root(dir.path());
+        root.several = several;
+        let registry = root.app_views.get().unwrap().clone();
+        let token = opened(&registry, &root).await;
+
+        let closed = delivered(&registry, &root, "view_close", &token).await;
+
+        assert_eq!(
+            closed.to_string(),
+            expected,
+            "with several desktops: {several}"
+        );
+    }
 }

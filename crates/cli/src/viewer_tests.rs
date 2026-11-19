@@ -3386,3 +3386,15 @@ async fn the_live_window_and_frame_service_of_a_vm_are_refused_in_one_plain_word
     assert!(keeper.asked_for("picture").is_empty());
     assert!(keeper.asked_for("observe").is_empty());
 }
+
+#[tokio::test]
+async fn the_service_and_its_status_say_which_desktop_they_serve() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+
+    let (_, identity) = read_json(&viewer, "").await;
+    let status = viewer.status_for(false).await;
+
+    assert_eq!(identity["desktopKey"], "user");
+    assert_eq!(status["desktopKey"], "user");
+}

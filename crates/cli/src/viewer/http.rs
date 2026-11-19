@@ -496,6 +496,7 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
                 "protocol": super::PROTOCOL,
                 "capabilities": super::CAPABILITIES,
                 "incarnation": viewer.incarnation,
+                "desktopKey": viewer.client().desktop().record_key().as_str(),
                 "events": if viewer.feed.available() { "available" } else { "unavailable" },
             }),
         );

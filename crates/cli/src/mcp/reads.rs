@@ -128,8 +128,8 @@ impl Server {
     pub(super) async fn status(&self) -> Result<Value> {
         let began = Instant::now();
         let output = self.client.output_dir()?.to_path_buf();
-        let (status, _) = crate::watch::read(&self.client, &output, self.port)
-            .await
+        let (status, _) = crate::watch::read(&self.client, &output, self.port, self.several)
+            .await?
             .ok_or_else(|| Error::new(Code::Menubar, "Atlas's menu bar is busy; try again"))?;
         // The records and notes are read under their locks, off the runtime.
         let client = self.client.clone();
@@ -160,7 +160,9 @@ impl Server {
 
     /// The tool result for a fresh status read.
     pub(super) async fn status_result(&self) -> Result<Value> {
-        self.status().await.map(|status| said(&status))
+        self.status()
+            .await
+            .map(|status| said(&status, self.named()))
     }
 
     /// The status for a frame: the last read when it is recent.
@@ -179,14 +181,18 @@ impl Server {
     /// `streaming` says they came from the menu bar's frame service, which
     /// the view may read as often as it likes. Refused with `busy`, held by
     /// the person, while they sign the helper in to an account, and when a
-    /// sign-in began or ended while it was read.
+    /// sign-in began or ended while it was read. A VM's screen never comes
+    /// from the frame service, which serves Second Login: it is the VM's
+    /// own picture, taken between two proofs of its guest.
     pub(super) async fn screen(&self, since: Option<&str>, drawn: Option<u32>) -> Result<Value> {
-        if let Some(withheld) = crate::watch::pictures_withheld(&self.client) {
-            return Err(withheld);
-        }
         let status = self.recent_status().await?;
         let admitted = self.client.controller.screen_visible()?;
-        let (shot, shared, streaming) = match self.streamed().await {
+        let streamed = if self.on_vm() {
+            None
+        } else {
+            self.streamed().await
+        };
+        let (shot, shared, streaming) = match streamed {
             Some(streamed) => (
                 Some(Shot::Streamed(streamed.rgb, streamed.layout)),
                 Some((streamed.key, streamed.display)),
@@ -208,7 +214,7 @@ impl Server {
             None => None,
         };
 
-        let mut result = said(&status);
+        let mut result = said(&status, self.named());
         result["structuredContent"]["unchanged"] =
             json!(tiled.as_ref().is_some_and(Tiled::unchanged));
         result["structuredContent"]["screen"] = json!(tiled.is_some());
@@ -277,9 +283,6 @@ impl Server {
     /// image comes back even when the command says it is unchanged: the last
     /// screenshot of that part may have been another session's.
     pub(super) async fn take_screenshot(&self, arguments: &Value) -> Result<Value> {
-        if let Some(withheld) = crate::watch::pictures_withheld(&self.client) {
-            return Err(withheld);
-        }
         let argv = screenshot_argv(arguments)?;
         let program = std::env::current_exe().map_err(|error| {
             Error::new(Code::Capture, "Atlas could not find itself").with_source(error)
@@ -320,11 +323,15 @@ impl Server {
             .with_source(error)
         })?;
         if reply["ok"] != true {
-            let refused = refusal(&reply);
-            return Err(match reply["next"].as_str() {
-                Some(next) => refused.with("next", json!(next)),
-                None => refused,
-            });
+            let mut refused = refusal(&reply);
+            if let Some(next) = reply["next"].as_str() {
+                refused = refused.with("next", json!(next));
+            }
+            // The command named the desktop it chose, as its words do.
+            if let Some(desktop) = reply.get("desktop") {
+                refused = refused.with("desktop", desktop.clone());
+            }
+            return Err(refused);
         }
 
         let text = reply.to_string();

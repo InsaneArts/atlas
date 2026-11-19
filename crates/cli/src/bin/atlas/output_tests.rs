@@ -244,3 +244,29 @@ fn present_noninteger_exit_codes_retain_their_failure_status() {
         assert!(failed(&result), "{result}");
     }
 }
+
+#[test]
+fn with_one_desktop_listed_every_reply_is_unchanged_byte_for_byte() {
+    let reply = json!({"ok": true, "windows": [{"id": 4, "app": "Notes"}]});
+    let failed = failure(&Error::new(Code::Transport, "No reply"), true);
+    let unadvised = json!({"ok": false, "code": "busy", "error": "Wait"});
+
+    assert_eq!(json_text(&reply, true, None), reply.to_string());
+    assert_eq!(json_text(&failed, false, None), failed.to_string());
+    let mut advised = unadvised.clone();
+    advise(&mut advised);
+    assert_eq!(json_text(&unadvised, true, None), advised.to_string());
+}
+
+#[test]
+fn with_two_desktops_listed_every_reply_and_failure_names_its_desktop() {
+    let work = json!({"name": "work", "kind": "vm"});
+    let failed = failure(&Error::new(Code::Platform, "work is a VM desktop"), true);
+    for value in [json!({"ok": true, "windows": []}), failed] {
+        let shown: Value = serde_json::from_str(&json_text(&value, true, Some(&work))).unwrap();
+        assert_eq!(shown["desktop"], work, "{shown}");
+        assert_eq!(shown["next"], value["next"], "{shown}");
+    }
+    let own = json!({"ok": true, "desktop": {"kind": "vm", "name": "other"}});
+    assert_eq!(json_text(&own, true, Some(&work)), own.to_string());
+}

@@ -280,6 +280,9 @@ impl Viewer {
         if !self.feed.available() {
             status.value["events"] = json!("unavailable");
         }
+        // Which desktop this status is of, so a reader for another one reads
+        // that one itself.
+        status.value["desktopKey"] = json!(client.desktop().record_key().as_str());
 
         if !person && let Some(fields) = status.value.as_object_mut() {
             fields.remove("consoleName");

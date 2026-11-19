@@ -1259,6 +1259,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: showing the person this desktop",
     ),
     (
+        "crates/cli/src/ui/desktop.rs",
+        &["of"],
+        "owner: the word a reply names the desktop's kind by",
+    ),
+    (
         "crates/cli/src/ui/render/act.rs",
         &["opened"],
         "exception: the link: copies are made on a shared disk, and these words name its folder",

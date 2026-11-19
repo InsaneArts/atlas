@@ -104,6 +104,7 @@ impl Entry {
         child.picture_tiles = root.picture_tiles.clone();
         child.decoded = root.decoded.clone();
         child.picture_decoded = root.picture_decoded.clone();
+        child.several = root.several;
         child.views.store(true, Ordering::Relaxed);
         Self {
             token: atlas_core::files::token(),
@@ -237,7 +238,9 @@ impl Registry {
         };
         let result = if tool == Tool::CloseView {
             self.close(&child);
-            json!({"content": [], "structuredContent": {"closed": true}})
+            let mut closed = json!({"content": [], "structuredContent": {"closed": true}});
+            child.name_desktop(&mut closed);
+            closed
         } else {
             let outcome = child.run(tool, arguments).await;
             // Only a failure that says so leaves a mutation unknown: a status

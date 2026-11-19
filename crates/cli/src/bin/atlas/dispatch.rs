@@ -163,12 +163,15 @@ pub(super) fn actor() -> Actor {
 /// for other controllers to let go of the helper. An agent's command is
 /// labelled with the host session it comes from, and what it left is noted
 /// in that session's record; a refusal names the other sessions it can.
+/// With `names`, its replies name the desktop of the first client it
+/// builds: the selection it runs with.
 pub(super) async fn execute(
     config: PathBuf,
     command: Command,
     policy: &Policy,
     wait: Duration,
     allow_disrupt: bool,
+    names: bool,
 ) -> Result<Value> {
     let actor = actor();
 
@@ -196,6 +199,9 @@ pub(super) async fn execute(
     )?;
     let client = || {
         Client::new(Selected::load(&config)?).map(|mut client| {
+            if names {
+                atlas_cli::ui::desktop::name(reply_desktop(&client));
+            }
             client.actor = actor;
             client.doing = doing.clone();
             client.host_session = host.clone();
@@ -223,6 +229,12 @@ pub(super) async fn execute(
         allow_disrupt,
     )
     .await
+}
+
+/// The desktop a reply names: the one `client` runs on, by the name and
+/// kind of the very selection it was built from.
+fn reply_desktop(client: &Client) -> Value {
+    atlas_cli::ui::desktop::of(&client.selected.name, &client.desktop())
 }
 
 /// Execute with the attributed session and its configured client.

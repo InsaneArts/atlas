@@ -1,6 +1,6 @@
 //! Result presentation, output streams and process result classification.
 use atlas_cli::ui::{
-    Format,
+    Format, desktop,
     render::{self, View},
 };
 use atlas_core::error::advice as hints;
@@ -13,7 +13,7 @@ pub(super) fn serving_menu_bar(shown: &Value) {
     if atlas_cli::ui::human() {
         println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
     } else {
-        println!("{shown}");
+        println!("{}", desktop::naming(shown, desktop::named()));
     }
 }
 
@@ -30,16 +30,15 @@ pub(super) fn started_menu_bar(already: bool, record: &Value) {
             atlas_cli::ui::style::ok()
         );
     } else {
-        println!(
-            "{}",
-            json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
-        );
+        let started =
+            json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]});
+        println!("{}", desktop::naming(&started, desktop::named()));
     }
 }
 
-/// Write a result: JSON for programs, its view for a person. A failure for
-/// programs says what to do next when `advised`. A reader that went away
-/// (`| head`) ends the output quietly.
+/// Write a result: JSON for programs, its view for a person. A result for
+/// programs is [`json_text`]'s, naming the desktop this process chose among
+/// several. A reader that went away (`| head`) ends the output quietly.
 pub(super) fn emit(format: Format, view: &View, value: &Value, advised: bool) {
     if value.is_null() {
         return;
@@ -47,13 +46,7 @@ pub(super) fn emit(format: Format, view: &View, value: &Value, advised: bool) {
 
     match format {
         Format::Json => {
-            let text = if advised && value["ok"] == false {
-                let mut advised = value.clone();
-                advise(&mut advised);
-                advised.to_string()
-            } else {
-                value.to_string()
-            };
+            let text = json_text(value, advised, desktop::named());
             let _ = writeln!(std::io::stdout().lock(), "{text}");
         }
         Format::Human => {
@@ -71,6 +64,19 @@ pub(super) fn emit(format: Format, view: &View, value: &Value, advised: bool) {
                 eprintln!("{}", shown.err);
             }
         }
+    }
+}
+
+/// `value` as programs read it: a failure says what to do next when
+/// `advised`, and every result names `named`, the desktop it came from,
+/// unless it names its own.
+pub(super) fn json_text(value: &Value, advised: bool, named: Option<&Value>) -> String {
+    if advised && value["ok"] == false {
+        let mut advised = value.clone();
+        advise(&mut advised);
+        desktop::naming(&advised, named).to_string()
+    } else {
+        desktop::naming(value, named).to_string()
     }
 }
 
