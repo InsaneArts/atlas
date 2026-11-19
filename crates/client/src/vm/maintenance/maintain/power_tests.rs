@@ -493,3 +493,61 @@ async fn a_stop_atlas_vm_answers_pending_is_followed_past_a_window_changes_patie
     assert_eq!(keeper.runner.asked_for("start").len(), 1);
     assert!(pending(&client).is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_power_stop_is_refused_during_maintenance_and_kept_until_atlas_vm_confirms_it() {
+    let dir = tempdir();
+    let (client, keeper) = quiet_vm(dir.path());
+    let stopped = |client: &Client| {
+        let client = client.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::vm::maintenance::powered_off_within(&client, Duration::from_millis(400))
+        })
+    };
+    let lifecycle = lifecycle(&client).clone();
+    under_maintenance(lifecycle.home(), &client.desktop().id(), Phase::Open);
+
+    let refused = stopped(&client).await.unwrap().unwrap_err();
+
+    assert_eq!(refused.code, Code::Busy, "{refused:?}");
+    assert_eq!(
+        refused.error,
+        "work is open for maintenance; end its maintenance before stopping it."
+    );
+    assert!(keeper.runner.asked_for("stop").is_empty(), "nothing asked");
+    assert!(record(&client).power_stop.is_none(), "nothing kept");
+
+    let mut kept = record(&client);
+    kept.maintenance = None;
+    lifecycle.keep_record(&kept).unwrap();
+    keeper.runner.stalling_stop();
+
+    let waiting = stopped(&client).await.unwrap().unwrap_err();
+
+    assert_eq!(waiting.code, Code::NotReady, "{waiting:?}");
+    assert!(!waiting.to_string().contains("helper"), "{waiting:?}");
+    let change = record(&client).power_stop.expect("the stop is kept");
+    assert_eq!(
+        pending(&client),
+        vec![change.to_string()],
+        "claimed as Atlas VM's"
+    );
+    assert_eq!(keeper.runner.begun(), vec![change.to_string()]);
+
+    keeper.runner.set_power("stopped");
+    let done = stopped(&client).await.unwrap().unwrap();
+
+    assert_eq!(
+        done,
+        json!({"ok": true, "desktop": "work", "power": "stopped"})
+    );
+    assert_eq!(
+        keeper.runner.begun(),
+        vec![change.to_string()],
+        "the same stop was followed, never a second"
+    );
+    let settled = record(&client);
+    assert!(settled.power_stop.is_none(), "forgotten once confirmed");
+    assert!(settled.sent(&change).is_none());
+    assert!(pending(&client).is_empty(), "its claim cleared");
+}

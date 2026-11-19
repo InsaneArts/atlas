@@ -188,7 +188,7 @@ impl Startup {
 
     fn prepare(&mut self, ready: &Ready) -> Result<(bool, serde_json::Value)> {
         self.lock = Some(self.starting(ready)?);
-        let record = self.output.join(crate::viewer::MENUBAR_RECORD);
+        let record = crate::viewer::record_for(&self.output);
         if let Some(running) = self.viewer_running(&record) {
             return Ok((true, running));
         }
@@ -501,7 +501,7 @@ pub fn stop(output: &Path) -> Result<Option<u16>> {
     atlas_core::files::lock_within(&starting, atlas_core::files::Lock::Exclusive, START_WAIT)
         .map_err(|held| start_refused().with_source(held.0))?;
 
-    let record = output.join(crate::viewer::MENUBAR_RECORD);
+    let record = crate::viewer::record_for(output);
     let recorded = serving(
         &record,
         |record| fs::read(record),

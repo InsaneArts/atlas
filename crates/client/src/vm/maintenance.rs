@@ -6,10 +6,10 @@
 //! words. A record that cannot be read holds agents as a kept one does.
 mod maintain;
 
-pub use maintain::{Maintain, maintain};
+pub use maintain::{Maintain, maintain, power_off};
 
 #[cfg(test)]
-pub(in crate::vm) use maintain::maintained_by;
+pub(in crate::vm) use maintain::{maintained_by, powered_off_within};
 
 use super::lifecycle::{Lifecycle, record::Maintenance};
 use atlas_core::{

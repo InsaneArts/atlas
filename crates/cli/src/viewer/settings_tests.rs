@@ -256,7 +256,7 @@ fn screenshot_rows_keep_the_folder_they_were_listed_from() {
         let text = SETTINGS.replace("\"out\"", "\"moved\"").into_bytes();
         let config = atlas_core::config::Config::parse(&text, &dir.path().join("u.toml")).unwrap();
         viewer
-            .follow_output(&original, Selected::provisional(config), text)
+            .follow_output(&original, Selected::provisional(config), (text, None))
             .await;
         assert_ne!(
             viewer.client().helper_config().output_dir,

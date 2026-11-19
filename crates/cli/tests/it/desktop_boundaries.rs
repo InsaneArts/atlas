@@ -1294,7 +1294,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     ),
     (
         "crates/cli/src/viewer/reads.rs",
-        &["Viewer::status_for"],
+        &["Viewer::status_of"],
         "owner: the name the desktop's account goes by",
     ),
     (

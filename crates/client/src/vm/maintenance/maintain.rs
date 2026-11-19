@@ -132,6 +132,33 @@ pub(in crate::vm) fn maintained_by(
     Maintainer::of(client, patience)?.run(asked, grants, say)
 }
 
+/// Stop the VM `client` acts on, as the person asked from Atlas.app, under
+/// its station-operation lock and its exclusion: work running there ends.
+/// The stop is a change of its own, kept in the VM's lifecycle record before
+/// it is claimed as Atlas VM's and asked, and kept until Atlas VM confirms
+/// the VM stopped; asked again, the very same change is followed.
+///
+/// # Errors
+///
+/// Refuses another desktop, a VM not added, being removed, handed over or
+/// open for maintenance, and one another command holds; fails when Atlas VM
+/// refused the stop, has not said what it came to, or has not confirmed the
+/// VM stopped, or when a record cannot be kept. Each says what is kept.
+pub fn power_off(client: &Client) -> Result<Value> {
+    Maintainer::of(client, Patience::REAL)?.power_off()
+}
+
+/// [`power_off`], the stop followed and its power looked at for `within`.
+#[cfg(test)]
+pub(in crate::vm) fn powered_off_within(client: &Client, within: Duration) -> Result<Value> {
+    let patience = Patience {
+        within,
+        powering: within,
+        every: Duration::from_millis(50),
+    };
+    Maintainer::of(client, patience)?.power_off()
+}
+
 /// How long a window change, and a stop or start of the VM, is waited
 /// for, and how often each is looked at.
 #[derive(Clone, Copy, Debug)]

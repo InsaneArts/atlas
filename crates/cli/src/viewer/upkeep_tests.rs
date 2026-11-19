@@ -92,3 +92,59 @@ async fn a_service_nobody_reads_follows_its_settings() {
 
     assert_eq!(viewer.client().output_dir().unwrap(), base.join("moved"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn second_logins_upkeep_runs_while_a_vm_is_viewed() {
+    use crate::viewer::two_desktops::{Two, post};
+    let two = Two::new().await;
+    let (main, work) = (Two::id(&two.main), Two::id(&two.work));
+    let (status, viewed) = post(
+        &two.viewer,
+        "view",
+        &serde_json::json!({"desktop": work}),
+        true,
+    )
+    .await;
+    assert_eq!(status, 200, "{viewed}");
+    let mut observed = two.viewer.observed.subscribe();
+
+    let keeping = tokio::spawn(keep_up(two.viewer.clone()));
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        observed.wait_for(|read| read.contains_key(&main) && read.contains_key(&work)),
+    )
+    .await
+    .expect("the upkeep read both desktops")
+    .unwrap();
+    keeping.abort();
+
+    let listed = two.viewer.listed();
+    assert!(listed["desktops"][0]["standing"].is_string(), "{listed}");
+    assert_eq!(listed["viewed"], work, "the VM stays viewed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_desktop_not_viewed_is_kept_up_while_the_viewed_one_is_read_often() {
+    use crate::viewer::two_desktops::Two;
+    let two = Two::new().await;
+    let work = Two::id(&two.work);
+    let mut observed = two.viewer.observed.subscribe();
+    let reader = two.viewer.clone();
+    let reading = tokio::spawn(async move {
+        loop {
+            reader.status_read();
+            tokio::time::sleep(PERIOD / 4).await;
+        }
+    });
+
+    let keeping = tokio::spawn(keep_up(two.viewer.clone()));
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        observed.wait_for(|read| read.contains_key(&work)),
+    )
+    .await
+    .expect("the VM was kept up while Second Login was read often")
+    .unwrap();
+    keeping.abort();
+    reading.abort();
+}

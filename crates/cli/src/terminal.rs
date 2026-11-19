@@ -168,10 +168,7 @@ struct Discovery {
 impl Discovery {
     fn of(client: &Client) -> Self {
         Self {
-            record: client
-                .output_dir()
-                .ok()
-                .map(|output| output.join(viewer::MENUBAR_RECORD)),
+            record: client.output_dir().ok().map(viewer::record_for),
             helper: client
                 .link
                 .socket()

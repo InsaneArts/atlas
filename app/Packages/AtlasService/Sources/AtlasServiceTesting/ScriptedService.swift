@@ -98,6 +98,12 @@ public final class ScriptedService: ViewerService {
   public var answers: [String] = []
   /// The service's own refusal each route answers with, its code included, in place of `fail`'s codeless one.
   public var refusals: [String: ServiceError] = [:]
+  /// What `desktops.json` answers; viewing a desktop marks it viewed there.
+  public var desktopList = DesktopList()
+  /// Whether the service offers `desktops.json`; an older one answers ``ServiceError/notOffered``.
+  public var offersDesktops = true
+  /// `desktops.json` requests made.
+  public var desktopsCalls = 0
   /// What a sign-in's start answers; its kind and site follow the request.
   public var signInLease = "sign-in-lease"
   /// What Done answers of `added`, for a sign-in.
@@ -166,6 +172,32 @@ public final class ScriptedService: ViewerService {
     if let earlier = held.updateValue(continuation, forKey: route) {
       Issue.record("A second \(route) request was held while one already was; the first was let go")
       earlier.resume()
+    }
+  }
+
+  /// Answers ``desktopList``, unless held, failed or not offered.
+  ///
+  /// - Returns: The desktops.
+  /// - Throws: ``ServiceError/notOffered`` when ``offersDesktops`` is false, or a ``ServiceError`` when the route fails.
+  @MainActor
+  public func desktops() async throws(ServiceError) -> DesktopList {
+    desktopsCalls += 1
+    try await pause("desktops")
+    guard offersDesktops else { throw .notOffered }
+    return desktopList
+  }
+
+  /// Records viewing `desktop`, and marks it the one viewed in ``desktopList``, unless held or failed.
+  ///
+  /// - Parameter desktop: The desktop's ID.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func view(_ desktop: String) async throws {
+    log.append("view \(desktop)")
+    try await pause("view")
+    desktopList.viewed = desktop
+    for index in desktopList.desktops.indices {
+      desktopList.desktops[index].isViewed = desktopList.desktops[index].id == desktop
     }
   }
 

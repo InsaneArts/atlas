@@ -107,26 +107,27 @@ async fn a_status_read_is_told_as_what_changed_and_an_older_look_says_nothing() 
     producer.tick(&viewer).await;
     let start = head(&viewer);
     let now = Instant::now();
+    let desktop = viewer.client().desktop().id().as_str().to_owned();
 
     producer
-        .observe(&viewer, reading(now, "ready", false))
+        .observe(&viewer, &desktop, reading(now, "ready", false))
         .await;
     assert_eq!(kinds_after(&viewer, start).await, ["status", "control"]);
 
     let first = head(&viewer);
     producer
-        .observe(&viewer, reading(now, "ready", false))
+        .observe(&viewer, &desktop, reading(now, "ready", false))
         .await;
     assert_eq!(head(&viewer), first, "the same reading says nothing");
 
     producer
-        .observe(&viewer, reading(now + TICK, "ready", true))
+        .observe(&viewer, &desktop, reading(now + TICK, "ready", true))
         .await;
     assert_eq!(kinds_after(&viewer, first).await, ["control"]);
 
     let second = head(&viewer);
     producer
-        .observe(&viewer, reading(now, "working", false))
+        .observe(&viewer, &desktop, reading(now, "working", false))
         .await;
     assert_eq!(head(&viewer), second, "an older look says nothing");
 }
@@ -136,7 +137,8 @@ async fn a_read_of_a_replaced_helper_or_an_older_look_is_not_handed_on() {
     let (viewer, _dir) = viewer();
     let served = viewer.client();
     let now = Instant::now();
-    let newest = |viewer: &Viewer| viewer.observed.borrow().as_ref().map(|seen| seen.at);
+    let desktop = served.desktop().id().as_str().to_owned();
+    let newest = |viewer: &Viewer| viewer.observed.borrow().get(&desktop).map(|seen| seen.at);
 
     viewer.tell_producer(&served, now, &json!({"overview": {}}), false);
     assert_eq!(newest(&viewer), Some(now));
@@ -169,4 +171,110 @@ async fn a_change_to_control_makes_the_next_read_look_at_the_helper_again() {
     producer.tick(&viewer).await;
 
     assert!(forgotten() > before);
+}
+
+/// What the feed of `viewer` told after `after`: each event's desktop and
+/// kind, in order.
+async fn told_after(viewer: &Viewer, after: u64) -> Vec<(String, String)> {
+    let (feed, _) = viewer.feed.head().unwrap();
+    let (_, body) = viewer.feed.answer(Some(&feed), after).await;
+    body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| {
+            (
+                event["desktop"].as_str().unwrap().to_owned(),
+                event["kind"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_desktop_not_viewed_tells_the_feed_of_its_questions_status_and_activity_and_a_restart_goes_on()
+ {
+    use crate::viewer::{
+        http::bind,
+        two_desktops::{Two, read},
+    };
+    let two = Two::new().await;
+    let viewer = &two.viewer;
+    let (main, work) = (Two::id(&two.main), Two::id(&two.work));
+    let mut producer = Producer::default();
+    producer.tick(viewer).await;
+    let folder = super::super::station::service_folder(&two.home).join(FOLDER);
+    assert!(folder.is_dir(), "the feed is the station's");
+    let told = told_after(viewer, 0).await;
+    for kind in [
+        "activity", "sessions", "asks", "control", "status", "desktops",
+    ] {
+        assert!(
+            told.contains(&(main.clone(), kind.to_owned())),
+            "{kind}: {told:?}"
+        );
+    }
+    for kind in ["activity", "sessions", "asks", "control"] {
+        assert!(
+            told.contains(&(work.clone(), kind.to_owned())),
+            "{kind}: {told:?}"
+        );
+    }
+
+    let start = head(viewer);
+    let records = two.work.records().to_owned();
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(
+        records.join(atlas_client::activity_log::FILE),
+        "{\"at\":\"1\",\"operation\":\"input\",\"ok\":true}\n",
+    )
+    .unwrap();
+    producer.tick(viewer).await;
+    assert_eq!(
+        told_after(viewer, start).await,
+        [(work.clone(), "activity".to_owned())]
+    );
+
+    let asked = head(viewer);
+    let asks = two.work.controller.asks().folder().to_owned();
+    std::fs::create_dir_all(&asks).unwrap();
+    std::fs::write(asks.join("question.json"), "{}").unwrap();
+    producer.tick(viewer).await;
+    assert_eq!(
+        told_after(viewer, asked).await,
+        [(work.clone(), "asks".to_owned())]
+    );
+
+    let read_at = head(viewer);
+    let (status, said) = read(viewer, &format!("status.json?desktop={work}"), true).await;
+    assert_eq!(status, 200, "{said}");
+    let reading = viewer.observed.borrow().get(&work).cloned().unwrap();
+    producer.observe(viewer, &work, reading).await;
+    assert_eq!(
+        told_after(viewer, read_at).await,
+        [
+            (work.clone(), "status".to_owned()),
+            (work.clone(), "control".to_owned())
+        ]
+    );
+
+    // The service started again goes on with the same feed, from where it
+    // was, and tells every kind of each desktop once more.
+    let (feed, before) = viewer.feed.head().unwrap();
+    let (_, again) = bind(two.main.clone(), 0, Some(&two.settings))
+        .await
+        .unwrap();
+    unpoisoned(&again.stand_ins).extend([two.main.clone(), two.work.clone()]);
+    *unpoisoned(&again.station_home) = Some(two.home.clone());
+    again.follow_settings().await;
+    Producer::default().tick(&again).await;
+    let (continued, after) = again.feed.head().unwrap();
+    assert_eq!(continued, feed, "the reader's place holds");
+    assert!(after > before);
+    let told = told_after(&again, before).await;
+    assert!(
+        told.contains(&(work.clone(), "activity".to_owned())),
+        "{told:?}"
+    );
+    assert!(told.contains(&(main, "activity".to_owned())), "{told:?}");
 }

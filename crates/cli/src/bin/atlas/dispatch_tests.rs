@@ -888,49 +888,6 @@ async fn every_look_at_the_screen_is_refused_while_the_person_signs_in() {
     lease.release();
 }
 
-/// Settings that list the Second Login `main` and the VM desktop `work`.
-const BOTH: &str = "default = \"main\"\noutput_dir = \"out\"\n\n\
-                    [[desktops]]\nname = \"main\"\nkind = \"user\"\nhelper_uid = 60001\n\
-                    socket_path = \"c.sock\"\nidentity_probe = \"probe\"\ninput_socket = \"i.sock\"\n\n\
-                    [[desktops]]\nname = \"work\"\nkind = \"vm\"\nid = \"0123456789abcdef01234567\"\n";
-
-#[tokio::test]
-async fn a_stop_keeps_a_vm_desktops_hold_and_says_it_did_not_reach_it_while_another_desktop_fails()
-{
-    let dir = tempfile::tempdir().unwrap();
-    let settings =
-        atlas_core::config::desktops::Settings::parse(BOTH.as_bytes(), &dir.path().join("u.toml"))
-            .unwrap();
-    let state = dir.path().join("state");
-    let made = |listed: &atlas_core::config::desktops::Listed| match listed.desktop {
-        atlas_core::config::desktops::Chosen::User(_) => {
-            Err(Error::new(Code::Io, "The helper could not be told"))
-        }
-        atlas_core::config::desktops::Chosen::Vm(_) => {
-            let mut client = Client::new(settings.selected(listed))?;
-            client.controller = atlas_control::Controller::of_at(&client.desktop(), &state);
-            Ok(client)
-        }
-    };
-    let error = stop_listed(&settings, None, made).await.unwrap_err();
-    assert_eq!(error.error, "The helper could not be told");
-    let each = &error.details["desktops"];
-    assert_eq!(each[0]["desktop"], "main");
-    assert_eq!(each[1]["desktop"], "work");
-    let work = &each[1]["reply"];
-    assert_eq!(work["held"], true, "{work}");
-    assert_eq!(work["delivered"], false, "{work}");
-    assert!(
-        work["warnings"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("work is a VM desktop, which this build of Atlas cannot reach yet"),
-        "{work}"
-    );
-    let vm = made(&settings.desktops()[1]).unwrap();
-    assert!(vm.controller.stop_noted(), "the VM's Stop is kept here");
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_command_on_a_vm_reaches_its_change_lane_through_dispatch_and_is_held_by_either_stop() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();

@@ -1,17 +1,21 @@
 //! What writes the feed: one task in the service, the feed's only writer.
-//! It looks at the marks of the stores other processes write (the activity
-//! log and its pictures, the session and task records, the asks and grants,
-//! the control files, the accounts, the settings) and writes an event for
-//! each kind whose mark moved. What changes no file (the helper's state,
-//! a session's liveness, a grant that expired) it learns from the service's
-//! own status reads, which the upkeep loop makes when nobody else does, and
-//! from a slow look of its own.
+//! For every desktop the service serves it looks at the marks of the stores
+//! other processes write (the activity log and its pictures, the session
+//! and task records, the asks and grants, the control files; for the one
+//! viewed, the accounts and the settings too) and writes an event naming
+//! that desktop for each kind whose mark moved. What changes no file (a
+//! desktop's state, a session's liveness, a grant that expired) it learns
+//! from the service's own status reads of each desktop, which the upkeep
+//! loop makes when nobody else does, and from a slow look of its own.
 //!
+//! The feed is the station's one: kept beside the service's station-wide
+//! record, so a reader's place in it holds whichever desktop is viewed.
 //! A mark is taken as seen only once its event is written, so a change the
 //! feed could not keep is written on a later look. A feed opened anew finds
-//! every mark unseen, so every kind is written once and every reader
-//! reloads. Every write happens off the runtime.
-use super::{Viewer, events::Kind};
+//! every mark unseen, so every kind of every desktop is written once and
+//! every reader reloads; so is each desktop the settings list anew. Every
+//! write happens off the runtime.
+use super::{Viewer, events::Kind, unpoisoned};
 use atlas_client::client::Client;
 use serde_json::{Value, json};
 use std::{
@@ -31,14 +35,14 @@ const SLOW: Duration = Duration::from_secs(5);
 /// The most entries a folder's mark lists; past them the folder is marked
 /// by its own time, which an entry made or removed moves.
 const ENTRIES: usize = 4096;
-/// Where the feed is kept, in the service's output folder.
+/// Where the feed is kept, beside the service's station-wide record.
 const FOLDER: &str = "events";
 
-/// One status read's view of the helper, as the producer compares it: the
+/// One status read's view of a desktop, as the producer compares it: the
 /// look it came from, and what it said with the ages that tick left out.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Observed {
-    /// When the look at the helper it came from was taken.
+    /// When the look at the desktop it came from was taken.
     at: Instant,
     status: Value,
     control: Value,
@@ -46,12 +50,12 @@ pub(super) struct Observed {
 
 impl Viewer {
     /// Hand the producer what a status read of `client` said, from the look
-    /// at the helper taken `at`: as any caller is shown it, so the person's
-    /// reads and an agent's compare alike, its ticking ages and the activity
-    /// rows (which have marks of their own) left out. `active` is whether
-    /// this service holds control. A read of a helper the settings replaced
-    /// meanwhile, or from an older look than one handed already, says
-    /// nothing.
+    /// at its desktop taken `at`: as any caller is shown it, so the
+    /// person's reads and an agent's compare alike, its ticking ages and the
+    /// activity rows (which have marks of their own) left out. `active` is
+    /// whether this service holds control there. A read of a desktop the
+    /// settings replaced meanwhile, or from an older look than one handed
+    /// already, says nothing.
     pub(super) fn tell_producer(
         &self,
         client: &Arc<Client>,
@@ -59,7 +63,11 @@ impl Viewer {
         status: &Value,
         active: bool,
     ) {
-        if !Arc::ptr_eq(client, &self.client()) {
+        if !self
+            .desks()
+            .iter()
+            .any(|desk| Arc::ptr_eq(&desk.client, client))
+        {
             return;
         }
         let mut shown = status.clone();
@@ -93,13 +101,30 @@ impl Viewer {
             status: shown,
             control,
         };
+        let desktop = client.desktop().id().as_str().to_owned();
         self.observed.send_if_modified(|newest| {
-            if newest.as_ref().is_some_and(|newest| newest.at > reading.at) {
+            if newest
+                .get(&desktop)
+                .is_some_and(|newest| newest.at > reading.at)
+            {
                 return false;
             }
-            *newest = Some(reading);
+            newest.insert(desktop, reading);
             true
         });
+    }
+
+    /// Where the feed is kept: beside the service's station-wide record, or,
+    /// for a viewer that keeps none, in the records folder of the desktop
+    /// viewed.
+    fn feed_folder(&self) -> Option<PathBuf> {
+        if let Some(home) = unpoisoned(&self.station_home).as_deref() {
+            return Some(super::station::service_folder(home).join(FOLDER));
+        }
+        self.client()
+            .output_dir()
+            .ok()
+            .map(|output| output.join(FOLDER))
     }
 }
 
@@ -119,9 +144,9 @@ pub(super) async fn produce(viewer: Arc<Viewer>) {
                 if changed.is_err() {
                     return;
                 }
-                let reading = observed.borrow_and_update().clone();
-                if let Some(reading) = reading {
-                    producer.observe(&viewer, reading).await;
+                let readings = observed.borrow_and_update().clone();
+                for (desktop, reading) in readings {
+                    producer.observe(&viewer, &desktop, reading).await;
                 }
             }
         }
@@ -131,120 +156,142 @@ pub(super) async fn produce(viewer: Arc<Viewer>) {
 /// What the producer last wrote events for.
 #[derive(Default)]
 struct Producer {
-    /// The output folder the feed is kept in, once open.
+    /// The folder the feed is kept in, once open.
     folder: Option<PathBuf>,
-    /// The desktop the marks are of.
-    desktop: Option<String>,
+    /// What was written for each desktop, by its ID.
+    desktops: BTreeMap<String, Written>,
+    slow_due: Option<Instant>,
+}
+
+/// What the producer last wrote events for of one desktop.
+#[derive(Default)]
+struct Written {
     marks: BTreeMap<Kind, Mark>,
     /// What the newest status read compared said.
     observed: Option<Observed>,
     /// What the slow look last said of sessions and asks.
     slow: BTreeMap<Kind, Value>,
-    slow_due: Option<Instant>,
 }
 
 impl Producer {
-    /// Look at every store's mark, and every [`SLOW`] at what no file shows.
+    /// Look at every desktop's stores' marks, and every [`SLOW`] at what no
+    /// file shows.
     async fn tick(&mut self, viewer: &Arc<Viewer>) {
-        let client = viewer.client();
-        let Ok(output) = client.output_dir().map(Path::to_path_buf) else {
+        let Some(folder) = viewer.feed_folder() else {
             return;
         };
-        let desktop = client.desktop().id().as_str().to_owned();
         let slow = self.slow_due.is_none_or(|due| due <= Instant::now());
         if slow {
             self.slow_due = Some(Instant::now() + SLOW);
         }
 
-        // Another folder or another desktop: everything is read again; so
-        // it is once a feed that could not be written is begun again.
-        let moved = self.folder.as_deref() != Some(output.as_path())
-            || self.desktop.as_deref() != Some(desktop.as_str());
+        // Another folder: everything is read again; so it is once a feed
+        // that could not be written is begun again.
+        let moved = self.folder.as_deref() != Some(folder.as_path());
         let fresh = moved || (slow && !viewer.feed.available());
         if fresh {
-            let folder = output.join(FOLDER);
-            let feed = viewer.clone();
+            let (feed, opening) = (viewer.clone(), folder.clone());
             let opened = tokio::task::spawn_blocking(move || {
                 if moved {
-                    feed.feed.open(&folder)
+                    feed.feed.open(&opening)
                 } else {
-                    feed.feed.begin(&folder)
+                    feed.feed.begin(&opening)
                 }
             })
             .await;
-            self.folder = Some(output.clone());
-            self.desktop = Some(desktop.clone());
+            self.folder = Some(folder);
             // One that could not be opened is begun again at the next slow
             // look, not at every tick.
             if !matches!(opened, Ok(Ok(()))) {
                 return;
             }
-            self.marks.clear();
-            self.slow.clear();
-            self.observed = None;
+            self.desktops.clear();
         }
 
-        let places = Places::of(viewer, &output);
-        let (marks, slow_values) = tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || (places.marks(), slow.then(|| slow_values(&client)))
+        let viewed = viewer.client().desktop().id();
+        let desks = viewer.desks();
+        let looking: Vec<_> = desks
+            .iter()
+            .map(|desk| {
+                let id = desk.client.desktop().id();
+                let places = Places::of(viewer, &desk.client, id == viewed);
+                (id.as_str().to_owned(), desk.client.clone(), places)
+            })
+            .collect();
+        self.desktops
+            .retain(|desktop, _| looking.iter().any(|(id, ..)| id == desktop));
+        let looked = tokio::task::spawn_blocking(move || {
+            looking
+                .into_iter()
+                .map(|(id, client, places)| {
+                    (id, places.marks(), slow.then(|| slow_values(&client)))
+                })
+                .collect::<Vec<_>>()
         })
         .await
         .unwrap_or_default();
 
-        let moved_marks: Vec<_> = marks
-            .into_iter()
-            .filter(|(kind, mark)| self.marks.get(kind) != Some(mark))
-            .collect();
-        // A change to control or sign-ins may change what the helper says:
-        // the readers it wakes look at the helper again.
-        if moved_marks
-            .iter()
-            .any(|(kind, _)| matches!(kind, Kind::Control | Kind::Status))
-        {
-            viewer.forget_look();
-        }
-        let written = write(viewer, &desktop, moved_marks.iter().map(|(kind, _)| *kind)).await;
-        for ((kind, mark), kept) in moved_marks.into_iter().zip(written) {
-            if kept {
-                self.marks.insert(kind, mark);
+        for (desktop, marks, slow_values) in looked {
+            // A desktop first looked at tells every kind by its marks.
+            let new = !self.desktops.contains_key(&desktop);
+            let written = self.desktops.entry(desktop.clone()).or_default();
+            let moved_marks: Vec<_> = marks
+                .into_iter()
+                .filter(|(kind, mark)| written.marks.get(kind) != Some(mark))
+                .collect();
+            // A change to control or sign-ins may change what the viewed
+            // desktop says: the readers it wakes look at it again.
+            if desktop == viewed.as_str()
+                && moved_marks
+                    .iter()
+                    .any(|(kind, _)| matches!(kind, Kind::Control | Kind::Status))
+            {
+                viewer.forget_look();
             }
-        }
+            let kept = write(viewer, &desktop, moved_marks.iter().map(|(kind, _)| *kind)).await;
+            for ((kind, mark), kept) in moved_marks.into_iter().zip(kept) {
+                if kept {
+                    written.marks.insert(kind, mark);
+                }
+            }
 
-        // A fresh feed told every kind by its marks already.
-        let changed: Vec<_> = slow_values
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(kind, value)| self.slow.get(kind) != Some(value))
-            .collect();
-        let written = if fresh {
-            vec![true; changed.len()]
-        } else {
-            write(viewer, &desktop, changed.iter().map(|(kind, _)| *kind)).await
-        };
-        for ((kind, value), kept) in changed.into_iter().zip(written) {
-            if kept {
-                self.slow.insert(kind, value);
+            // A fresh feed, or a desktop first looked at, told every kind
+            // by its marks already.
+            let changed: Vec<_> = slow_values
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(kind, value)| written.slow.get(kind) != Some(value))
+                .collect();
+            let kept = if fresh || new {
+                vec![true; changed.len()]
+            } else {
+                write(viewer, &desktop, changed.iter().map(|(kind, _)| *kind)).await
+            };
+            for ((kind, value), kept) in changed.into_iter().zip(kept) {
+                if kept {
+                    written.slow.insert(kind, value);
+                }
             }
         }
     }
 
-    /// Compare a status read with the newest one compared before it: an
-    /// older look than one already compared says nothing new. A change the
-    /// feed could not keep is told once a feed is begun again, which tells
-    /// every kind.
-    async fn observe(&mut self, viewer: &Arc<Viewer>, reading: Observed) {
-        let Some(desktop) = self.desktop.clone() else {
+    /// Compare a status read of `desktop` with the newest one compared
+    /// before it: an older look than one already compared says nothing
+    /// new, nor does one of a desktop not looked at yet. A change the feed
+    /// could not keep is told once a feed is begun again, which tells every
+    /// kind.
+    async fn observe(&mut self, viewer: &Arc<Viewer>, desktop: &str, reading: Observed) {
+        let Some(written) = self.desktops.get_mut(desktop) else {
             return;
         };
-        if self
+        if written
             .observed
             .as_ref()
             .is_some_and(|before| before.at > reading.at)
         {
             return;
         }
-        let before = self.observed.replace(reading.clone());
+        let before = written.observed.replace(reading.clone());
         let changed = [
             (
                 Kind::Status,
@@ -260,7 +307,7 @@ impl Producer {
         .into_iter()
         .filter(|(_, before, now)| *before != Some(*now))
         .map(|(kind, ..)| kind);
-        write(viewer, &desktop, changed).await;
+        write(viewer, desktop, changed).await;
     }
 }
 
@@ -294,17 +341,32 @@ struct Places {
     asks: Vec<PathBuf>,
     /// The control folder, and the prefix of this desktop's files in it.
     control: Option<(PathBuf, String)>,
-    status: Vec<PathBuf>,
-    desktops: Vec<PathBuf>,
+    /// What is the station's rather than any desktop's, the person's
+    /// accounts and the desktops listed and viewed, told as the viewed
+    /// desktop's: none for any other.
+    shared: Option<(Vec<PathBuf>, Vec<PathBuf>)>,
 }
 
 impl Places {
-    fn of(viewer: &Viewer, output: &Path) -> Self {
-        let client = viewer.client();
+    /// The places of `client`'s desktop, with the station's own when it is
+    /// the one `viewed`.
+    fn of(viewer: &Viewer, client: &Client, viewed: bool) -> Self {
+        let output = client.records();
         let controller = &client.controller;
         let asks = controller.asks();
         let name = client.desktop().id().as_str().to_owned();
-        let home = viewer.accounts_home();
+        let shared = viewed.then(|| {
+            let home = viewer.accounts_home();
+            let station = unpoisoned(&viewer.station_home).clone();
+            let viewed =
+                station.and_then(|home| atlas_client::station::Station::under(&home).viewed().ok());
+            (
+                home.iter()
+                    .map(|home| atlas_client::sign_ins::record_in(home))
+                    .collect(),
+                viewer.settings.iter().cloned().chain(viewed).collect(),
+            )
+        });
         Self {
             activity: vec![
                 output.join(atlas_client::activity_log::FILE),
@@ -316,11 +378,7 @@ impl Places {
                 .holder_path()
                 .parent()
                 .map(|folder| (folder.to_owned(), format!("{name}."))),
-            status: home
-                .iter()
-                .map(|home| atlas_client::sign_ins::record_in(home))
-                .collect(),
-            desktops: viewer.settings.iter().cloned().collect(),
+            shared,
         }
     }
 
@@ -347,14 +405,17 @@ impl Places {
                     })
                     .collect()
             });
-        vec![
+        let mut marks = vec![
             (Kind::Activity, of(&self.activity)),
             (Kind::Sessions, of(&self.sessions)),
             (Kind::Asks, of(&self.asks)),
             (Kind::Control, control),
-            (Kind::Status, of(&self.status)),
-            (Kind::Desktops, of(&self.desktops)),
-        ]
+        ];
+        if let Some((status, desktops)) = &self.shared {
+            marks.push((Kind::Status, of(status)));
+            marks.push((Kind::Desktops, of(desktops)));
+        }
+        marks
     }
 }
 

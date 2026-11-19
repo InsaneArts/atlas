@@ -23,6 +23,8 @@ public struct ViewerClient: ViewerService {
   let appSecret: String?
   /// The header that carries ``appSecret``.
   static let secretHeader = "X-Atlas-App-Secret"
+  /// The desktop the app views, which every request names; shared by every copy of this client.
+  private(set) var viewed = ViewedDesktop()
 
   /// A client for `text`, which must be the service's local capability URL.
   ///
@@ -65,14 +67,40 @@ public struct ViewerClient: ViewerService {
     return request
   }
 
-  /// A GET of `url`, which must be under the capability URL, carrying the service's origin.
+  /// `url` naming the desktop the app views, once the service named one, as `desktop=` its ID.
+  ///
+  /// - Parameter url: The route's full URL, query included.
+  /// - Returns: The URL, its query naming the desktop.
+  func named(_ url: URL) -> URL {
+    guard let id = viewed.id,
+      let encoded = id.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
+      var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else { return url }
+    let query = [components.percentEncodedQuery, "desktop=\(encoded)"]
+      .compactMap { $0 }
+    components.percentEncodedQuery = query.joined(separator: "&")
+    return components.url ?? url
+  }
+
+  /// This client, its requests naming the desktop `viewed` holds.
+  ///
+  /// - Parameter viewed: The desktop the app views.
+  /// - Returns: The client.
+  func viewing(_ viewed: ViewedDesktop) -> ViewerClient {
+    var client = self
+    client.viewed = viewed
+    return client
+  }
+
+  /// A GET of `url`, which must be under the capability URL, carrying the service's origin and naming the desktop
+  /// the app views.
   ///
   /// - Parameters:
   ///   - url: The route's full URL, query included.
   ///   - timeout: How long the reply may take, in seconds.
   /// - Returns: The request.
   func request(to url: URL, timeout: TimeInterval = ViewerClient.timeout) -> URLRequest {
-    var request = URLRequest(url: url)
+    var request = URLRequest(url: named(url))
     request.timeoutInterval = timeout
     request.setValue(origin, forHTTPHeaderField: "Origin")
     if let appSecret { request.setValue(appSecret, forHTTPHeaderField: Self.secretHeader) }

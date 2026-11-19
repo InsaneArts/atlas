@@ -2,7 +2,10 @@
 use super::{MENUBAR_RECORD, SERVICE, unanswered};
 use atlas_core::error::{Code, Error, Result};
 use serde_json::Value;
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// The most bytes a reply may take, unless its caller says.
 const REPLY_LIMIT: usize = 1 << 16;
@@ -11,6 +14,32 @@ const REPLY_LIMIT: usize = 1 << 16;
 pub(crate) fn read_record(path: &Path) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// Where the record of the menu bar's service that keeps the records in
+/// `output` is: its station-wide one while that names `output` among the
+/// records folders of the desktops it serves, so every desktop finds the
+/// one service the same way; else the one in `output` itself, as a service
+/// of an earlier build keeps it.
+pub(crate) fn record_for(output: &Path) -> PathBuf {
+    match atlas_core::config::home() {
+        Ok(home) => record_in(&home, output),
+        Err(_) => output.join(MENUBAR_RECORD),
+    }
+}
+
+/// [`record_for`], the station's folder in `home`.
+pub(super) fn record_in(home: &Path, output: &Path) -> PathBuf {
+    let own = output.join(MENUBAR_RECORD);
+    let station = super::station::service_record(home);
+    let names = read_record(&station).is_some_and(|record| {
+        record["records"].as_array().is_some_and(|folders| {
+            folders
+                .iter()
+                .any(|folder| folder.as_str().map(Path::new) == Some(output))
+        })
+    });
+    if names { station } else { own }
 }
 
 /// The private address `record` names.
@@ -82,7 +111,7 @@ fn identity(url: &str) -> Option<Value> {
 /// Whether the menu bar's viewer is recorded in `output` as serving `port`
 /// and its process still runs Atlas, answering or not.
 pub(crate) fn recorded(output: &Path, port: u16) -> bool {
-    read_record(&output.join(MENUBAR_RECORD))
+    read_record(&record_for(output))
         .filter(|record| serves(record, port))
         .and_then(|record| process(&record))
         .and_then(|pid| i32::try_from(pid).ok())
@@ -113,7 +142,7 @@ pub(crate) fn local_checked(output: &Path, port: u16) -> Result<Option<String>> 
 ///
 /// As [`local_checked`].
 pub(crate) fn local_serving(output: &Path, port: u16) -> Result<Option<(String, Option<String>)>> {
-    match identified(&output.join(MENUBAR_RECORD), port) {
+    match identified(&record_for(output), port) {
         Some((running, identity)) if compatible(&identity) => Ok(address(&running).map(|url| {
             let served = identity["desktopKey"].as_str().map(str::to_owned);
             (url.to_owned(), served)
@@ -131,7 +160,7 @@ pub(crate) fn local_serving(output: &Path, port: u16) -> Result<Option<(String, 
 /// this version and keeps a feed of what changes. It blocks for up to a
 /// second: call it off the async runtime.
 pub(crate) fn serving_events(output: &Path, port: u16) -> Option<String> {
-    let (running, identity) = identified(&output.join(MENUBAR_RECORD), port)?;
+    let (running, identity) = identified(&record_for(output), port)?;
     let events = identity["capabilities"]
         .as_array()
         .is_some_and(|capabilities| capabilities.iter().any(|capability| capability == "events"));

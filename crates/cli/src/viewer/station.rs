@@ -2,7 +2,8 @@
 //! serves, and its record, which says where it is and which settings it
 //! serves, for the command line and the app to find it. The record holds
 //! no secret: what it names is reached only through the service's own
-//! checks.
+//! checks. Beside them is the service's own folder, for what is the
+//! station's rather than any desktop's.
 use atlas_core::{
     error::{Code, Error, Result},
     files::LockFile,
@@ -17,6 +18,20 @@ use std::{
 const FOLDER: &str = "Library/Application Support/Atlas";
 const LOCK: &str = "station.lock";
 const RECORD: &str = "station.json";
+/// Where the service keeps what is the station's rather than any
+/// desktop's, beside the station's own folder: its private record, which
+/// every command finds it by whichever desktop it acts on, and its feed.
+const SERVICE: &str = "Service";
+
+/// The service's own folder in `home`, made or not.
+pub(super) fn service_folder(home: &Path) -> PathBuf {
+    home.join(FOLDER).join(SERVICE)
+}
+
+/// Where the service's private record is kept in `home`, made or not.
+pub(super) fn service_record(home: &Path) -> PathBuf {
+    service_folder(home).join(super::MENUBAR_RECORD)
+}
 
 /// This service's hold on the account's one service, and its record, gone
 /// with it.

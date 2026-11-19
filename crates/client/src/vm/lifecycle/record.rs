@@ -252,6 +252,10 @@ pub struct Record {
     /// The add's setup window, once one is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Setup>,
+    /// The person's stop of the VM's power, kept before it is claimed and
+    /// asked, until Atlas VM confirms the VM stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_stop: Option<Token>,
 }
 
 impl Record {
@@ -281,6 +285,7 @@ impl Record {
             maintenance: None,
             adder: None,
             setup: None,
+            power_stop: None,
         }
     }
 

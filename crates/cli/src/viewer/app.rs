@@ -3,13 +3,14 @@
 use super::{
     MENUBAR_RECORD, Viewer,
     http::{CONNECTIONS, accept, bind},
-    local::{address, post_local, running},
+    local::{address, post_local, record_for, running},
     settings::remove_record,
     unanswered, unpoisoned,
 };
 use crate::menubar::{App, Line};
 use atlas_client::client::Client;
 use atlas_core::{
+    desktop::DesktopId,
     error::{Code, Error, Result},
     files,
 };
@@ -67,6 +68,12 @@ pub async fn serve(
     // And one service runs for this account, whatever its settings.
     let _station = super::station::Station::claim(&program.config, port, &viewer.incarnation)?;
     viewer.idle_leave.give();
+    // It serves every desktop the settings list, and views the one the
+    // person viewed last, before anything is served.
+    let home = atlas_core::config::home()?;
+    *unpoisoned(&viewer.station_home) = Some(home.clone());
+    viewer.adopt_viewed();
+    viewer.follow_settings().await;
 
     // Stopping it any of these ways releases control and removes its record.
     let mut terminated = signal(SignalKind::terminate())?;
@@ -116,6 +123,15 @@ pub async fn serve(
     });
     files::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
     *unpoisoned(&viewer.record) = Some((path, record.clone()));
+    // The record every desktop finds this service by, naming each one's
+    // records folder; the one above stays for commands of earlier builds.
+    let discovery = super::station::service_record(&home);
+    if let Some(folder) = discovery.parent() {
+        files::private_folder(folder, Code::Menubar)?;
+    }
+    files::write_private(&discovery, &serde_json::to_vec_pretty(&record)?)?;
+    *unpoisoned(&viewer.discovery) = Some((discovery, record.clone()));
+    viewer.follow_settings().await;
 
     // The URL is a bearer capability: it stays in the private record and
     // with the app, never in output.
@@ -167,8 +183,11 @@ pub async fn serve(
     let _ = pipe_stop.send(());
     let _ = pipe.await;
 
-    // The record goes with this viewer, unless another has replaced it.
+    // The records go with this viewer, unless another has replaced them.
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
+        remove_record(&path);
+    }
+    if let Some((path, _)) = unpoisoned(&viewer.discovery).take() {
         remove_record(&path);
     }
     viewer.idle_leave.take_back();
@@ -352,7 +371,7 @@ async fn blocking<T: Send + 'static>(
 /// The port is taken. When the menu bar holds it, that succeeds: it is
 /// already running, as its process.
 fn already_running(output: &Path, port: u16, taken: Error) -> Result<Value> {
-    let Some(bar) = running(&output.join(MENUBAR_RECORD), port) else {
+    let Some(bar) = running(&record_for(output), port) else {
         return Err(taken);
     };
 
@@ -383,22 +402,29 @@ pub async fn keep_app(record: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Open the viewer window in the menu bar app, starting the menu bar first
-/// when it is not running. It prints nothing.
-pub(crate) async fn open_viewer(config: &Path, port: u16, output: &Path) -> Result<()> {
+/// Open the viewer window in the menu bar app on `desktop`, starting the
+/// menu bar first when it is not running. It prints nothing.
+pub(crate) async fn open_viewer(
+    config: &Path,
+    port: u16,
+    output: &Path,
+    desktop: &DesktopId,
+) -> Result<()> {
     let url = launched_url(config, port, output).await?;
-    blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
+    let asked = json!({"desktop": desktop});
+    blocking(move || post_local(&url, "app/viewer", &asked)).await?;
     Ok(())
 }
 
-/// [`open_viewer`], saying that the viewer is open.
+/// [`open_viewer`] on `client`'s desktop, saying that the viewer is open.
 ///
 /// # Errors
 ///
-/// Returns viewer configuration, launch or readiness failures. A failed launch can leave
-/// owned work requiring cleanup.
-pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<Value> {
-    open_viewer(config, port, output).await?;
+/// Returns viewer configuration, launch or readiness failures, and the
+/// service's refusal to view that desktop. A failed launch can leave owned
+/// work requiring cleanup.
+pub async fn monitor(config: &Path, port: u16, client: &Client) -> Result<Value> {
+    open_viewer(config, port, client.output_dir()?, &client.desktop().id()).await?;
     Ok(json!({"ok": true, "viewer": "open"}))
 }
 

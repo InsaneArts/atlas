@@ -1,8 +1,12 @@
 /// What the person's Stop came to: agents stopped, what the service warned of, and the background jobs it could not
-/// end. A job is named here only when the helper's daemon answered for it.
+/// end. A job is named here only when the helper's daemon answered for it. A Stop holds every desktop the service
+/// serves: with more than one, what each said is read together, and each one whose Stop is not certain is named.
 public struct StopOutcome: Decodable, Equatable, Sendable {
   /// Whether agents are stopped.
   public var held = true
+  /// The desktops whose Stop is not certain, by name: it failed, or the desktop may not have been told. Agents there
+  /// are held all the same where Atlas could keep the Stop, as its warnings say.
+  public var uncertain: [String] = []
   /// What the service warned of, in its own words, such as a helper it could not reach to end its jobs.
   public var warnings: [String] = []
   /// The jobs nothing could be sent to: their processes no longer match them.
@@ -37,7 +41,7 @@ public struct StopOutcome: Decodable, Equatable, Sendable {
 
   /// The fields of the Stop's reply.
   private enum CodingKeys: String, CodingKey {
-    case held, warnings, jobs
+    case held, warnings, jobs, desktops
   }
 
   /// The fields of its `jobs` object.
@@ -46,12 +50,18 @@ public struct StopOutcome: Decodable, Equatable, Sendable {
   }
 
   /// Decodes a Stop's reply, keeping the default of anything missing or of the wrong type. Each warning and job
-  /// decodes on its own: an odd warning is dropped, and an odd job still counts, with an empty ID.
+  /// decodes on its own: an odd warning is dropped, and an odd job still counts, with an empty ID. A reply naming
+  /// each desktop's own is read from those, in their order, whatever its first desktop said at its top.
   ///
   /// - Parameter decoder: The decoder reading the reply.
   /// - Throws: `DecodingError` only when it is not an object.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    let each = container.lenientList(Desktop.self, forKey: .desktops)
+    guard each.isEmpty else {
+      self = StopOutcome(each)
+      return
+    }
     held = container.lenientBool(.held) ?? true
     warnings = container.lenientList(String.self, forKey: .warnings)
     guard let jobs = try? container.nestedContainer(keyedBy: JobsKeys.self, forKey: .jobs) else { return }
@@ -62,5 +72,21 @@ public struct StopOutcome: Decodable, Equatable, Sendable {
     refused = listed(.refused)
     unknown = listed(.unknown)
     unresolved = listed(.unresolved)
+  }
+
+  /// The outcome of a Stop of every desktop in `each`: held only where each is, every warning once, every job left,
+  /// and each desktop whose Stop is not certain.
+  ///
+  /// - Parameter each: What each desktop's Stop came to, in the service's order.
+  init(_ each: [Desktop]) {
+    held = each.allSatisfy(\.reply.held)
+    for desktop in each {
+      warnings += desktop.reply.warnings.filter { !warnings.contains($0) }
+      refused += desktop.reply.refused
+      unknown += desktop.reply.unknown
+      unresolved += desktop.reply.unresolved
+    }
+    uncertain = each.filter(\.uncertain)
+      .map(\.name)
   }
 }

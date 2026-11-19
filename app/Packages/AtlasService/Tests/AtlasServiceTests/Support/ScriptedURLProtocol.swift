@@ -10,6 +10,8 @@ final class ScriptedURLProtocol: URLProtocol {
     case reply(status: Int, body: Data, headers: [String: String] = [:])
     /// A failure, such as a timeout or a cancellation.
     case failure(URLError.Code)
+    /// Whatever `answer` gives each request, as it comes.
+    case each(@Sendable (URLRequest) -> Answer)
   }
 
   /// Each test's answer, by its capability URL's secret. URLProtocol makes its own instances, so the script lives
@@ -46,7 +48,10 @@ final class ScriptedURLProtocol: URLProtocol {
     let secret = request.url?.pathComponents.dropFirst().first ?? ""
     let scripted = Self.script
       .withLock { $0[secret] }
-    let answer = scripted ?? .failure(.cannotConnectToHost)
+    var answer = scripted ?? .failure(.cannotConnectToHost)
+    if case .each(let answering) = answer {
+      answer = answering(request)
+    }
     switch answer {
     case .reply(let status, let body, let headers):
       guard
@@ -58,6 +63,8 @@ final class ScriptedURLProtocol: URLProtocol {
       client?.urlProtocolDidFinishLoading(self)
     case .failure(let code):
       client?.urlProtocol(self, didFailWithError: URLError(code))
+    case .each:
+      client?.urlProtocol(self, didFailWithError: URLError(.cannotParseResponse))
     }
   }
 

@@ -27,7 +27,7 @@ pub(crate) mod update;
 mod window;
 
 pub use agent::{install_agent, install_agent_held};
-pub use maintenance::{Maintain, maintain};
+pub use maintenance::{Maintain, maintain, power_off};
 pub use removal::{remove, remove_held};
 pub use station::{Facts, Refused, StationSocket, Untrusted, facts, trusted};
 

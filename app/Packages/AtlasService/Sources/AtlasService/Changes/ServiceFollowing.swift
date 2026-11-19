@@ -4,6 +4,7 @@ import Foundation
 /// ``ServiceChanges`` what to read again. A reset, or the feed found again, reads everything again. While the feed
 /// cannot be followed (it is unavailable, every wait is taken, or it is not there), readers keep their own pace and
 /// the feed is asked again a little later. A follower cancelled says nothing more: the one that replaced it speaks.
+/// The desktops are read again first whenever they may have changed, so readers it wakes name the desktop viewed now.
 enum ServiceFollowing {
   /// How long the feed is left after every wait was taken.
   static let afterPoll: Duration = .seconds(2)
@@ -16,10 +17,12 @@ enum ServiceFollowing {
   ///   - ask: One wait on the feed, from a position.
   ///   - changes: Where what changed is told.
   ///   - clock: The clock pauses run on.
+  ///   - desktops: Reads the desktops again, on a reset or a change to them, before anyone is told.
   static func follow(
     _ ask: @Sendable (FeedPosition?) async throws(ServiceError) -> FeedAnswer,
     into changes: ServiceChanges,
-    clock: any Clock<Duration>
+    clock: any Clock<Duration>,
+    desktops: @Sendable () async -> Void = {}
   ) async {
     var position: FeedPosition?
     while !Task.isCancelled {
@@ -30,10 +33,12 @@ enum ServiceFollowing {
         switch answer {
         case .reset(let given):
           position = given
+          await desktops()
           changes.follow(true)
           changes.tell(Set(ChangeKind.allCases))
         case .events(let kinds, let last, let poll):
           position = last ?? position
+          if kinds.contains(.desktops) { await desktops() }
           changes.follow(!poll)
           if !kinds.isEmpty { changes.tell(kinds) }
           if poll { pause = afterPoll }

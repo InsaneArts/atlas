@@ -207,6 +207,7 @@ fn begun(
             maintenance: None,
             adder: None,
             setup: None,
+            power_stop: None,
         },
     };
     let recorded = lifecycle

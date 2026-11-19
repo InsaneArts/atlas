@@ -3,6 +3,7 @@
 //! address, routed once and answered in a task of its own.
 use super::{
     LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer,
+    desks::Desk,
     frames::{FRAME_REUSE, FRAME_WIDTH, Frames},
     unpoisoned,
 };
@@ -87,6 +88,12 @@ pub(super) fn configured(
         client: std::sync::Mutex::new(Arc::new(client)),
         settings: settings.map(Path::to_path_buf),
         settings_text: std::sync::Mutex::new(None),
+        desks: super::desks::Desks::default(),
+        viewed: std::sync::Mutex::new(None),
+        station_home: std::sync::Mutex::new(None),
+        discovery: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        stand_ins: std::sync::Mutex::new(Vec::new()),
         outputs: std::sync::Mutex::new(outputs),
         output_moved: tokio::sync::Notify::new(),
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
@@ -112,7 +119,7 @@ pub(super) fn configured(
         look: tokio::sync::Mutex::new(None),
         looks_forgotten: std::sync::atomic::AtomicU64::new(0),
         feed: super::feed::Feed::default(),
-        observed: watch::Sender::new(None),
+        observed: watch::Sender::new(std::collections::BTreeMap::new()),
         accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
         sign_in: Mutex::new(None),
         interrupted: std::sync::Mutex::new(None),
@@ -344,6 +351,8 @@ routes! {
         // What Atlas asks the person before an agent sends, with what would
         // be sent: theirs alone.
         Asks => "asks.json",
+        // Every desktop served, and which one is viewed.
+        Desktops => "desktops.json",
     }
     POST {
         Recover => "recover",
@@ -374,13 +383,17 @@ routes! {
         // Finishing or cancelling a sign-in an earlier service was holding
         // when it died.
         SignInInterrupted => "sign-in/interrupted",
+        // Viewing another desktop, and the person's start or stop of a VM.
+        View => "view",
+        Power => "desktops/power",
     }
 }
 
 impl Route {
     /// Whether only the Atlas app may ask for it: the person's questions
-    /// with what would be sent, their answers, accounts and sign-ins, and
-    /// the menu bar's emergency stop, which ends a sign-in. Taking,
+    /// with what would be sent, their answers, accounts and sign-ins, the
+    /// menu bar's emergency stop, which ends a sign-in, viewing another
+    /// desktop and a VM's power. Taking,
     /// renewing, giving back and using control, and Stop, stay open to the
     /// terminal viewer too; Resume is the app's alone, by its body.
     fn app_only(self) -> bool {
@@ -399,7 +412,9 @@ impl Route {
                 | Change::SignInRenew
                 | Change::SignInDone
                 | Change::SignInCancel
-                | Change::SignInInterrupted,
+                | Change::SignInInterrupted
+                | Change::View
+                | Change::Power,
             ) => true,
             Self::Service
             | Self::Events
@@ -449,7 +464,9 @@ impl Route {
                 | Change::SignInStart
                 | Change::ForgetStart
                 | Change::ResetStart
-                | Change::SignInRenew,
+                | Change::SignInRenew
+                | Change::View
+                | Change::Power,
             ) => false,
         }
     }
@@ -533,31 +550,74 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
     };
 
     match route {
+        // The list of desktops is of every one, whichever the request names.
+        Some(Route::Read(Read::Desktops)) => {
+            viewer.follow_settings().await;
+            json_response(200, viewer.listed())
+        }
         Some(Route::Read(read)) => {
-            let named = named_in_query(request.uri().query()).map(|named| json!(named));
+            let named = named_in_query(request.uri().query());
+            if named.is_none() && app && viewer.unnamed_refused().await {
+                return json_response(400, json!(unnamed()));
+            }
+            // The status of any desktop served, the one viewed or another.
+            if read == Read::Status
+                && let Some(named) = named
+                && let Some(status) = viewer.status_named(named, app).await
+            {
+                return json_response(200, status);
+            }
+            let named = named.map(|named| json!(named));
             let Some(_pinned) = viewer.pin(named.as_ref()).await else {
                 return json_response(409, json!(another_desktop()));
             };
             answer(&viewer, read, request.uri().query(), app).await
         }
-        Some(Route::OpenViewer) => match read_body(request).await {
-            Ok(body) => match viewer.pin(body.get("desktop")).await {
-                Some(_pinned) => open_app_viewer(&viewer, body["window"] != false),
-                None => json_response(409, json!(another_desktop())),
+        Some(Route::OpenViewer) => match read_named(request).await {
+            Ok(body) if body.get("desktop").is_none() && app && viewer.unnamed_refused().await => {
+                json_response(400, json!(unnamed()))
+            }
+            Ok(body) => match viewer.open_on(body.get("desktop"), app).await {
+                Err(error) if error.code == Code::Permission => json_response(403, json!(error)),
+                Err(error) => json_response(409, json!(error)),
+                Ok(()) => match viewer.pin(body.get("desktop")).await {
+                    Some(_pinned) => open_app_viewer(&viewer, body["window"] != false),
+                    None => json_response(409, json!(another_desktop())),
+                },
             },
             Err(response) => response,
         },
-        Some(Route::Change(change)) => match read_body(request).await {
+        Some(Route::Change(change)) => match read_named(request).await {
             // Resume is the person's: only the app may lift a Stop.
             Ok(body) if change == Change::Hold && body["on"] == false && !app => {
                 json_response(403, json!(not_the_app()))
             }
-            // A Stop is for every desktop; anything else, Resume included, is
-            // for the one named, and a desktop named by anything but its ID
-            // is refused.
-            Ok(body) if change == Change::Hold && body["on"] == true => {
+            // A Stop is for every desktop, whichever one a request names;
+            // viewing one and a VM's power name their own.
+            Ok(body)
+                if (change == Change::Hold && body["on"] == true)
+                    || matches!(change, Change::View | Change::Power) =>
+            {
                 apply(&viewer, change, &body).await
             }
+            Ok(body) if body.get("desktop").is_none() && app && viewer.unnamed_refused().await => {
+                json_response(400, json!(unnamed()))
+            }
+            // Resume is for the desktop named, any one served; a desktop
+            // named by anything but its ID is refused.
+            Ok(body) if change == Change::Hold && body["on"] == false => {
+                match viewer.named_other(body.get("desktop")).await {
+                    Some(Some(desk)) => resume_other(&viewer, &desk.client, &body).await,
+                    Some(None) => {
+                        let Some(_pinned) = viewer.pin(body.get("desktop")).await else {
+                            return json_response(409, json!(another_desktop()));
+                        };
+                        apply(&viewer, change, &body).await
+                    }
+                    None => json_response(409, json!(another_desktop())),
+                }
+            }
+            // Anything else is for the one viewed.
             Ok(body) => {
                 let Some(_pinned) = viewer.pin(body.get("desktop")).await else {
                     return json_response(409, json!(another_desktop()));
@@ -592,10 +652,19 @@ fn named_in_query(query: Option<&str>) -> Option<&str> {
 }
 
 /// The refusal of a request for a desktop this service does not serve.
-fn another_desktop() -> Error {
+pub(super) fn another_desktop() -> Error {
     Error::new(
         Code::ConfigInvalid,
         "This Atlas serves another desktop than the one asked for",
+    )
+}
+
+/// The refusal of the app's request that names no desktop, once more than
+/// one is served.
+fn unnamed() -> Error {
+    Error::new(
+        Code::Input,
+        "Name the desktop this is for: Atlas serves more than one",
     )
 }
 
@@ -625,6 +694,69 @@ impl Viewer {
         self.follow_settings().await;
         let pinned = self.pinned.read().await;
         self.serves(Some(named)).then_some(Some(pinned))
+    }
+
+    /// Whether an app request that names no desktop is refused: once more
+    /// than one is served, the settings followed first.
+    async fn unnamed_refused(self: &Arc<Self>) -> bool {
+        self.follow_settings().await;
+        self.several()
+    }
+
+    /// The desktop served that `named` names by its ID, when it is another
+    /// than the one viewed: `Some(None)` for the one viewed or none named,
+    /// and None for anything else.
+    async fn named_other(self: &Arc<Self>, named: Option<&Value>) -> Option<Option<Desk>> {
+        let Some(named) = named else {
+            return Some(None);
+        };
+        let Value::String(named) = named else {
+            return None;
+        };
+        self.follow_settings().await;
+        let desk = self.desk(named)?;
+        Some((!Arc::ptr_eq(&desk.client, &self.client())).then_some(desk))
+    }
+
+    /// The status of `named`, by its ID, when it is a desktop served other
+    /// than the one viewed, as the person's app (`person`) or anyone else
+    /// is shown it; None for the one viewed or any other name.
+    async fn status_named(self: &Arc<Self>, named: &str, person: bool) -> Option<Value> {
+        let until = tokio::time::Instant::now() + atlas_client::overview::READ_DEADLINE;
+        let desk = self.named_other(Some(&json!(named))).await.flatten()?;
+        Some(self.status_of(&desk.client, person, until).await)
+    }
+
+    /// Before the viewer window opens on `named`, by its ID: view it, when
+    /// it is another desktop served than the one viewed and the person's
+    /// own app (`app`) asks, unless the person controls the one viewed,
+    /// which is never taken from them for it. Anyone else opens only the
+    /// desktop viewed. Anything else is judged as the window's own request.
+    async fn open_on(self: &Arc<Self>, named: Option<&Value>, app: bool) -> Result<()> {
+        let Some(Some(desk)) = self.named_other(named).await else {
+            return Ok(());
+        };
+        if !app {
+            return Err(Error::new(
+                Code::Permission,
+                format!(
+                    "Atlas shows {} now. Only the person switches it to {}, in the Atlas app.",
+                    self.client().selected.name,
+                    desk.name
+                ),
+            ));
+        }
+        if self.lease.lock().await.active() || unpoisoned(&self.interrupted).is_some() {
+            return Err(Error::new(
+                Code::Busy,
+                format!(
+                    "You control {} in Atlas; give control back before opening {}.",
+                    self.client().selected.name,
+                    desk.name
+                ),
+            ));
+        }
+        self.view(&json!({"desktop": named})).await.map(|_| ())
     }
 }
 
@@ -662,27 +794,21 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
     let outcome = match change {
         Change::Recover => viewer.recover().await,
         Change::Cleanup => viewer.clean_up(body["session"].as_str()).await,
-        // Control a viewer holds is left alone either way.
+        // Control a viewer holds is left alone either way. A Stop holds
+        // every desktop served, as atlas stop does.
         Change::Hold => match body["on"].as_bool() {
-            Some(on) => {
-                let client = viewer.client();
-                // A VM's Resume carries its keeper's capability, which only
-                // this service reads.
-                let held = match client.desktop().kind() {
-                    atlas_core::desktop::Kind::Vm(vm) if !on => {
-                        match atlas_client::vm::keeper::resume_capability(&vm.id) {
-                            Ok(capability) => client.resume_vm(&capability).await,
-                            Err(error) => Err(error),
-                        }
-                    }
-                    _ => client.hold(on).await,
-                };
+            Some(true) => {
+                let each = viewer.every_desktop_now().await;
+                let held = atlas_client::stop_all::stop_each(each).await;
                 // The shared look says how the helper stood before.
                 viewer.forget_look();
                 held
             }
+            Some(false) => resumed(viewer, &viewer.client()).await,
             None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
         },
+        Change::View => viewer.view(body).await,
+        Change::Power => viewer.power(body).await,
         Change::Input => viewer.input(lease, frame, &body["actions"]).await,
         Change::Acquire => viewer.acquire(frame).await,
         Change::Renew => viewer.renew(lease, frame).await,
@@ -706,6 +832,44 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
     };
 
     mutation_reply(viewer, owner, outcome).await
+}
+
+/// The person's Resume of `client`'s desktop. A VM's carries its keeper's
+/// capability, which only this service reads.
+async fn resumed(viewer: &Viewer, client: &Client) -> Result<Value> {
+    let resumed = match client.desktop().kind() {
+        atlas_core::desktop::Kind::Vm(vm) => {
+            match atlas_client::vm::keeper::resume_capability(&vm.id) {
+                Ok(capability) => client.resume_vm(&capability).await,
+                Err(error) => Err(error),
+            }
+        }
+        _ => client.hold(false).await,
+    };
+    // The shared look says how the helper stood before.
+    viewer.forget_look();
+    resumed
+}
+
+/// [`resumed`] of a desktop served other than the one viewed, as a change
+/// like any other, as `body` asks.
+async fn resume_other(viewer: &Arc<Viewer>, client: &Client, body: &Value) -> Response {
+    let Some(_changing) = viewer.changing().await else {
+        return refused(503, "The viewer is closing");
+    };
+    let outcome = resumed(viewer, client).await;
+    mutation_reply(viewer, body["lease"].as_str(), outcome).await
+}
+
+/// [`read_body`], naming the desktop the request's query names, as the app
+/// names it on every request, when its body names none.
+async fn read_named(request: Request) -> std::result::Result<Value, Response> {
+    let named = named_in_query(request.uri().query()).map(str::to_owned);
+    let mut body = read_body(request).await?;
+    if let (Some(named), Value::Object(fields)) = (named, &mut body) {
+        fields.entry("desktop").or_insert(json!(named));
+    }
+    Ok(body)
 }
 
 /// Read one bounded JSON object with the existing last-member interpretation.
@@ -793,6 +957,7 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
         Read::Screenshots => read_reply(viewer.screenshots().await),
         Read::Screenshot => viewer.screenshot(query).await,
         Read::Asks => json_response(200, super::accounts::asks(&viewer.client())),
+        Read::Desktops => json_response(200, viewer.listed()),
         // The frame service of the helper served now: one still serving the
         // helper the settings named before is not offered while it is
         // replaced.

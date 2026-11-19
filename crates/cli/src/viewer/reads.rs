@@ -187,22 +187,45 @@ impl Viewer {
         self.follow_settings().await;
 
         let client = self.client();
-        let (doctor, looked_at, looked) = self.look(&client, until).await;
+        self.status_of(&client, person, until).await
+    }
+
+    /// [`Viewer::status_for`] of `client`, any desktop the settings list,
+    /// read by `until`: the one viewed shares its looks and says whether
+    /// control is held there and how a sign-in stands; any other is looked
+    /// at for this read alone, its control and sign-in the viewed one's
+    /// to hold. Either way input starts there once it logs in, and what it
+    /// said is kept for the list of desktops and told to the feed.
+    pub(super) async fn status_of(
+        self: &Arc<Self>,
+        client: &Arc<Client>,
+        person: bool,
+        until: tokio::time::Instant,
+    ) -> Value {
+        let viewed = Arc::ptr_eq(client, &self.client());
+        let (doctor, looked_at, looked) = if viewed {
+            self.look(client, until).await
+        } else {
+            let mut doctor =
+                atlas_client::overview::helper_report(client, until, self.idle_look()).await;
+            atlas_client::overview::note_stop(client, &mut doctor);
+            (doctor, Some(tokio::time::Instant::now()), true)
+        };
 
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment. Only a look this read made
         // ends it: a shared one may be older than the control taken since.
-        if looked && !doctor.diagnosis.ready {
+        if viewed && looked && !doctor.diagnosis.ready {
             self.release_shortly().await;
         }
 
-        let active = self.lease.lock().await.active();
+        let active = viewed && self.lease.lock().await.active();
 
         let (pending, total) = atlas_client::overview::pending(&client.controller);
 
         // The status never waits for input to start; shutdown does.
         let _starting = self.start_input_after_login(
-            &client,
+            client,
             &doctor.diagnosis.observation,
             total == 0 && !active,
         );
@@ -231,7 +254,7 @@ impl Viewer {
                     .collect::<Vec<_>>()
             );
         }
-        atlas_client::overview::add_host_sessions(&mut status, &client, now).await;
+        atlas_client::overview::add_host_sessions(&mut status, client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
             // A second login's account is one of this Mac's, named here.
@@ -258,14 +281,18 @@ impl Viewer {
             status.value["overview"]["accountNote"] = note;
         }
         keep_idle_time_for(&mut status.value, person);
-        let (asks, allowed) = super::accounts::asks_for_status(&client);
+        let (asks, allowed) = super::accounts::asks_for_status(client);
         status.value["overview"]["asks"] = asks;
         status.value["overview"]["allowed"] = allowed;
         // While the person signs in, so the app keeps the lease through its
         // window losing focus or being covered.
         // A sign-in an earlier service died holding is the person's to
         // finish or cancel, not one under way.
-        let interrupted = self.interrupted_for_status();
+        let interrupted = if viewed {
+            self.interrupted_for_status()
+        } else {
+            Value::Null
+        };
         status.value["overview"]["signingIn"] = match interrupted {
             Value::Null => client
                 .controller
@@ -275,7 +302,7 @@ impl Viewer {
         };
         status.value["overview"]["signInInterrupted"] = interrupted;
         if let Some(looked_at) = looked_at {
-            self.tell_producer(&client, looked_at, &status.value, active);
+            self.tell_producer(client, looked_at, &status.value, active);
         }
         if !self.feed.available() {
             status.value["events"] = json!("unavailable");
@@ -287,6 +314,7 @@ impl Viewer {
         if !person && let Some(fields) = status.value.as_object_mut() {
             fields.remove("consoleName");
         }
+        self.note_seen(client, &status.value);
         status.value
     }
 

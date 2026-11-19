@@ -75,6 +75,16 @@ impl Station {
         self.root.join("lifecycle")
     }
 
+    /// Where the station keeps which desktop the person views in Atlas.app,
+    /// in its own folder, made private when missing.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the station's folder cannot be made, or is not private.
+    pub fn viewed(&self) -> Result<PathBuf> {
+        Ok(self.root()?.join("viewed.json"))
+    }
+
     /// `vm`'s pairing record, in its private folder.
     ///
     /// # Errors

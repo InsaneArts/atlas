@@ -535,7 +535,7 @@ async fn carry_out(
         Command::Monitor { port, .. } => {
             let client = client()?;
             viewer::shown_in_window(&client)?;
-            viewer::monitor(config, port, client.output_dir()?).await
+            viewer::monitor(config, port, &client).await
         }
         Command::Screenshot(args) => {
             let client = client()?;
@@ -1279,78 +1279,16 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
     Ok(())
 }
 
-/// Stop the agents on every desktop the settings at `config` list: a Stop
-/// is the person's, for the whole Mac, and no choice of desktop (a stale
-/// `ATLAS_DESKTOP`, a broken binding) keeps it from any of them. Each is
-/// told even when another could not be; the first failure is returned once
-/// all were tried, and with more than one desktop the reply says what each
-/// one said. The command's own client, when it has one, stops its desktop
-/// as it always has; the others get its labels. A VM desktop this build
-/// cannot reach keeps its Stop here, and its reply says it was not told.
+/// Stop the agents on every desktop the settings at `config` list, as
+/// [`atlas_client::stop_all::stop_listed`] does: the command's own client,
+/// when it has one, stops its desktop as it always has, and the others get
+/// its labels.
 async fn stop_everywhere(config: &Path, client: &impl Fn() -> Result<Client>) -> Result<Value> {
     let settings = atlas_core::config::desktops::Settings::load(config)?;
-    stop_listed(&settings, client().ok(), |listed| {
+    atlas_client::stop_all::stop_listed(&settings, client().ok(), |listed| {
         Client::new(settings.selected(listed))
     })
     .await
-}
-
-/// [`stop_everywhere`] over `settings`, with the command's own client
-/// `own`, if any, and `make` making the client of each other desktop.
-async fn stop_listed(
-    settings: &atlas_core::config::desktops::Settings,
-    own: Option<Client>,
-    make: impl Fn(&atlas_core::config::desktops::Listed) -> Result<Client>,
-) -> Result<Value> {
-    let mut held = Vec::new();
-    for listed in settings.desktops() {
-        let mine = own
-            .as_ref()
-            .filter(|own| own.desktop() == listed.desktop.desktop());
-        let stopped = match mine {
-            Some(own) => own.hold(true).await,
-            None => match make(listed) {
-                Ok(mut other) => {
-                    if let Some(own) = &own {
-                        other.actor = own.actor;
-                        other.doing = own.doing.clone();
-                        other.host_session = own.host_session.clone();
-                        other.controller = other.controller.labelled(own.host_session.as_ref());
-                    }
-                    other.hold(true).await
-                }
-                Err(error) => Err(error),
-            },
-        };
-        held.push((listed.name.clone(), stopped));
-    }
-    if held.len() == 1 {
-        return held.remove(0).1;
-    }
-
-    let each: Vec<Value> = held
-        .iter()
-        .map(|(name, stopped)| json!({"desktop": name, "reply": reply_of(stopped)}))
-        .collect();
-    let mut replies = held.into_iter().map(|(_, stopped)| stopped);
-    let first = replies.next().unwrap_or_else(|| Ok(json!({"ok": true})));
-    match first {
-        Err(error) => Err(error.with("desktops", json!(each))),
-        Ok(mut reply) => match replies.find_map(Result::err) {
-            Some(error) => Err(error.with("desktops", json!(each))),
-            None => {
-                reply["desktops"] = json!(each);
-                Ok(reply)
-            }
-        },
-    }
-}
-
-fn reply_of(held: &Result<Value>) -> Value {
-    match held {
-        Ok(reply) => reply.clone(),
-        Err(error) => json!(error),
-    }
 }
 
 #[cfg(test)]

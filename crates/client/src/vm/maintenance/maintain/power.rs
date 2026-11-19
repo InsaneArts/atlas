@@ -1,20 +1,23 @@
 //! A maintenance's VM stopped and started again, or only started, before
-//! its window opens. Each is a change of its own, kept, claimed as Atlas
-//! VM's and asked, its claim cleared only on Atlas VM's answer, and the
-//! next phase is begun only once Atlas VM confirms the VM's power: a lost
-//! answer never takes a stop for done. Neither is a start a command asked
-//! because it needed the VM running, so neither is kept among those.
-use super::{Asked, Maintainer, READING};
+//! its window opens, and the person's own stop of a VM. Each is a change of
+//! its own, kept, claimed as Atlas VM's and asked, its claim cleared only on
+//! Atlas VM's answer, and the next phase is begun only once Atlas VM
+//! confirms the VM's power: a lost answer never takes a stop for done.
+//! None is a start a command asked because it needed the VM running, so
+//! none is kept among those.
+use super::{Asked, CLEARING, Maintainer, READING};
 use crate::vm::{
-    lifecycle::record::{Maintenance, Phase, Record},
+    handover, hold_in,
+    lifecycle::record::{Maintenance, Phase, Record, State},
     runner::{Operation, Outcome, Power},
 };
+use atlas_control::executors::Executor;
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
 };
-use serde_json::json;
-use std::time::Instant;
+use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 impl Maintainer {
     /// Take `maintenance`, kept in `record`, from `stopping` or `starting`
@@ -62,6 +65,152 @@ impl Maintainer {
         }
         maintenance.phase = Phase::Holding;
         self.keep(record, maintenance)
+    }
+
+    /// The person's stop of the VM: kept in its record before it is claimed
+    /// and asked, under its station-operation lock and its exclusion, and
+    /// forgotten only once Atlas VM confirms the VM stopped.
+    pub(super) fn power_off(&self) -> Result<Value> {
+        self.stoppable()?;
+        let admitted = self.lifecycle.admit()?;
+        let _hold = hold_in(&self.vms, &self.vm, &admitted)?.ok_or_else(|| self.held())?;
+        // Stopping ends whatever runs there, as the person was told: the
+        // exclusion is taken whatever is pending.
+        let _exclusion = self
+            .controller
+            .clone()
+            .waiting(Duration::ZERO)
+            .acquire_for_executor()
+            .map_err(|error| {
+                if error.code == Code::Busy {
+                    self.held()
+                } else {
+                    error
+                }
+            })?;
+        // Looked at again under both: a removal, a handover or a maintenance
+        // begun meanwhile is seen now.
+        let mut record = self.stoppable()?;
+        let change = match record.power_stop.clone() {
+            Some(change) => change,
+            None => {
+                let change = Token::new();
+                record.power_stop = Some(change.clone());
+                self.lifecycle.keep_record(&record)?;
+                change
+            }
+        };
+        let claim = self
+            .controller
+            .quarantine_by_within(change.as_str(), Executor::Vm, CLEARING)
+            .map_err(|error| {
+                if error.code == Code::Busy {
+                    self.held()
+                } else {
+                    error
+                }
+            })?;
+        let operation = Operation::Stop(change.clone());
+        let uncertain = record.sent(&change).is_some();
+        match self.ask_within(&mut record, &operation, uncertain, self.patience.powering)? {
+            Asked::Came {
+                outcome: Outcome::Done,
+                ..
+            } => self.clear(&change, claim)?,
+            Asked::Came {
+                outcome: Outcome::Refused { reason },
+                ..
+            }
+            | Asked::NotTaken(reason) => {
+                self.clear(&change, claim)?;
+                self.power_stop_settled(&mut record, &change)?;
+                return Err(Error::new(
+                    Code::State,
+                    format!("Atlas VM did not stop {}: {reason}", self.name),
+                ));
+            }
+            Asked::Unknown => {
+                return Err(Error::new(
+                    Code::NotReady,
+                    format!(
+                        "Atlas VM has not said whether it stopped {}; the stop is kept until it \
+                         does. Stop it again to go on.",
+                        self.name
+                    ),
+                ));
+            }
+        }
+        if !self.confirmed(Power::Stopped)? {
+            return Err(Error::new(
+                Code::NotReady,
+                format!(
+                    "{} is not confirmed stopped yet; the stop is kept until Atlas VM confirms \
+                     it. Stop it again to go on.",
+                    self.name
+                ),
+            ));
+        }
+        self.power_stop_settled(&mut record, &change)?;
+        Ok(json!({"ok": true, "desktop": self.name, "power": "stopped"}))
+    }
+
+    /// The VM's lifecycle record, once it is added and neither removed,
+    /// handed over nor open for maintenance, so its power is the person's
+    /// to stop.
+    fn stoppable(&self) -> Result<Record> {
+        let record = self.recorded()?;
+        let removing = || {
+            Error::new(
+                Code::State,
+                format!("{} is being removed, so it is not stopped.", self.name),
+            )
+        };
+        match record.state {
+            State::Created => {}
+            State::Removing => return Err(removing()),
+            State::Adding => {
+                return Err(Error::new(
+                    Code::NotReady,
+                    format!("{} is still being added, so it is not stopped.", self.name),
+                ));
+            }
+        }
+        if record.removal.is_some() || self.lifecycle.recorded_removal(&self.vm)?.is_some() {
+            return Err(removing());
+        }
+        let station = crate::station::Station::under(self.lifecycle.home()).path_of(&self.vm);
+        if let Some(why) = handover::unfinished_in(&station, &self.name) {
+            return Err(Error::new(Code::Stopped, why));
+        }
+        if record.maintenance.is_some() {
+            return Err(Error::new(
+                Code::Busy,
+                format!(
+                    "{} is open for maintenance; end its maintenance before stopping it.",
+                    self.name
+                ),
+            ));
+        }
+        Ok(record)
+    }
+
+    /// Forget the person's stop `change` and what was sent for it, once
+    /// Atlas VM settled it.
+    fn power_stop_settled(&self, record: &mut Record, change: &Token) -> Result<()> {
+        record.power_stop = None;
+        record.operations.retain(|sent| sent.change != *change);
+        self.lifecycle.keep_record(record)
+    }
+
+    /// Why another command keeps the VM from being stopped now.
+    fn held(&self) -> Error {
+        Error::new(
+            Code::Busy,
+            format!(
+                "Another Atlas command or an update holds {}; stop it again in a moment.",
+                self.name
+            ),
+        )
     }
 
     /// Ask Atlas VM for the stop or start `operation`, kept in `record`,

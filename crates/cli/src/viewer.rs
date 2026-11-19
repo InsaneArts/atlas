@@ -6,6 +6,7 @@ mod accounts;
 mod app;
 mod attach;
 mod control;
+mod desks;
 mod events;
 mod feed;
 mod frames;
@@ -18,14 +19,17 @@ mod settings;
 mod sign_in;
 mod station;
 mod terminal;
+#[cfg(test)]
+mod two_desktops;
 mod upkeep;
+mod viewed;
 
 pub use app::{keep_app, monitor, render_menubar, serve};
 pub(crate) use app::{launched_url, open_viewer};
 pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, local_checked,
-    local_serving, post_local, process, read_record, recorded, recorded_port, running,
+    local_serving, post_local, process, read_record, record_for, recorded, recorded_port, running,
     serving_events,
 };
 pub(crate) use reads::{Named, activity_of};
@@ -35,6 +39,7 @@ use crate::menubar::Line;
 use atlas_client::client::Client;
 use atlas_control::SharedLease;
 use atlas_core::{
+    desktop::RecordKey,
     error::{Code, Error},
     session::Epoch,
 };
@@ -83,8 +88,25 @@ struct Viewer {
     client: std::sync::Mutex<Arc<Client>>,
     /// The settings file the client was made from, when it follows one.
     settings: Option<PathBuf>,
-    /// That file's text when last found to match the client.
-    settings_text: std::sync::Mutex<Option<Vec<u8>>>,
+    /// That file's text, and the desktop the person chose to view, when
+    /// last found to match the client.
+    settings_text: std::sync::Mutex<Option<(Vec<u8>, Option<RecordKey>)>>,
+    /// Every desktop the settings list, the one viewed among them.
+    desks: desks::Desks,
+    /// The desktop the person chose to view, by its record key; none views
+    /// the default.
+    viewed: std::sync::Mutex<Option<RecordKey>>,
+    /// The home whose Atlas folder keeps this service's station-wide
+    /// record, its feed and the desktop the person views; none for a viewer
+    /// made to render, which keeps neither.
+    station_home: std::sync::Mutex<Option<PathBuf>>,
+    /// Where the station-wide record of this service is kept and what it
+    /// says, once written.
+    discovery: std::sync::Mutex<Option<(PathBuf, Value)>>,
+    /// Clients a test stands in for the desktops the settings list, by
+    /// desktop.
+    #[cfg(test)]
+    stand_ins: std::sync::Mutex<Vec<Client>>,
     /// Every output folder served since the viewer started, the pictures
     /// kept in each pruned while it runs, and the signal that the settings
     /// added one or changed how long pictures are kept.
@@ -133,9 +155,10 @@ struct Viewer {
     /// many times looks were forgotten since the service started.
     look: tokio::sync::Mutex<Option<reads::Look>>,
     looks_forgotten: std::sync::atomic::AtomicU64,
-    /// The event feed, and the newest status read for its producer.
+    /// The event feed.
     feed: feed::Feed,
-    observed: tokio::sync::watch::Sender<Option<produce::Observed>>,
+    /// The newest status read of each desktop, by its ID, for the producer.
+    observed: tokio::sync::watch::Sender<std::collections::BTreeMap<String, produce::Observed>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
     /// The helper daemon and display input was last started or re-pinned

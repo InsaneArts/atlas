@@ -8,6 +8,20 @@ public protocol ViewerService: Sendable {
   /// What changed, as the service's feed says it: readers wait on it between readings.
   var changes: ServiceChanges { get }
 
+  /// Reads every desktop the service serves, and views from then on the one it says it views.
+  ///
+  /// - Returns: Every desktop, in the settings' order.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that serves one desktop; else ``ServiceError`` when
+  ///   the service cannot be read or refuses.
+  func desktops() async throws(ServiceError) -> DesktopList
+
+  /// Views another desktop: the service lets go of control on the one viewed before, and every request names this one
+  /// from then on.
+  ///
+  /// - Parameter desktop: The desktop's ID.
+  /// - Throws: ``ServiceError`` when the service refuses, as for a desktop it does not serve.
+  func view(_ desktop: String) async throws
+
   /// Reads the helper's status.
   ///
   /// - Returns: The status as the service reports it, every missing field at its safe default.

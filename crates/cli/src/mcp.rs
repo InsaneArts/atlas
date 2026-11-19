@@ -544,7 +544,8 @@ impl Server {
     /// Open Atlas's own viewer window on the person's desktop.
     async fn open_viewer(&self) -> Result<Value> {
         let output = self.client.output_dir()?.to_path_buf();
-        crate::viewer::open_viewer(&self.config, self.port, &output).await?;
+        let desktop = self.client.desktop().id();
+        crate::viewer::open_viewer(&self.config, self.port, &output, &desktop).await?;
         Ok(tool_result(
             "Atlas's viewer is open.",
             json!({"viewer": "open"}),

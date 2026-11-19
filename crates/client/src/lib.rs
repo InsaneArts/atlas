@@ -44,6 +44,7 @@ pub mod sign_ins;
 pub mod sound;
 pub mod station;
 pub mod station_key;
+pub mod stop_all;
 pub mod task;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
