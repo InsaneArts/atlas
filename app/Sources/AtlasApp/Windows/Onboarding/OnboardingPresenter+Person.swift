@@ -86,7 +86,8 @@ extension OnboardingPresenter {
     return OnboardingWords.waitingForSwitchBack
   }
 
-  /// The finishing check: checking, passed or failed, naming the helper logged in, with the failure over Try Again.
+  /// The finishing check: checking, passed or failed, naming the helper logged in, or checking the VM, with the
+  /// failure over Try Again.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The finishing screen.
@@ -106,11 +107,13 @@ extension OnboardingPresenter {
     return OnboardingFinishingScreenState(
       title: headline.title,
       tail: headline.tail,
-      loggedIn: OnboardingWords.loggedIn(snapshot.facts.helper.title),
+      // A VM has no helper to name; its check is one line.
+      loggedIn: snapshot.facts.vm == nil ? OnboardingWords.loggedIn(snapshot.facts.helper.title) : "",
       permissionsNote: StatusWord.allowed.text,
       live: live.state,
       liveNote: live.note,
-      failure: live.failure
+      failure: live.failure,
+      isVM: snapshot.facts.vm != nil
     )
   }
 
@@ -147,15 +150,18 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The done screen, naming the helper to log in to after a restart.
+  /// The done screen, naming the helper to log in to after a restart; with a VM, no login and no home folder to keep
+  /// private.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The done screen.
   static func done(_ snapshot: OnboardingSnapshot) -> OnboardingDoneScreenState {
-    OnboardingDoneScreenState(
-      lede: OnboardingWords.doneLede(snapshot.facts.helper.title),
+    let onVM = snapshot.facts.vm != nil
+    return OnboardingDoneScreenState(
+      lede: onVM ? OnboardingWords.vmDoneLede : OnboardingWords.doneLede(snapshot.facts.helper.title),
       opensAtLogin: snapshot.opensAtLogin,
       keepsHomePrivate: snapshot.keepsHomePrivate,
+      offersHomePrivacy: !onVM,
       isEnabled: snapshot.working == nil
     )
   }

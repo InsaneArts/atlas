@@ -14,6 +14,8 @@ public struct OnboardingFinishingScreenState: Equatable, Sendable {
   public var liveNote: String
   /// Why the check failed, over Try Again; nil while it runs or once it passed.
   public var failure: String?
+  /// Whether it checks a VM, which a line under the title follows in place of the helper's checklist.
+  public var isVM: Bool
 
   /// Creates the finishing check's state.
   ///
@@ -25,6 +27,7 @@ public struct OnboardingFinishingScreenState: Equatable, Sendable {
   ///   - live: How the last check, the live one, stands.
   ///   - liveNote: The live check's word on the right, such as Passed.
   ///   - failure: Why the check failed, over Try Again; nil while it runs or once it passed.
+  ///   - isVM: Whether it checks a VM; false, by default, for the helper.
   public init(
     title: String,
     tail: String,
@@ -32,7 +35,8 @@ public struct OnboardingFinishingScreenState: Equatable, Sendable {
     permissionsNote: String,
     live: CheckState,
     liveNote: String,
-    failure: String? = nil
+    failure: String? = nil,
+    isVM: Bool = false
   ) {
     self.title = title
     self.tail = tail
@@ -41,5 +45,6 @@ public struct OnboardingFinishingScreenState: Equatable, Sendable {
     self.live = live
     self.liveNote = liveNote
     self.failure = failure
+    self.isVM = isVM
   }
 }

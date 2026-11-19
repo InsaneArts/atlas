@@ -14,8 +14,10 @@ public struct OnboardingFooterAction: Equatable, Sendable {
     case createAccount
     /// Lock and Switch, to log in to the helper.
     case lockAndSwitch
-    /// Try Again, after the first reading or the check failed.
+    /// Try Again, after the first reading, the check or the VM's add failed.
     case tryAgain
+    /// Go On, once the VM's add stopped with no reason.
+    case goOn
     /// Check Again, when something only the person can fix comes first.
     case checkAgain
     /// Close It…, for a deleted account's login that is still open.
@@ -41,7 +43,7 @@ public struct OnboardingFooterAction: Equatable, Sendable {
       switch self {
       case .getStarted, .lockAndSwitch, .tryAgain, .checkAgain, .allow, .switchBack: true
       case .back, .chooseAnother, .continue, .createAccount, .done, .closeIt, .notNow, .allowPermission,
-        .showInFinder:
+        .showInFinder, .goOn:
         false
       }
     }

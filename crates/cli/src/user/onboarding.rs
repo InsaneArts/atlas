@@ -28,7 +28,10 @@ use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account, app_bundle,
     app_bundle::signed_executable,
-    config::{self, Config, desktops::Selected},
+    config::{
+        self, Config,
+        desktops::{Selected, Settings},
+    },
     desktop::Desktop,
     error::{Code, Error, Result},
 };
@@ -1020,6 +1023,46 @@ pub fn window(open: bool) -> Result<Value> {
 /// How long setup's end-to-end check waits for the person to be back in
 /// their own account before it gives up.
 const BACK_WITHIN: Duration = Duration::from_secs(60);
+
+/// The check at the end of the setup of the desktop the settings at
+/// `config_path` name `name`: a Second Login's as [`finish`] does it; a
+/// VM's, that its status says it is ready for agents. A VM's add made and
+/// set it up already, so nothing is changed.
+///
+/// # Errors
+///
+/// Refuses a name the settings do not list, and a VM that is not ready, in
+/// its status's own words, such as the Resume a set-up VM still waits for.
+pub async fn finish_on(config_path: &Path, name: &str) -> Result<Value> {
+    let settings = Settings::load(config_path)?;
+    let listed = settings
+        .desktops()
+        .iter()
+        .find(|listed| listed.name == name)
+        .ok_or_else(|| {
+            Error::new(
+                Code::ConfigInvalid,
+                format!("The settings list no desktop named \u{201c}{name}\u{201d}."),
+            )
+        })?;
+    if listed.desktop.user().is_some() {
+        return finish(config_path).await;
+    }
+    let status = Client::new(settings.selected(listed))?.status().await;
+    vm_ready(name, &status)
+}
+
+/// What the check of the VM `name` comes to, its status `status` read.
+fn vm_ready(name: &str, status: &Value) -> Result<Value> {
+    if status["ready"] == true {
+        return Ok(json!({"ok": true, "ready": true, "desktop": name}));
+    }
+    let why = status["notReady"]
+        .as_str()
+        .or_else(|| status["error"].as_str())
+        .map_or_else(|| format!("{name} is not ready yet."), str::to_owned);
+    Err(Error::new(Code::NotReady, why))
+}
 
 /// Back in the person's account: start input, record and check the setup
 /// end to end, as `atlas init` does. Nothing starts until the person is

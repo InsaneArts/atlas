@@ -36,4 +36,28 @@ struct StepRowTests {
     #expect(StepRow.animation(for: .done, reduceMotion: false) == Motion.state)
     #expect(StepRow.animation(for: .current, reduceMotion: true) == Motion.reduced, "no wait under Reduce Motion")
   }
+
+  @Test("a step with an empty detail draws no second line: its row stands at the least height alone")
+  func anEmptyDetailIsHidden() throws {
+    let titled = try PanelPixels(
+      StepList(
+        steps: [
+          StepList.Step(title: "Install macOS", detail: "", state: .done),
+          StepList.Step(title: "Start the VM", detail: "", state: .current),
+        ]
+      )
+      .frame(width: OnboardingLayout.column)
+    )
+    let detailed = try PanelPixels(
+      StepList(
+        steps: [
+          StepList.Step(title: "Install macOS", detail: "From Apple", state: .done),
+          StepList.Step(title: "Start the VM", detail: "On this Mac", state: .current),
+        ]
+      )
+      .frame(width: OnboardingLayout.column)
+    )
+    #expect(titled.height == 2 * Int(StepRowLayout.height), "two 48-point rows, no empty line under either title")
+    #expect(detailed.height > titled.height, "a detail still takes its line")
+  }
 }

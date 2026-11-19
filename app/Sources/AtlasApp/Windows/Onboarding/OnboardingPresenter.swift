@@ -44,6 +44,10 @@ enum OnboardingPresenter {
   private static func screen(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingScreen {
     switch step {
     case .welcome: .welcome
+    case .chooseDesktop: .desktop(desktop(snapshot))
+    case .downloadVM: .vmDownload(vmDownload(snapshot))
+    case .installVM: .vmInstall(vmInstall(snapshot))
+    case .allowVM: .vmAllow(vmAllow(snapshot))
     case .chooseHelper: .choose(choose(snapshot))
     case .createAccount: .create(create(snapshot))
     case .switchToHelper: .switchToHelper(switchToHelper(snapshot))

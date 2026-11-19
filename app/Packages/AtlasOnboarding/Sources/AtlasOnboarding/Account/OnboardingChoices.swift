@@ -2,6 +2,10 @@
 public struct OnboardingChoices: Equatable, Sendable {
   /// Past the welcome screen.
   public var started = false
+  /// Where agents work, chosen with Continue on the choice; nil until then.
+  public var desktop: DesktopChoice.Kind?
+  /// The VM's check passed and the person went on past it.
+  public var checked = false
   /// On the account form rather than the list.
   public var creating = false
   /// The agents screen is behind them.

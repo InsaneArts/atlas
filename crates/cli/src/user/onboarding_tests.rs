@@ -793,3 +793,28 @@ fn a_surviving_executor_keeps_recovery_excluded_until_its_observed_exit() {
         "interactive",
     );
 }
+
+#[test]
+fn a_vms_setup_ends_only_once_its_status_says_it_is_ready() {
+    assert_eq!(
+        vm_ready("vm", &json!({"ok": true, "ready": true})).unwrap(),
+        json!({"ok": true, "ready": true, "desktop": "vm"})
+    );
+    let set_up = json!({"ok": true, "ready": false,
+        "notReady": "Setup is done. Resume agents from the Atlas menu bar to let them use the VM."});
+    let refused = vm_ready("vm", &set_up).unwrap_err();
+    assert_eq!(refused.code, Code::NotReady);
+    assert_eq!(
+        refused.error,
+        "Setup is done. Resume agents from the Atlas menu bar to let them use the VM."
+    );
+    let unreached = json!({"ok": false, "error": "Atlas cannot reach vm now."});
+    assert_eq!(
+        vm_ready("vm", &unreached).unwrap_err().error,
+        "Atlas cannot reach vm now."
+    );
+    assert_eq!(
+        vm_ready("vm", &json!({})).unwrap_err().error,
+        "vm is not ready yet."
+    );
+}

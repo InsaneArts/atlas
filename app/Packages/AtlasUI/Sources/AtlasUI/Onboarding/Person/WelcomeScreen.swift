@@ -9,7 +9,7 @@ struct WelcomeScreen: View {
         title: OnboardingScreen.welcomeTitle,
         tail: OnboardingScreen.welcomeTail,
         lede:
-          "Atlas runs a hidden helper account on this Mac. Your agents open their builds there, click through them and come back with screenshots, while you keep working."
+          "Your agents open their builds on a desktop of their own, click through them and come back with screenshots, while you keep working."
       ) {
         AppIcon(tile: OnboardingLayout.welcomeTile)
       }

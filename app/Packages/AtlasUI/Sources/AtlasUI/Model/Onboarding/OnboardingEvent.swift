@@ -4,6 +4,16 @@ public enum OnboardingEvent: Hashable, Sendable {
   case begin
   /// Back, to the screen before.
   case back
+  /// A desktop picked in the choice of where agents work.
+  ///
+  /// - Parameter kind: The kind of desktop.
+  case pickDesktop(OnboardingDesktopKind)
+  /// Continue on the choice of where agents work.
+  case continueDesktop
+  /// Go On, once the VM's add stopped with no reason: ask it again.
+  case goOnAdding
+  /// Try Again, once the VM's add failed: ask it again.
+  case retryAdding
   /// An account picked in the choice.
   ///
   /// - Parameter account: A new account, or the short name of one already on this Mac.

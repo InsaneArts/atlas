@@ -4,6 +4,14 @@ extension OnboardingScreen {
   public enum ID: Hashable, Sendable {
     /// The welcome.
     case welcome
+    /// The choice of where agents work.
+    case desktop
+    /// The VM's download.
+    case vmDownload
+    /// The VM being made.
+    case vmInstall
+    /// Allowing Atlas in the VM.
+    case vmAllow
     /// The account choice.
     case choose
     /// The account form.
@@ -34,6 +42,10 @@ extension OnboardingScreen {
   public var id: ID {
     switch self {
     case .welcome: .welcome
+    case .desktop: .desktop
+    case .vmDownload: .vmDownload
+    case .vmInstall: .vmInstall
+    case .vmAllow: .vmAllow
     case .choose: .choose
     case .create: .create
     case .switchToHelper: .switchToHelper

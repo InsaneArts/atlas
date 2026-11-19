@@ -44,6 +44,16 @@
       ("14-close-closing", PreviewStates.onboardingCloseClosing),
       ("14-close-cancelled", PreviewStates.onboardingCloseCancelled),
       ("14-close-closed", PreviewStates.onboardingCloseClosed),
+      ("15-desktop", PreviewStates.onboardingDesktop),
+      ("15-desktop-no-vm", PreviewStates.onboardingDesktopNoVM),
+      ("16-vm-download", PreviewStates.onboardingVMDownload),
+      ("16-vm-stopped", PreviewStates.onboardingVMStopped),
+      ("17-vm-install", PreviewStates.onboardingVMInstall),
+      ("17-vm-failed", PreviewStates.onboardingVMFailed),
+      ("18-vm-allow", PreviewStates.onboardingVMAllow),
+      ("19-vm-finishing", PreviewStates.onboardingVMFinishing),
+      ("19-vm-finishing-passed", PreviewStates.onboardingVMFinishingPassed),
+      ("20-vm-done", PreviewStates.onboardingVMDone),
     ]
 
     /// Draws every setup window sample to a PNG named after it in `directory`, at Retina scale and at its window's

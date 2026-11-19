@@ -3,6 +3,22 @@ extension OnboardingScreen {
   static let welcomeTitle = "Give your agents"
   /// Its second line.
   static let welcomeTail = "a Mac of their own."
+  /// The choice of where agents work's headline.
+  static let desktopTitle = "Choose where"
+  /// Its second line.
+  static let desktopTail = "your agents work."
+  /// The VM's download's headline.
+  static let vmDownloadTitle = "Downloading"
+  /// Its second line.
+  static let vmDownloadTail = "macOS."
+  /// The VM being made's headline.
+  static let vmInstallTitle = "Making"
+  /// Its second line.
+  static let vmInstallTail = "the VM."
+  /// Allowing Atlas in the VM's headline.
+  static let vmAllowTitle = "Allow Atlas"
+  /// Its second line.
+  static let vmAllowTail = "in the VM."
   /// The account choice's headline.
   static let chooseTitle = "Agents need an account"
   /// Its second line.
@@ -35,6 +51,10 @@ extension OnboardingScreen {
     let lines: [String] =
       switch self {
       case .welcome: [Self.welcomeTitle, Self.welcomeTail]
+      case .desktop: [Self.desktopTitle, Self.desktopTail]
+      case .vmDownload: [Self.vmDownloadTitle, Self.vmDownloadTail]
+      case .vmInstall: [Self.vmInstallTitle, Self.vmInstallTail]
+      case .vmAllow: [Self.vmAllowTitle, Self.vmAllowTail]
       case .choose: [Self.chooseTitle, Self.chooseTail]
       case .create(let state): [Self.createTitle, state.tail]
       case .switchToHelper(let state): [state.title, Self.switchTail]

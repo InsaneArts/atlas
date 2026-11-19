@@ -10,12 +10,14 @@ struct OnboardingStepRuleTests {
     OnboardingStep(facts: facts, choices: choices)
   }
 
-  @Test("a fresh Mac starts with the welcome, then the account choice or form")
+  @Test("a fresh Mac starts with the welcome, then where agents work, then the account choice or form")
   func freshMac() throws {
     let facts = try controller()
     var choices = OnboardingChoices()
     #expect(step(facts, choices) == .welcome)
     choices.started = true
+    #expect(step(facts, choices) == .chooseDesktop)
+    choices.desktop = .secondLogin
     #expect(step(facts, choices) == .chooseHelper)
     choices.creating = true
     #expect(step(facts, choices) == .createAccount)
@@ -65,6 +67,7 @@ struct OnboardingStepRuleTests {
   func leftoverLogins() throws {
     var started = OnboardingChoices()
     started.started = true
+    started.desktop = .secondLogin
     let fresh = try controller(leftovers: [502])
     #expect(step(fresh) == .welcome)
     #expect(step(fresh, started) == .chooseHelper)
@@ -152,5 +155,58 @@ struct OnboardingStepRuleTests {
       Issue.record("a job that does not run, with no one asking, is explained")
       return
     }
+  }
+
+  @Test("the choice step shows only on a first setup")
+  func theChoiceShowsOnlyOnAFirstSetup() throws {
+    var started = OnboardingChoices()
+    started.started = true
+    #expect(step(try controller(), started) == .chooseDesktop)
+    #expect(step(try controller(helper(signedIn: false, answering: false, allowed: false))) == .switchToHelper)
+    #expect(step(try controller(["exists": false]), started) == .chooseHelper, "a helper chosen before is chosen again")
+    #expect(step(try controller(helper(), finished: true), started) == .agents)
+  }
+
+  @Test("the VM path goes download, install, allow, check, agents, done")
+  func theVMPath() throws {
+    var choices = OnboardingChoices()
+    choices.started = true
+    choices.desktop = .vm
+    #expect(step(try controller(), choices) == .downloadVM, "the add asked, nothing made yet")
+    #expect(step(try onVM(vm(progress: "downloading")), choices) == .downloadVM)
+    #expect(step(try onVM(vm(progress: "installing")), choices) == .installVM)
+    #expect(step(try onVM(vm(steps: ["agent", "created", "started"])), choices) == .installVM)
+    #expect(step(try onVM(vm(steps: ["created", "started", "installed", "closed", "shown"])), choices) == .allowVM)
+    #expect(step(try onVM(vm(adding: false, ready: false)), choices) == .finishing)
+    #expect(step(try onVM(vm(adding: false, ready: true)), choices) == .finishing, "the check shows until passed")
+    choices.checked = true
+    #expect(step(try onVM(vm(adding: false, ready: true)), choices) == .agents)
+    choices.agentsDone = true
+    #expect(step(try onVM(vm(adding: false, ready: true)), choices) == .done)
+  }
+
+  @Test("a window reopened mid-download lands on the download")
+  func aReopenedWindowLandsOnTheDownload() throws {
+    let facts = try controller(vm: vm(progress: "downloading"))
+    #expect(step(facts) == .downloadVM, "no welcome and no choice again")
+    #expect(step(try onVM(vm(progress: "downloading"))) == .downloadVM)
+  }
+
+  @Test("a VM set up but waiting for the person's Resume is checked, and the check says so")
+  func aSetUpVMIsChecked() throws {
+    let waiting = vm(
+      steps: ["created", "started", "installed", "closed", "shown", "allowed", "hidden", "ready"],
+      setup: "done"
+    )
+    #expect(step(try onVM(waiting)) == .finishing)
+  }
+
+  @Test("a VM-only settings file reads as configured")
+  func aVMOnlySettingsFileIsConfigured() throws {
+    let facts = try onVM(vm(adding: false, ready: true))
+    #expect(facts.configured)
+    #expect(facts.finished)
+    #expect(facts.vm?.name == "vm")
+    #expect(facts.vm?.ready == true)
   }
 }

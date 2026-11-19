@@ -1126,7 +1126,8 @@ pub(super) enum OnboardingCommand {
         #[arg(long)]
         helper: bool,
     },
-    /// Back in the person's account: start input and check everything.
+    /// Back in the person's account: start input and check everything. With
+    /// `--desktop`, the VM it names: that it is ready for agents.
     Finish,
     /// Open the menu bar at login (on or off), decided once.
     Login {

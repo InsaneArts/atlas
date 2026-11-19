@@ -17,6 +17,8 @@ extension OnboardingPresenter {
   /// - Returns: The footer.
   static func footer(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingFooterState {
     switch step {
+    case .chooseDesktop: desktopFooter(snapshot, step: step)
+    case .downloadVM, .installVM, .allowVM: vmFooter(snapshot, step: step)
     case .chooseHelper, .createAccount: accountFooter(snapshot, step: step)
     case .switchToHelper: switchFooter(snapshot, step: step)
     case .finishing, .agents, .done: finishFooter(snapshot, step: step)
@@ -64,7 +66,7 @@ extension OnboardingPresenter {
       case .blocked: main(.checkAgain, .checkAgain, isEnabled: true)
       default: nil
       }
-    return OnboardingFooterState(next: next, track: step.track)
+    return OnboardingFooterState(next: next, track: step.track(onVM: snapshot.onVM))
   }
 
   /// The helper's allow screen: Allow, and Not Now beside it, which closes the window with nothing allowed.
@@ -78,7 +80,7 @@ extension OnboardingPresenter {
     return OnboardingFooterState(
       back: OnboardingFooterAction(title: .notNow, event: .notNow, isEnabled: idle, isDefault: false),
       next: main(.allow, .allow, isEnabled: idle),
-      track: step.track
+      track: step.track(onVM: snapshot.onVM)
     )
   }
 
@@ -112,8 +114,13 @@ extension OnboardingPresenter {
       creating
       ? main(.createAccount, .createAccount, isEnabled: snapshot.form.canCreate && idle)
       : main(.continue, .continueChoice, isEnabled: snapshot.shownPick != nil && idle)
+    // Back from the choice goes to where agents work, which only a first setup shows.
     let hasBack = creating || !snapshot.facts.configured
-    return OnboardingFooterState(back: hasBack ? back(idle: idle) : nil, next: next, track: step.track)
+    return OnboardingFooterState(
+      back: hasBack ? back(idle: idle) : nil,
+      next: next,
+      track: step.track(onVM: snapshot.onVM)
+    )
   }
 
   /// The switch to the helper: Choose Another Account in Back's place while the helper asked never answered, and Lock
@@ -137,7 +144,7 @@ extension OnboardingPresenter {
     return OnboardingFooterState(
       back: helper.forgettable ? chooseAnother : nil,
       next: locks ? main(.lockAndSwitch, .lockAndSwitch, isEnabled: idle && snapshot.isOnConsole) : nil,
-      track: step.track
+      track: step.track(onVM: snapshot.onVM)
     )
   }
 
@@ -153,7 +160,10 @@ extension OnboardingPresenter {
     switch step {
     case .finishing:
       if case .failed = snapshot.finish {
-        return OnboardingFooterState(next: main(.tryAgain, .retryFinish, isEnabled: true), track: step.track)
+        return OnboardingFooterState(
+          next: main(.tryAgain, .retryFinish, isEnabled: true),
+          track: step.track(onVM: snapshot.onVM)
+        )
       }
       // It lights up, and takes presses, Return's too, a moment after the check passes, so a press meant for the check
       // never skips past its result.
@@ -164,15 +174,18 @@ extension OnboardingPresenter {
         isEnabled: settled,
         isDefault: settled
       )
-      return OnboardingFooterState(next: next, track: step.track)
+      return OnboardingFooterState(next: next, track: step.track(onVM: snapshot.onVM))
     case .agents:
       let ready = idle && !snapshot.agentsInstalling && (snapshot.agentsLoaded || snapshot.agentsFailed)
-      return OnboardingFooterState(next: main(.continue, .connectAgents, isEnabled: ready), track: step.track)
+      return OnboardingFooterState(
+        next: main(.continue, .connectAgents, isEnabled: ready),
+        track: step.track(onVM: snapshot.onVM)
+      )
     default:
       return OnboardingFooterState(
         back: back(idle: idle),
         next: main(.done, .complete, isEnabled: idle),
-        track: step.track
+        track: step.track(onVM: snapshot.onVM)
       )
     }
   }

@@ -18,6 +18,18 @@
           screen.accounts[index].isSelected = screen.accounts[index].id == id
         }
         next.content = .screen(.choose(screen))
+      case (.screen(.desktop(var screen)), .pickDesktop(let kind)):
+        for index in screen.items.indices {
+          if case .choice = screen.items[index].standing {
+            screen.items[index].standing = .choice(isPicked: screen.items[index].id == kind)
+          }
+        }
+        next.content = .screen(.desktop(screen))
+      case (.screen(.desktop(let screen)), .continueDesktop):
+        let picksVM = screen.items.contains { $0.id == .vm && $0.standing == .choice(isPicked: true) }
+        return picksVM ? onboardingVMDownload : onboardingChoose
+      case (.screen(.desktop), .back):
+        return onboardingWelcome
       case (.screen(.choose(let screen)), .continueChoice):
         return screen.isNewAccountPicked ? onboardingCreate : onboardingSwitch
       case (.screen(.agents(var screen)), .setAgent(let id, let on)):
@@ -32,13 +44,17 @@
         screen.keepsHomePrivate = on
         next.content = .screen(.done(screen))
       case (.screen(.choose), .back):
-        return onboardingWelcome
+        return onboardingDesktop
       case (.screen(.create), .back):
         return onboardingChoose
       case (.screen(.done), .back):
         return onboardingAgents
       case (_, .begin):
-        return onboardingChoose
+        return onboardingDesktop
+      case (_, .goOnAdding):
+        return onboardingVMDownload
+      case (_, .retryAdding):
+        return onboardingVMInstall
       case (_, .createAccount):
         return onboardingSwitch
       case (_, .connectAgents):

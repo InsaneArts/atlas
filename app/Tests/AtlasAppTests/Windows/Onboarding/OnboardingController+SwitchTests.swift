@@ -47,6 +47,7 @@ struct OnboardingControllerSwitchTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.begin)
+      controller.send(.continueDesktop)
       controller.send(.pick(.newAccount))
       await controller.useHelper()
       var form = controller.snapshot.form

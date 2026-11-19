@@ -153,6 +153,8 @@ struct ListRow: View {
   private let detailStyle: DetailStyle
   /// A short word on a tint beside the title, or nil for none.
   private let tag: String?
+  /// How the tag is coloured.
+  private let tagTone: Tag.Tone
   /// How the title fits the row's width.
   private let titleFit: TitleFit
   /// What leads the row.
@@ -161,6 +163,8 @@ struct ListRow: View {
   private let trailing: Trailing
   /// How tall the row is.
   private let size: Size
+  /// Whether its turn has not come: its lead and words dim together, and what ends it stays whole.
+  private let isNotYet: Bool
   /// What the row's control does: flips its switch, presses its button or picks its choice.
   private let action: (@MainActor () -> Void)?
 
@@ -171,30 +175,36 @@ struct ListRow: View {
   ///   - detail: The detail under it, or nil for none.
   ///   - detailStyle: How the detail is set; secondary text by default.
   ///   - tag: A short word on a tint beside the title, such as Recommended; none by default.
+  ///   - tagTone: How the tag is coloured; blue by default.
   ///   - titleFit: How the title fits the row's width; up to two lines by default.
   ///   - lead: What leads the row; nothing by default.
   ///   - trailing: What ends the row; nothing by default.
   ///   - size: How tall the row is; a setup list's by default.
+  ///   - isNotYet: Whether its lead and words dim together while its turn has not come; false by default.
   ///   - action: What its switch, button or radio does, or nil for a row that only shows.
   init(
     _ title: String,
     detail: String? = nil,
     detailStyle: DetailStyle = .plain,
     tag: String? = nil,
+    tagTone: Tag.Tone = .accent,
     titleFit: TitleFit = .twoLines,
     lead: Lead = .none,
     trailing: Trailing = .none,
     size: Size = .regular,
+    isNotYet: Bool = false,
     action: (@MainActor () -> Void)? = nil
   ) {
     self.title = title
     self.detail = detail
     self.detailStyle = detailStyle
     self.tag = tag
+    self.tagTone = tagTone
     self.titleFit = titleFit
     self.lead = lead
     self.trailing = trailing
     self.size = size
+    self.isNotYet = isNotYet
     self.action = action
   }
 
@@ -221,9 +231,11 @@ struct ListRow: View {
       detail: detail,
       detailStyle: detailStyle,
       tag: tag,
+      tagTone: tagTone,
       titleFit: titleFit,
       lead: lead,
       size: size,
+      isNotYet: isNotYet,
       accessibilityChildren: accessibilityChildren
     ) {
       ListRowTrailing(trailing: trailing, label: title, size: size, action: action)

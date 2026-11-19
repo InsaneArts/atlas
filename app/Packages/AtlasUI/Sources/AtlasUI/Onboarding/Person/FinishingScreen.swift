@@ -9,16 +9,41 @@ struct FinishingScreen: View {
   let state: OnboardingFinishingScreenState
   @Environment(\.motionReduced) private var reduceMotion
 
-  /// The checklist, then why it failed, in the status line's kept place.
+  /// The checklist, then why it failed, in the status line's kept place; for a VM, the line alone, saying the check
+  /// runs, passed or why it failed.
   var body: some View {
     ScreenColumn {
-      OnboardingHeader(label: "Welcome back", title: state.title, tail: state.tail, swapsTitle: true)
-      GroupedList(Self.checks(state)) { check in
-        ListRow(check.title, lead: check.lead, trailing: check.trailing, size: Self.rowSize)
+      if state.isVM {
+        OnboardingHeader(label: "VM", title: state.title, tail: state.tail, swapsTitle: true)
+        StatusSlot(line: Self.vmLine(state))
+          .animation(
+            Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
+            value: state.live
+          )
+      } else {
+        OnboardingHeader(label: "Welcome back", title: state.title, tail: state.tail, swapsTitle: true)
+        GroupedList(Self.checks(state)) { check in
+          ListRow(check.title, lead: check.lead, trailing: check.trailing, size: Self.rowSize)
+        }
+        .animation(
+          Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
+          value: state.live
+        )
+        .padding(.top, OnboardingLayout.Rhythm.paragraph)
+        StatusSlot(line: state.failure.map { StatusLine(kind: .problem, text: $0) })
       }
-      .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state.live)
-      .padding(.top, OnboardingLayout.Rhythm.paragraph)
-      StatusSlot(line: state.failure.map { StatusLine(kind: .problem, text: $0) })
+    }
+  }
+
+  /// A VM's check in one line: Atlas checks the VM works, the VM is ready once it passed, else why it failed.
+  ///
+  /// - Parameter state: The finishing check.
+  /// - Returns: The line.
+  static func vmLine(_ state: OnboardingFinishingScreenState) -> StatusLine {
+    switch state.live {
+    case .busy: StatusLine(kind: .working, text: "Atlas checks the VM works.")
+    case .done: StatusLine(kind: .done, text: "The VM is ready.")
+    case .failed: StatusLine(kind: .problem, text: state.failure ?? "")
     }
   }
 
@@ -65,6 +90,11 @@ struct FinishingScreen: View {
 #if DEBUG
   #Preview("Finishing") {
     FinishingScreen(state: PreviewStates.onboardingFinishingScreen)
+      .onboardingSample()
+  }
+
+  #Preview("Finishing a VM") {
+    FinishingScreen(state: PreviewStates.onboardingVMFinishingScreen)
       .onboardingSample()
   }
 

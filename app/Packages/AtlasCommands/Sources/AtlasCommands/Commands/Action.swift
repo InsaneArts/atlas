@@ -28,6 +28,11 @@ public enum Action: Sendable, Equatable {
   case closeHelper
   /// Run the end-to-end check of the helper.
   case finishSetup
+  /// Check the VM a first setup made is ready for agents.
+  case finishVM(String)
+  /// Add a VM desktop, or go on with the add of the one named; the person allows it in the approval window. It runs
+  /// for as long as macOS takes to download and install, so it is run with ``CommandRunning/runLasting(_:keeping:)``.
+  case addVM(name: String?)
   /// Turn Open at Login on or off at the end of setup.
   case setOpensAtLogin(Bool)
   /// Turn Open at Login on or off from the menu bar, recorded as the person's choice.
@@ -112,6 +117,9 @@ public enum Action: Sendable, Equatable {
     case .closeLeftovers: ["onboarding", "close"]
     case .closeHelper: ["onboarding", "close", "--helper"]
     case .finishSetup: ["onboarding", "finish"]
+    case .finishVM(let name): ["onboarding", "finish", "--desktop", name]
+    // The approval window is the confirmation.
+    case .addVM(let name): ["desktop", "add", "vm"] + (name.map { ["--name", $0] } ?? [])
     case .setOpensAtLogin(let on): ["onboarding", "login", on ? "on" : "off"]
     case .openMenuBar: ["menubar"]
     case .openAtLogin(let on): ["menubar", "--login", on ? "on" : "off"]

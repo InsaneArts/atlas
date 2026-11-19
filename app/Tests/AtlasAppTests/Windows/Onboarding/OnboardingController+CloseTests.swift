@@ -46,6 +46,7 @@ struct OnboardingControllerCloseTests {
       try await controller.untilLoaded()
       #expect(controller.snapshot.step == .welcome)
       controller.send(.begin)
+      controller.send(.continueDesktop)
       #expect(controller.snapshot.step == .chooseHelper)
       await controller.closeLeftovers()
       #expect(authorizations == 0, "a stale standalone cleanup request cannot add an approval to setup")

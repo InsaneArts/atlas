@@ -203,6 +203,10 @@
           case .screen(let screen):
             switch screen.id {
             case .welcome: "welcome"
+            case .desktop: "desktop"
+            case .vmDownload: "vmDownload"
+            case .vmInstall: "vmInstall"
+            case .vmAllow: "vmAllow"
             case .choose: "choose"
             case .create: "create"
             case .switchToHelper: "switchToHelper"
@@ -222,7 +226,7 @@
         shown == [
           "loading", "permissionPanel", "welcome", "choose", "create", "switchToHelper", "finishing", "agents", "done",
           "allow",
-          "permissions", "helperDone", "blocked", "closeLeftovers",
+          "permissions", "helperDone", "blocked", "closeLeftovers", "desktop", "vmDownload", "vmInstall", "vmAllow",
         ]
       )
       let notes = PreviewStates.onboarding

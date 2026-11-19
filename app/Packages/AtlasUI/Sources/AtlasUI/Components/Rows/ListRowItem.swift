@@ -11,10 +11,14 @@ struct ListRowItem<ID: Hashable & Sendable>: Identifiable, Equatable, Sendable {
   var detailStyle = ListRow.DetailStyle.plain
   /// A short word on a tint beside the title, or nil for none.
   var tag: String?
+  /// How the tag is coloured.
+  var tagTone = Tag.Tone.accent
   /// How the title fits the row's width.
   var titleFit = ListRow.TitleFit.twoLines
   /// What leads the row.
   var lead = ListRow.Lead.none
   /// What ends the row.
   var trailing = ListRow.Trailing.none
+  /// Whether its turn has not come: its lead and words dim together.
+  var isNotYet = false
 }

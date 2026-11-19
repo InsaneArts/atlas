@@ -1,5 +1,5 @@
 extension OnboardingFacts {
-  /// The reply exactly as `crates/cli/src/onboarding.rs` writes it.
+  /// The reply exactly as `crates/cli/src/user/onboarding/status.rs` writes it.
   struct Reply: Decodable {
     /// This account.
     struct Me: Decodable {
@@ -33,6 +33,20 @@ extension OnboardingFacts {
       let name: String?
       /// Its full name, when it has one.
       let realName: String?
+    }
+
+    /// Whether this Mac can make a VM now.
+    struct Room: Decodable {
+      /// Whether it can.
+      let available: Bool?
+      /// What it lacks, when it cannot: `macos`, `chip`, `disk` or `running`.
+      let why: String?
+    }
+
+    /// The desktops a first setup can choose beyond Second Login.
+    struct Desktops: Decodable {
+      /// Whether this Mac can make a VM now.
+      let vm: Room?
     }
 
     /// A deleted account's login that is still open.
@@ -101,5 +115,9 @@ extension OnboardingFacts {
     let helper: Side?
     /// The deleted accounts' logins that are still open.
     let leftoverLogins: [Leftover]?
+    /// The desktops a first setup can choose beyond Second Login.
+    let desktops: Desktops?
+    /// The VM a first setup makes.
+    let vm: VMFacts.Reply?
   }
 }

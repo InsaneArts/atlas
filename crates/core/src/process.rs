@@ -381,23 +381,46 @@ pub fn boot() -> Result<String> {
 
 /// Whether this Mac runs in a virtual machine, as its kernel says
 /// (`kern.hv_vmm_present`); none when it does not say.
-#[allow(unsafe_code, reason = "FFI: kern.hv_vmm_present has no safe binding")]
 #[must_use]
 pub fn in_virtual_machine() -> Option<bool> {
-    let mut present: libc::c_int = 0;
-    let mut size = std::mem::size_of_val(&present);
+    flag(c"kern.hv_vmm_present")
+}
+
+/// Whether this Mac's kernel can run virtual machines
+/// (`kern.hv_support`); none when it does not say.
+#[must_use]
+pub fn hypervisor() -> Option<bool> {
+    flag(c"kern.hv_support")
+}
+
+/// Whether this Mac has Apple silicon (`hw.optional.arm64`), whatever this
+/// process was built for; none when it does not say.
+#[must_use]
+pub fn apple_silicon() -> Option<bool> {
+    flag(c"hw.optional.arm64")
+}
+
+/// The yes or no the kernel keeps under `name` as an integer; none when it
+/// does not say.
+#[allow(
+    unsafe_code,
+    reason = "FFI: macOS's integer sysctls have no safe binding"
+)]
+fn flag(name: &CStr) -> Option<bool> {
+    let mut value: libc::c_int = 0;
+    let mut size = std::mem::size_of_val(&value);
     // SAFETY: NUL-terminated name and a writable integer of the declared
     // size; no input buffer.
     let status = unsafe {
         libc::sysctlbyname(
-            c"kern.hv_vmm_present".as_ptr(),
-            (&raw mut present).cast(),
+            name.as_ptr(),
+            (&raw mut value).cast(),
             &mut size,
             std::ptr::null_mut(),
             0,
         )
     };
-    (status == 0 && size == std::mem::size_of_val(&present)).then_some(present != 0)
+    (status == 0 && size == std::mem::size_of_val(&value)).then_some(value != 0)
 }
 
 /// This Mac's macOS, as its kernel says: its version, as 27.2.1

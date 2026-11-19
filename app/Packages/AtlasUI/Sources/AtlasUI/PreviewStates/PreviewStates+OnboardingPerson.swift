@@ -14,7 +14,7 @@
       content: .screen(.welcome),
       footer: OnboardingFooterState(
         next: OnboardingFooterAction(title: .getStarted, event: .begin, isEnabled: true, isDefault: true),
-        track: onboardingTrack(0, of: 6)
+        track: onboardingTrack(0, of: 7)
       ),
       note: .none
     )
@@ -25,7 +25,7 @@
       footer: OnboardingFooterState(
         back: OnboardingFooterAction(title: .chooseAnother, event: .chooseAnother, isEnabled: true, isDefault: false),
         next: OnboardingFooterAction(title: .lockAndSwitch, event: .lockAndSwitch, isEnabled: true, isDefault: true),
-        track: onboardingTrack(2, of: 6)
+        track: onboardingTrack(3, of: 7)
       ),
       note: .none
     )
@@ -52,7 +52,7 @@
       content: .screen(.finishing(onboardingFinishingScreen)),
       footer: OnboardingFooterState(
         next: OnboardingFooterAction(title: .continue, event: .continueFinishing, isEnabled: false, isDefault: false),
-        track: onboardingTrack(3, of: 6)
+        track: onboardingTrack(4, of: 7)
       ),
       note: .none
     )
@@ -89,7 +89,7 @@
       content: .screen(.agents(onboardingAgentsScreen)),
       footer: OnboardingFooterState(
         next: OnboardingFooterAction(title: .continue, event: .connectAgents, isEnabled: true, isDefault: true),
-        track: onboardingTrack(4, of: 6)
+        track: onboardingTrack(5, of: 7)
       ),
       note: .none
     )
@@ -100,7 +100,7 @@
       footer: OnboardingFooterState(
         back: onboardingBack,
         next: OnboardingFooterAction(title: .done, event: .complete, isEnabled: true, isDefault: true),
-        track: onboardingTrack(5, of: 6)
+        track: onboardingTrack(6, of: 7)
       ),
       note: .none
     )

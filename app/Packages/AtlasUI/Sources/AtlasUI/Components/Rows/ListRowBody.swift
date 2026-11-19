@@ -13,6 +13,8 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   private let detailStyle: ListRow.DetailStyle
   /// A short word on a tint beside the title, or nil for none.
   private let tag: String?
+  /// How the tag is coloured.
+  private let tagTone: Tag.Tone
   /// How the title fits the row's width.
   private let titleFit: ListRow.TitleFit
   /// What leads the row.
@@ -21,6 +23,9 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   private let size: ListRow.Size
   /// How opaque the lead draws, such as faded for an agent not on this Mac.
   private let leadOpacity: Double
+  /// Whether the row's turn has not come, such as a desktop not offered yet: its lead and words dim together, and
+  /// what ends it stays whole.
+  private let isNotYet: Bool
   /// How VoiceOver reads the row.
   private let accessibilityChildren: AccessibilityChildBehavior
   /// The control at the row's end.
@@ -34,10 +39,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   ///   - detail: The detail under it, or nil for none.
   ///   - detailStyle: How the detail is set; secondary text by default.
   ///   - tag: A short word on a tint beside the title; none by default.
+  ///   - tagTone: How the tag is coloured; blue by default.
   ///   - titleFit: How the title fits the row's width; up to two lines by default.
   ///   - lead: What leads the row; nothing by default.
   ///   - size: How tall the row is; a setup list's by default.
   ///   - leadOpacity: How opaque the lead draws; whole by default.
+  ///   - isNotYet: Whether its lead and words dim together while its turn has not come; false by default.
   ///   - accessibilityChildren: How VoiceOver reads the row; as one element with its control kept apart by default.
   ///   - trailing: The control at the row's end.
   init(
@@ -45,10 +52,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     detail: String? = nil,
     detailStyle: ListRow.DetailStyle = .plain,
     tag: String? = nil,
+    tagTone: Tag.Tone = .accent,
     titleFit: ListRow.TitleFit = .twoLines,
     lead: ListRow.Lead = .none,
     size: ListRow.Size = .regular,
     leadOpacity: Double = 1,
+    isNotYet: Bool = false,
     accessibilityChildren: AccessibilityChildBehavior = .contain,
     @ViewBuilder trailing: () -> Trailing
   ) where Detail == Text? {
@@ -56,10 +65,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
       title,
       detailStyle: detailStyle,
       tag: tag,
+      tagTone: tagTone,
       titleFit: titleFit,
       lead: lead,
       size: size,
       leadOpacity: leadOpacity,
+      isNotYet: isNotYet,
       accessibilityChildren: accessibilityChildren,
       detailContent: { detail.map { Text($0) } },
       trailing: trailing
@@ -72,10 +83,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   ///   - title: The title.
   ///   - detailStyle: How the detail is set.
   ///   - tag: A short word on a tint beside the title.
+  ///   - tagTone: How the tag is coloured.
   ///   - titleFit: How the title fits the row's width.
   ///   - lead: What leads the row.
   ///   - size: How tall the row is.
   ///   - leadOpacity: How opaque the lead draws.
+  ///   - isNotYet: Whether its lead and words dim together while its turn has not come.
   ///   - accessibilityChildren: How VoiceOver reads the row.
   ///   - detailContent: The content under the title, at the row's detail style.
   ///   - trailing: The control at the row's end.
@@ -83,10 +96,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     _ title: String,
     detailStyle: ListRow.DetailStyle = .plain,
     tag: String? = nil,
+    tagTone: Tag.Tone = .accent,
     titleFit: ListRow.TitleFit = .twoLines,
     lead: ListRow.Lead = .none,
     size: ListRow.Size = .regular,
     leadOpacity: Double = 1,
+    isNotYet: Bool = false,
     accessibilityChildren: AccessibilityChildBehavior = .contain,
     @ViewBuilder detailContent: () -> Detail,
     @ViewBuilder trailing: () -> Trailing
@@ -95,10 +110,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     self.detail = detailContent()
     self.detailStyle = detailStyle
     self.tag = tag
+    self.tagTone = tagTone
     self.titleFit = titleFit
     self.lead = lead
     self.size = size
     self.leadOpacity = leadOpacity
+    self.isNotYet = isNotYet
     self.accessibilityChildren = accessibilityChildren
     self.trailing = trailing()
   }
@@ -125,12 +142,12 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   var body: some View {
     HStack(spacing: size.gap) {
       ListRowLead(lead: lead, size: size)
-        .opacity(leadOpacity)
+        .opacity(isNotYet ? Opacity.notYet : leadOpacity)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         HStack(spacing: Spacing.s) {
           titleText
           if let tag {
-            Tag(text: tag, tone: .accent)
+            Tag(text: tag, tone: tagTone)
           }
         }
         detail
@@ -139,6 +156,7 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
           .lineLimit(detailStyle == .path ? 1 : nil)
           .truncationMode(.middle)
       }
+      .opacity(isNotYet ? Opacity.notYet : 1)
       .frame(maxWidth: .infinity, alignment: .leading)
       trailing
     }

@@ -2,6 +2,14 @@
 public enum OnboardingScreen: Equatable, Sendable {
   /// What Atlas is, before anything is set up.
   case welcome
+  /// Choose where agents work.
+  case desktop(OnboardingDesktopScreenState)
+  /// macOS coming down from Apple for the VM.
+  case vmDownload(OnboardingVMDownloadScreenState)
+  /// Atlas making the VM.
+  case vmInstall(OnboardingVMInstallScreenState)
+  /// Allow Atlas in the VM's own window.
+  case vmAllow(OnboardingVMAllowScreenState)
   /// Choose an account to be the helper.
   case choose(OnboardingChooseScreenState)
   /// Create a new account to be the helper.

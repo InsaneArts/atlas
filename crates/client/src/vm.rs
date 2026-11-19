@@ -20,6 +20,7 @@ pub(crate) mod native;
 pub(crate) mod proof;
 mod removal;
 pub mod removing;
+pub mod room;
 pub mod runner;
 pub mod start;
 mod station;

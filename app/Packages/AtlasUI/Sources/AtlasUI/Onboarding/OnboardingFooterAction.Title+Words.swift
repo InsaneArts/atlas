@@ -9,6 +9,7 @@ extension OnboardingFooterAction.Title {
     case .createAccount: "Create Account"
     case .lockAndSwitch: "Lock and Switch"
     case .tryAgain: "Try Again"
+    case .goOn: "Go On"
     case .checkAgain: "Check Again"
     case .closeIt: "Close It…"
     case .done: "Done"

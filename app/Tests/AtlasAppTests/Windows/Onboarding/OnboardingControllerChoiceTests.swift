@@ -33,6 +33,7 @@ struct OnboardingControllerChoiceTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.begin)
+      controller.send(.continueDesktop)
       await controller.useHelper()
       #expect(controller.snapshot.step == .createAccount)
       commands.answer("onboarding status", choiceAsked)

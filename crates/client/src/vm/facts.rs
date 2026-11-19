@@ -8,7 +8,7 @@
 use super::{
     lifecycle::{
         Lifecycle,
-        record::{Record, State},
+        record::{Record, State, Step},
     },
     maintenance::Kept,
     runner::{Hello, Operation, Power, Release, Reply, Runner},
@@ -147,8 +147,29 @@ pub(crate) fn facts(seen: &Seen<'_>) -> Value {
         "adder": adder(seen.record),
         "setup": setup(seen.record),
         "waiting": waiting(seen.record),
+        "allowed": allowed(seen.record),
         "can": can(seen),
     })
+}
+
+/// Which of Screen & System Audio Recording and Accessibility the guest of
+/// an add under way said it allows, once its setup window opened: both
+/// once the add found them allowed; null before its window opened, and
+/// once the add ended.
+fn allowed(record: Option<&Record>) -> Value {
+    let Some(record) = record.filter(|record| record.state == State::Adding) else {
+        return Value::Null;
+    };
+    if record.has(Step::Allowed) {
+        return json!({"screenCapture": true, "accessibility": true});
+    }
+    match &record.setup {
+        Some(setup) if record.has(Step::Shown) => json!({
+            "screenCapture": setup.recording,
+            "accessibility": setup.accessibility,
+        }),
+        _ => Value::Null,
+    }
 }
 
 /// Where the setup of an add under way stands, `waiting` for its

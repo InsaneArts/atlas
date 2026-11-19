@@ -24,6 +24,14 @@ struct OnboardingScreenContent: View {
     switch screen {
     case .welcome:
       WelcomeScreen()
+    case .desktop(let state):
+      DesktopScreen(state: state, send: send)
+    case .vmDownload(let state):
+      VMDownloadScreen(state: state)
+    case .vmInstall(let state):
+      VMInstallScreen(state: state)
+    case .vmAllow(let state):
+      VMAllowScreen(state: state)
     case .choose(let state):
       ChooseScreen(state: state, note: note, send: send)
     case .create(let state):

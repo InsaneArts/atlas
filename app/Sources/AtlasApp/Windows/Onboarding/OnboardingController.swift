@@ -51,6 +51,8 @@ final class OnboardingController {
 
   /// What the controller reaches outside itself.
   @ObservationIgnored let dependencies: OnboardingDependencies
+  /// The wait for the VM's add this window runs, which the window's close ends; the add itself goes on.
+  @ObservationIgnored var adding: Task<Void, Never>?
   /// The tickets of the queued requests, in order, for the queue in ``run()``.
   @ObservationIgnored let requests: AsyncStream<Int>
   /// Where the window queues a request's ticket.
@@ -136,6 +138,9 @@ final class OnboardingController {
     switch event {
     case .begin: snapshot.choices.started = true
     case .back: back()
+    case .pickDesktop(let kind): snapshot.pickedDesktop = DesktopChoice.Kind(kind)
+    case .continueDesktop: continueDesktop()
+    case .goOnAdding, .retryAdding: addVM()
     case .pick(let account): snapshot.picked = account
     case .continueChoice: enqueue(.useHelper)
     case .createAccount: enqueue(.createAccount)
@@ -143,7 +148,10 @@ final class OnboardingController {
     case .chooseAnother: enqueue(.chooseAnother)
     case .closeLeftovers: enqueue(.closeLeftovers)
     case .continueAfterClose: snapshot.choices.closedLeftovers = false
-    case .checkAgain, .continueFinishing: refresh()
+    case .checkAgain: refresh()
+    case .continueFinishing:
+      if snapshot.finish == .passed { snapshot.choices.checked = true }
+      refresh()
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
     case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))
@@ -205,6 +213,7 @@ final class OnboardingController {
   func close() async {
     guard !closed else { return }
     closed = true
+    adding?.cancel()
     queue.finish()
     pending.removeAll()
     changes.stop()
@@ -276,12 +285,16 @@ final class OnboardingController {
     try? await dependencies.clock.sleep(for: left)
   }
 
-  /// Back to the screen before: the welcome from the choice, the choice from the form, the agents from Done. It is
+  /// Back to the screen before: the welcome from the choice of where agents work, that choice from the account choice
+  /// and from a VM's download before anything of it was made, the choice from the form, the agents from Done. It is
   /// applied at once, never queued, and stops the lock's wait, waiting or under way.
   private func back() {
     stop(where: \.endsOnBack)
     switch snapshot.step {
-    case .chooseHelper: snapshot.choices.started = false
+    case .chooseDesktop: snapshot.choices.started = false
+    case .chooseHelper, .downloadVM:
+      snapshot.choices.desktop = nil
+      snapshot.addFailure = nil
     case .createAccount: snapshot.choices.creating = false
     case .done: snapshot.choices.agentsDone = false
     default: break

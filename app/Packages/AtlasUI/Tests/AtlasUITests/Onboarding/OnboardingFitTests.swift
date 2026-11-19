@@ -22,8 +22,28 @@
     }
 
     /// The states that make screens longest beyond the samples: the account form with its working line, the
-    /// longest a problem with a long name makes it.
+    /// longest a problem with a long name makes it, and the VM's screens with a long reason their add failed.
     private static var longest: [PreviewState<OnboardingState>] {
+      let reason =
+        "Atlas couldn’t make the VM: Atlas VM did not take the VM’s create: this Mac needs 70 GB free to make a VM, "
+        + "and the restore image could not be kept beside the VMs."
+      var download = PreviewStates.onboardingVMStopped
+      var install = PreviewStates.onboardingVMFailed
+      var allow = PreviewStates.onboardingVMAllow
+      download.content = .screen(
+        .vmDownload(.init(fraction: 0.5, amount: "12.4 GB of 25.6 GB", isHeld: true, problem: reason))
+      )
+      install.content = .screen(.vmInstall(.init(steps: [.current, .waiting, .waiting, .waiting], problem: reason)))
+      allow.content = .screen(.vmAllow(.init(steps: [.done, .current], problem: reason)))
+      return createLongest + [
+        PreviewState(name: "VM download, a long reason", value: download),
+        PreviewState(name: "VM install, a long reason", value: install),
+        PreviewState(name: "VM allow, a long reason", value: allow),
+      ]
+    }
+
+    /// The account form with the longest problem a long name makes.
+    private static var createLongest: [PreviewState<OnboardingState>] {
       var flagged = PreviewStates.onboardingCreateBadName
       if case .screen(.create(var screen)) = flagged.content {
         screen.note = .problem(

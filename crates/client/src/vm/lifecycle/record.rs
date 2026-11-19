@@ -208,6 +208,14 @@ pub struct Setup {
     /// the VM, while the window is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// Whether the guest last said Screen & System Audio Recording is
+    /// allowed while the window is open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recording: bool,
+    /// Whether the guest last said Accessibility is allowed while the
+    /// window is open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accessibility: bool,
     /// The change the add's own Resume is asked as, kept before it is
     /// claimed or sent, until what it came to is settled.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -23,6 +23,12 @@ struct OnboardingSnapshot {
   var problemAbout: String?
   /// The account picked as the helper: a new one or one already on this Mac, nil for none yet.
   var picked: OnboardingAccountPick?
+  /// The kind of desktop picked in the choice of where agents work: Second Login as it opens.
+  var pickedDesktop = DesktopChoice.Kind.secondLogin
+  /// Whether this window runs the VM's add now.
+  var addingHere = false
+  /// Why the VM's add this window ran last failed; nil when it did not, or none ran.
+  var addFailure: String?
   /// The new helper account's form.
   var form = OnboardingAccountForm()
   /// Where the end-to-end check stands.
@@ -68,6 +74,18 @@ struct OnboardingSnapshot {
 
   /// The screen the facts and choices lead to.
   var step: OnboardingStep { OnboardingStep(facts: facts, choices: choices) }
+
+  /// The kind of desktop the choice shows picked: never one it cannot pick.
+  var shownDesktop: DesktopChoice.Kind { DesktopChoice.shown(pickedDesktop, facts: facts) }
+
+  /// Whether the person's side goes the VM's path: a VM being added or set up, chosen with Continue, or picked on the
+  /// choice.
+  var onVM: Bool {
+    facts.vm != nil || choices.desktop == .vm || (step == .chooseDesktop && shownDesktop == .vm)
+  }
+
+  /// How the VM's add stands, from this window's own run and the facts.
+  var vmAdd: VMAdd { VMAdd.of(facts.vm, runningHere: addingHere, failedHere: addFailure) }
 
   /// The account picked, while the choice shows it: never an account it does not list, nor a new one it does not
   /// offer.

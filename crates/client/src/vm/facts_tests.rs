@@ -197,3 +197,38 @@ fn what_the_person_can_do_follows_its_power_its_maintenance_and_its_removal() {
         json!(["remove"])
     );
 }
+
+#[test]
+fn what_the_guest_allows_in_the_setup_window_is_listed_from_the_adds_record() {
+    let home = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::under(home.path());
+    let allowed = |record: &Record| {
+        of(
+            &lifecycle,
+            record,
+            &word(&[], json!({}), Value::Null),
+            &Value::Null,
+        )["allowed"]
+            .clone()
+    };
+    let mut adding = record(State::Adding);
+    adding.done(Step::Closed);
+    assert_eq!(allowed(&adding), Value::Null, "no window open yet");
+
+    adding.done(Step::Shown);
+    adding.setup = Some(crate::vm::lifecycle::record::Setup {
+        recording: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        allowed(&adding),
+        json!({"screenCapture": true, "accessibility": false})
+    );
+
+    adding.done(Step::Allowed);
+    assert_eq!(
+        allowed(&adding),
+        json!({"screenCapture": true, "accessibility": true})
+    );
+    assert_eq!(allowed(&record(State::Created)), Value::Null, "added");
+}

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One step of a ``StepList``: its disc, a medium title over its detail, and the rail that joins it to
+/// One step of a ``StepList``: its disc, a medium title over its detail, if it has one, and the rail that joins it to
 /// the steps above and below. The step to do now carries the only colour, an accent wash; a waiting or finished step
 /// steps back to grey, a finished one with its green check. As a step finishes, the rail below it turns green, and the
 /// step it leads to lights up a moment later.
@@ -9,7 +9,7 @@ struct StepRow: View {
   let index: Int
   /// What to do.
   let title: String
-  /// Where or how.
+  /// Where or how; empty for a step that needs no second line, which then draws none.
   let detail: String
   /// Where the step stands.
   let state: StepState
@@ -28,9 +28,11 @@ struct StepRow: View {
         Text(title)
           .textStyle(.body, weight: .medium)
           .foregroundStyle(state == .current ? Color.textPrimary : Color.textSecondary)
-        Text(detail)
-          .textStyle(.callout)
-          .foregroundStyle(Color.textSecondary)
+        if !detail.isEmpty {
+          Text(detail)
+            .textStyle(.callout)
+            .foregroundStyle(Color.textSecondary)
+        }
       }
       .lineLimit(StepRowLayout.lines)
       .truncationMode(.middle)

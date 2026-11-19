@@ -47,6 +47,17 @@ public final class ScriptedCommands: CommandRunning {
     self.step = step
   }
 
+  /// Records a lasting command as any other, and answers it the same way.
+  ///
+  /// - Parameters:
+  ///   - arguments: The command's arguments.
+  ///   - folder: Where a live command keeps its outputs; unused.
+  /// - Returns: Its scripted outcome.
+  @MainActor
+  public func runLasting(_ arguments: [String], keeping folder: URL) async -> Outcome {
+    await run(arguments, input: nil)
+  }
+
   /// Records the command, waits a turn as a live one does, runs the step, then answers it, or fails it as unknown.
   ///
   /// - Parameters:

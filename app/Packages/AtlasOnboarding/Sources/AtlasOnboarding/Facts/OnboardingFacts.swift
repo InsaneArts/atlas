@@ -29,6 +29,11 @@ public struct OnboardingFacts: Equatable, Sendable {
   public var asker = Asker()
   /// The user IDs of deleted accounts whose logins are still open, which Atlas closes before setup goes on.
   public var leftoverLogins: [Int] = []
+  /// Why this Mac cannot make a VM now; nil when it can. Not offered yet when the status does not say.
+  public internal(set) var vmLack: DesktopChoice.Lack? = .notYet
+  /// The VM a first setup makes: one being added, or the one the settings list alone; nil when there is none, and
+  /// once the settings list a Second Login.
+  public internal(set) var vm: VMFacts?
 
   /// Atlas.app is not in Applications, where the helper can run it.
   static let notInApplications =
@@ -61,6 +66,10 @@ public struct OnboardingFacts: Equatable, Sendable {
     homePrivacyOffered = raw.homePrivacyOffered ?? false
     leftoverLogins = (raw.leftoverLogins ?? [])
       .compactMap(\.uid)
+    if let room = raw.desktops?.vm {
+      vmLack = room.available == true ? nil : DesktopChoice.Lack(why: room.why)
+    }
+    vm = raw.vm.map(VMFacts.init)
     guard let side = raw.helper else { return }
     switch role {
     case .controller:

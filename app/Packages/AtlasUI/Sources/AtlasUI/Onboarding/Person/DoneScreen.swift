@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Setup is done: the icon settles into place once, where Atlas lives now, and two choices in one group: whether it
-/// opens at login, and whether the home folder stays private from the helper. Done is the footer's.
+/// opens at login, and whether the home folder stays private from the helper, which a VM has none of. Done is the
+/// footer's.
 struct DoneScreen: View {
   /// What the screen shows.
   let state: OnboardingDoneScreenState
@@ -30,12 +31,13 @@ struct DoneScreen: View {
     }
   }
 
-  /// The two settings, each with its switch: Open Atlas at login, then keeping the home folder private.
+  /// The settings, each with its switch: Open Atlas at login, then keeping the home folder private where it is
+  /// offered.
   ///
   /// - Parameter state: The done screen.
   /// - Returns: The settings' rows.
   static func settings(_ state: OnboardingDoneScreenState) -> [ListRowItem<Int>] {
-    [
+    let rows = [
       ListRowItem(
         id: 0,
         title: "Open Atlas at login",
@@ -49,6 +51,7 @@ struct DoneScreen: View {
         trailing: .toggle(isOn: state.keepsHomePrivate)
       ),
     ]
+    return state.offersHomePrivacy ? rows : Array(rows.prefix(1))
   }
 
   /// What pressing a setting's row sends: its switch, turned the other way.

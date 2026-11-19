@@ -17,20 +17,24 @@ struct OnboardingControllerAccountTests {
       #expect(controller.snapshot.step == .welcome)
       #expect(controller.snapshot.picked == .newAccount, "no candidates: a new account is picked")
       controller.send(.begin)
+      controller.send(.continueDesktop)
       await controller.useHelper()
       #expect(controller.snapshot.step == .createAccount)
     }
   }
 
-  @Test("Back leaves the form for the account choice, and the choice for the welcome")
+  @Test("Back leaves the form for the account choice, the choice for where agents work, and that for the welcome")
   func backStepsBack() async throws {
     let controller = OnboardingController.scripted(ScriptedCommands(["onboarding status": OnboardingReplies.freshMac]))
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.begin)
+      controller.send(.continueDesktop)
       await controller.useHelper()
       controller.send(.back)
       #expect(controller.snapshot.step == .chooseHelper)
+      controller.send(.back)
+      #expect(controller.snapshot.step == .chooseDesktop)
       controller.send(.back)
       #expect(controller.snapshot.step == .welcome)
     }
@@ -104,6 +108,7 @@ struct OnboardingControllerAccountTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.begin)
+      controller.send(.continueDesktop)
       controller.send(.pick(.existing("qa")))
       await controller.useHelper()
       #expect(controller.snapshot.problemAbout == "qa")

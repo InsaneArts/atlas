@@ -18,10 +18,10 @@ extension OnboardingController {
     refresh()
   }
 
-  /// Runs the end-to-end check, then reads the facts again; a check the closing window stopped shows nothing. Once it
+  /// Runs the end-to-end check, or a VM's, then reads the facts again; a check the closing window stopped shows nothing. Once it
   /// passed, its Continue lights up and takes presses ``continueFollows`` later.
   func check() async {
-    let outcome = await commands.run(.finishSetup)
+    let outcome = await commands.run(snapshot.facts.vm.map { .finishVM($0.name) } ?? .finishSetup)
     guard !closed else { return }
     snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
     refresh()
@@ -46,11 +46,13 @@ extension OnboardingController {
   }
 
   /// Makes the home folder private when the box is checked, else remembers that it was offered, unless an attempt
-  /// failed: then it stays unoffered, so Atlas offers it again later.
+  /// failed: then it stays unoffered, so Atlas offers it again later. With a VM there is nothing to do.
   ///
   /// - Returns: Whether Done goes on; false after a failed attempt, which says why and turns the box off, or once the
   ///   window has closed.
   func keepHomePrivate() async -> Bool {
+    // A VM has no home folder of the person's to keep private.
+    guard snapshot.facts.vm == nil else { return true }
     guard snapshot.keepsHomePrivate else {
       // Through `act`, so the switches wait while it runs; a failure to remember the offer only asks again later.
       guard !snapshot.homePrivacyFailed else { return true }

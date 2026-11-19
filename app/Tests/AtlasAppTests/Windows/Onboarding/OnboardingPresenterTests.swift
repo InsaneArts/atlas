@@ -48,14 +48,34 @@ struct OnboardingPresenterTests {
     #expect(footer.next == nil && footer.track == nil)
   }
 
-  @Test("the person's side counts six segments and the helper's three; the close and blocked screens show no track")
+  @Test(
+    "the track has seven segments for Second Login and eight for a VM; the helper's three; none while closed or blocked"
+  )
   func track() {
-    #expect(OnboardingStep.welcome.track == OnboardingFooterState.Track(index: 0, count: 6, label: "Step 1 of 6"))
-    #expect(OnboardingStep.createAccount.track == OnboardingStep.chooseHelper.track, "the form shares the choice's")
-    #expect(OnboardingStep.done.track?.index == 5)
-    #expect(OnboardingStep.helperDone.track == OnboardingFooterState.Track(index: 2, count: 3, label: "Step 3 of 3"))
-    #expect(OnboardingStep.blocked("x").track == nil)
-    #expect(OnboardingStep.closeLeftovers.track == nil)
+    #expect(
+      OnboardingStep.welcome.track(onVM: false) == OnboardingFooterState.Track(index: 0, count: 7, label: "Step 1 of 7")
+    )
+    #expect(OnboardingStep.chooseDesktop.track(onVM: false)?.index == 1)
+    #expect(OnboardingStep.chooseDesktop.track(onVM: true)?.count == 8, "the count follows the row picked")
+    #expect(
+      OnboardingStep.createAccount.track(onVM: false) == OnboardingStep.chooseHelper.track(onVM: false),
+      "the form shares the choice's"
+    )
+    #expect(
+      OnboardingStep.done.track(onVM: false) == OnboardingFooterState.Track(index: 6, count: 7, label: "Step 7 of 7")
+    )
+    let vm: [OnboardingStep] = [
+      .welcome, .chooseDesktop, .downloadVM, .installVM, .allowVM, .finishing, .agents, .done,
+    ]
+    #expect(vm.map { $0.track(onVM: true)?.index } == Array(0..<8))
+    #expect(vm.allSatisfy { $0.track(onVM: true)?.count == 8 })
+    #expect(OnboardingStep.allowVM.track(onVM: true)?.label == "Step 5 of 8")
+    #expect(
+      OnboardingStep.helperDone.track(onVM: false)
+        == OnboardingFooterState.Track(index: 2, count: 3, label: "Step 3 of 3")
+    )
+    #expect(OnboardingStep.blocked("x").track(onVM: false) == nil)
+    #expect(OnboardingStep.closeLeftovers.track(onVM: true) == nil)
   }
 
   /// What blocks a helper whose Atlas does not run, when no account asked.

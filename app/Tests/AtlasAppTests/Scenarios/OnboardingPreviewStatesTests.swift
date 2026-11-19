@@ -92,18 +92,69 @@
       ])
     }
 
-    /// A snapshot that has read `facts`, past the welcome when `started`.
+    /// A snapshot that has read `facts`, past the welcome when `started`, and past the choice of where agents work
+    /// with Second Login when `chose`.
     ///
     /// - Parameters:
     ///   - facts: The facts read.
     ///   - started: Whether the person pressed Get Started.
+    ///   - chose: Whether the person chose Second Login.
     /// - Returns: The snapshot.
-    func loaded(_ facts: OnboardingFacts, started: Bool = false) -> OnboardingSnapshot {
+    func loaded(_ facts: OnboardingFacts, started: Bool = false, chose: Bool = true) -> OnboardingSnapshot {
       var snapshot = OnboardingSnapshot(facts: facts, loaded: true, isOnConsole: true)
       snapshot.choices.started = started
+      snapshot.choices.desktop = started && chose ? .secondLogin : nil
       // The samples name the permissions as macOS 26 does.
       snapshot.macOS = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
       return snapshot
+    }
+
+    /// Settings that list the VM `vm` alone, this Mac able to make one unless `room` says why not.
+    ///
+    /// - Parameters:
+    ///   - vm: The VM's part of the reply, or nil before its add has a record.
+    ///   - room: Whether this Mac can make a VM.
+    /// - Returns: The facts.
+    /// - Throws: When the reply is not a status.
+    func onVM(_ vm: [String: Any]?, room: [String: Any] = ["available": true]) throws -> OnboardingFacts {
+      var reply: [String: Any] = [
+        "ok": true, "role": "controller", "me": ["name": "me"], "app": ["installed": true, "signed": true],
+        "configured": vm != nil, "finished": vm?["ready"] as? Bool ?? false, "candidates": [],
+        "desktops": ["vm": room],
+      ]
+      if let vm { reply["vm"] = vm }
+      return try facts(reply)
+    }
+
+    /// The VM `vm` being added, at `steps`, Atlas VM at `phase`, its add's process running as said.
+    ///
+    /// - Parameters:
+    ///   - steps: The steps of its add done.
+    ///   - phase: What making it does now, with 12.4 GB of 25.6 GB down.
+    ///   - running: Whether its add's process runs.
+    ///   - allowed: Which permissions the guest allows in the setup window.
+    ///   - failure: Why its add stopped short.
+    ///   - added: Whether it is added and ready.
+    /// - Returns: The VM's part of the reply.
+    func vm(
+      steps: [String] = [],
+      phase: String? = nil,
+      running: Bool = true,
+      allowed: (Bool, Bool)? = nil,
+      failure: String? = nil,
+      added: Bool = false
+    ) -> [String: Any] {
+      var vm: [String: Any] = [
+        "name": "vm", "kind": "vm", "listed": true, "lifecycle": added ? "created" : "adding", "steps": steps,
+        "ready": added,
+      ]
+      if !added { vm["adder"] = ["running": running] }
+      if let phase {
+        vm["progress"] = ["phase": phase, "received": 12_400_000_000, "total": 25_600_000_000, "fraction": 0.48]
+      }
+      if let allowed { vm["allowed"] = ["screenCapture": allowed.0, "accessibility": allowed.1] }
+      if let failure { vm["failure"] = failure }
+      return vm
     }
 
     @Test("each setup window sample is what the window shows for the same facts")
@@ -215,7 +266,31 @@
       closed.choices.closedLeftovers = true
       var checkingFacts = try helperSide()
       checkingFacts.asker.permissionsKnown = false
+      let desktop = loaded(try onVM(nil), started: true, chose: false)
+      var noVM = loaded(try onVM(nil, room: ["available": false, "why": "disk"]), started: true, chose: false)
+      noVM.pickedDesktop = .vm
+      let made = ["agent", "created", "started", "enrolled", "installed", "listed", "keeper", "paired", "closed"]
+      var vmFinishing = loaded(try onVM(vm(added: true)))
+      vmFinishing.finish = .running
+      var vmPassed = vmFinishing
+      vmPassed.finish = .passed
+      vmPassed.passSettled = true
+      var vmDone = loaded(try onVM(vm(added: true)))
+      vmDone.choices.checked = true
+      vmDone.choices.agentsDone = true
       let presented: [String: OnboardingSnapshot] = [
+        "Desktop": desktop,
+        "Desktop, no VM": noVM,
+        "VM download": loaded(try onVM(vm(phase: "downloading"))),
+        "VM install": loaded(try onVM(vm(steps: ["agent", "created"], phase: "done"))),
+        "VM allow": loaded(try onVM(vm(steps: made + ["shown"], allowed: (true, false)))),
+        "VM stopped": loaded(try onVM(vm(phase: "downloading", running: false))),
+        "VM failed": loaded(
+          try onVM(vm(phase: "installing", running: false, failure: "The VM’s disk could not be made."))
+        ),
+        "VM finishing": vmFinishing,
+        "VM finishing, passed": vmPassed,
+        "VM done": vmDone,
         "Loading": OnboardingSnapshot(),
         "Loading, failed": loadingFailed,
         "Welcome": loaded(try person()),

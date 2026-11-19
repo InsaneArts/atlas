@@ -141,6 +141,19 @@ fn whether_this_mac_is_a_virtual_machine_is_what_its_kernel_says() {
 }
 
 #[test]
+fn whether_this_mac_runs_virtual_machines_and_has_apple_silicon_is_what_its_kernel_says() {
+    let said = |name: &str| {
+        crate::spawn::output(std::process::Command::new("/usr/sbin/sysctl").args(["-n", name]))
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "1")
+    };
+
+    assert_eq!(hypervisor(), said("kern.hv_support"));
+    assert_eq!(apple_silicon(), said("hw.optional.arm64"));
+}
+
+#[test]
 fn this_macs_version_and_build_are_what_its_kernel_says() {
     let said = |name: &str| {
         crate::spawn::output(std::process::Command::new("/usr/sbin/sysctl").args(["-n", name]))

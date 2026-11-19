@@ -6,6 +6,8 @@ public struct OnboardingDoneScreenState: Equatable, Sendable {
   public var opensAtLogin: Bool
   /// Whether the box to keep the home folder private from the helper is checked.
   public var keepsHomePrivate: Bool
+  /// Whether the box shows: only with a helper, which a VM is not.
+  public var offersHomePrivacy: Bool
   /// Whether the screen's switches take changes.
   public var isEnabled: Bool
 
@@ -15,11 +17,19 @@ public struct OnboardingDoneScreenState: Equatable, Sendable {
   ///   - lede: What to do after a restart, naming the helper.
   ///   - opensAtLogin: Whether Open Atlas at login is on.
   ///   - keepsHomePrivate: Whether the box to keep the home folder private is checked; checked by default.
+  ///   - offersHomePrivacy: Whether the box shows; true by default, false for a VM.
   ///   - isEnabled: Whether the screen's switches take changes.
-  public init(lede: String, opensAtLogin: Bool, keepsHomePrivate: Bool = true, isEnabled: Bool = true) {
+  public init(
+    lede: String,
+    opensAtLogin: Bool,
+    keepsHomePrivate: Bool = true,
+    offersHomePrivacy: Bool = true,
+    isEnabled: Bool = true
+  ) {
     self.lede = lede
     self.opensAtLogin = opensAtLogin
     self.keepsHomePrivate = keepsHomePrivate
+    self.offersHomePrivacy = offersHomePrivacy
     self.isEnabled = isEnabled
   }
 }

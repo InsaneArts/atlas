@@ -59,12 +59,13 @@ enum HomeOffer {
     return alert.runModal() == .alertFirstButtonReturn
   }
 
-  /// Whether the home folder is worth a look: setup is finished, and the offer was never made for this helper.
+  /// Whether the home folder is worth a look: setup is finished with a helper, which a VM is not, and the offer was
+  /// never made for it.
   ///
   /// - Parameter facts: What setup's status said.
   /// - Returns: Whether to look.
   static func due(_ facts: OnboardingFacts) -> Bool {
-    facts.finished && !facts.homePrivacyOffered
+    facts.finished && facts.vm == nil && !facts.homePrivacyOffered
   }
 
   /// Whether to ask: the home folder is open to the helper, and keeping it private was never offered for it.

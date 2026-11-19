@@ -7,7 +7,7 @@
 //! setup is done only on the proof the window gives. The VM is still being
 //! added all the while: no agent reaches it until the add's own Resume
 //! ([`super::resume`]), or the person's, ends the add.
-use super::{Adding, Means};
+use super::{Adding, Means, Posture};
 use crate::vm::{
     guest_words,
     lifecycle::{
@@ -211,7 +211,7 @@ impl<'a, M: Means> Adding<'a, M> {
                     self.setup().waiting = None;
                     return self.done(Step::Allowed);
                 }
-                self.waiting(&posture.waiting)?;
+                self.seen(&posture)?;
             }
             if self.window_shown() == Some(false) {
                 return Err(Error::new(
@@ -232,17 +232,23 @@ impl<'a, M: Means> Adding<'a, M> {
         ))
     }
 
-    /// Keep and say what the guest waits for, `said` in its own words,
-    /// when it changed.
-    fn waiting(&mut self, said: &[String]) -> Result<()> {
-        let words = guest_words::said_of(&said.join(" "), &self.record.name);
+    /// Keep which of the two the guest says `posture` allows, and keep and
+    /// say what it waits for, in its own words, each when it changed.
+    fn seen(&mut self, posture: &Posture) -> Result<()> {
+        let words = guest_words::said_of(&posture.waiting.join(" "), &self.record.name);
         let words = (!words.is_empty()).then_some(words);
-        if self.setup().waiting == words {
+        let recording = posture.recording == Some(true);
+        let accessibility = posture.accessibility == Some(true);
+        let setup = self.setup();
+        let changed = setup.waiting != words;
+        if !changed && setup.recording == recording && setup.accessibility == accessibility {
             return Ok(());
         }
-        self.setup().waiting.clone_from(&words);
+        setup.waiting.clone_from(&words);
+        setup.recording = recording;
+        setup.accessibility = accessibility;
         self.keep()?;
-        if let Some(words) = words {
+        if changed && let Some(words) = words {
             self.say(&format!("In the VM: {words}"));
         }
         Ok(())

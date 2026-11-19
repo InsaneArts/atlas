@@ -3,7 +3,7 @@ extension StepList {
   struct Step: Equatable, Sendable {
     /// What to do.
     let title: String
-    /// Where or how.
+    /// Where or how; empty for none.
     let detail: String
     /// Where the step stands.
     let state: StepState

@@ -84,15 +84,21 @@ enum OnboardingSamples {
     OnboardingSnapshot(facts: facts, choices: choices, loaded: true, isOnConsole: true)
   }
 
-  /// Choices past the welcome, on the form when `creating`.
+  /// Choices past the welcome and where agents work, on the form when `creating`.
   ///
   /// - Parameters:
   ///   - creating: Whether the person is on the account form.
   ///   - agentsDone: Whether the agents screen is behind them.
+  ///   - desktop: Where agents work, chosen; Second Login by default.
   /// - Returns: The choices.
-  static func choices(creating: Bool = false, agentsDone: Bool = false) -> OnboardingChoices {
+  static func choices(
+    creating: Bool = false,
+    agentsDone: Bool = false,
+    desktop: DesktopChoice.Kind? = .secondLogin
+  ) -> OnboardingChoices {
     var choices = OnboardingChoices()
     choices.started = true
+    choices.desktop = desktop
     choices.creating = creating
     choices.agentsDone = agentsDone
     return choices

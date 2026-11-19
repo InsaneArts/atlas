@@ -1439,6 +1439,11 @@ fn the_add_waits_for_both_permissions_through_a_guest_restart() {
         [true, false],
         "one window, through the restart"
     );
+    let setup = world.record().setup.unwrap();
+    assert!(
+        setup.recording && !setup.accessibility,
+        "what the guest allowed was kept as it said it: {setup:?}"
+    );
 }
 
 #[test]

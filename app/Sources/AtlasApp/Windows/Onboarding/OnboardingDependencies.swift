@@ -30,6 +30,9 @@ struct OnboardingDependencies {
   var changes: @MainActor () -> any SetupWatching = { SetupChanges() }
   /// This account's home folder, under which the helper's job keeps its folder.
   var home: String = NSHomeDirectory()
+  /// Where a command that outlives the window, the VM's add, keeps its outputs while it runs.
+  var commandsFolder = FileManager.default.homeDirectoryForCurrentUser
+    .appending(path: "Library/Application Support/Atlas/App/commands", directoryHint: .isDirectory)
   /// Notes a marker in the login timing, in the unified log.
   var mark: @MainActor (String) -> Void = LoginLog.mark
   /// The icons of the agents whose apps are on this Mac, by agent id, as Settings reads them.

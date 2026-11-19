@@ -32,10 +32,119 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             }));
         }
 
-        return choosing(me, app, false, logins(None));
+        let mut reply = choosing(me, app, false, logins(None))?;
+        reply["desktops"] = desktops().await;
+        reply["vm"] = json!(first_vm(config_path).await);
+        return Ok(reply);
+    }
+
+    // Settings that list VMs alone: no Second Login to look at.
+    if only_vms(config_path) {
+        let vm = first_vm(config_path).await;
+        return Ok(on_vms(
+            me,
+            app,
+            vm,
+            desktops().await,
+            crate::menubar::login_decided(),
+        ));
     }
 
     configured(config_path, uid, me, app).await
+}
+
+/// Whether the settings at `config_path` load and list no Second Login.
+fn only_vms(config_path: &Path) -> bool {
+    Settings::load(config_path).is_ok_and(|settings| settings.user().is_err())
+}
+
+/// The setup of settings that list VMs alone: configured, with no account to
+/// choose, the VM of the first setup `vm` and whether this Mac can make
+/// another, `desktops`; finished once that VM is ready.
+fn on_vms(me: Value, app: Value, vm: Option<Value>, desktops: Value, login_decided: bool) -> Value {
+    let finished = vm.as_ref().is_some_and(|vm| vm["ready"] == true);
+    json!({
+        "ok": true,
+        "role": "controller",
+        "me": me,
+        "app": app,
+        "configured": true,
+        "candidates": [],
+        "desktops": desktops,
+        "vm": vm,
+        "finished": finished,
+        "menubarLogin": login_decided,
+        "leftoverLogins": [],
+        "blockers": [],
+    })
+}
+
+/// The desktops a first setup can choose beyond Second Login: whether this
+/// Mac can make a VM now.
+async fn desktops() -> Value {
+    let room = tokio::task::spawn_blocking(|| {
+        config::home().map_or_else(
+            |_| json!({"available": false, "why": atlas_client::vm::room::Lack::Disk}),
+            |home| atlas_client::vm::room::now(&home),
+        )
+    })
+    .await
+    .unwrap_or(Value::Null);
+    json!({"vm": room})
+}
+
+/// The VM of the first setup, as `atlas desktop list` shows it, with
+/// whether it is ready for agents; none when there is none, or the list
+/// cannot be read.
+async fn first_vm(config_path: &Path) -> Option<Value> {
+    let path = config_path.to_owned();
+    let listing = tokio::task::spawn_blocking(move || atlas_client::vm::listing::list(&path))
+        .await
+        .ok()?
+        .ok()?;
+    let mut vm = setting_up(&listing)?;
+    vm["ready"] = json!(ready(config_path, &vm).await);
+    Some(vm)
+}
+
+/// Of the desktops `listing` shows, the VM a first setup makes: one being
+/// added, else the default one once added. None once the settings list a
+/// Second Login, whose own setup the window shows.
+fn setting_up(listing: &Value) -> Option<Value> {
+    let desktops = listing["desktops"].as_array()?;
+    if desktops.iter().any(|desktop| desktop["kind"] == "user") {
+        return None;
+    }
+    let vms = || desktops.iter().filter(|desktop| desktop["kind"] == "vm");
+    vms()
+        .find(|vm| vm["lifecycle"] == "adding")
+        .or_else(|| vms().find(|vm| vm["default"] == true && vm["listed"] == true))
+        .cloned()
+}
+
+/// Whether the VM `vm` shows is ready for agents, as its status says: never
+/// while it is still being added.
+async fn ready(config_path: &Path, vm: &Value) -> bool {
+    if vm["lifecycle"] == "adding" {
+        return false;
+    }
+    let Some(name) = vm["name"].as_str() else {
+        return false;
+    };
+    let Ok(settings) = Settings::load(config_path) else {
+        return false;
+    };
+    let Some(listed) = settings
+        .desktops()
+        .iter()
+        .find(|listed| listed.name == name)
+    else {
+        return false;
+    };
+    match Client::new(settings.selected(listed)) {
+        Ok(client) => client.status().await["ready"] == true,
+        Err(_) => false,
+    }
 }
 
 /// The controller with no helper to look at: the window offers the accounts.

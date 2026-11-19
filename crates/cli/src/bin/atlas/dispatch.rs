@@ -921,7 +921,12 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
         OnboardingCommand::Close { helper: true } => {
             atlas_cli::user::onboarding::close_helper(config)
         }
-        OnboardingCommand::Finish => atlas_cli::user::onboarding::finish(config).await,
+        // Onboarding chooses Second Login whatever is named: the desktop
+        // `--desktop` names is the one whose setup ends.
+        OnboardingCommand::Finish => match atlas_core::config::desktops::process_selection().flag {
+            Some(name) => atlas_cli::user::onboarding::finish_on(config, &name).await,
+            None => atlas_cli::user::onboarding::finish(config).await,
+        },
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
         OnboardingCommand::Files { change } => {
             onboarding::second_login_only(config)?;
