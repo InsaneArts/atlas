@@ -5,11 +5,16 @@
 //! anywhere, the add asked again goes on from what is there, judged by
 //! launchd's jobs, Atlas VM's answers, its install's progress, the pairing
 //! record and the settings, never by the record's steps alone; once the
-//! guest paired, its secret is never asked for again.
+//! guest paired, its secret is never asked for again. Once its guest is
+//! closed, its setup window opens on this Mac's screen for the person to
+//! allow Atlas there, and the add is set up once that window takes no input
+//! again; agents wait until the person's Resume ends it.
 mod bootstrap;
 mod real;
+mod setup;
 
 use bootstrap::Progress;
+pub(crate) use setup::READY;
 
 use super::{
     StationHold,
@@ -34,8 +39,9 @@ use atlas_core::{
 use atlas_session::keys::PairingSecret;
 use serde_json::{Value, json};
 use std::{
+    future::Future,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How often, and how many times, something is looked at before the add
@@ -118,6 +124,8 @@ trait Means {
     fn posture(&self, selected: &Selected, vm: &DesktopId) -> Result<Posture>;
     /// Let `how_long` go by.
     fn wait(&self, how_long: Duration);
+    /// Now, as the waits count it.
+    fn now(&self) -> Instant;
 }
 
 /// How a VM's pairing stands, as the station's record of it says.
@@ -130,25 +138,52 @@ enum Pairing {
     Revoked,
 }
 
-/// Whether a guest is closed to all but Atlas, as its own hello says.
+/// Whether a guest is closed to all but Atlas, and what it is allowed, as
+/// its own hello says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Posture {
     /// `on`, `off` or `unknown`.
     remote_login: String,
     /// Whether its account is an administrator; none when it cannot tell.
     admin: Option<bool>,
+    /// Whether its daemon may record its screen; none when it does not say.
+    recording: Option<bool>,
+    /// Whether Atlas is allowed Accessibility there; none when it does not
+    /// say.
+    accessibility: Option<bool>,
+    /// What it says it waits for, in its own words, for each of them not
+    /// allowed.
+    waiting: Vec<String>,
 }
 
 impl Posture {
     /// As the guest's `hello` says it.
     fn of(hello: &Value) -> Self {
+        let recording = hello["permissions"]["screenCapture"].as_bool();
+        let accessibility = hello["permissions"]["accessibility"].as_bool();
+        let waiting = [
+            (recording, &hello["capture"]["held"]),
+            (accessibility, &hello["input"]["held"]),
+        ]
+        .into_iter()
+        .filter(|(allowed, _)| *allowed != Some(true))
+        .filter_map(|(_, said)| said.as_str().map(str::to_owned))
+        .collect();
         Self {
             remote_login: hello["remoteLogin"]
                 .as_str()
                 .unwrap_or("unknown")
                 .to_owned(),
             admin: hello["account"]["admin"].as_bool(),
+            recording,
+            accessibility,
+            waiting,
         }
+    }
+
+    /// Whether Screen Recording and Accessibility are both allowed.
+    fn allowed(&self) -> bool {
+        self.recording == Some(true) && self.accessibility == Some(true)
     }
 
     /// Why the guest is not closed; none once Remote Login is off and its
@@ -255,12 +290,14 @@ fn add_with(
     match adding.steps() {
         Ok(()) => {
             let record = &adding.record;
-            say(&format!("The VM \u{201c}{}\u{201d} is added.", record.name));
+            say(READY);
             Ok(json!({
                 "ok": true,
                 "added": {"name": record.name, "id": record.id, "kind": "vm"},
                 "resumed": reservation.resumed,
                 "settings": atlas_core::config::tilde(&record.settings),
+                "setup": "done",
+                "next": setup::RESUME,
             }))
         }
         Err(error) => {
@@ -270,6 +307,87 @@ fn add_with(
             Err(error)
         }
     }
+}
+
+/// Where the add of a VM still being added stands, as its record says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Standing {
+    /// Under way, or cut short.
+    Adding,
+    /// Its setup window is open, and the guest waits for this, in its own
+    /// words.
+    Waiting(String),
+    /// Set up: the person's Resume ends it.
+    SetUp,
+}
+
+/// Where the add of the VM `vm` stands, its record read in `lifecycle`;
+/// none when it is not being added, or that cannot be read.
+pub(crate) fn standing(lifecycle: &Lifecycle, vm: &DesktopId) -> Option<Standing> {
+    let record = lifecycle
+        .record(vm)
+        .ok()
+        .flatten()
+        .filter(|record| record.state == State::Adding)?;
+    if record.has(Step::Ready) {
+        return Some(Standing::SetUp);
+    }
+    let waiting = record.setup.and_then(|setup| setup.waiting);
+    Some(waiting.map_or(Standing::Adding, Standing::Waiting))
+}
+
+/// `refused`, the refusal of a VM still being added, saying where its add
+/// stands: that the person's Resume ends a set-up one, or what its guest
+/// waits for while its setup window is open.
+pub(crate) fn said(standing: Option<Standing>, refused: Error) -> Error {
+    match standing {
+        Some(Standing::SetUp) => refused.with("next", json!(READY)),
+        Some(Standing::Waiting(words)) => refused.with("waiting", json!(words)),
+        Some(Standing::Adding) | None => refused,
+    }
+}
+
+/// Run `resume`, the person's Resume of the VM `vm` named `name`, whose add
+/// is set up, under its station-operation lock, and end the add once that
+/// Resume let agents go on: the VM is added, and agents reach it.
+///
+/// # Errors
+///
+/// Refuses while another command holds the VM or Atlas is being
+/// uninstalled, and fails as `resume` does, nothing ended; fails when the
+/// record cannot be kept.
+pub(crate) async fn resumed(
+    lifecycle: &Lifecycle,
+    vm: &DesktopId,
+    name: &str,
+    resume: impl Future<Output = Result<Value>>,
+) -> Result<Value> {
+    let admitted = lifecycle.admit()?;
+    let Some(_hold) = super::hold_in(&lifecycle.vms(), vm, &admitted)? else {
+        return Err(Error::new(
+            Code::Busy,
+            format!("Another Atlas command holds {name}. Resume agents again in a moment."),
+        ));
+    };
+    let mut reply = resume.await?;
+    if reply["held"] != false {
+        return Ok(reply);
+    }
+    // Read again under the hold: only a set-up add is ended.
+    let mut record = lifecycle
+        .record(vm)?
+        .filter(|record| record.state == State::Adding && record.has(Step::Ready))
+        .ok_or_else(|| {
+            Error::new(
+                Code::State,
+                format!("{name}'s add changed while agents resumed; nothing was ended."),
+            )
+        })?;
+    record.state = State::Created;
+    record.failure = None;
+    lifecycle.keep_record(&record)?;
+    reply["added"] = json!(true);
+    Ok(reply)
 }
 
 /// The record of the add of `vm` kept before, when there is one: only one
@@ -362,7 +480,8 @@ impl<M: Means> Adding<'_, M> {
                 install: install.clone(),
             })?;
         }
-        self.record.state = State::Created;
+        // Still adding: only the person's Resume ends it.
+        self.set_up()?;
         self.record.failure = None;
         self.keep()
     }

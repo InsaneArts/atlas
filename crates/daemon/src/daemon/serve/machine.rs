@@ -97,6 +97,8 @@ pub struct Paired {
     /// Where it notes that Screen Recording was held and asked for, on its
     /// disk.
     pub recording: std::path::PathBuf,
+    /// Where it notes that Accessibility was asked for, on its disk.
+    pub accessibility: std::path::PathBuf,
 }
 
 impl std::fmt::Debug for Paired {
@@ -2021,6 +2023,7 @@ fn bound(header: &Header, line: &[u8]) -> std::result::Result<(), Value> {
     }
 }
 
+mod accessibility;
 mod bounded;
 pub mod entry;
 mod jobs;

@@ -41,6 +41,22 @@ fn signatures_are_checked_against_atlass_identity() {
 }
 
 #[test]
+fn only_the_apps_own_executable_signed_as_atlas_runs_the_app() {
+    let folder = tempfile::tempdir().unwrap();
+    let app = folder.path().join("Atlas.app");
+    let macos = app.join("Contents/MacOS");
+    std::fs::create_dir_all(&macos).unwrap();
+    let test = std::env::current_exe().unwrap();
+    std::os::unix::fs::symlink(&test, macos.join(super::super::APP_EXECUTABLE)).unwrap();
+
+    assert!(
+        !runs_app(std::process::id(), &app),
+        "its path is the app's, but its code is not signed as Atlas"
+    );
+    assert!(!runs_app(std::process::id(), folder.path()));
+}
+
+#[test]
 fn codesign_diagnostics_parse_without_inventing_fields() {
     let text = "Executable=/x\nIdentifier=com.example.sessiond\nCDHash=0c61eed3\n\
                     Signature=adhoc\nTeamIdentifier=not set\n";

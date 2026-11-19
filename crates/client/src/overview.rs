@@ -487,6 +487,11 @@ fn mode(
         Some(crate::capability::VmMode::Maintained(why)) => {
             return (Mode::Unavailable, why.clone());
         }
+        // A VM set up and still being added waits for the Resume that ends
+        // its add.
+        Some(crate::capability::VmMode::Stopped) if report.diagnosis.value["setup"] == "done" => {
+            return (Mode::Stopped, crate::vm::add::READY.to_owned());
+        }
         Some(crate::capability::VmMode::Stopped) => {
             return (
                 Mode::Stopped,

@@ -1,8 +1,9 @@
 //! A machine desktop's daemon as its installed job starts it: enrolling
 //! until a station is committed, then serving that station on the guest's
-//! vsock port, and asking for Screen Recording in the VM's window.
+//! vsock port, and asking for Screen Recording, then Accessibility, in the
+//! VM's window.
 use super::{
-    FRAMING, Listener, Machine, OPENING, PAIRINGS,
+    FRAMING, Listener, Machine, OPENING, PAIRINGS, accessibility,
     bounded::{BLOCKING, Bounded},
     listen, recording,
 };
@@ -121,6 +122,11 @@ async fn serve(named: Named) -> Result<()> {
     let recording = recording::Own(machine.clone());
     let record = recording::Record::at(machine.paired.recording.clone());
     tokio::spawn(async move { recording::watch(&recording, &record).await });
+    // Accessibility, asked once Screen Recording is taken: macOS shows one
+    // prompt at a time.
+    let trust = accessibility::Own(machine.clone());
+    let asked = accessibility::Record::at(machine.paired.accessibility.clone());
+    tokio::spawn(async move { accessibility::watch(&trust, &asked).await });
     machine.serve(&listener).await
 }
 

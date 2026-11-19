@@ -206,6 +206,7 @@ fn begun(
             refused_start: None,
             maintenance: None,
             adder: None,
+            setup: None,
         },
     };
     let recorded = lifecycle

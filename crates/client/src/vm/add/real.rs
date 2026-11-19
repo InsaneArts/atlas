@@ -18,7 +18,7 @@ use atlas_session::pairing::{Enrolment, StationRecords};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How long the guest is given to answer through its keeper.
@@ -123,5 +123,9 @@ impl Means for Real {
 
     fn wait(&self, how_long: Duration) {
         std::thread::sleep(how_long);
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
     }
 }

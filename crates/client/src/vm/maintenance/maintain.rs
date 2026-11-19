@@ -50,6 +50,7 @@ use crate::{
             record::{Ended, Maintenance, Phase, Record, State},
         },
         runner::{Operation, Outcome, Power, Reply, Runner},
+        window::{self, Asked, AtlasVm},
     },
 };
 use atlas_control::{Controller, Ownership, Pending, executors::Executor};
@@ -152,34 +153,6 @@ impl Patience {
 /// grant: the change it is made as.
 fn person(operation: &grant::Operation) -> Result<Token> {
     grant::ask(operation.clone())?.take(operation)
-}
-
-/// What a window change asked of Atlas VM came to.
-enum Asked {
-    /// Atlas VM's own word, with the run that did it and the run that
-    /// answered.
-    Came {
-        outcome: Outcome,
-        by: Option<String>,
-        answering: Option<String>,
-    },
-    /// Its only submission was not taken, for this reason: nothing was
-    /// begun.
-    NotTaken(String),
-    /// Not known yet.
-    Unknown,
-}
-
-impl Asked {
-    /// What Atlas VM's `reply` says the change came to, naming the runs;
-    /// none while it does not say.
-    fn came(reply: Reply) -> Option<Self> {
-        Some(Self::Came {
-            outcome: reply.outcome?,
-            by: reply.by,
-            answering: reply.incarnation.map(|incarnation| incarnation.id),
-        })
-    }
 }
 
 /// How the VM's keeper is reached.
@@ -624,22 +597,8 @@ impl Maintainer {
     /// Atlas VM's answer to a void of `change`, `request` in words, asked
     /// until it says what `change` came to, or the patience runs out.
     fn voided(&self, change: &Token, request: &str) -> Result<Reply> {
-        let runner = self.runner();
-        let deadline = Instant::now() + self.patience.within;
-        loop {
-            self.controller.interrupt().check()?;
-            if let Ok(reply) = runner.read_within(&Operation::Void(change.clone()), READING)
-                && reply.ok
-                && reply.change.as_ref() == Some(change)
-                && reply.outcome.is_some()
-            {
-                return Ok(reply);
-            }
-            if Instant::now() + self.patience.every > deadline {
-                return Err(self.not_settled(request));
-            }
-            std::thread::sleep(self.patience.every);
-        }
+        window::voided(self, change, self.window_patience())?
+            .ok_or_else(|| self.not_settled(request))
     }
 
     /// None is kept: the keeper is still told to let agents in, as a hold
@@ -951,57 +910,18 @@ impl Maintainer {
         uncertain: bool,
         within: Duration,
     ) -> Result<Asked> {
-        let change = operation
-            .change()
-            .cloned()
-            .ok_or_else(|| Error::new(Code::BadRequest, "A read is not a change of the VM."))?;
-        let runner = self.runner();
-        let deadline = Instant::now() + within;
-        let mut uncertain = uncertain;
-        let mut asking = true;
-        loop {
-            if asking {
-                asking = false;
-                self.controller.interrupt().check()?;
-                let lifecycle = &self.lifecycle;
-                let answer = runner.change_within(
-                    record,
-                    |record| lifecycle.keep_record(record),
-                    operation,
-                    left(deadline),
-                );
-                match answer {
-                    Ok(reply) if reply.ok => {
-                        if let Some(came) = Asked::came(reply) {
-                            return Ok(came);
-                        }
-                        uncertain = true;
-                    }
-                    Ok(reply) if !uncertain => {
-                        return Ok(Asked::NotTaken(reply.error.unwrap_or_else(|| {
-                            "Atlas VM did not take the change.".to_owned()
-                        })));
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.code == Code::Transport => uncertain = true,
-                    Err(error) => return Err(error),
-                }
-            }
-            if Instant::now() + self.patience.every > deadline {
-                return Ok(Asked::Unknown);
-            }
-            std::thread::sleep(self.patience.every);
-            match runner.read_within(&Operation::Outcome(change.clone()), READING) {
-                Ok(reply) if reply.ok && reply.change.as_ref() == Some(&change) => {
-                    let pending = reply.pending;
-                    match (Asked::came(reply), pending) {
-                        (Some(came), _) => return Ok(came),
-                        (None, Some(true)) => {}
-                        (None, _) => asking = true,
-                    }
-                }
-                Ok(_) | Err(_) => {}
-            }
+        let patience = window::Patience {
+            within,
+            every: self.patience.every,
+        };
+        window::ask(self, record, operation, uncertain, patience)
+    }
+
+    /// How long a window change is followed, and how often it is looked at.
+    const fn window_patience(&self) -> window::Patience {
+        window::Patience {
+            within: self.patience.within,
+            every: self.patience.every,
         }
     }
 
@@ -1128,6 +1048,39 @@ impl Maintainer {
     }
 }
 
+impl AtlasVm for Maintainer {
+    fn change(
+        &self,
+        record: &mut Record,
+        operation: &Operation,
+        within: Duration,
+    ) -> Result<Reply> {
+        let lifecycle = &self.lifecycle;
+        self.runner().change_within(
+            record,
+            |record| lifecycle.keep_record(record),
+            operation,
+            within,
+        )
+    }
+
+    fn read(&self, operation: &Operation) -> Result<Reply> {
+        self.runner().read_within(operation, READING)
+    }
+
+    fn interrupted(&self) -> Result<()> {
+        self.controller.interrupt().check()
+    }
+
+    fn pause(&self, how_long: Duration) {
+        std::thread::sleep(how_long);
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// Whether `keeper` let agents in again, asked to release the maintenance
 /// `change`.
 fn release(keeper: &link::Keeper, change: &Token) -> bool {
@@ -1138,11 +1091,6 @@ fn release(keeper: &link::Keeper, change: &Token) -> bool {
         .ok()
         .and_then(|mut lines| lines.pop())
         .is_some_and(|answer| answer["ok"] == true)
-}
-
-/// What is left before `deadline`.
-fn left(deadline: Instant) -> Duration {
-    deadline.saturating_duration_since(Instant::now())
 }
 
 #[cfg(test)]

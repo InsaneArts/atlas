@@ -30,7 +30,7 @@ fn note(name: &str) -> Option<PathBuf> {
     unsafe_code,
     reason = "FFI: the consent prompt takes an options dictionary"
 )]
-fn request_accessibility() {
+pub(super) fn request_accessibility() {
     if accessibility() {
         return;
     }
@@ -586,7 +586,7 @@ async fn setting_up() -> bool {
 }
 
 /// Open a Privacy & Security page of System Settings in this session.
-fn open_settings(page: &str) {
+pub(super) fn open_settings(page: &str) {
     let mut command = Command::new("/usr/bin/open");
     command.arg(format!(
         "x-apple.systempreferences:com.apple.preference.security?{page}"

@@ -16,7 +16,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
-    /// Being added: every command on it but the person's Stop is refused.
+    /// Being added: every command on it but the person's Stop is refused,
+    /// and, once its setup is done, the person's Resume, which ends its add.
     Adding,
     /// Added.
     Created,
@@ -46,6 +47,16 @@ pub enum Step {
     Paired,
     /// Its guest was found closed, and Atlas VM was told.
     Closed,
+    /// Its window was opened on this Mac's screen with the person's input,
+    /// for them to allow Atlas in the guest.
+    Shown,
+    /// Its guest said Screen Recording and Accessibility are allowed.
+    Allowed,
+    /// Atlas VM confirmed its window takes no input, as the setup window's
+    /// proof says.
+    Hidden,
+    /// Its setup is done: the person's Resume ends its add.
+    Ready,
 }
 
 /// A change Atlas VM was asked for, kept before it was sent: its ID, what
@@ -164,6 +175,36 @@ impl Maintenance {
     }
 }
 
+/// The add's setup window, its input the person's while they allow Atlas
+/// in the guest: kept before anything of it is asked, and until Atlas VM
+/// confirmed it takes no input.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Setup {
+    /// The change that opens the window with input, once one is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Token>,
+    /// The first run of Atlas VM that opened it, as its ledger says: a
+    /// window-off by any later run proves its end only once that run says
+    /// every earlier run's VM is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<String>,
+    /// Whether its window-on is settled for good, by what it came to or
+    /// voided before Atlas VM ever saw it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+    /// The change that turns its input off, once one is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<Token>,
+    /// Kept once Atlas VM confirmed the window takes no input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<Ended>,
+    /// What the guest says it still waits for, in its own words said of
+    /// the VM, while the window is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<String>,
+}
+
 /// A VM's lifecycle record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -208,6 +249,9 @@ pub struct Record {
     /// guess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adder: Option<atlas_core::process::Instance>,
+    /// The add's setup window, once one is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Setup>,
 }
 
 impl Record {
@@ -236,6 +280,7 @@ impl Record {
             refused_start: None,
             maintenance: None,
             adder: None,
+            setup: None,
         }
     }
 
@@ -250,6 +295,11 @@ impl Record {
         if !self.has(step) {
             self.steps.push(step);
         }
+    }
+
+    /// Note `step` not done after all.
+    pub(in crate::vm) fn undo(&mut self, step: Step) {
+        self.steps.retain(|done| *done != step);
     }
 
     /// Note why it stopped short.
@@ -284,7 +334,7 @@ impl Record {
 
     /// Forget the person's maintenance once it ended, each change of it
     /// settled: it, its stop and start, and every window change sent, which
-    /// only a maintenance asks.
+    /// only a maintenance asks once the VM is added.
     pub(in crate::vm) fn maintenance_settled(&mut self) {
         if let Some(maintenance) = self.maintenance.take() {
             let own = [maintenance.stop, maintenance.start];

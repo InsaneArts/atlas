@@ -97,7 +97,9 @@ extension ApprovalState {
     let asked = "Asked from \(session)."
     let allow = "Allow it only if you asked for this."
     switch operation {
-    case .add: return "\(asked) Atlas makes a new VM on this Mac. \(allow)"
+    case .add:
+      let making = "Atlas downloads macOS from Apple (about 26 GB), makes a VM on this Mac"
+      return "\(asked) \(making) and opens its window once, so you can allow Atlas there. \(allow)"
     case .remove: return "\(asked) The VM and everything in it are deleted. \(allow)"
     case .uninstall:
       return "\(asked) Atlas is removed, and these VMs are deleted with everything in them: \(desktop). \(allow)"

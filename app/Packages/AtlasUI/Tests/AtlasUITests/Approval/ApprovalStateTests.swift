@@ -19,6 +19,16 @@ struct ApprovalStateTests {
     #expect(card.escape == .refuse)
   }
 
+  @Test("an add says it downloads macOS and opens the VM's window once, from Atlas")
+  func addFromAtlas() {
+    let card = ApprovalState(operation: .add, desktop: "work", session: "Atlas", phase: .asking).card
+    #expect(
+      card.message
+        == "Asked from Atlas. Atlas downloads macOS from Apple (about 26 GB), makes a VM on this Mac and opens its "
+        + "window once, so you can allow Atlas there. Allow it only if you asked for this."
+    )
+  }
+
   @Test(
     "a removal or an uninstall asks as a destructive alert, Don't Allow its default",
     arguments: [

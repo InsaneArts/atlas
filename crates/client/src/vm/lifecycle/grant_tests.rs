@@ -468,3 +468,17 @@ fn a_grant_to_begin_a_maintenance_is_never_one_to_end_it_and_atlas_app_reads_whi
             .contains("another kind")
     );
 }
+
+#[test]
+fn a_request_from_atlas_names_atlas_only_when_its_parent_is_the_signed_app() {
+    let host = || Some("Codex in atlas".to_owned());
+
+    assert_eq!(session_of(true, host), "Atlas");
+    assert_eq!(session_of(true, || None), "Atlas");
+    assert_eq!(session_of(false, host), "Codex in atlas");
+    assert_eq!(session_of(false, || None), "a command line no agent names");
+    // This test's own parent is no signed app, whatever its environment
+    // says of who is asking.
+    assert!(!parent_is_app());
+    assert_ne!(session(), "Atlas");
+}

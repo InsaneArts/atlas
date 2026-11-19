@@ -290,7 +290,9 @@ pub(super) fn desktop_added(value: &Value) -> String {
         "{} The VM \u{201c}{name}\u{201d} is added to {}\n  {}",
         style::ok(),
         text::printable(value["settings"].as_str().unwrap_or("the settings")),
-        style::dim("Agents cannot use it yet: this build of Atlas does not reach VM desktops.")
+        style::dim(text::printable(value["next"].as_str().unwrap_or(
+            "Resume agents from the Atlas menu bar to let them use the VM."
+        )))
     )
 }
 

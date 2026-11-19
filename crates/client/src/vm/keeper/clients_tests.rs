@@ -1021,6 +1021,15 @@ async fn a_persons_stop_before_the_update_keeps_its_reason_and_revision_through_
 
 /// Keep `client`'s VM's lifecycle record in `state`, in its test lifecycle.
 fn lifecycle_record(client: &crate::client::Client, state: crate::vm::lifecycle::record::State) {
+    lifecycle_record_at(client, state, &[]);
+}
+
+/// [`lifecycle_record`], with `steps` of its add done.
+fn lifecycle_record_at(
+    client: &crate::client::Client,
+    state: crate::vm::lifecycle::record::State,
+    steps: &[crate::vm::lifecycle::record::Step],
+) {
     use crate::vm::lifecycle::{Provenance, Reservation, record::Record};
     let lifecycle = client.lifecycle.as_ref().unwrap();
     let reservation = Reservation {
@@ -1038,6 +1047,7 @@ fn lifecycle_record(client: &crate::client::Client, state: crate::vm::lifecycle:
         },
     );
     record.state = state;
+    record.steps = steps.to_vec();
     lifecycle.keep_record(&record).unwrap();
 }
 
@@ -1499,4 +1509,139 @@ async fn a_vm_that_reconnected_to_an_older_build_between_its_hello_and_proof_is_
     );
     assert_eq!(unsaid_refused["proven"], false, "{unsaid_refused}");
     assert_eq!(served(&unsaid_refused, &client)["ok"], Value::Null);
+}
+
+/// Every step of an add up to its setup window, its permissions allowed
+/// when `allowed`, and its setup done when `ready`.
+fn setup_steps(allowed: bool, ready: bool) -> Vec<crate::vm::lifecycle::record::Step> {
+    use crate::vm::lifecycle::record::Step;
+    let mut steps = vec![
+        Step::Agent,
+        Step::Created,
+        Step::Started,
+        Step::Enrolled,
+        Step::Installed,
+        Step::Listed,
+        Step::Keeper,
+        Step::Paired,
+        Step::Closed,
+        Step::Shown,
+    ];
+    if allowed {
+        steps.push(Step::Allowed);
+    }
+    if ready {
+        steps.extend([Step::Hidden, Step::Ready]);
+    }
+    steps
+}
+
+/// The state `client`'s VM's lifecycle record keeps.
+fn kept_state(client: &crate::client::Client) -> crate::vm::lifecycle::record::State {
+    let lifecycle = client.lifecycle.as_ref().unwrap();
+    lifecycle
+        .record(&client.desktop().id())
+        .unwrap()
+        .unwrap()
+        .state
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_are_refused_at_ready_until_the_persons_resume_ends_the_add() {
+    use crate::{client::Actor, vm::lifecycle::record::State};
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    lifecycle_record_at(&client, State::Adding, &setup_steps(true, true));
+
+    let refused = client.reachable().unwrap_err();
+    let status = client.status().await;
+    let agents = client.resume_vm(&serving.capability).await.unwrap_err();
+    let mut viewer = client.clone();
+    viewer.actor = Actor::Viewer;
+    let resumed = viewer.resume_vm(&serving.capability).await.unwrap();
+
+    assert_eq!(refused.error, "work is still being added.");
+    assert_eq!(
+        json!(refused)["next"],
+        "Setup is done. Resume agents from the Atlas menu bar to let them use the VM."
+    );
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(status["setup"], "done", "{status}");
+    assert_eq!(status["guest"]["stop"]["state"], "stopped", "{status}");
+    assert_eq!(status["next"], json!(refused)["next"], "{status}");
+    assert!(agents.error.contains("Only the person"), "{agents:?}");
+    assert_eq!(resumed["held"], false, "{resumed}");
+    assert_eq!(resumed["added"], true, "{resumed}");
+    assert_eq!(kept_state(&client), State::Created);
+    client.reachable().unwrap();
+    assert_eq!(client.status().await["ok"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_during_allow_holds_until_the_persons_resume_after_an_app_restart_ends_the_add() {
+    use crate::{client::Actor, vm::lifecycle::record::State};
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let mut viewer = client_of(&serving, directory.path());
+    viewer.actor = Actor::Viewer;
+    lifecycle_record_at(&viewer, State::Adding, &setup_steps(false, false));
+
+    let stopped = viewer.hold(true).await.unwrap();
+    let early = viewer.resume_vm(&serving.capability).await.unwrap_err();
+    // The add goes on to its setup's end; the app starts again.
+    lifecycle_record_at(&viewer, State::Adding, &setup_steps(true, true));
+    drop(viewer);
+    let mut restarted = client_of(&serving, directory.path());
+    restarted.actor = Actor::Viewer;
+    let held = restarted.controller.stop_noted();
+    let resumed = restarted.resume_vm(&serving.capability).await.unwrap();
+
+    assert_eq!(stopped["kept"], true, "{stopped}");
+    assert_eq!(early.error, "work is still being added.");
+    assert!(held, "the person's Stop outlives the add and the app");
+    assert_eq!(resumed["held"], false, "{resumed}");
+    assert_eq!(resumed["lifted"], "cleared", "{resumed}");
+    assert_eq!(resumed["added"], true, "{resumed}");
+    assert!(!restarted.controller.stop_noted());
+    assert_eq!(kept_state(&restarted), State::Created);
+    restarted.reachable().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_set_up_reads_as_stopped_waiting_for_the_persons_resume() {
+    use crate::{
+        capability::{Doctor, VmMode},
+        overview::{Pending, overview},
+        vm::lifecycle::record::State,
+    };
+    let serving = serving(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_of(&serving, directory.path());
+    lifecycle_record_at(&client, State::Adding, &setup_steps(true, true));
+    let resume = "Setup is done. Resume agents from the Atlas menu bar to let them use the VM.";
+
+    let status = client.status().await;
+    let doctor = Doctor::vm(status.clone(), client.unreachable());
+    let shown = overview(&doctor, false, Pending::default(), &[], 0).value;
+
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["ready"], false, "{status}");
+    assert_eq!(status["next"], resume, "{status}");
+    assert_eq!(status["notReady"], resume, "{status}");
+    assert_eq!(
+        doctor.vm,
+        Some(VmMode::Stopped),
+        "the menu bar offers its Resume"
+    );
+    assert_eq!(shown["mode"], "stopped", "{shown}");
+    assert_eq!(shown["reason"], resume, "{shown}");
+    assert_eq!(
+        client.reachable().unwrap_err().error,
+        "work is still being added.",
+        "agents stay refused until it is added"
+    );
+    assert_eq!(kept_state(&client), State::Adding);
+    assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 0);
 }

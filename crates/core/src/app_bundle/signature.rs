@@ -111,6 +111,18 @@ fn running_developer_id(pid: u32) -> bool {
     satisfies(pid.to_string().as_ref(), IDENTIFIER)
 }
 
+/// Whether process `pid` runs the app of the Atlas.app `app`, its loaded
+/// code signed by Atlas's Developer ID and exactly the file on disk.
+pub fn runs_app(pid: u32, app: &Path) -> bool {
+    let expected = app.join("Contents/MacOS").join(super::APP_EXECUTABLE);
+    executable_of(pid)
+        .and_then(|path| fs::canonicalize(path).ok())
+        .is_some_and(|running| {
+            fs::canonicalize(&expected).is_ok_and(|expected| running == expected)
+                && satisfies(pid.to_string().as_ref(), APP_IDENTIFIER)
+        })
+}
+
 /// Whether helper daemon `pid` runs `executable` exactly as it is on disk
 /// now. False for a daemon still running a build an update replaced: its
 /// file moved aside, or its loaded code no longer matches the file.

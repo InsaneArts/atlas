@@ -495,16 +495,40 @@ fn sweep(requests: &Path) {
     }
 }
 
-/// Where the asking command comes from, as the person reads it: the agent
-/// host and its project when one is named, or a plain command line.
+/// Where the asking command comes from, as the person reads it.
 fn session() -> String {
-    match atlas_core::host::HostSession::from_env() {
-        Some(session) => match session.folder() {
+    session_of(parent_is_app(), || {
+        atlas_core::host::HostSession::from_env().map(|session| match session.folder() {
             Some(folder) => format!("{} in {folder}", session.host().label()),
             None => session.host().label().to_owned(),
-        },
-        None => "a command line no agent names".to_owned(),
+        })
+    })
+}
+
+/// Where a command comes from, as the person reads it: Atlas when it is
+/// `from_app`, else the agent host and its project that `host` names, or a
+/// plain command line.
+fn session_of(from_app: bool, host: impl FnOnce() -> Option<String>) -> String {
+    if from_app {
+        return "Atlas".to_owned();
     }
+    host().unwrap_or_else(|| "a command line no agent names".to_owned())
+}
+
+/// Whether this command's parent is the app of the Atlas.app it runs from,
+/// running code signed as Atlas, as its code says: nothing it says of
+/// itself, an environment variable among it, makes it so. It is only what
+/// the card says; the grant's safety never rests on it.
+fn parent_is_app() -> bool {
+    let parent = std::os::unix::process::parent_id();
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|executable| std::fs::canonicalize(executable).ok())
+        .and_then(|executable| atlas_core::app_bundle::app_of(&executable));
+    ours.is_some_and(|app| atlas_core::app_bundle::runs_app(parent, &app))
+        // The one judged is still this command's parent, never another
+        // process given its number since.
+        && std::os::unix::process::parent_id() == parent
 }
 
 fn millis(duration: Duration) -> u64 {

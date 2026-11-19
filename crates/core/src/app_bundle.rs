@@ -5,7 +5,8 @@ pub mod signature;
 use signature::app_signed;
 pub use signature::{APP_IDENTIFIER, IDENTIFIER, developer_id};
 pub use signature::{
-    executable_of, require_current, requirement_for, runs_current, signature, signed_daemon,
+    executable_of, require_current, requirement_for, runs_app, runs_current, signature,
+    signed_daemon,
 };
 
 use crate::error::{Code, Error, Result};

@@ -348,10 +348,18 @@ impl Client {
     }
 
     /// The one refusal of what this build cannot do on a VM desktop, named
-    /// for the desktop this client acts on, its add looked at again first.
+    /// for the desktop this client acts on, its add looked at again first:
+    /// one still being added says what its guest waits for while its setup
+    /// window is open, and that the person's Resume ends it once set up.
     pub fn unreachable(&self) -> Error {
-        self.admission();
-        self.selected.unreachable()
+        let adding = self.admission() == Admission::Adding;
+        let refused = self.selected.unreachable();
+        match (&self.lifecycle, &self.selected.desktop) {
+            (Some(lifecycle), Chosen::Vm(config)) if adding => {
+                crate::vm::add::said(crate::vm::add::standing(lifecycle, &config.id), refused)
+            }
+            _ => refused,
+        }
     }
 
     /// The desktop as the station's own words name it at the start of a

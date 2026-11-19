@@ -1,10 +1,44 @@
 use super::*;
-use crate::vm::Vms;
+use crate::vm::{
+    Vms,
+    lifecycle::record::{Sent, Setup},
+};
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::Mutex,
 };
+
+/// The run Atlas VM answers as first.
+const FIRST_RUN: &str = "0b0e1a5e-7a1d-4e3c-9a55-1a7a5f0e0001";
+/// The run it answers as once it ran again.
+const NEXT_RUN: &str = "0b0e1a5e-7a1d-4e3c-9a55-1a7a5f0e0002";
+/// What a guest not allowed Screen Recording says.
+const RECORDING_HELD: &str = "Allow Atlas in Privacy & Security, Screen & System Audio \
+                              Recording, in the VM's window: agents' pictures wait for it.";
+/// What a guest not allowed Accessibility says.
+const ACCESSIBILITY_HELD: &str =
+    "Allow Atlas in Privacy & Security, Accessibility, in the VM's window: agents wait for it.";
+
+/// What the guest says at one look once its window opened, or what happens
+/// meanwhile.
+#[derive(Clone, Copy, Debug)]
+enum Look {
+    /// It is allowed these from now.
+    Says {
+        recording: bool,
+        accessibility: bool,
+    },
+    /// It restarts, to take Screen Recording: it does not answer.
+    Restarting,
+    /// Atlas VM runs again as this run, its window gone with the one
+    /// before.
+    RunsAgain(&'static str),
+    /// The person's Stop holds agents there.
+    PersonStops,
+    /// The person closes the window.
+    PersonCloses,
+}
 
 /// Where a stand-in run is killed, as `kill` would: at a numbered call to
 /// its means, or at the first call of one by name.
@@ -72,6 +106,22 @@ struct Vm {
     keeper_saw_listed: bool,
     /// What the station did that the guest's closing turns on, in order.
     events: Vec<&'static str>,
+    /// The run of Atlas VM answering now.
+    run: &'static str,
+    window_open: bool,
+    /// The run that did each window change, by its ID.
+    done_by: BTreeMap<String, &'static str>,
+    /// Whether the run answering says every earlier run's VM is gone.
+    earlier_gone: Option<bool>,
+    /// Whether it never says what a window-off came to.
+    withholds_off: bool,
+    recording: bool,
+    accessibility: bool,
+    /// What the guest says at each look once its window opened, before it
+    /// says only what it is allowed.
+    looks: VecDeque<Look>,
+    /// The guest's Stop, as its hello says it.
+    guest_stop: &'static str,
 }
 
 impl Vm {
@@ -95,7 +145,49 @@ impl Vm {
             wrong_secret: false,
             keeper_saw_listed: false,
             events: Vec::new(),
+            run: FIRST_RUN,
+            window_open: false,
+            done_by: BTreeMap::new(),
+            earlier_gone: None,
+            withholds_off: false,
+            recording: true,
+            accessibility: true,
+            looks: VecDeque::new(),
+            guest_stop: "clear",
         }
+    }
+
+    /// The guest's hello, as its keeper carries it.
+    fn hello(&self) -> Value {
+        json!({
+            "remoteLogin": self.remote_login,
+            "account": {"admin": self.admin},
+            "permissions": {"screenCapture": self.recording, "accessibility": self.accessibility},
+            "capture": if self.recording { json!({}) } else { json!({"held": RECORDING_HELD}) },
+            "input": {"held": (!self.accessibility).then_some(ACCESSIBILITY_HELD)},
+            "stop": {"state": self.guest_stop},
+        })
+    }
+
+    /// The run answering, as Atlas VM names it.
+    fn incarnation(&self) -> Value {
+        json!({"pid": 7, "startSeconds": 1, "startMicroseconds": 0, "id": self.run})
+    }
+
+    /// What the change `change` came to, and the run that did it, as its
+    /// ledger says: `pending` while it is kept unanswered.
+    fn outcome(&self, op: &str, change: &Token) -> Reply {
+        let kept = self.ledger.get(change.as_str());
+        let outcome = kept.and_then(|(_, outcome)| outcome.clone());
+        reply(json!({
+            "ok": true,
+            "op": op,
+            "change": change,
+            "outcome": outcome.map(said),
+            "by": self.done_by.get(change.as_str()),
+            "pending": kept.is_some_and(|(_, outcome)| outcome.is_none()),
+            "incarnation": self.incarnation(),
+        }))
     }
 
     /// The change `change`, named `op`: what it came to before, or what
@@ -181,17 +273,42 @@ impl Vm {
                 }
                 Some(Outcome::Done)
             }),
+            Operation::Window {
+                change,
+                input: false,
+            } if self.withholds_off => {
+                self.ledger
+                    .entry(change.as_str().to_owned())
+                    .or_insert_with(|| ("window".to_owned(), None));
+                None
+            }
+            Operation::Window { change, input } => self.once(change, "window", |vm| {
+                if *input {
+                    if vm.power != Power::Running {
+                        return Some(Outcome::Refused {
+                            reason: "The VM is not running.".to_owned(),
+                        });
+                    }
+                    vm.window_open = true;
+                    vm.events.push("window-on");
+                } else {
+                    vm.window_open = false;
+                    vm.events.push("window-off");
+                }
+                vm.done_by.insert(change.as_str().to_owned(), vm.run);
+                Some(Outcome::Done)
+            }),
             other => panic!("an add never asks {other:?}"),
         };
+        let change = operation.change();
         reply(json!({
             "ok": true,
             "op": operation.name(),
-            "change": operation.change(),
-            "outcome": outcome.map(|outcome| match outcome {
-                Outcome::Done => json!({"state": "done"}),
-                Outcome::Refused { reason } => json!({"state": "refused", "reason": reason}),
-            }),
+            "change": change,
+            "outcome": outcome.map(said),
+            "by": change.and_then(|change| self.done_by.get(change.as_str())),
             "pending": false,
+            "incarnation": self.incarnation(),
         }))
     }
 
@@ -212,6 +329,14 @@ fn reply(value: Value) -> Reply {
     serde_json::from_value(value).unwrap()
 }
 
+/// `outcome` as Atlas VM says it.
+fn said(outcome: Outcome) -> Value {
+    match outcome {
+        Outcome::Done => json!({"state": "done"}),
+        Outcome::Refused { reason } => json!({"state": "refused", "reason": reason}),
+    }
+}
+
 /// Another add, made while one waits for the VM's hold.
 type Meanwhile = Box<dyn FnOnce(&World)>;
 
@@ -229,6 +354,9 @@ struct World {
     program: RefCell<PathBuf>,
     /// What another add does while this one waits for the VM's hold.
     meanwhile: RefCell<Option<Meanwhile>>,
+    /// When the test began, and how long its waits made it since.
+    began: Instant,
+    waited: Cell<Duration>,
 }
 
 impl World {
@@ -247,6 +375,8 @@ impl World {
                 "/Applications/Atlas.app/Contents/MacOS/atlas",
             )),
             meanwhile: RefCell::new(None),
+            began: Instant::now(),
+            waited: Cell::new(Duration::ZERO),
         }
     }
 
@@ -285,6 +415,15 @@ impl World {
         let records = self.lifecycle().records().unwrap();
         assert_eq!(records.len(), 1, "{records:?}");
         records.into_iter().next().unwrap()
+    }
+
+    /// The person's Resume ending the one add set up, as it does under
+    /// the VM's hold.
+    fn resumed(&self) {
+        let mut record = self.record();
+        assert!(record.has(Step::Ready), "{:?}", record.steps);
+        record.state = State::Created;
+        self.lifecycle().keep_record(&record).unwrap();
     }
 
     fn names(&self) -> Vec<String> {
@@ -392,10 +531,27 @@ impl Means for World {
             Operation::Hello => reply(json!({"ok": true, "op": "hello", "hello": {
                 "version": 1,
                 "capabilities": ["changes", "outcomes", "power", "window-input", "install",
-                    "install-resume"],
+                    "install-resume", "void"],
             }})),
-            Operation::State => {
-                reply(json!({"ok": true, "op": "state", "power": vm.power, "confirmed": true}))
+            Operation::State => reply(json!({
+                "ok": true, "op": "state", "power": vm.power, "confirmed": true,
+                "window": if vm.window_open { "open" } else { "closed" },
+                "earlierGone": vm.earlier_gone, "incarnation": vm.incarnation(),
+            })),
+            Operation::Outcome(change) => vm.outcome("outcome", change),
+            Operation::Void(change) => {
+                drop(vm);
+                let mut vm = self.vm.borrow_mut();
+                // Voided, never having been seen: it is never done.
+                vm.ledger
+                    .entry(change.as_str().to_owned())
+                    .or_insert_with(|| {
+                        let voided = Outcome::Refused {
+                            reason: "Voided before it was seen.".to_owned(),
+                        };
+                        ("void".to_owned(), Some(voided))
+                    });
+                vm.outcome("void", change)
             }
             other => panic!("an add never reads {other:?}"),
         })
@@ -452,19 +608,51 @@ impl Means for World {
             return Err(Error::new(Code::Transport, "work is not paired yet"));
         }
         vm.events.push("posture");
-        Ok(Posture {
-            remote_login: vm.remote_login.to_owned(),
-            admin: Some(vm.admin),
-        })
+        let look = vm
+            .events
+            .contains(&"window-on")
+            .then(|| vm.looks.pop_front())
+            .flatten();
+        match look {
+            Some(Look::Says {
+                recording,
+                accessibility,
+            }) => {
+                vm.recording = recording;
+                vm.accessibility = accessibility;
+            }
+            Some(Look::Restarting) => {
+                return Err(Error::new(Code::Transport, "work's guest did not answer."));
+            }
+            Some(Look::RunsAgain(run)) => {
+                vm.run = run;
+                vm.window_open = false;
+            }
+            Some(Look::PersonStops) => vm.guest_stop = "stopped",
+            Some(Look::PersonCloses) => vm.window_open = false,
+            None => {}
+        }
+        Ok(Posture::of(&vm.hello()))
     }
 
-    fn wait(&self, _how_long: Duration) {}
+    fn wait(&self, how_long: Duration) {
+        self.waited.set(self.waited.get() + how_long);
+    }
+
+    fn now(&self) -> Instant {
+        self.began + self.waited.get()
+    }
 }
 
-/// Every step's word is kept, and nothing is sent twice that took effect.
+/// Every step's word is kept, and nothing is sent twice that took effect:
+/// set up, still being added, its window open no more.
 fn added_once(world: &World) {
     let record = world.record();
-    assert_eq!(record.state, State::Created);
+    assert_eq!(
+        record.state,
+        State::Adding,
+        "only the person's Resume ends it"
+    );
     for step in [
         Step::Agent,
         Step::Created,
@@ -475,9 +663,16 @@ fn added_once(world: &World) {
         Step::Keeper,
         Step::Paired,
         Step::Closed,
+        Step::Shown,
+        Step::Allowed,
+        Step::Hidden,
+        Step::Ready,
     ] {
         assert!(record.has(step), "{step:?} in {:?}", record.steps);
     }
+    let setup = record.setup.clone().unwrap();
+    assert!(setup.ended.is_some(), "{setup:?}");
+    assert!(setup.waiting.is_none());
     let vm = world.vm.borrow();
     assert_eq!(vm.made, 1);
     assert!(
@@ -497,7 +692,11 @@ fn added_once(world: &World) {
     assert_eq!(reports, [&"paired", &"closed"]);
     let posture = vm.events.iter().position(|event| *event == "posture");
     let closed = vm.events.iter().position(|event| *event == "closed");
+    let on = vm.events.iter().position(|event| *event == "window-on");
+    let off = vm.events.iter().rposition(|event| *event == "window-off");
     assert!(posture.is_some() && posture < closed, "{:?}", vm.events);
+    assert!(closed < on && on < off, "{:?}", vm.events);
+    assert!(!vm.window_open);
     let settings = Settings::load(&world.settings()).unwrap();
     assert_eq!(settings.desktops().len(), 1);
     assert!(listed_as(Some(&settings), &record.id));
@@ -505,7 +704,7 @@ fn added_once(world: &World) {
 }
 
 #[test]
-fn an_add_goes_through_every_step_to_created_and_says_each_as_a_plain_line() {
+fn an_add_goes_through_every_step_to_its_setup_and_says_each_as_a_plain_line() {
     let world = World::new();
 
     let (added, said) = world.add(Some("work"), Kill::Never);
@@ -522,7 +721,10 @@ fn an_add_goes_through_every_step_to_created_and_says_each_as_a_plain_line() {
         "Putting Atlas inside the VM",
         "only Stop reaches it",
         "closed to all but Atlas",
-        "is added",
+        "Opening the VM's window. In it, allow Screen & System Audio Recording and \
+         Accessibility for Atlas.",
+        "Both are allowed. Closing the window's input.",
+        "Setup is done. Resume agents from the Atlas menu bar to let them use the VM.",
     ] {
         assert!(
             said.iter().any(|line| line.contains(word)),
@@ -659,6 +861,7 @@ fn a_station_key_another_atlas_made_stops_the_add_before_anything_is_made() {
 fn a_name_in_use_is_refused_before_the_person_is_asked() {
     let world = World::new();
     world.add(Some("work"), Kill::Never).0.unwrap();
+    world.resumed();
     Change::AddVm {
         name: "office".to_owned(),
         id: DesktopId::parse("0123456789abcdef01234567").unwrap(),
@@ -687,7 +890,16 @@ fn a_guest_not_closed_is_closed_again_without_its_secret_before_atlas_vm_is_told
     assert_eq!(vm.resumed, 1);
     assert_eq!(
         vm.events,
-        ["posture", "reclosed", "posture", "paired", "closed"]
+        [
+            "posture",
+            "reclosed",
+            "posture",
+            "paired",
+            "closed",
+            "window-on",
+            "posture",
+            "window-off"
+        ]
     );
 }
 
@@ -875,6 +1087,7 @@ fn a_make_refused_for_good_is_asked_anew_once_its_cause_is_gone() {
 fn a_name_in_use_says_what_to_do_instead() {
     let world = World::new();
     world.add(Some("work"), Kill::Never).0.unwrap();
+    world.resumed();
 
     let refused = world.add(Some("work"), Kill::Never).0.unwrap_err();
 
@@ -882,4 +1095,279 @@ fn a_name_in_use_says_what_to_do_instead() {
         json!(refused)["next"],
         "Use another name, or remove work first."
     );
+}
+
+/// The window changes Atlas VM was asked, in order: whether each turned
+/// input on.
+fn windows(world: &World) -> Vec<bool> {
+    world
+        .vm
+        .borrow()
+        .events
+        .iter()
+        .filter_map(|event| match *event {
+            "window-on" => Some(true),
+            "window-off" => Some(false),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_setup_window_opens_only_after_the_guest_is_closed() {
+    let open = World::new();
+    {
+        let mut vm = open.vm.borrow_mut();
+        vm.admin = true;
+        vm.recloses = false;
+    }
+    let closed_again = World::new();
+    closed_again.vm.borrow_mut().admin = true;
+
+    open.add(Some("work"), Kill::Never).0.unwrap_err();
+    closed_again.add(Some("work"), Kill::Never).0.unwrap();
+
+    assert!(windows(&open).is_empty(), "{:?}", open.vm.borrow().events);
+    assert!(!open.record().has(Step::Shown));
+    added_once(&closed_again);
+    let vm = closed_again.vm.borrow();
+    let told = vm.events.iter().position(|event| *event == "closed");
+    let shown = vm.events.iter().position(|event| *event == "window-on");
+    assert!(told.is_some() && told < shown, "{:?}", vm.events);
+}
+
+#[test]
+fn the_add_waits_for_both_permissions_through_a_guest_restart() {
+    let world = World::new();
+    {
+        let mut vm = world.vm.borrow_mut();
+        vm.recording = false;
+        vm.accessibility = false;
+        vm.looks = VecDeque::from([
+            Look::Says {
+                recording: false,
+                accessibility: false,
+            },
+            Look::Restarting,
+            Look::Restarting,
+            Look::Says {
+                recording: true,
+                accessibility: false,
+            },
+            Look::Says {
+                recording: true,
+                accessibility: true,
+            },
+        ]);
+    }
+
+    let (added, said) = world.add(Some("work"), Kill::Never);
+
+    assert_eq!(added.unwrap()["setup"], "done");
+    added_once(&world);
+    let waiting: Vec<&String> = said
+        .iter()
+        .filter(|line| line.starts_with("In the VM: "))
+        .collect();
+    assert_eq!(
+        waiting,
+        [
+            &format!("In the VM: {RECORDING_HELD} {ACCESSIBILITY_HELD}"),
+            &format!("In the VM: {ACCESSIBILITY_HELD}"),
+        ],
+        "the guest's own words, said as they change: {said:?}"
+    );
+    let allowed = said
+        .iter()
+        .position(|line| line.starts_with("Both are allowed"));
+    let last = said
+        .iter()
+        .rposition(|line| line.starts_with("In the VM: "));
+    assert!(last < allowed, "{said:?}");
+    assert_eq!(
+        windows(&world),
+        [true, false],
+        "one window, through the restart"
+    );
+}
+
+#[test]
+fn the_window_input_off_from_another_run_never_ends_the_setup_window() {
+    let world = World::new();
+    {
+        let mut vm = world.vm.borrow_mut();
+        // Atlas VM ran again while the person allowed Atlas: the window
+        // that run opened went with it, which no run can say yet.
+        vm.looks = VecDeque::from([Look::RunsAgain(NEXT_RUN)]);
+        vm.earlier_gone = Some(false);
+    }
+
+    let (unproven, _) = world.add(Some("work"), Kill::Never);
+
+    let unproven = unproven.unwrap_err();
+    assert_eq!(unproven.code, Code::NotReady, "{unproven:?}");
+    assert!(unproven.error.contains("ran again"), "{}", unproven.error);
+    let record = world.record();
+    assert_eq!(record.state, State::Adding);
+    assert!(record.has(Step::Allowed) && !record.has(Step::Hidden));
+    let setup = record.setup.unwrap();
+    assert!(setup.ended.is_none());
+    assert_eq!(setup.opened_by.as_deref(), Some(FIRST_RUN));
+
+    world.vm.borrow_mut().earlier_gone = Some(true);
+    world.add(Some("work"), Kill::Never).0.unwrap();
+
+    added_once(&world);
+    let ended = world.record().setup.unwrap().ended.unwrap();
+    assert_eq!(ended.by, NEXT_RUN);
+    assert_eq!(ended.earlier.as_deref(), Some(FIRST_RUN));
+    assert_eq!(ended.earlier_gone, Some(true));
+}
+
+#[test]
+fn agents_are_refused_until_the_setup_window_input_is_confirmed_off() {
+    let world = World::new();
+    world.vm.borrow_mut().withholds_off = true;
+
+    let (unconfirmed, _) = world.add(Some("work"), Kill::Never);
+    let record = world.record();
+    let mut agent = crate::test_support::vm_client(world.home.path(), None);
+    agent.selected.desktop = Chosen::Vm(atlas_core::config::desktops::VmConfig {
+        id: record.id.clone(),
+        output_dir: world.home.path().join("output"),
+        activity: atlas_core::config::Activity::default(),
+    });
+
+    let unconfirmed = unconfirmed.unwrap_err();
+    assert_eq!(unconfirmed.code, Code::NotReady, "{unconfirmed:?}");
+    assert!(
+        unconfirmed.error.contains("not answering"),
+        "{unconfirmed:?}"
+    );
+    assert_eq!(record.state, State::Adding);
+    assert!(record.has(Step::Allowed) && !record.has(Step::Hidden));
+    assert!(record.setup.unwrap().ended.is_none());
+    assert_eq!(
+        agent.reachable().unwrap_err().error,
+        "work is still being added."
+    );
+
+    world.vm.borrow_mut().withholds_off = false;
+    world.add(Some("work"), Kill::Never).0.unwrap();
+
+    added_once(&world);
+    assert_eq!(
+        agent.reachable().unwrap_err().error,
+        "work is still being added.",
+        "set up, it still waits for the person's Resume"
+    );
+}
+
+#[test]
+fn the_add_never_resumes_a_stop_the_person_made() {
+    let world = World::new();
+    world.vm.borrow_mut().looks = VecDeque::from([Look::PersonStops]);
+
+    let (added, said) = world.add(Some("work"), Kill::Never);
+
+    added.unwrap();
+    added_once(&world);
+    assert_eq!(
+        world.vm.borrow().guest_stop,
+        "stopped",
+        "the person's Stop holds"
+    );
+    let closed = world.record().last_sent("closed").unwrap().change.clone();
+    let after: Vec<String> = world
+        .record()
+        .operations
+        .iter()
+        .skip_while(|sent| sent.change != closed)
+        .skip(1)
+        .map(|sent| sent.op.clone())
+        .collect();
+    assert_eq!(
+        after,
+        ["window", "window"],
+        "nothing but its window is asked"
+    );
+    assert_eq!(
+        said.last().unwrap(),
+        "Setup is done. Resume agents from the Atlas menu bar to let them use the VM."
+    );
+}
+
+#[test]
+fn an_add_cut_short_with_its_window_open_goes_on_from_the_window() {
+    let world = World::new();
+    {
+        let mut vm = world.vm.borrow_mut();
+        vm.recording = false;
+        vm.accessibility = false;
+    }
+
+    let (waited, _) = world.add(Some("work"), Kill::Never);
+
+    let waited = waited.unwrap_err();
+    assert_eq!(waited.code, Code::NotReady);
+    assert_eq!(
+        waited.error,
+        "Atlas is not allowed in the VM yet; its window stays open. Run atlas desktop add vm \
+         again to go on."
+    );
+    let record = world.record();
+    assert!(record.has(Step::Shown) && !record.has(Step::Allowed));
+    assert_eq!(
+        record.setup.unwrap().waiting.as_deref(),
+        Some(format!("{RECORDING_HELD} {ACCESSIBILITY_HELD}").as_str()),
+        "what the guest waits for is kept for the status to say"
+    );
+    assert!(world.vm.borrow().window_open);
+    {
+        let mut vm = world.vm.borrow_mut();
+        vm.recording = true;
+        vm.accessibility = true;
+    }
+
+    let (added, said) = world.add(Some("work"), Kill::Never);
+
+    added.unwrap();
+    added_once(&world);
+    assert_eq!(windows(&world), [true, false], "the window opened once");
+    assert!(
+        !said
+            .iter()
+            .any(|line| line.starts_with("Opening the VM's window"))
+    );
+}
+
+#[test]
+fn a_setup_window_the_person_closed_opens_again_when_the_add_is_asked_again() {
+    let world = World::new();
+    {
+        let mut vm = world.vm.borrow_mut();
+        vm.recording = false;
+        vm.looks = VecDeque::from([Look::PersonCloses]);
+    }
+
+    let (closed, _) = world.add(Some("work"), Kill::Never);
+
+    assert!(
+        closed.unwrap_err().error.contains("window was closed"),
+        "it stops at once"
+    );
+    world.vm.borrow_mut().recording = true;
+    world.add(Some("work"), Kill::Never).0.unwrap();
+
+    added_once(&world);
+    assert_eq!(windows(&world), [true, true, false]);
+    let record = world.record();
+    let changes: Vec<&Sent> = record
+        .operations
+        .iter()
+        .filter(|sent| sent.op == "window")
+        .collect();
+    assert_eq!(changes.len(), 3, "a window-on of its own each time");
+    let setup: Setup = record.setup.unwrap();
+    assert_eq!(setup.opened_by.as_deref(), Some(FIRST_RUN));
 }

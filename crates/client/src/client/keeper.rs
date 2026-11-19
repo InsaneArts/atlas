@@ -458,9 +458,13 @@ impl Client {
         let maintenance = self.maintenance();
         let said = maintenance.said(&self.selected.name);
         let handing = |error| handing_over(error, self.handover_unfinished(), &said);
-        // A VM still being added answers nothing but the person's Stop.
+        // A VM still being added answers nothing but the person's Stop, and
+        // once set up, its Resume.
         if self.admission() != Admission::Open {
-            return Err(handing(self.selected.unreachable()));
+            if self.set_up().is_some() {
+                return Ok(self.set_up_status(said).await);
+            }
+            return Err(handing(self.unreachable()));
         }
         let keeper = self.keeper().await.map_err(handing)?;
         let hello = keeper.one(&json!({"op": "hello"})).await.map_err(handing)?;
@@ -501,30 +505,7 @@ impl Client {
                 }
             }
         };
-        // The station's own Stop, and why: an update's says so.
-        let controller = self.controller.clone();
-        let station = match tokio::task::spawn_blocking(move || controller.stop_revision()).await {
-            Ok(Ok(Some(revision))) => json!({"state": "stopped", "why": revision.why()}),
-            Ok(Ok(None)) => json!({"state": "clear"}),
-            Ok(Err(_)) | Err(_) => json!({"state": "unknown"}),
-        };
-        // The changes whose outcome the station does not know yet, read
-        // without queueing behind control.
-        let controller = self.controller.clone();
-        let pending = tokio::task::spawn_blocking(move || controller.pending_within(PENDING_READ))
-            .await
-            .map_or(json!("unknown"), |pending| {
-                pending.map_or(json!("unknown"), |pending| json!(pending))
-            });
-        // Those of them that keep control from being taken, by the
-        // controller's own rule: unknown when they cannot be read.
-        let controller = self.controller.clone();
-        let unresolved =
-            tokio::task::spawn_blocking(move || controller.unresolved_within(PENDING_READ))
-                .await
-                .map_or(json!("unknown"), |unresolved| {
-                    unresolved.map_or(json!("unknown"), |unresolved| json!(unresolved))
-                });
+        let (station, pending, unresolved) = self.station_kept().await;
         // The guest's own word on the work it started, which may outlive its
         // commands: unknown when it cannot be asked.
         let leftovers = self.leftovers().await.unwrap_or(Leftovers::Unknown);
@@ -589,6 +570,69 @@ impl Client {
         Ok(status)
     }
 
+    /// The status of a VM whose add is set up: its agents stopped until the
+    /// person's Resume, which ends the add, as a stopped desktop says it, so
+    /// the Atlas menu bar offers that Resume. Nothing of the guest is asked:
+    /// no agent reaches it yet, whatever its guest's own Stop says.
+    async fn set_up_status(&self, maintenance: Value) -> Value {
+        let stop = json!({"state": "stopped", "why": "setup"});
+        let (station, pending, unresolved) = self.station_kept().await;
+        let ready = crate::vm::add::READY;
+        let mut status = json!({
+            "ok": true,
+            "proven": false,
+            "proof": {"code": Code::Stopped, "error": ready},
+            "declared": null,
+            "desktop": {"kind": "vm", "name": self.selected.name},
+            "keeper": {"live": false},
+            "stop": stop,
+            "work": {"state": "unknown"},
+            "leftovers": Leftovers::Unknown,
+            "guest": {"ok": true, "stop": stop},
+            "runner": null,
+            "station": {"stop": station, "handover": self.handover_unfinished(),
+                "maintenance": maintenance, "pending": pending, "unresolved": unresolved},
+            "setup": "done",
+            "ready": false,
+            "notReady": ready,
+            "next": ready,
+        });
+        if let Some(Value::Object(facts)) = crate::vm::facts::of_status(self, &status).await
+            && let Some(said) = status.as_object_mut()
+        {
+            said.extend(facts);
+        }
+        status
+    }
+
+    /// What this Mac keeps for the VM: its own Stop and why (an update's
+    /// says so); the changes whose outcome it does not know yet, read
+    /// without queueing behind control; and those of them that keep control
+    /// from being taken, by the controller's own rule. Each is unknown when
+    /// it cannot be read.
+    async fn station_kept(&self) -> (Value, Value, Value) {
+        let controller = self.controller.clone();
+        let station = match tokio::task::spawn_blocking(move || controller.stop_revision()).await {
+            Ok(Ok(Some(revision))) => json!({"state": "stopped", "why": revision.why()}),
+            Ok(Ok(None)) => json!({"state": "clear"}),
+            Ok(Err(_)) | Err(_) => json!({"state": "unknown"}),
+        };
+        let controller = self.controller.clone();
+        let pending = tokio::task::spawn_blocking(move || controller.pending_within(PENDING_READ))
+            .await
+            .map_or(json!("unknown"), |pending| {
+                pending.map_or(json!("unknown"), |pending| json!(pending))
+            });
+        let controller = self.controller.clone();
+        let unresolved =
+            tokio::task::spawn_blocking(move || controller.unresolved_within(PENDING_READ))
+                .await
+                .map_or(json!("unknown"), |unresolved| {
+                    unresolved.map_or(json!("unknown"), |unresolved| json!(unresolved))
+                });
+        (station, pending, unresolved)
+    }
+
     /// The person's Stop on a VM: kept here first, then said through the
     /// keeper, delivered only once the guest answered it applied.
     pub(super) async fn hold_vm(&self) -> Result<Value> {
@@ -616,12 +660,15 @@ impl Client {
     /// The person's Resume on a VM, from the viewer alone, with the keeper's
     /// Resume `capability` the viewer read in the station folder: the Stop
     /// noted here as read now goes with it, and the keeper lifts that Stop
-    /// once the guest resumed. A Stop given meanwhile stays.
+    /// once the guest resumed. A Stop given meanwhile stays. On a VM still
+    /// being added whose setup is done, a Resume that lets agents go on
+    /// ends its add.
     ///
     /// # Errors
     ///
-    /// Refuses anyone but the viewer, a VM whose keeper is not reached, and a
-    /// Resume the keeper refused; fails when the Stop cannot be read.
+    /// Refuses anyone but the viewer, a VM still being added before its
+    /// setup is done, a VM whose keeper is not reached, and a Resume the
+    /// keeper refused; fails when the Stop cannot be read.
     pub async fn resume_vm(&self, capability: &str) -> Result<Value> {
         if self.actor != Actor::Viewer {
             return Err(Error::new(
@@ -629,12 +676,43 @@ impl Client {
                 "Only the person resumes agents, from the Atlas menu bar",
             ));
         }
-        if self.admission() != Admission::Open {
-            return Err(self.selected.unreachable());
-        }
+        // A VM still being added is resumed only once its setup is done,
+        // and that Resume ends its add.
+        let adding = match self.admission() {
+            Admission::Open => None,
+            Admission::Adding => Some(self.set_up().ok_or_else(|| self.unreachable())?),
+            Admission::Uncertain => return Err(self.selected.unreachable()),
+        };
         if let Some(refused) = self.maintenance().resume_refused(&self.selected.name) {
             return Err(refused);
         }
+        let resume = self.resume_told(capability);
+        match adding {
+            None => resume.await,
+            Some((lifecycle, vm)) => {
+                crate::vm::add::resumed(lifecycle, &vm, &self.selected.name, resume).await
+            }
+        }
+    }
+
+    /// The VM's lifecycle and its identifier, while its add is set up.
+    fn set_up(
+        &self,
+    ) -> Option<(
+        &crate::vm::lifecycle::Lifecycle,
+        atlas_core::desktop::DesktopId,
+    )> {
+        let (Some(lifecycle), Chosen::Vm(config)) = (&self.lifecycle, &self.selected.desktop)
+        else {
+            return None;
+        };
+        (crate::vm::add::standing(lifecycle, &config.id) == Some(crate::vm::add::Standing::SetUp))
+            .then(|| (lifecycle, config.id.clone()))
+    }
+
+    /// Tell the keeper the person's Resume, with its `capability` and the
+    /// Stop noted here as read now: what it came to.
+    async fn resume_told(&self, capability: &str) -> Result<Value> {
         let keeper = self.keeper().await?;
         let revision = self.controller.stop_revision()?;
         let told = keeper

@@ -1696,12 +1696,20 @@ fn desktops_are_listed_by_kind_a_vms_power_apart_from_whether_atlas_reaches_it()
     let added = show(
         View::DesktopAdd,
         json!({"ok": true, "added": {"name": "work", "id": "0123456789abcdef01234567"},
-               "settings": "~/.config/atlas.toml"}),
+               "settings": "~/.config/atlas.toml", "setup": "done",
+               "next": "Resume agents from the Atlas menu bar to let them use the VM."}),
     );
     assert!(
         added
             .out
             .starts_with("✓ The VM \u{201c}work\u{201d} is added to ~/.config/atlas.toml")
+    );
+    assert!(
+        added
+            .out
+            .contains("Resume agents from the Atlas menu bar to let them use the VM."),
+        "{}",
+        added.out
     );
 }
 

@@ -212,6 +212,7 @@ impl Served {
             stop: stopping(&records, &vault),
             updates: updating(&records, &vault),
             recording: recording_at(&records),
+            accessibility: records.path().join("accessibility.json"),
         };
         let machine = Machine::new(
             daemon,
@@ -639,6 +640,7 @@ async fn be_the_guest(spec: &str) {
         stop: stopping(&_records, &_vault),
         updates: updating(&_records, &_vault),
         recording: recording_at(&_records),
+        accessibility: _records.path().join("accessibility.json"),
         changes,
     };
     let listener = socket_listener(std::path::Path::new(socket));
