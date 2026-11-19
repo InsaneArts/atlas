@@ -8,9 +8,11 @@
 //! on.
 //!
 //! Nothing here reads a path: the client took the snapshot and sends its
-//! bytes. A client that hangs up before the final reply, or sends more than
-//! the stage holds, has the lane cancelled at once, while it waits for the
-//! guest's credit too, and the guest places nothing.
+//! bytes. A client's stage never names a purpose: a stage for an update is
+//! the keeper's own, and one a client asks is refused unsent. A client that
+//! hangs up before the final reply, or sends more than the stage holds, has
+//! the lane cancelled at once, while it waits for the guest's credit too,
+//! and the guest places nothing.
 use super::{
     Keeper,
     change::{OPENING, lane_failed, live_in, lost, say_within, unsent},
@@ -24,7 +26,7 @@ use atlas_core::{
     stage::{MOST_CONTENTS, MOST_MANIFEST},
 };
 use atlas_session::{
-    compatibility::{STAGE, judge},
+    compatibility::STAGE,
     credit::Credit,
     lane::{LaneId, LaneKind},
 };
@@ -75,8 +77,26 @@ struct Asked {
 impl Asked {
     /// The stage `request` asks for: its change, named by its stage too,
     /// the generation it was proved in, and how many bytes follow, within
-    /// the bounds a guest takes.
-    fn of(request: &Value) -> Option<Self> {
+    /// the bounds a guest takes; refused when it names a purpose, as a stage
+    /// for an update does, which only the keeper itself stages, or names
+    /// none of these.
+    fn of(request: &Value) -> std::result::Result<Self, Error> {
+        if request["request"].get("purpose").is_some() {
+            return Err(Error::new(
+                Code::Denied,
+                "A stage for an update is the keeper's own; nothing was sent.",
+            ));
+        }
+        Self::named(request).ok_or_else(|| {
+            Error::new(
+                Code::BadRequest,
+                "A stage names its change, the generation it was proved in, and a stage request \
+                 naming that change within a guest's bounds.",
+            )
+        })
+    }
+
+    fn named(request: &Value) -> Option<Self> {
         let change = Token::parse(request["change"].as_str()?)?;
         let generation = request["generation"].as_u64()?;
         let asked = request["request"].clone();
@@ -123,14 +143,12 @@ pub(super) async fn staged(
     ticket: &Ticket<'_>,
 ) {
     let (mut reading, mut writing) = stream.into_split();
-    let Some(asked) = Asked::of(request) else {
-        let refused = unsent(Error::new(
-            Code::BadRequest,
-            "A stage names its change, the generation it was proved in, and a stage request \
-             naming that change within a guest's bounds.",
-        ));
-        say_within(&mut writing, &refused).await;
-        return;
+    let asked = match Asked::of(request) {
+        Ok(asked) => asked,
+        Err(refused) => {
+            say_within(&mut writing, &unsent(refused)).await;
+            return;
+        }
     };
     if early {
         let refused = unsent(Error::new(
@@ -147,11 +165,9 @@ pub(super) async fn staged(
             return;
         }
     };
-    if judge(session.control.declared(), &[STAGE])
-        .refusal()
-        .is_some()
-    {
-        let refused = Error::new(Code::Update, "Atlas in the VM takes no stages; update it.");
+    if let Some(refused) = keeper.unserved(&session, &[STAGE], |name| {
+        format!("{name}'s Atlas takes no stages, so nothing was sent.")
+    }) {
         say_within(&mut writing, &unsent(refused)).await;
         return;
     }

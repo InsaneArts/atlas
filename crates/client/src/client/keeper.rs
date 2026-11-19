@@ -343,7 +343,8 @@ impl Client {
     /// The generation `verified`, a VM's proof, was taken in, which every
     /// change a command makes on that proof carries; refused when the guest
     /// it proved does not offer `capability`, in `older`'s words, given the
-    /// VM's name, or when it proved no VM.
+    /// VM's name, what to do next judged from the guest's build beside the
+    /// one its keeper runs, or when it proved no VM.
     ///
     /// # Errors
     ///
@@ -354,18 +355,34 @@ impl Client {
         capability: &str,
         older: impl FnOnce(&str) -> String,
     ) -> Result<u64> {
-        let generation = verified
+        let machine = verified
             .machine
             .as_ref()
-            .map(|machine| machine.generation)
             .ok_or_else(|| self.unreachable())?;
         if !verified.observation.has_capability(capability) {
-            return Err(Error::new(Code::Update, older(&self.selected.name)).with(
-                "next",
-                json!("Update Atlas so the VM's Atlas and this command are one build."),
-            ));
+            let observation = &verified.observation;
+            // This Mac's build is the one its keeper runs, which an update
+            // hands the VM to; this command's own only when the keeper says
+            // nothing of it.
+            let own = if verified.keeper.known() {
+                verified.keeper.clone()
+            } else {
+                crate::vm::update::Build::own()
+            };
+            let facts = crate::vm::update::Facts {
+                declared: observation.daemon_capabilities().to_vec(),
+                guest: crate::vm::update::Build::new(
+                    observation.daemon_build(),
+                    observation.daemon_version(),
+                ),
+                own,
+            };
+            let next = crate::vm::update::advice(&self.selected.name, &facts);
+            return Err(
+                Error::new(Code::Update, older(&self.selected.name)).with("next", json!(next))
+            );
         }
-        Ok(generation)
+        Ok(machine.generation)
     }
 
     /// Whether work the VM's guest started may still run there, as the
@@ -601,6 +618,11 @@ impl Client {
                 "maintenance": said,
                 "pending": pending, "unresolved": unresolved},
         });
+        // Whether its Atlas is this Mac's build, or what brings it there.
+        let update = crate::vm::update::said(&self.selected.name, &update_facts(&status));
+        if let Some(guest) = status["guest"].as_object_mut() {
+            guest.insert("update".to_owned(), update);
+        }
         let judged = readiness_of(&status);
         status["ready"] = json!(judged.is_ok());
         if let Err(why) = judged {
@@ -747,11 +769,13 @@ fn verified_vm(machine: MachineSession, observed: &Observed) -> Verified {
             input_held,
             fence: observed.runner.fence(),
         }),
+        keeper: observed.keeper.clone(),
     }
 }
 
 /// The keeper's refusal `refused` of an observation of the VM `name`, its
-/// code kept; one from a keeper that does not observe says to update.
+/// code kept, and the next step it gives; one from a keeper that does not
+/// observe says to update.
 fn observe_refused(refused: &Value, name: &str) -> Error {
     let code = refused["code"].as_str().and_then(Code::parse);
     if code == Some(Code::BadRequest) && refused["capabilities"].is_array() {
@@ -764,11 +788,15 @@ fn observe_refused(refused: &Value, name: &str) -> Error {
             json!("Update Atlas so the keeper and this command are one build."),
         );
     }
-    Error::refused(
+    let error = Error::refused(
         code.unwrap_or(Code::Transport),
         refused,
         "The VM's session keeper did not observe it.",
-    )
+    );
+    match refused["next"].as_str() {
+        Some(next) => error.with("next", json!(next)),
+        None => error,
+    }
 }
 
 /// Why the guest of the VM `name`, whose hello is `hello`, holds agents, in
@@ -948,9 +976,9 @@ impl Rule {
             Self::Served => match judge(facts.declared, &MACHINE) {
                 Usable::Usable => Ok(()),
                 Usable::MissingCapabilities { missing } => Err(format!(
-                    "{name}'s Atlas is from another build that does not serve all this one needs \
-                     ({}); update Atlas so both are one build.",
-                    missing.join(", ")
+                    "{name}'s Atlas does not serve all this build needs ({}). {}",
+                    missing.join(", "),
+                    crate::vm::update::remedy(name, &update_facts(status))
                 )),
                 Usable::Incompatible { theirs } => Err(format!(
                     "{name}'s Atlas speaks protocol {theirs} and this Mac's {PROTOCOL}; update \
@@ -1105,6 +1133,42 @@ fn declared_of(status: &Value) -> Declared {
         capabilities: Vec::new(),
         version: String::new(),
     })
+}
+
+/// What the guest of the VM whose status is `status` is judged on when what
+/// it serves, or whether it is this Mac's build, is said, beside its
+/// keeper's own build, which is this Mac's. A guest whose own hello the
+/// status holds is judged on that hello alone: what its daemon leaves
+/// unsaid stays unknown, never filled from what the keeper heard in another
+/// generation. With no hello of its own, it is judged on what its keeper
+/// heard in the generation live now, and on nothing once none is.
+fn update_facts(status: &Value) -> crate::vm::update::Facts {
+    let (daemon, keeper) = (&status["guest"]["daemon"], &status["keeper"]);
+    let said = if daemon.is_object() {
+        daemon
+    } else if keeper["live"] == true {
+        &keeper["guest"]
+    } else {
+        &Value::Null
+    };
+    let declared = status["declared"]["capabilities"]
+        .as_array()
+        .or_else(|| said["capabilities"].as_array())
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(|name| name.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::vm::update::Facts {
+        declared,
+        guest: crate::vm::update::Build::of(said),
+        own: crate::vm::update::Build::new(
+            keeper["program"]["build"].as_str(),
+            keeper["keeper"]["build"].as_str(),
+        ),
+    }
 }
 
 /// Why changes the station holds on the VM `name`, `pending`, keep it from

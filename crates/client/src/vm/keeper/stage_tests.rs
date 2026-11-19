@@ -5,7 +5,7 @@
 use super::*;
 use crate::vm::keeper::{
     change::tests::{admitted, live, proven, record, settled},
-    clients::tests::Serving,
+    clients::tests::{Serving, asked},
     tests::{Saying, until},
 };
 use atlas_core::{
@@ -362,6 +362,42 @@ async fn the_stand_in_declares_only_what_a_real_machine_guest_declares() {
     assert!(declared.capabilities.iter().any(|name| name == STAGE));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_stage_naming_a_purpose_is_refused_unsent_and_nothing_is_claimed() {
+    let (serving, _saying, client, _directory) = proven().await;
+    let session = serving.fixture.keeper.shared.live().unwrap();
+    let (_folder, tree) = tree();
+    let snapshot = Snapshot::of(&tree).unwrap();
+    let manifest = serde_json::to_vec(&snapshot).unwrap();
+    let change = Token::new();
+
+    for purpose in [json!("update"), json!("copy"), Value::Null] {
+        let mut asking = stage_request(&serving, &change, &snapshot, &manifest);
+        asking["request"]["purpose"] = purpose.clone();
+
+        let answered = asked(&serving.socket, &asking).await;
+
+        assert_eq!(answered.len(), 1, "{purpose}: {answered:?}");
+        assert_eq!(answered[0]["code"], "denied", "{purpose}");
+        assert_eq!(answered[0]["sent"], false, "{purpose}");
+        assert_eq!(answered[0]["uncertain"], false, "{purpose}");
+        assert_eq!(
+            answered[0]["error"],
+            "A stage for an update is the keeper's own; nothing was sent."
+        );
+    }
+
+    assert!(stage_lanes(&serving).is_empty(), "no stage lane opened");
+    assert_eq!(serving.fixture.guest.standin.received.load(Ordered), 0);
+    assert!(copy(&serving, &change).is_none(), "nothing placed");
+    assert_eq!(record(&serving, &change), None, "the guest heard nothing");
+    assert!(
+        session.carried.all().is_empty(),
+        "nothing claimed to settle"
+    );
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
 #[test]
 fn a_stage_names_its_change_and_generation_within_a_guests_bounds() {
     let change = Token::new();
@@ -371,14 +407,14 @@ fn a_stage_names_its_change_and_generation_within_a_guests_bounds() {
     };
 
     assert_eq!(Asked::of(&stage(10, 20)).unwrap().bytes, 38);
-    assert!(Asked::of(&stage(MOST_MANIFEST as u64 + 1, 0)).is_none());
-    assert!(Asked::of(&stage(0, MOST_CONTENTS + 1)).is_none());
+    assert!(Asked::of(&stage(MOST_MANIFEST as u64 + 1, 0)).is_err());
+    assert!(Asked::of(&stage(0, MOST_CONTENTS + 1)).is_err());
     let mut another = stage(1, 1);
     another["request"]["change"] = json!(Token::new());
-    assert!(Asked::of(&another).is_none(), "another change");
+    assert!(Asked::of(&another).is_err(), "another change");
     let mut run = stage(1, 1);
     run["request"]["op"] = json!("run");
-    assert!(Asked::of(&run).is_none(), "not a stage");
+    assert!(Asked::of(&run).is_err(), "not a stage");
 }
 
 #[test]

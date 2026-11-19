@@ -352,7 +352,8 @@ async fn a_change_is_carried_only_as_asked_and_refused_unsaid_otherwise() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_guest_that_keeps_no_change_records_is_told_nothing_and_asked_to_update() {
+async fn a_guest_that_keeps_no_change_records_and_takes_no_update_is_told_nothing_and_to_be_added_again()
+ {
     let serving = serving_with(true, true).await;
     let change = Token::new();
 
@@ -366,11 +367,55 @@ async fn a_guest_that_keeps_no_change_records_is_told_nothing_and_asked_to_updat
 
     assert_eq!(answered[0]["code"], "update", "{answered:?}");
     assert_eq!(answered[0]["sent"], false);
+    assert_eq!(
+        answered[0]["error"],
+        "work's Atlas keeps no record of changes, so nothing was sent."
+    );
+    assert_eq!(
+        answered[0]["next"],
+        "work's Atlas cannot be updated from this Mac. Remove the VM and add it again."
+    );
     assert!(
         admitted(&serving)
             .iter()
             .all(|header| !matches!(header.kind, LaneKind::Change { .. }))
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_change_asking_the_guest_to_update_is_refused_unsent() {
+    let (serving, _saying, client, _directory) = proven().await;
+    let generation = live(&serving);
+    let session = serving.fixture.keeper.shared.live().unwrap();
+    let opened = admitted(&serving).len();
+    let change = Token::new();
+    let update = |lane: &str| {
+        json!({"op": "change", "lane": lane, "change": change, "generation": generation,
+            "request": {"op": "update", "change": change, "staged": "/Users/Shared/Atlas.app"}})
+    };
+
+    for asking in [
+        update("change"),
+        update("input"),
+        // Refused as an update whatever else it lacks.
+        json!({"op": "change", "request": {"op": "update"}}),
+    ] {
+        let answered = asked(&serving.socket, &asking).await;
+
+        assert_eq!(answered.len(), 1, "{asking}: {answered:?}");
+        assert_eq!(answered[0]["code"], "denied", "{asking}");
+        assert_eq!(answered[0]["sent"], false, "{asking}");
+        assert_eq!(answered[0]["uncertain"], false, "{asking}");
+        assert_eq!(
+            answered[0]["error"],
+            "Only Atlas's own update changes Atlas in the VM; nothing was sent."
+        );
+    }
+
+    assert_eq!(admitted(&serving).len(), opened, "no lane was opened");
+    assert_eq!(record(&serving, &change), None, "the guest heard nothing");
+    assert!(session.carried.all().is_empty(), "nothing to settle");
+    assert!(client.controller.pending().unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

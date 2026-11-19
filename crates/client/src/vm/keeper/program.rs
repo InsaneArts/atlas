@@ -1,10 +1,10 @@
-//! The keeper's own program, as it was started: its signing, read once at
-//! its start, and the file the kernel mapped its image from. An update of
-//! Atlas replaces that program's file, and may move or delete the bundle it
-//! was in, while the keeper runs: nothing of its own is read from disk
-//! again, and the clients it admits are judged by the requirement it was
-//! built with. Replaced, it does nothing on its own: it says so, and waits
-//! for the update to hand it over.
+//! The keeper's own program, as it was started: its signing and the digest
+//! of its executable, read once at its start, and the file the kernel mapped
+//! its image from. An update of Atlas replaces that program's file, and may
+//! move or delete the bundle it was in, while the keeper runs: nothing of
+//! its own is read from disk again, and the clients it admits are judged by
+//! the requirement it was built with. Replaced, it does nothing on its own:
+//! it says so, and waits for the update to hand it over.
 use serde_json::{Value, json};
 use std::{os::unix::fs::MetadataExt, path::PathBuf};
 
@@ -13,6 +13,9 @@ use std::{os::unix::fs::MetadataExt, path::PathBuf};
 pub(crate) struct Program {
     /// The code directory hash it is signed with: which build it is.
     code: Option<String>,
+    /// The SHA-256 of the file its image was mapped from, as a guest's
+    /// daemon says its own `build`.
+    build: Option<String>,
     /// Its launch path, and the file its image was mapped from.
     launched: Option<Launched>,
 }
@@ -43,6 +46,18 @@ impl Launched {
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
         }
     }
+
+    /// The SHA-256 of the file its image was mapped from, read through the
+    /// launch path's file only while that is still the image's, checked on
+    /// the descriptor read; none otherwise.
+    fn digest(&self) -> Option<String> {
+        let file = atlas_core::files::open_plain(&std::fs::canonicalize(&self.path).ok()?)?;
+        let opened = file.metadata().ok()?;
+        if opened.dev() != self.device || opened.ino() != self.inode {
+            return None;
+        }
+        atlas_core::digest::sha256(&file)
+    }
 }
 
 impl Program {
@@ -54,7 +69,12 @@ impl Program {
             atlas_native::program::mapped()
                 .map(|mapped| Launched::new(path, mapped.device, mapped.inode))
         });
-        Self { code, launched }
+        let build = launched.as_ref().and_then(Launched::digest);
+        Self {
+            code,
+            build,
+            launched,
+        }
     }
 
     /// A signed program started from `path`, as a test stands one in.
@@ -63,7 +83,17 @@ impl Program {
         let started = std::fs::metadata(path).unwrap();
         Self {
             code: Some("00".repeat(20)),
+            build: None,
             launched: Some(Launched::new(path.to_owned(), started.dev(), started.ino())),
+        }
+    }
+
+    /// A program of the build `build`, as a test stands one in.
+    #[cfg(test)]
+    pub(crate) fn built(build: &str) -> Self {
+        Self {
+            build: Some(build.to_owned()),
+            ..Self::default()
         }
     }
 
@@ -78,9 +108,15 @@ impl Program {
         self.launched.as_ref().map(Launched::replaced)
     }
 
+    /// Which build of Atlas it is: its digest, when it was read, and this
+    /// build's version.
+    pub(crate) fn build(&self) -> crate::vm::update::Build {
+        crate::vm::update::Build::new(self.build.as_deref(), Some(atlas_core::VERSION))
+    }
+
     /// What its hello says of it.
     pub(crate) fn said(&self) -> Value {
-        json!({"code": self.code, "replaced": self.replaced()})
+        json!({"code": self.code, "build": self.build, "replaced": self.replaced()})
     }
 }
 

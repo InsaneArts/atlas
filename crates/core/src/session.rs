@@ -167,6 +167,8 @@ pub struct Observation {
     /// The digest of the executable a machine desktop's daemon started
     /// from, in the form its input service says its own.
     daemon_build: Option<String>,
+    /// The Atlas version a machine desktop's daemon says it is.
+    daemon_version: Option<String>,
     /// Why a machine desktop's guest holds agents while it is open to more
     /// than Atlas; none once it says it is closed.
     posture_held: Option<String>,
@@ -217,6 +219,7 @@ impl Observation {
                 .map(str::to_owned),
             virtual_machine: value["machine"]["virtual"].as_bool(),
             daemon_build: value["daemon"]["build"].as_str().map(str::to_owned),
+            daemon_version: value["daemon"]["version"].as_str().map(str::to_owned),
             posture_held: posture_held(value),
         }
     }
@@ -235,6 +238,23 @@ impl Observation {
         self.daemon_capabilities
             .iter()
             .any(|capability| capability == name)
+    }
+
+    /// The capabilities the desktop's daemon declares, in its order.
+    pub fn daemon_capabilities(&self) -> &[String] {
+        &self.daemon_capabilities
+    }
+
+    /// The digest of the executable a machine desktop's daemon started
+    /// from; none when it did not say.
+    pub fn daemon_build(&self) -> Option<&str> {
+        self.daemon_build.as_deref()
+    }
+
+    /// The Atlas version a machine desktop's daemon says it is; none when
+    /// it did not say.
+    pub fn daemon_version(&self) -> Option<&str> {
+        self.daemon_version.as_deref()
     }
 
     /// # Errors

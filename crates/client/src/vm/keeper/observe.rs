@@ -3,8 +3,9 @@
 //! service's own hello and its proof for the command's own challenge are
 //! read on lanes of that generation, then Atlas VM's state; the answer names
 //! the generation, what the guest declared in it, the guest key its
-//! handshake pinned and the station's own key. The keeper judges none of it
-//! and keeps none of it.
+//! handshake pinned, the station's own key, and the build of Atlas the
+//! keeper runs, which a command judges the guest's build beside. The keeper
+//! judges none of it and keeps none of it.
 use super::{
     Keeper, Session, held,
     lanes::{Ticket, Work},
@@ -77,11 +78,10 @@ pub(super) async fn observed(
             why.as_deref().unwrap_or("The VM's session is not live."),
         );
     };
-    if judge(session.control.declared(), &[MACHINE_PROOF])
-        .refusal()
-        .is_some()
-    {
-        return refusal(Code::Update, "Update Atlas in the VM.");
+    if let Some(refused) = keeper.unserved(&session, &[MACHINE_PROOF], |name| {
+        format!("{name}'s Atlas does not say what this Mac proves it by.")
+    }) {
+        return serde_json::to_value(&refused).unwrap_or_default();
     }
     let started = tokio::time::Instant::now();
     let hello = json!({"op": "hello"});
@@ -133,6 +133,7 @@ pub(super) async fn observed(
         "declared": session.control.declared(),
         "peer": session.guest,
         "station": keeper.own.public(),
+        "keeper": keeper.program.build().said(),
         "status": {"hello": hello, "inputService": input, "sessionProof": proof},
         "runner": runner,
     })

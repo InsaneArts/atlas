@@ -58,7 +58,7 @@ async fn a_challenge_that_is_no_challenge_is_refused_before_any_lane_opens() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_guest_that_does_not_say_what_it_is_proved_by_is_told_to_update() {
+async fn a_guest_that_does_not_say_what_it_is_proved_by_is_told_what_to_do_next() {
     let (fixture, _running) = live(true).await;
     fixture.guest.proving();
     let opened = lanes(&fixture);
@@ -66,7 +66,16 @@ async fn a_guest_that_does_not_say_what_it_is_proved_by_is_told_to_update() {
     let refused = observed(&fixture.keeper, Some("challenge"), DEADLINE).await;
 
     assert_eq!(refused["code"], "update", "{refused}");
-    assert_eq!(refused["error"], "Update Atlas in the VM.");
+    assert_eq!(
+        refused["error"],
+        "work's Atlas does not say what this Mac proves it by."
+    );
+    let session = fixture.keeper.shared.live().unwrap();
+    assert_eq!(
+        refused["next"],
+        crate::vm::update::advice("work", &fixture.keeper.update_facts(&session)),
+        "the one advice's"
+    );
     assert_eq!(lanes(&fixture), opened);
 }
 

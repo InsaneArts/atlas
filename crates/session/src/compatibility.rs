@@ -7,6 +7,11 @@
 //! an old name's meaning never changes. The transport's own version, in
 //! the handshake's prologue, never changes, so two ends can always say
 //! which protocol each speaks.
+//!
+//! A protocol change never strands a guest: every later protocol keeps
+//! speaking `hello`, `stage`, `update` and `outcome` to a protocol 1 guest,
+//! as protocol 1 speaks them, so a station of any later build can always
+//! bring that guest to its own.
 use atlas_core::error::{Code, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

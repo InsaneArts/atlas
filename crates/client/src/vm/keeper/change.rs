@@ -6,7 +6,8 @@
 //! A change is refused unsaid, `"sent": false`, while nothing of it can have
 //! reached the guest: no live generation, another one than its command
 //! proved, a guest that keeps no change records, or a lane that did not
-//! open. Once its request may have reached the guest, a failure says
+//! open. A client's change that asks the guest to update its Atlas is
+//! refused so before anything else: only the keeper itself asks that. Once its request may have reached the guest, a failure says
 //! `"sent": true, "uncertain": true`, and the guest's own record of it is
 //! what tells. A client that hangs up before the final reply has its
 //! change's lane cancelled over control.
@@ -16,7 +17,7 @@ use atlas_core::{
     files::Token,
 };
 use atlas_session::{
-    compatibility::{CHANGES, judge},
+    compatibility::CHANGES,
     control::{NAMED, Said},
     lane::LaneKind,
 };
@@ -74,7 +75,7 @@ impl Carried {
         self.lock().insert(change);
     }
 
-    fn all(&self) -> Vec<Token> {
+    pub(super) fn all(&self) -> Vec<Token> {
         self.lock().iter().cloned().collect()
     }
 
@@ -96,8 +97,26 @@ struct Asked {
 
 impl Asked {
     /// The change `request` asks for: its lane, its change named by its
-    /// request too, and the generation it was proved in.
-    fn of(request: &Value) -> Option<Self> {
+    /// request too, and the generation it was proved in; refused when it
+    /// asks the guest to update its Atlas, which only the keeper itself
+    /// asks, or names none of these.
+    fn of(request: &Value) -> std::result::Result<Self, Error> {
+        if request["request"]["op"] == "update" {
+            return Err(Error::new(
+                Code::Denied,
+                "Only Atlas's own update changes Atlas in the VM; nothing was sent.",
+            ));
+        }
+        Self::named(request).ok_or_else(|| {
+            Error::new(
+                Code::BadRequest,
+                "A change names its lane, its change, the generation it was proved in, and a \
+                 request naming that change.",
+            )
+        })
+    }
+
+    fn named(request: &Value) -> Option<Self> {
         let change = Token::parse(request["change"].as_str()?)?;
         let generation = request["generation"].as_u64()?;
         let asked = request["request"].clone();
@@ -157,14 +176,12 @@ pub(super) async fn changed(
         .map_or(DEADLINE, Duration::from_millis)
         .min(LONGEST);
     let (mut reading, mut writing) = stream.into_split();
-    let Some(asked) = Asked::of(request) else {
-        let refused = unsent(Error::new(
-            Code::BadRequest,
-            "A change names its lane, its change, the generation it was proved in, and a request \
-             naming that change.",
-        ));
-        say_within(&mut writing, &refused).await;
-        return;
+    let asked = match Asked::of(request) {
+        Ok(asked) => asked,
+        Err(refused) => {
+            say_within(&mut writing, &unsent(refused)).await;
+            return;
+        }
     };
     let session = match live_in(keeper, asked.generation) {
         Ok(session) => session,
@@ -266,14 +283,10 @@ pub(super) fn live_in(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc
             "The VM's session this change was proved in has ended; nothing was sent.",
         ));
     }
-    if judge(session.control.declared(), &[CHANGES])
-        .refusal()
-        .is_some()
-    {
-        return Err(Error::new(
-            Code::Update,
-            "Atlas in the VM keeps no record of changes; update it.",
-        ));
+    if let Some(refused) = keeper.unserved(&session, &[CHANGES], |name| {
+        format!("{name}'s Atlas keeps no record of changes, so nothing was sent.")
+    }) {
+        return Err(refused);
     }
     Ok(session)
 }

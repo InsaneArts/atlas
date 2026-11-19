@@ -28,7 +28,7 @@ use super::{
 use crate::vm::{proof::Fence, runner::Window};
 use atlas_core::error::{Code, Error};
 use atlas_session::{
-    compatibility::{PICTURES, judge},
+    compatibility::PICTURES,
     control::Said,
     credit::CHUNK,
     lane::{LaneId, LaneKind},
@@ -302,14 +302,10 @@ fn live(keeper: &Keeper, generation: u64) -> Result<std::sync::Arc<Session>, Err
             "The VM's session this picture was proved in has ended; nothing was asked.",
         ));
     }
-    if judge(session.control.declared(), &[PICTURES])
-        .refusal()
-        .is_some()
-    {
-        return Err(Error::new(
-            Code::Update,
-            "Atlas in the VM gives no pictures or files to this Mac; update it.",
-        ));
+    if let Some(refused) = keeper.unserved(&session, &[PICTURES], |name| {
+        format!("{name}'s Atlas gives no pictures or files to this Mac, so nothing was asked.")
+    }) {
+        return Err(refused);
     }
     Ok(session)
 }

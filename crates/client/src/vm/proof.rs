@@ -65,6 +65,9 @@ pub(crate) struct Observed {
     /// What the guest declared in the generation it was observed in; none
     /// from a keeper that does not say.
     pub(crate) declared: Option<atlas_session::compatibility::Declared>,
+    /// The build of Atlas the keeper runs, as it says it: nothing known of
+    /// it from a keeper that does not say.
+    pub(crate) keeper: crate::vm::update::Build,
 }
 
 impl Observed {
@@ -131,6 +134,7 @@ impl Observed {
         status["sessionProof"] = proof["proof"].clone();
         let runner = serde_json::from_value(answer["runner"].clone()).unwrap_or_default();
         let declared = serde_json::from_value(answer["declared"].clone()).ok();
+        let keeper = crate::vm::update::Build::of(&answer["keeper"]);
         Ok(Self {
             generation,
             peer,
@@ -138,6 +142,7 @@ impl Observed {
             status,
             runner,
             declared,
+            keeper,
         })
     }
 

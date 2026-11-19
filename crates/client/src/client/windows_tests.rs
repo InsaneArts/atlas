@@ -109,6 +109,7 @@ async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() 
         },
         observation: Observation::decode(&json!({"daemon": {"capabilities": [SESSION_PIN]}})),
         machine: None,
+        keeper: crate::vm::update::Build::default(),
     };
     client.remember_windows(
         &[HitWindow {

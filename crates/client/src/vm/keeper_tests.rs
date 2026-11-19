@@ -460,7 +460,7 @@ pub(super) fn fixture() -> Fixture {
         applied: Mutex::default(),
         forgotten: std::sync::atomic::AtomicBool::new(false),
         folder: state.path().join("station"),
-        program: Program::default(),
+        program: Program::built("b1"),
         instance: atlas_core::process::Instance::current(),
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),

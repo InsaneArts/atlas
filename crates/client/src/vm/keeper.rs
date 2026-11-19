@@ -65,7 +65,7 @@ use atlas_core::{
     session::key::PeerKey,
 };
 use atlas_session::{
-    compatibility::{Declared, STOP_REPORT, judge},
+    compatibility::{Declared, STOP_REPORT, Usable, judge},
     control::Outcome,
     generation::Generation,
     keys::Keypair,
@@ -467,8 +467,18 @@ struct State {
     declared: Option<Declared>,
     /// Why no generation is live.
     why: Option<String>,
-    /// The guest's own report of its Stop and work, as last read.
+    /// The guest's own report of its Stop, work and build, as last read,
+    /// named by the generation it was read in.
     report: Option<Value>,
+}
+
+impl State {
+    /// The guest's report, when it was read in `generation`.
+    fn reported(&self, generation: Generation) -> Option<&Value> {
+        self.report
+            .as_ref()
+            .filter(|report| report["generation"] == json!(generation))
+    }
 }
 
 impl Shared {
@@ -734,6 +744,8 @@ impl Keeper {
                 "protocol": declared.protocol,
                 "capabilities": declared.capabilities,
                 "version": declared.version,
+                "build": state.generation.and_then(|generation| state.reported(generation))
+                    .map_or(Value::Null, |report| report["build"].clone()),
             })),
             "generation": state.generation,
             "live": state.session.is_some(),
@@ -771,13 +783,64 @@ impl Keeper {
         }
         self.unlive("This keeper handed the session over to the next.".to_owned());
     }
+
+    /// The refusal of what the guest of `session` cannot serve, lacking one
+    /// of `needs`: what it lacks in `lacks`' words, given the VM's name, and
+    /// what to do next in the one advice's; another protocol's own refusal.
+    /// None when it serves them all. Nothing is sent to judge it.
+    fn unserved(
+        &self,
+        session: &Session,
+        needs: &[&str],
+        lacks: impl FnOnce(&str) -> String,
+    ) -> Option<Error> {
+        let declared = session.control.declared();
+        match judge(declared, needs) {
+            Usable::Usable => None,
+            Usable::MissingCapabilities { .. } => {
+                let next = super::update::advice(&self.name, &self.update_facts(session));
+                Some(Error::new(Code::Update, lacks(&self.name)).with("next", json!(next)))
+            }
+            incompatible @ Usable::Incompatible { .. } => incompatible.refusal(),
+        }
+    }
+
+    /// What the guest of `session` is judged on: what it declared there,
+    /// its build and version as it reported them in that very generation,
+    /// its declared version while it reported none, beside this keeper's own
+    /// build. A report of another generation is never taken: its build is
+    /// then not known.
+    fn update_facts(&self, session: &Session) -> super::update::Facts {
+        let declared = session.control.declared();
+        let report = self
+            .shared
+            .state()
+            .reported(session.control.generation())
+            .cloned()
+            .unwrap_or_default();
+        let version = report["version"].as_str().unwrap_or(&declared.version);
+        super::update::Facts {
+            declared: declared.capabilities.clone(),
+            guest: super::update::Build::new(report["build"].as_str(), Some(version)),
+            own: self.program.build(),
+        }
+    }
 }
 
-/// The guest's own report of its Stop and work, read on a lane of the
-/// generation; its Stop is unknown when the guest does not report one or the
-/// read fails.
+/// The guest's own report of its Stop and work, and the build and version
+/// its daemon says it is, read on a lane of the generation and named by it;
+/// its Stop is unknown, and its build and version none, when the guest does
+/// not report them or the read fails.
 async fn report(session: &Session) -> Value {
-    let unknown = json!({"stop": {"state": "unknown"}, "work": {"state": "unknown"}});
+    let mut report = reported(session).await;
+    report["generation"] = json!(session.control.generation());
+    report
+}
+
+/// [`report`], before it is named by its generation.
+async fn reported(session: &Session) -> Value {
+    let unknown = json!({"stop": {"state": "unknown"}, "work": {"state": "unknown"},
+        "build": null, "version": null});
     let declared = session.control.declared();
     if judge(declared, &[STOP_REPORT]).refusal().is_some() {
         return unknown;
@@ -795,10 +858,16 @@ async fn report(session: &Session) -> Value {
         .last()
         .and_then(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|hello| hello["ok"] == true)
-        .map_or(
-            unknown,
-            |hello| json!({"stop": hello["stop"], "work": hello["work"]}),
-        )
+        .map_or(unknown, |hello| {
+            let daemon = &hello["daemon"];
+            let said = |field: &str| {
+                daemon[field]
+                    .as_str()
+                    .map_or(Value::Null, |said| json!(said))
+            };
+            json!({"stop": hello["stop"], "work": hello["work"],
+                "build": said("build"), "version": said("version")})
+        })
 }
 
 /// What of the station's Stop the live generation's guest applied: the
@@ -1048,3 +1117,7 @@ async fn blocking<T: Send + 'static>(
 #[cfg(test)]
 #[path = "keeper_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "keeper/advice_tests.rs"]
+mod advice_tests;

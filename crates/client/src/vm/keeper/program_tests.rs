@@ -40,3 +40,29 @@ fn this_keepers_own_program_is_read_whole_at_its_start() {
     assert_eq!(own.replaced(), Some(false));
     assert_eq!(own.said()["code"].as_str().map(str::len), Some(40));
 }
+
+#[test]
+fn this_keepers_build_is_the_digest_of_the_very_file_its_image_was_mapped_from() {
+    let own = Program::own();
+
+    assert_eq!(
+        own.build().digest,
+        atlas_native::native::service::own_build()
+    );
+    assert_eq!(own.said()["build"].as_str().map(str::len), Some(64));
+    assert_eq!(own.build().version.as_deref(), Some(atlas_core::VERSION));
+}
+
+#[test]
+fn a_launch_path_that_names_another_file_than_the_image_gives_no_build() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("atlas");
+    std::fs::write(&path, b"A").unwrap();
+    let launched = launched_from(&path);
+    assert!(launched.digest().is_some(), "the image's own file");
+
+    std::fs::write(folder.path().join("atlas.new"), b"B").unwrap();
+    std::fs::rename(folder.path().join("atlas.new"), &path).unwrap();
+
+    assert_eq!(launched.digest(), None);
+}

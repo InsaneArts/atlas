@@ -77,6 +77,10 @@ pub(crate) struct Verified {
     observation: Observation,
     /// A VM's session as its proof pinned it; none for Second Login.
     machine: Option<Pinned>,
+    /// The build of Atlas a VM's keeper runs, as the keeper that proved it
+    /// said: what its guest's build is judged beside. Nothing of it is
+    /// known for Second Login, or from a keeper that does not say.
+    keeper: crate::vm::update::Build,
 }
 
 /// A VM's session as one command proved it: its epoch, and the generation of
@@ -649,6 +653,7 @@ impl Client {
             session,
             observation,
             machine: None,
+            keeper: crate::vm::update::Build::default(),
         })
     }
 

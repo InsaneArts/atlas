@@ -74,7 +74,8 @@ fn ready() -> Value {
         "declared": everything(),
         "desktop": {"kind": "vm", "name": "work"},
         "keeper": {"live": true, "generation": 1, "guest": everything(),
-            "keeper": {"capabilities": crate::vm::keeper::CAPABILITIES}},
+            "keeper": {"capabilities": crate::vm::keeper::CAPABILITIES, "build": "1.0.0"},
+            "program": {"build": "b1"}},
         "runner": {"ok": true, "power": "running", "window": "closed",
             "incarnation": "6f1c0de2-run", "fence": 3},
         "guest": guest,
@@ -221,8 +222,8 @@ fn each_rule_failing() -> [Failing; 21] {
                     .retain(|name| name != atlas_session::compatibility::PICTURES);
                 status["declared"] = json!(older);
             },
-            "work's Atlas is from another build that does not serve all this one needs \
-             (pictures-v1); update Atlas so both are one build.",
+            "work's Atlas does not serve all this build needs (pictures-v1). Restart work with \
+             atlas desktop maintain work --restart; if it stays, remove it and add it again.",
         ),
         (
             |status| {
@@ -396,7 +397,7 @@ fn a_vm_whose_atlas_speaks_another_protocol_or_declares_nothing_is_not_ready() {
     assert!(
         readiness_of(&status)
             .unwrap_err()
-            .starts_with("work's Atlas is from another build"),
+            .starts_with("work's Atlas does not serve all this build needs"),
         "a guest that declared nothing serves nothing"
     );
 }
@@ -489,6 +490,64 @@ fn a_vms_capabilities_are_judged_in_the_generation_it_was_observed_in_never_from
             .as_str()
             .unwrap()
             .contains("(pictures-v1)")
+    );
+}
+
+#[test]
+fn a_guests_own_hello_that_leaves_its_build_unsaid_is_never_filled_from_what_its_keeper_heard() {
+    let mut status = ready();
+    status["keeper"]["guest"]["build"] = json!("b1");
+    status["keeper"]["guest"]["version"] = json!("1.0.0");
+    status["keeper"]["live"] = json!(true);
+    let current = crate::vm::update::said("work", &update_facts(&status));
+    status["guest"]["daemon"]
+        .as_object_mut()
+        .unwrap()
+        .remove("build");
+    status["guest"]["daemon"]["version"] = json!("1.0.0");
+
+    let unsaid = crate::vm::update::said("work", &update_facts(&status));
+
+    assert_eq!(current, json!({"state": "current"}));
+    assert_eq!(unsaid, json!({"state": "unknown"}), "never the keeper's b1");
+    // With no hello of its own, what the live generation's keeper heard
+    // counts; once no generation is live, nothing does.
+    status["guest"] = json!({"ok": false, "code": "transport", "error": "work did not answer."});
+    assert_eq!(
+        crate::vm::update::said("work", &update_facts(&status)),
+        json!({"state": "current"})
+    );
+    status["keeper"]["live"] = json!(false);
+    assert_eq!(
+        crate::vm::update::said("work", &update_facts(&status)),
+        json!({"state": "unknown"})
+    );
+}
+
+#[test]
+fn a_vm_whose_atlas_does_not_serve_this_build_is_told_what_brings_the_two_to_one_build() {
+    let missing = |version: &str, build: &str| {
+        let mut status = ready();
+        let mut older = everything();
+        older
+            .capabilities
+            .retain(|name| name != atlas_session::compatibility::PICTURES);
+        status["declared"] = json!(older);
+        status["guest"]["daemon"]["version"] = json!(version);
+        status["guest"]["daemon"]["build"] = json!(build);
+        status["guest"]["inputService"]["build"] = json!(build);
+        readiness_of(&status).unwrap_err()
+    };
+
+    assert_eq!(
+        missing("0.9.0", "a0"),
+        "work's Atlas does not serve all this build needs (pictures-v1). Run atlas update to \
+         bring work's Atlas to this Mac's build."
+    );
+    assert_eq!(
+        missing("2.0.0", "c2"),
+        "work's Atlas does not serve all this build needs (pictures-v1). Update Atlas on this \
+         Mac."
     );
 }
 
