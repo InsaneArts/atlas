@@ -47,6 +47,9 @@ const READING: Duration = Duration::from_secs(10);
 /// How long the pending changes' lock is waited for when a start's claim is
 /// cleared.
 const CLEARING: Duration = Duration::from_secs(5);
+/// How often the station-operation lock is looked for again while a
+/// recovery waits for it.
+const HOLD_AGAIN: Duration = Duration::from_millis(100);
 
 /// How long a start is waited for, and how often it is looked at.
 #[derive(Clone, Copy, Debug)]
@@ -107,21 +110,9 @@ async fn ensure_running_within(client: &Client, patience: Patience) -> Result<Op
         return Err(client.stopped());
     }
     client.reachable()?;
-    let lifecycle = client
-        .lifecycle
-        .clone()
-        .ok_or_else(|| client.unreachable())?;
     let began = Instant::now();
     let deadline = began + patience.within;
-    let starter = Starter {
-        vms: lifecycle.vms(),
-        lifecycle,
-        vm: config.id.clone(),
-        name: client.selected.name.clone(),
-        controller: client.controller.clone(),
-        stopped: client.stopped().error,
-        patience,
-    };
+    let starter = Starter::of(client, &config.id, patience)?;
     let came = tokio::task::spawn_blocking(move || starter.running(deadline))
         .await
         .map_err(|_| Error::new(Code::State, "The VM's start could not be looked after."))??;
@@ -150,6 +141,43 @@ async fn ensure_running_within(client: &Client, patience: Patience) -> Result<Op
         });
     }
     Ok(started)
+}
+
+/// What settling Atlas VM's changes from its answers came to: each change
+/// whose claim it cleared, and what stopped it short, when anything did.
+#[derive(Debug, Default)]
+pub(crate) struct Settled {
+    pub(crate) cleared: Vec<Token>,
+    pub(crate) failed: Option<Error>,
+}
+
+/// Settle the changes Atlas VM carries out on `client`'s VM from what it
+/// answers of each alone, as the person's Recover does: nothing is asked
+/// again and nothing is started, whether the VM runs or not. Every claim
+/// cleared is said, whatever stops it short after; what stopped it is said
+/// too. Second Login has none.
+pub(crate) async fn settled_from_outcomes(client: &Client) -> Settled {
+    let Chosen::Vm(config) = &client.selected.desktop else {
+        return Settled::default();
+    };
+    let starter = match Starter::of(client, &config.id, Patience::REAL) {
+        Ok(starter) => starter,
+        Err(failed) => {
+            return Settled {
+                cleared: Vec::new(),
+                failed: Some(failed),
+            };
+        }
+    };
+    tokio::task::spawn_blocking(move || starter.settled_from_outcomes())
+        .await
+        .unwrap_or_else(|_| Settled {
+            cleared: Vec::new(),
+            failed: Some(Error::new(
+                Code::State,
+                "What Atlas VM answered could not be looked after.",
+            )),
+        })
 }
 
 /// How long a status gives Atlas VM to say the VM's power.
@@ -261,6 +289,18 @@ enum Asked {
     Unknown,
 }
 
+/// What Atlas VM says a change came to, from a read of its outcome alone.
+enum Answered {
+    /// Its own answer, kept by Atlas VM for its change.
+    Came(Outcome),
+    /// Still being made.
+    Pending,
+    /// Never heard of.
+    Unheard,
+    /// Not said.
+    Unknown,
+}
+
 /// One command's start of one VM.
 struct Starter {
     vms: Vms,
@@ -274,6 +314,23 @@ struct Starter {
 }
 
 impl Starter {
+    /// `client`'s start of its VM `vm`, waited for as `patience` says.
+    fn of(client: &Client, vm: &DesktopId, patience: Patience) -> Result<Self> {
+        let lifecycle = client
+            .lifecycle
+            .clone()
+            .ok_or_else(|| client.unreachable())?;
+        Ok(Self {
+            vms: lifecycle.vms(),
+            lifecycle,
+            vm: vm.clone(),
+            name: client.selected.name.clone(),
+            controller: client.controller.clone(),
+            stopped: client.stopped().error,
+            patience,
+        })
+    }
+
     /// Look at the VM, starting it when it is confirmed stopped, until it
     /// runs or `deadline` passes.
     fn running(&self, deadline: Instant) -> Result<Came> {
@@ -501,6 +558,129 @@ impl Starter {
         }
     }
 
+    /// What Atlas VM says the change `change` came to: its outcome read,
+    /// and nothing else asked.
+    fn answered(&self, change: &Token) -> Answered {
+        match self
+            .runner()
+            .read_within(&Operation::Outcome(change.clone()), READING)
+        {
+            Ok(reply) if reply.ok && reply.change.as_ref() == Some(change) => {
+                match (reply.outcome, reply.pending) {
+                    (Some(outcome), _) => Answered::Came(outcome),
+                    (None, Some(true)) => Answered::Pending,
+                    (None, _) => Answered::Unheard,
+                }
+            }
+            Ok(_) | Err(_) => Answered::Unknown,
+        }
+    }
+
+    /// Under the VM's station-operation lock, settle from Atlas VM's
+    /// answers alone every change it carries out whose claim no live
+    /// process holds, and every start kept in the VM's record: one it
+    /// answered has its claim cleared and is forgotten, a refused start's
+    /// minute begun first. One it is still making, never heard of or does
+    /// not say stays as it is, its claim kept: nothing is asked again, and
+    /// nothing is started. A maintenance kept leaves every change to its
+    /// own end. What it cleared, kept whatever stops it short after.
+    fn settled_from_outcomes(&self) -> Settled {
+        let mut settled = Settled::default();
+        if let Err(failed) = self.settling(&mut settled) {
+            settled.failed = Some(failed);
+        }
+        settled
+    }
+
+    /// [`Starter::settled_from_outcomes`], each change whose claim was
+    /// cleared kept in `settled` as soon as it is: the first failure that
+    /// stops it, or none. A claim that cannot be cleared is left as it is,
+    /// its failure kept, and the others still looked at.
+    fn settling(&self, settled: &mut Settled) -> Result<()> {
+        let admitted = self.lifecycle.admit()?;
+        let Some(_hold) = self.held_within(&admitted, CLEARING)? else {
+            return Err(Error::new(
+                Code::Busy,
+                format!(
+                    "Another command is starting {} or changing it, so what Atlas VM answered \
+                     is looked at again by the next recovery.",
+                    self.name
+                ),
+            ));
+        };
+        let mut record = self.lifecycle.record(&self.vm)?;
+        if record
+            .as_ref()
+            .is_some_and(|record| record.maintenance.is_some())
+        {
+            return Ok(());
+        }
+        let unheld = self.controller.unheld_by(Executor::Vm, CLEARING)?;
+        let pending = self.controller.pending_within(CLEARING)?;
+        let mut changes: Vec<Token> = unheld
+            .iter()
+            .filter_map(|claim| Token::parse(claim))
+            .collect();
+        let starts = record.as_ref().map_or(&[][..], |record| &record.starts);
+        for start in starts {
+            // One a live process holds is that process's to settle.
+            let held = pending.iter().any(|claim| claim == start.as_str())
+                && !unheld.iter().any(|claim| claim == start.as_str());
+            if !held && !changes.contains(start) {
+                changes.push(start.clone());
+            }
+        }
+        for change in changes {
+            let Answered::Came(outcome) = self.answered(&change) else {
+                continue;
+            };
+            let start = record
+                .as_mut()
+                .filter(|record| record.starts.contains(&change));
+            if let (Some(record), Outcome::Refused { reason }) = (start, &outcome) {
+                self.refused(record, change.clone(), reason)?;
+            }
+            if let Err(failed) = self
+                .controller
+                .clear_known_within(change.as_str(), CLEARING)
+            {
+                settled.failed.get_or_insert(failed);
+                continue;
+            }
+            settled.cleared.push(change.clone());
+            if let Some(record) = record
+                .as_mut()
+                .filter(|record| record.starts.contains(&change))
+            {
+                // Its claim is cleared already: a start kept on only asks
+                // Atlas VM again what it came to, which it answered.
+                record.start_settled(&change);
+                self.lifecycle.keep_record(record)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The VM's station-operation lock, looked for again while another
+    /// command holds it for a moment, as a start does between its looks,
+    /// for at most `wait`: none once that passed.
+    fn held_within<'a>(
+        &self,
+        admitted: &'a super::lifecycle::barrier::Admitted,
+        wait: Duration,
+    ) -> Result<Option<super::StationHold<'a>>> {
+        let until = Instant::now() + wait;
+        loop {
+            if let Some(hold) = hold_in(&self.vms, &self.vm, admitted)? {
+                return Ok(Some(hold));
+            }
+            if Instant::now() + HOLD_AGAIN > until {
+                return Ok(None);
+            }
+            std::thread::sleep(HOLD_AGAIN);
+        }
+    }
+
     /// Look after every start kept in `record`, as Atlas VM answers what
     /// each came to: one it answered is cleared, a refusal's minute begun
     /// first; one it never heard of is claimed again and asked again as the
@@ -514,28 +694,20 @@ impl Starter {
     ) -> Result<Option<String>> {
         let mut unknown = false;
         for change in record.starts.clone() {
-            let answer = self
-                .runner()
-                .read_within(&Operation::Outcome(change.clone()), READING);
             let mut claim = None;
-            let asked = match answer {
-                Ok(reply) if reply.ok && reply.change.as_ref() == Some(&change) => {
-                    match (reply.outcome, reply.pending) {
-                        (Some(outcome), _) => Asked::Came(outcome),
-                        (None, Some(true)) => Asked::Unknown,
-                        // Never heard of: its earlier request may still be
-                        // on its way, so it is asked again as the very same
-                        // start, claimed first.
-                        (None, _) => match self.claim(&change, deadline)? {
-                            Some(held) => {
-                                claim = Some(held);
-                                self.ask(record, &change, true, deadline)?
-                            }
-                            None => Asked::Unknown,
-                        },
+            let asked = match self.answered(&change) {
+                Answered::Came(outcome) => Asked::Came(outcome),
+                Answered::Pending | Answered::Unknown => Asked::Unknown,
+                // Never heard of: its earlier request may still be on its
+                // way, so it is asked again as the very same start, claimed
+                // first.
+                Answered::Unheard => match self.claim(&change, deadline)? {
+                    Some(held) => {
+                        claim = Some(held);
+                        self.ask(record, &change, true, deadline)?
                     }
-                }
-                Ok(_) | Err(_) => Asked::Unknown,
+                    None => Asked::Unknown,
+                },
             };
             let asked_again = claim.is_some();
             match asked {

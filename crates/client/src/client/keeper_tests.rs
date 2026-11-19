@@ -231,7 +231,8 @@ fn each_rule_failing() -> [Failing; 21] {
                     json!([{"generation": "ab12", "executor": "guest", "holder": "gone"}]);
             },
             "An action on work may not have finished; Atlas settles it on its own once work \
-             answers. If it stays, run atlas doctor --desktop work.",
+             answers. If it stays, run atlas doctor --desktop work or atlas restart --desktop \
+         work.",
         ),
     ]
 }
@@ -319,7 +320,7 @@ fn a_change_atlas_vm_left_with_no_answer_keeps_a_vm_from_being_ready_in_words_na
         judged(&status),
         Err(
             "Atlas VM has not said yet what a change it was making to work came to, so agents \
-             wait until it does."
+             wait until it does. If it stays, run atlas restart --desktop work."
                 .to_owned()
         )
     );
@@ -358,7 +359,7 @@ fn a_change_a_live_process_is_making_leaves_a_vm_ready_and_one_left_beside_it_do
         judged(&status),
         Err(
             "Atlas VM has not said yet what a change it was making to work came to, so agents \
-             wait until it does."
+             wait until it does. If it stays, run atlas restart --desktop work."
                 .to_owned()
         )
     );
@@ -552,7 +553,7 @@ fn a_vm_whose_atlas_does_not_serve_this_build_is_told_what_brings_the_two_to_one
 }
 
 #[test]
-fn an_unsettled_change_on_a_vm_never_points_at_the_menu_bar_or_atlas_restart() {
+fn an_unsettled_change_on_a_vm_never_points_at_the_menu_bar_or_a_restart_of_another_desktop() {
     for executor in [json!("guest"), json!("vm"), json!("station"), Value::Null] {
         for holder in ["gone", "unknown"] {
             let mut status = ready();
@@ -562,7 +563,11 @@ fn an_unsettled_change_on_a_vm_never_points_at_the_menu_bar_or_atlas_restart() {
             let said = judged(&status).unwrap_err();
 
             assert!(!said.contains("menu bar"), "{said}");
-            assert!(!said.contains("atlas restart"), "{said}");
+            assert_eq!(
+                said.matches("atlas restart").count(),
+                said.matches("atlas restart --desktop work").count(),
+                "{said}"
+            );
         }
     }
 }

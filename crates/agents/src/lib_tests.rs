@@ -459,10 +459,13 @@ fn a_session_start_on_a_vm_with_an_unknown_outcome_says_atlas_settles_it_never_t
     assert_eq!(
         vm,
         "Atlas 1.0.0: An action on work may not have finished; Atlas settles it on its own \
-         once work answers. If it stays, run atlas doctor --desktop work."
+         once work answers. If it stays, run atlas doctor --desktop work or atlas restart \
+         --desktop work."
     );
-    assert!(
-        !vm.contains("menu bar") && !vm.contains("atlas restart"),
+    assert!(!vm.contains("menu bar"), "{vm}");
+    assert_eq!(
+        vm.matches("atlas restart").count(),
+        vm.matches("atlas restart --desktop work").count(),
         "{vm}"
     );
     assert!(!vm.to_lowercase().contains("helper"), "{vm}");

@@ -101,10 +101,11 @@ impl Recovery {
 /// What happens to an action on the VM `vm` that may not have finished:
 /// its keeper asks the guest what it came to until it answers, and a start
 /// Atlas VM did not answer is asked again by the next command that needs
-/// the VM, so nothing is for anyone to recover.
+/// the VM. Its recovery, which anyone may run as it only settles what
+/// came to an answer, settles one that stays.
 pub(crate) fn settled_on_its_own(vm: &str) -> String {
     format!(
         "An action on {vm} may not have finished; Atlas settles it on its own once {vm} \
-         answers. If it stays, run atlas doctor --desktop {vm}."
+         answers. If it stays, run atlas doctor --desktop {vm} or atlas restart --desktop {vm}."
     )
 }

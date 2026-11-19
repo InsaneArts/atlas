@@ -2264,3 +2264,69 @@ async fn a_vms_maintenance_is_said_from_its_record_while_its_keeper_is_not_there
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_on_a_vm_recovers_it_and_never_restarts_its_guest() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+    let command = parse(&["restart"]).unwrap().command.unwrap();
+
+    let recovered = executed(&config, command, &client).await.unwrap();
+
+    assert_eq!(recovered["ok"], true, "{recovered}");
+    assert_eq!(recovered["op"], "recover");
+    assert_eq!(recovered["desktop"], json!({"kind": "vm", "name": "work"}));
+    assert_eq!(recovered["cleared"], json!([]));
+    assert_eq!(recovered["kept"], json!([]));
+    assert_eq!(recovered["guest"], json!({"recovered": true}));
+    assert!(recovered.get("restarted").is_none(), "{recovered}");
+    assert_eq!(keeper.asked_for("recover").len(), 1);
+    assert!(
+        keeper.asked_for("change").is_empty(),
+        "nothing asked of its guest"
+    );
+    for op in ["start", "stop", "window"] {
+        assert!(keeper.runner.asked_for(op).is_empty(), "{op} asked");
+    }
+    assert_eq!(keeper.runner.power(), "running");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn logout_on_a_vm_is_refused_in_its_own_words_and_claims_nothing() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let config = dir.path().join("settings.toml");
+
+    // Without --yes too: refused before the person is asked.
+    for args in [
+        &["logout"][..],
+        &["logout", "--yes"],
+        &["logout", "--force", "--yes"],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let refused = executed(&config, command, &client).await.unwrap_err();
+
+        assert_eq!(refused.code, Code::Platform, "{args:?}: {refused:?}");
+        assert_eq!(
+            refused.error, "work is a VM desktop, so Atlas does not log it out.",
+            "{args:?}"
+        );
+        assert_eq!(
+            refused.details["next"], "To log out by hand, run atlas desktop maintain work.",
+            "{args:?}"
+        );
+        assert!(!refused.uncertain, "{args:?}");
+    }
+    let refused = client.logout(false).await.unwrap_err();
+    assert_eq!(refused.code, Code::Platform);
+
+    assert!(
+        keeper.asked.lock().unwrap().is_empty(),
+        "nothing asked of its keeper"
+    );
+    assert!(keeper.runner.ops().is_empty(), "nothing asked of Atlas VM");
+    assert!(client.controller.pending().unwrap().is_empty());
+    let other = client.controller.clone().waiting(std::time::Duration::ZERO);
+    assert!(other.acquire_for_executor().is_ok(), "no exclusion kept");
+}

@@ -50,9 +50,46 @@ pub(super) const SAYING: Duration = Duration::from_secs(2);
 /// Set in a build made for live checks of a lost reply: the keeper keeps
 /// back the final reply of each change whose command names this word, or
 /// whose request is this operation (such as `environment`), as if its lane
-/// failed, and says so. Empty, it keeps back every change's.
+/// failed, and says so; the change then stays pending until the person's
+/// Recover ([`KeptBack`]). Empty, it keeps back every change's.
 /// `scripts/release.sh` refuses to release one.
 const DROPS_REPLY: Option<&str> = option_env!("ATLAS_TEST_DROP_REPLY");
+
+/// The words a test keeps back the final reply of, as a build made with
+/// [`DROPS_REPLY`] does its own.
+#[cfg(test)]
+pub(super) static TEST_DROPS_REPLY: std::sync::Mutex<Vec<String>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The changes whose final reply this keeper kept back, as [`DROPS_REPLY`]
+/// asks: no client's read of what one came to is carried to the guest, and
+/// only a recovery asked of the keeper settles one, so each stays pending
+/// until the person's Recover, as a reply truly lost with its guest away
+/// would. Always empty in a build made without it.
+#[derive(Debug, Default)]
+pub(super) struct KeptBack(std::sync::Mutex<BTreeSet<Token>>);
+
+impl KeptBack {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeSet<Token>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn keep(&self, change: Token) {
+        self.lock().insert(change);
+    }
+
+    /// Whether the change `change` is one whose final reply was kept back.
+    pub(super) fn holds(&self, change: &str) -> bool {
+        Token::parse(change).is_some_and(|change| self.lock().contains(&change))
+    }
+
+    /// Forget the change `change`, its claim cleared.
+    pub(super) fn forget(&self, change: &Token) {
+        self.lock().remove(change);
+    }
+}
 
 /// The changes carried in one generation, and those its hello named that
 /// were still claimed, settled once the station holds no claim on them.
@@ -159,6 +196,8 @@ enum Carrying {
     Answered,
     /// It may have reached the guest, and its final reply did not come.
     Lost(Error),
+    /// Its final reply came and was kept back, as a test build asks.
+    KeptBack(Error),
     /// The client went before its final reply.
     Gone,
 }
@@ -264,6 +303,11 @@ pub(super) async fn changed(
                 say_within(&mut writing, &lost(error)).await;
             }
         }
+        Carrying::KeptBack(error) => {
+            keeper.kept_back.keep(asked.change.clone());
+            session.desktop.cancel(lane);
+            say_within(&mut writing, &lost(error)).await;
+        }
         Carrying::Gone => session.desktop.cancel(lane),
     }
 }
@@ -333,7 +377,7 @@ where
         };
         let last = final_reply(reply.trim_end());
         if last && dropping {
-            return Carrying::Lost(Error::new(
+            return Carrying::KeptBack(Error::new(
                 Code::Transport,
                 "This test build kept back the change's final reply.",
             ));
@@ -352,13 +396,26 @@ where
 
 /// Whether this build keeps back the final reply of `request`.
 fn drops_reply(request: &Value) -> bool {
-    DROPS_REPLY.is_some_and(|word| {
-        word.is_empty()
-            || request["op"] == word
-            || request["argv"]
-                .as_array()
-                .is_some_and(|argv| argv.iter().any(|argument| argument == word))
-    })
+    #[cfg(test)]
+    if TEST_DROPS_REPLY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|word| names(request, word))
+    {
+        return true;
+    }
+    DROPS_REPLY.is_some_and(|word| names(request, word))
+}
+
+/// Whether `request` names `word`, as its operation or one of its
+/// command's arguments; every request names the empty word.
+fn names(request: &Value, word: &str) -> bool {
+    word.is_empty()
+        || request["op"] == word
+        || request["argv"]
+            .as_array()
+            .is_some_and(|argv| argv.iter().any(|argument| argument == word))
 }
 
 /// Settle on the live generation the changes `request` names that the

@@ -60,8 +60,8 @@ fn settled(outcome: &Result<Value>) -> bool {
 impl Client {
     /// Recover the helper: the verified restart when an outcome is unknown,
     /// otherwise starting, resetting or upgrading input. It never takes
-    /// control or resumes input. A VM's changes are recovered from what its
-    /// guest says they came to instead.
+    /// control or resumes input. A VM's changes are recovered from what
+    /// Atlas VM and its guest say they came to instead.
     ///
     /// # Errors
     ///
@@ -78,12 +78,17 @@ impl Client {
     }
 
     /// Restart the verified helper while retaining exclusion and pending-work ownership.
+    /// A VM is recovered instead, as [`Client::recover_helper`] recovers it:
+    /// its guest is never restarted.
     ///
     /// # Errors
     ///
     /// Returns admission, permission, service or post-restart identity failures. Unacknowledged
     /// cleanup remains pending; a timeout is not proof that restart completed.
     pub async fn restart(&self) -> Result<Value> {
+        if matches!(self.desktop().kind(), Kind::Vm(_)) {
+            return self.recover_vm().await;
+        }
         let _ownership = self.service_change(true).await?;
         let before = self.identity().await?;
 
@@ -213,15 +218,42 @@ impl Client {
     /// cleared once the desktop is gone or macOS refused, kept pending when
     /// it may still happen (an app holding it up, an unconfirmed request).
     /// `force` ends the session without asking the apps, and may run with
-    /// outcomes still unknown: it is the person's way out of one.
+    /// outcomes still unknown: it is the person's way out of one. A VM is
+    /// never logged out.
     ///
     /// # Errors
     ///
     /// Returns ownership, identity, job-stop or logout failures. Unknown logout or cleanup
-    /// outcomes stay pending and must not be retried blindly.
+    /// outcomes stay pending and must not be retried blindly. Refuses a VM
+    /// as [`Client::logout_allowed`] does.
     pub async fn logout(&self, force: bool) -> Result<Value> {
+        self.logout_allowed()?;
         let ownership = self.controller.acquire(force)?;
         self.logout_held(&ownership, force).await
+    }
+
+    /// Refuse a VM desktop, which Atlas never logs out, in its own words,
+    /// with how the person logs out of it by hand: nothing is taken, claimed
+    /// or asked.
+    ///
+    /// # Errors
+    ///
+    /// `platform` on a VM.
+    pub fn logout_allowed(&self) -> Result<()> {
+        if !matches!(self.desktop().kind(), Kind::Vm(_)) {
+            return Ok(());
+        }
+        let name = &self.selected.name;
+        Err(Error::new(
+            Code::Platform,
+            format!("{name} is a VM desktop, so Atlas does not log it out."),
+        )
+        .with(
+            "next",
+            json!(format!(
+                "To log out by hand, run atlas desktop maintain {name}."
+            )),
+        ))
     }
 
     /// [`Client::logout`] under control already held (`_ownership`), for a
@@ -232,7 +264,7 @@ impl Client {
     /// Returns a refusal to log out, or an error when the helper has not logged
     /// out yet.
     pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
-        self.second_login_only()?;
+        self.logout_allowed()?;
         let observation = self.observed().await;
         self.desktop().prove(&observation)?;
         let claim = self.controller.quarantine()?;

@@ -1789,3 +1789,101 @@ fn a_vm_removed_says_the_new_default_and_names_what_it_kept_and_left() {
     );
     assert!(lines[6].contains("Keychain Access"));
 }
+
+#[test]
+fn second_logins_restart_is_said_as_it_always_was() {
+    let restarted = show(
+        View::Restart,
+        json!({"ok": true, "restarted": true, "session": {}}),
+    );
+    let replaced = show(
+        View::Restart,
+        json!({"ok": true, "restarted": true, "inputReplaced": true, "session": {}}),
+    );
+
+    assert_eq!(restarted.out, "✓ The helper restarted and is ready");
+    assert_eq!(
+        replaced.out,
+        "✓ The helper restarted and is ready  input service updated"
+    );
+}
+
+#[test]
+fn a_vms_restart_says_what_it_cleared_and_kept_and_who_carries_each_out_never_that_it_restarted() {
+    let (guests, vms, stations) = ("a".repeat(48), "b".repeat(48), "c".repeat(48));
+    let partly = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [{"change": vms, "by": "vm"}],
+               "kept": [{"change": guests, "by": "guest"}, {"change": stations, "by": "station"}],
+               "guest": {"recovered": false,
+                   "why": "work is not running, so its guest's changes wait until it runs."}}),
+    );
+    let settled = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [{"change": guests, "by": "guest"}], "kept": [],
+               "guest": {"recovered": true}}),
+    );
+    let nothing = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [], "kept": [], "guest": {"recovered": true}}),
+    );
+    let unread = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [], "kept": "unknown", "guest": {"recovered": true}}),
+    );
+    let stopped = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [], "kept": [], "guest": {"recovered": true},
+               "station": {"why": "Not every change Atlas VM answered on work was settled: busy."}}),
+    );
+    let unreached = show(
+        View::Restart,
+        json!({"ok": true, "op": "recover", "desktop": {"kind": "vm", "name": "work"},
+               "cleared": [], "kept": [], "guest": {"recovered": false,
+                   "why": "work is not running, so its guest's changes wait until it runs."}}),
+    );
+
+    assert_eq!(
+        partly.out,
+        format!(
+            "! Some changes on work are still pending\n  Cleared {vms}  answered by Atlas VM\n  \
+             Kept {guests}  until Atlas in work answers\n  Kept {stations}  until Atlas on this \
+             Mac answers\n  work is not running, so its guest's changes wait until it runs."
+        )
+    );
+    assert_eq!(
+        settled.out,
+        format!(
+            "✓ Everything pending on work is settled\n  Cleared {guests}  answered by Atlas in work"
+        )
+    );
+    assert_eq!(nothing.out, "✓ Nothing is pending on work");
+    assert_eq!(
+        stopped.out,
+        "! Nothing is pending on work\n  Not every change Atlas VM answered on work was settled: \
+         busy."
+    );
+    assert_eq!(
+        unreached.out,
+        "✓ Nothing is pending on work\n  work is not running, so its guest's changes wait until \
+         it runs."
+    );
+    assert_eq!(
+        unread.out,
+        "! Some changes on work are still pending\n  Which changes on work are still pending \
+         cannot be read."
+    );
+    for shown in [&partly, &settled, &nothing, &stopped, &unreached, &unread] {
+        assert!(!shown.out.contains("restarted"), "{}", shown.out);
+        assert!(
+            !shown.out.to_lowercase().contains("helper"),
+            "{}",
+            shown.out
+        );
+    }
+}

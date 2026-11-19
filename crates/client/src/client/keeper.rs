@@ -19,13 +19,10 @@ use atlas_core::{
 use atlas_session::compatibility::{Declared, MACHINE, PROTOCOL, Usable, judge};
 use serde_json::{Value, json};
 
+mod recover;
+
 /// How long a status waits for the station's pending changes to be read.
 const PENDING_READ: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// How long the person's recovery of a VM waits for its keeper, and the
-/// moment of it left for the keeper's own answer.
-const RECOVERY: std::time::Duration = std::time::Duration::from_secs(60);
-const RECOVERY_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How long a status waits for the guest's word on its leftover work.
 const LEFTOVERS_READ: std::time::Duration = std::time::Duration::from_secs(2);
@@ -449,55 +446,6 @@ impl Client {
                 .one(&json!({"op": "settle", "changes": changes}))
                 .await;
         }
-    }
-
-    /// Recover a VM, as the person's Recover does: the VM proved afresh,
-    /// then every change its guest carries out whose command ended without
-    /// its answer asked of the guest through its keeper, in the generation
-    /// the proof was taken in. Only a certain answer, or one the guest
-    /// proves ended, clears a claim; every other change stays pending, and
-    /// is said as kept. A Stop does not hold it: it changes nothing on the
-    /// guest, and a claim Atlas VM or the station carries out is never
-    /// looked at.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a VM still being added, or handed over by an update; fails
-    /// when it does not prove, or its keeper cannot read the station's
-    /// pending changes or refuses.
-    pub(super) async fn recover_vm(&self) -> Result<Value> {
-        if self.admission() != Admission::Open {
-            return Err(self.selected.unreachable());
-        }
-        if let Some(held) = self.maintenance_held() {
-            return Err(held);
-        }
-        if let Some(why) = self.handover_unfinished() {
-            return Err(Error::new(Code::Busy, why));
-        }
-        let mut keeper = self.keeper().await?;
-        let proved = self.verify_machine(&keeper).await?;
-        proved.session?;
-        keeper.timeout = RECOVERY;
-        let asked = json!({"op": "recover", "generation": proved.observed.generation,
-            "deadline_ms": (RECOVERY - RECOVERY_MARGIN).as_millis()});
-        let answer = keeper.one(&asked).await?;
-        if answer["ok"] != true {
-            return Err(atlas_core::transport::refusal(&answer));
-        }
-        let controller = self.controller.clone();
-        let kept = tokio::task::spawn_blocking(move || controller.pending_within(PENDING_READ))
-            .await
-            .map_or(json!("unknown"), |pending| {
-                pending.map_or(json!("unknown"), |pending| json!(pending))
-            });
-        Ok(json!({
-            "ok": true,
-            "op": "recover",
-            "desktop": {"kind": "vm", "name": self.selected.name},
-            "cleared": answer["cleared"],
-            "kept": kept,
-        }))
     }
 
     /// A VM's status: its keeper's hello, its guest's own and a fresh proof
@@ -1193,7 +1141,7 @@ fn unsettled(name: &str, pending: &Value) -> std::result::Result<(), String> {
     Err(match left["executor"].as_str() {
         Some("vm") => format!(
             "Atlas VM has not said yet what a change it was making to {name} came to, so \
-             agents wait until it does."
+             agents wait until it does. If it stays, run atlas restart --desktop {name}."
         ),
         Some("guest") => crate::host_session::settled_on_its_own(name),
         Some("station") => format!(

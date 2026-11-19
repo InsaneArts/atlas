@@ -48,8 +48,14 @@ impl Keeper {
     /// Recover in `session` the changes its guest carries out whose claim
     /// no live process holds, waiting at most `wait` to read the station's
     /// pending changes: none when they cannot be read by then, which
-    /// recovers nothing.
-    pub(super) async fn recovered(&self, session: &Session, wait: Duration) -> Option<Recovered> {
+    /// recovers nothing. A change whose final reply a test build kept back
+    /// is recovered only when the keeper is `asked` to.
+    pub(super) async fn recovered(
+        &self,
+        session: &Session,
+        wait: Duration,
+        asked: bool,
+    ) -> Option<Recovered> {
         let _one = self.recovering.lock().await;
         let stop = self.stop.clone();
         let unheld = super::blocking(move || stop.unheld_by(Executor::Guest, wait))
@@ -64,8 +70,10 @@ impl Keeper {
         }
         let proves_ended = judge(declared, &[ENDED]).refusal().is_none();
         let mut recovered = Recovered::default();
-        for (asked, claim) in unheld.into_iter().enumerate() {
-            let change = Token::parse(&claim).filter(|_| asked < ROUND);
+        for (index, claim) in unheld.into_iter().enumerate() {
+            let change = Token::parse(&claim)
+                .filter(|_| index < ROUND)
+                .filter(|_| asked || !self.kept_back.holds(&claim));
             let settled = match &change {
                 Some(change) => settles(outcome(session, change).await.as_ref(), proves_ended),
                 None => false,
@@ -75,6 +83,7 @@ impl Keeper {
             if let Some(change) = change.filter(|_| settled) {
                 session.carried.keep(change.clone());
                 if self.cleared(&claim).await {
+                    self.kept_back.forget(&change);
                     recovered.cleared.push(change);
                     continue;
                 }
@@ -89,7 +98,7 @@ impl Keeper {
     pub(super) async fn recovering(&self, session: &Session) {
         loop {
             // Never waiting: a busy round leaves it to the next.
-            let _ = self.recovered(session, Duration::ZERO).await;
+            let _ = self.recovered(session, Duration::ZERO, false).await;
             tokio::time::sleep(RECOVERING).await;
         }
     }
@@ -129,19 +138,24 @@ fn settles(answer: Option<&Value>, proves_ended: bool) -> bool {
 }
 
 /// Recover on the live generation, when it is `generation`, within
-/// `deadline`: what it cleared and kept, or why nothing was recovered.
+/// `deadline`: what it cleared, what it kept, each named with its guest as
+/// who carries it out, or why nothing was recovered.
 pub(super) async fn asked(keeper: &Keeper, generation: u64, deadline: Duration) -> Value {
     let session = match live_in(keeper, generation) {
         Ok(session) => session,
         Err(error) => return serde_json::to_value(&error).unwrap_or_default(),
     };
     let refused = |code, why: &str| serde_json::to_value(Error::new(code, why)).unwrap_or_default();
-    match tokio::time::timeout(deadline, keeper.recovered(&session, READING)).await {
+    match tokio::time::timeout(deadline, keeper.recovered(&session, READING, true)).await {
         Ok(Some(recovered)) => json!({
             "ok": true,
             "op": "recover",
             "cleared": recovered.cleared,
-            "kept": recovered.kept,
+            "kept": recovered
+                .kept
+                .iter()
+                .map(|change| json!({"change": change, "by": "guest"}))
+                .collect::<Vec<_>>(),
         }),
         Ok(None) => refused(
             Code::Busy,

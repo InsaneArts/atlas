@@ -332,7 +332,7 @@ async fn a_vms_host_is_verified_without_a_word_to_its_guest() {
 }
 
 #[test]
-fn a_recovery_step_on_a_vm_says_atlas_settles_it_never_the_menu_bar_or_restart() {
+fn a_recovery_step_on_a_vm_says_atlas_settles_it_and_recovers_only_that_vm_never_the_menu_bar() {
     use crate::overview::Called;
     let every = [
         Recovery::Own,
@@ -349,10 +349,15 @@ fn a_recovery_step_on_a_vm_says_atlas_settles_it_never_the_menu_bar_or_restart()
         assert_eq!(
             step,
             "An action on work may not have finished; Atlas settles it on its own once work \
-             answers. If it stays, run atlas doctor --desktop work."
+             answers. If it stays, run atlas doctor --desktop work or atlas restart --desktop \
+             work."
         );
         assert!(!step.to_lowercase().contains("helper"), "{step}");
         assert!(!step.contains("menu bar"), "{step}");
-        assert!(!step.contains("atlas restart"), "{step}");
+        assert_eq!(
+            step.matches("atlas restart").count(),
+            step.matches("atlas restart --desktop work").count(),
+            "{step}"
+        );
     }
 }

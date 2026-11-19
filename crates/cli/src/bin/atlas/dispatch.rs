@@ -259,6 +259,11 @@ async fn execute_with(
     if changes || starts {
         let client = client()?;
         let admitted = async {
+            // A VM is never logged out: refused in its own words before
+            // anything else is looked at or the person is asked.
+            if matches!(command, Command::Logout { .. }) {
+                client.logout_allowed()?;
+            }
             if changes && !changes_on_vm(&command) {
                 client.second_login_only()?;
             }
@@ -848,8 +853,17 @@ async fn input(client: &Client, actions: String, target: cli::AppTarget) -> Resu
     agent::act(client, target.expected(None, None)?.as_ref(), &value).await
 }
 
+/// `atlas restart`: Second Login's helper restarted, or a VM recovered, as
+/// its guest is never restarted.
 async fn restart(client: &Client) -> Result<Value> {
-    let _spinner = Spinner::new("Restarting the helper…");
+    let _spinner = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+        Spinner::new(format!(
+            "Settling the changes Atlas left pending on {}…",
+            client.selected.name
+        ))
+    } else {
+        Spinner::new("Restarting the helper…")
+    };
     client.restart().await
 }
 

@@ -89,6 +89,8 @@ struct Known {
     /// Whether a stop leaves the VM stopping, its outcome pending until the
     /// VM's power tells.
     stalls_stop: bool,
+    /// How long each outcome read is held before it is answered.
+    slow_outcomes: Option<Duration>,
 }
 
 /// Atlas VM, stood in for on a socket.
@@ -249,6 +251,12 @@ impl StandInRunner {
         self.known().stalls_stop = true;
     }
 
+    /// Hold each outcome read for `delay` before it is answered, as an Atlas
+    /// VM slow to say.
+    pub fn slow_outcomes(&self, delay: Duration) {
+        self.known().slow_outcomes = Some(delay);
+    }
+
     /// Every change begun, by its ID, in order: each was done once.
     #[must_use]
     pub fn begun(&self) -> Vec<String> {
@@ -398,6 +406,10 @@ fn serve(known: &Mutex<Known>, stream: std::os::unix::net::UnixStream) {
             reply
         }
         "outcome" => {
+            let held = lock().slow_outcomes;
+            if let Some(delay) = held {
+                std::thread::sleep(delay);
+            }
             let mut reply = served("outcome", &run);
             reply["change"] = json!(change);
             let mut known = lock();

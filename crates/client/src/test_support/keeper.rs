@@ -159,7 +159,8 @@ pub const GENERATION: u64 = 7;
 /// runs no app, has none of the apps asked after installed, reads a native
 /// check's folder as a machine guest does and keeps no copy, gives a picture of its whole display for a screenshot, settles
 /// whatever it is asked to, and cannot say whether work agents started runs
-/// there; its keeper holds and releases agents' lanes whenever it is asked.
+/// there; its keeper holds and releases agents' lanes whenever it is asked,
+/// and recovers nothing when asked to.
 /// The VM is added, its lifecycle record kept in `directory`, and runs, as
 /// Atlas VM, stood in for there too, says.
 #[must_use]
@@ -630,6 +631,7 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
         Some("hold") => json!({"ok": false, "code": "not-ready",
             "error": "Not every agent's lane on this VM ended in time; agents stay held."}),
         Some("release") => json!({"ok": true, "op": "release", "change": request["change"]}),
+        Some("recover") => json!({"ok": true, "op": "recover", "cleared": [], "kept": []}),
         Some("picture") if request["request"]["op"] == "screenshot" => {
             json!([{"ok": true, "op": "picture"}, screenshot(&request["request"])])
         }

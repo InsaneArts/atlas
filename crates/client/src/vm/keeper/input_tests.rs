@@ -665,7 +665,11 @@ async fn a_release_a_signal_cut_short_keeps_its_owner_held_until_the_guest_prove
     // waits for proof of its own.
     standin.done(&release, &proven_ended());
     let recovered = other.recover_helper().await.unwrap();
-    assert_eq!(recovered["cleared"], json!([release]), "{recovered}");
+    assert_eq!(
+        recovered["cleared"],
+        json!([{"change": release, "by": "guest"}]),
+        "{recovered}"
+    );
     assert_eq!(pending(&other), named(&[&owner]));
     assert_eq!(clicked(&other).await.unwrap_err().code, Code::Uncertain);
 
@@ -674,7 +678,11 @@ async fn a_release_a_signal_cut_short_keeps_its_owner_held_until_the_guest_prove
     *service.owner.lock().unwrap() = None;
     standin.done(&owner, &proven_ended());
     let recovered = other.recover_helper().await.unwrap();
-    assert_eq!(recovered["cleared"], json!([owner]), "{recovered}");
+    assert_eq!(
+        recovered["cleared"],
+        json!([{"change": owner, "by": "guest"}]),
+        "{recovered}"
+    );
     assert!(other.controller.pending().unwrap().is_empty());
     let after = clicked(&other).await.unwrap();
     assert_eq!(after["ok"], true, "{after}");

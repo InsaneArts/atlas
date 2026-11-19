@@ -223,6 +223,9 @@ fn element_wait(value: &Value, state: &str, after: &str) -> String {
 }
 
 pub(super) fn restart(value: &Value) -> String {
+    if value["op"] == "recover" {
+        return recovered(value);
+    }
     let mut line = format!("{} The helper restarted and is ready", style::ok());
 
     if value["inputReplaced"] == true {
@@ -230,6 +233,65 @@ pub(super) fn restart(value: &Value) -> String {
     }
 
     line
+}
+
+/// A VM's recovery: what it cleared and what it kept, each with who
+/// carries it out, what kept Atlas VM's part from finishing, and why its
+/// guest was asked nothing when it was not.
+fn recovered(value: &Value) -> String {
+    let name = text::printable(value["desktop"]["name"].as_str().unwrap_or("the VM")).into_owned();
+    let cleared: Vec<&Value> = items(&value["cleared"]).collect();
+    let kept: Vec<&Value> = items(&value["kept"]).collect();
+    let unread = !value["kept"].is_array();
+    let stopped = value["station"]["why"].as_str();
+    let settled = kept.is_empty() && !unread;
+    let mark = if settled && stopped.is_none() {
+        style::ok()
+    } else {
+        style::warn()
+    };
+    let head = if settled && cleared.is_empty() {
+        format!("Nothing is pending on {name}")
+    } else if settled {
+        format!("Everything pending on {name} is settled")
+    } else {
+        format!("Some changes on {name} are still pending")
+    };
+    let mut lines = vec![format!("{mark} {head}")];
+    let carrier = |change: &Value| match change["by"].as_str() {
+        Some("guest") => format!("Atlas in {name}"),
+        Some("vm") => "Atlas VM".to_owned(),
+        Some("station") => "Atlas on this Mac".to_owned(),
+        _ => name.clone(),
+    };
+    let id =
+        |change: &Value| text::printable(change["change"].as_str().unwrap_or("?")).into_owned();
+    for change in cleared {
+        lines.push(format!(
+            "  Cleared {}  {}",
+            id(change),
+            style::dim(format!("answered by {}", carrier(change)))
+        ));
+    }
+    for change in kept {
+        lines.push(format!(
+            "  Kept {}  {}",
+            id(change),
+            style::dim(format!("until {} answers", carrier(change)))
+        ));
+    }
+    if unread {
+        lines.push(format!(
+            "  Which changes on {name} are still pending cannot be read."
+        ));
+    }
+    for why in [stopped, value["guest"]["why"].as_str()]
+        .into_iter()
+        .flatten()
+    {
+        lines.push(format!("  {}", text::printable(why)));
+    }
+    lines.join("\n")
 }
 
 pub(super) fn logout(_: &Value) -> String {

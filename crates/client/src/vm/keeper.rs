@@ -262,6 +262,7 @@ async fn started(
         ended: tokio::sync::Notify::new(),
         observing: observe::room(),
         recovering: tokio::sync::Mutex::new(()),
+        kept_back: change::KeptBack::default(),
         progress: Mutex::new(picture::PROGRESS),
         shared: Shared::default(),
         lifecycle: super::lifecycle::Lifecycle::own()?,
@@ -445,6 +446,8 @@ struct Keeper {
     observing: tokio::sync::Semaphore,
     /// Held through each recovery of the changes no command holds.
     recovering: tokio::sync::Mutex<()>,
+    /// The changes whose final reply a test build kept back.
+    kept_back: change::KeptBack,
     /// How long a picture's client is given to take each chunk.
     progress: Mutex<Duration>,
     shared: Shared,

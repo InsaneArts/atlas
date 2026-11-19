@@ -262,8 +262,18 @@ fn a_clearing_whose_folder_was_not_synced_is_never_read_as_settled_until_it_is()
 
     crate::faults::fail_marker_sync();
     let unsynced = controller.pending_within(std::time::Duration::ZERO);
+    crate::faults::fail_marker_sync();
+    let unsynced_by = controller.pending_by(std::time::Duration::ZERO);
 
     assert!(unsynced.is_err(), "nothing is said settled");
+    assert!(unsynced_by.is_err(), "nor is anything said settled by whom");
+    assert!(
+        controller
+            .pending_by(std::time::Duration::ZERO)
+            .unwrap()
+            .is_empty(),
+        "once synced, by whom too"
+    );
     assert!(
         controller
             .pending_within(std::time::Duration::ZERO)
@@ -271,6 +281,43 @@ fn a_clearing_whose_folder_was_not_synced_is_never_read_as_settled_until_it_is()
             .is_empty(),
         "once synced"
     );
+}
+
+#[test]
+fn every_pending_change_is_read_with_who_carries_it_out_held_or_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let wait = std::time::Duration::ZERO;
+    assert!(controller.pending_by(wait).unwrap().is_empty());
+    let (guest, vms, station, own) = (token(), token(), token(), token());
+    let holding = controller.quarantine_by(&guest, Executor::Guest).unwrap();
+    drop(controller.quarantine_by(&vms, Executor::Vm).unwrap());
+    drop(
+        controller
+            .quarantine_by(&station, Executor::Station)
+            .unwrap(),
+    );
+    drop(controller.quarantine_as(&own).unwrap());
+
+    let mut read = controller.pending_by(wait).unwrap();
+    read.sort_by(|one, other| one.0.cmp(&other.0));
+    let mut expected = vec![
+        (guest, Some(Executor::Guest)),
+        (vms, Some(Executor::Vm)),
+        (station, Some(Executor::Station)),
+        (own, None),
+    ];
+    expected.sort_by(|one, other| one.0.cmp(&other.0));
+    assert_eq!(read, expected);
+    drop(holding);
+
+    let busy = controller.lock_marker().unwrap();
+    assert_eq!(controller.pending_by(wait).unwrap_err().code, "busy");
+    drop(busy);
+    std::fs::write(&controller.executors, b"{").unwrap();
+    assert!(controller.pending_by(wait).is_err());
+    std::fs::write(&controller.marker, b"[").unwrap();
+    assert!(controller.pending_by(wait).is_err());
 }
 
 #[test]

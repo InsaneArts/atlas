@@ -1205,7 +1205,7 @@ async fn a_ready_vm_with_a_change_atlas_vm_left_unanswered_is_not_ready_in_words
             .unwrap(),
     );
     let words = "Atlas VM has not said yet what a change it was making to work came to, so \
-                 agents wait until it does.";
+                 agents wait until it does. If it stays, run atlas restart --desktop work.";
 
     let status = client.status().await;
     let report = crate::capability::vm_report(status.clone(), client.unreachable());
@@ -1249,7 +1249,8 @@ async fn a_command_an_agent_started_that_still_runs_keeps_a_vm_ready_until_it_is
     assert_eq!(
         left["notReady"],
         "An action on work may not have finished; Atlas settles it on its own once work \
-         answers. If it stays, run atlas doctor --desktop work."
+         answers. If it stays, run atlas doctor --desktop work or atlas restart --desktop \
+         work."
     );
 }
 
@@ -1346,7 +1347,8 @@ async fn a_change_another_command_is_making_leaves_a_vm_ready_until_it_ends_with
     assert_eq!(
         after["notReady"],
         "An action on work may not have finished; Atlas settles it on its own once work \
-         answers. If it stays, run atlas doctor --desktop work."
+         answers. If it stays, run atlas doctor --desktop work or atlas restart --desktop \
+         work."
     );
 }
 

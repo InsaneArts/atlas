@@ -99,6 +99,11 @@ async fn recover(serving: &Serving) -> Value {
     answered[0].clone()
 }
 
+/// What a recovery says of `change` it kept: its guest carries it out.
+fn kept_by_its_guest(change: &Token) -> Value {
+    json!([{"change": change, "by": "guest"}])
+}
+
 fn hi() -> Vec<String> {
     vec!["/bin/echo".to_owned(), "hi".to_owned()]
 }
@@ -139,8 +144,12 @@ async fn a_change_whose_outcome_is_unknown_is_kept_until_its_guest_proves_its_wo
     serving.fixture.guest.standin.done(&change, &ended());
     let proven = recover(&serving).await;
 
-    assert_eq!(unknown["kept"], json!([change]), "{unknown}");
-    assert_eq!(cut_short["kept"], json!([change]), "never as it stands");
+    assert_eq!(unknown["kept"], kept_by_its_guest(&change), "{unknown}");
+    assert_eq!(
+        cut_short["kept"],
+        kept_by_its_guest(&change),
+        "never as it stands"
+    );
     assert_eq!(proven["cleared"], json!([change]), "{proven}");
     assert!(client.controller.pending().unwrap().is_empty());
     until("settled with the guest", || {
@@ -158,7 +167,7 @@ async fn a_guest_that_proves_nothing_ended_leaves_an_ended_answer_pending() {
 
     let recovered = recover(&serving).await;
 
-    assert_eq!(recovered["kept"], json!([change]), "{recovered}");
+    assert_eq!(recovered["kept"], kept_by_its_guest(&change), "{recovered}");
     assert_eq!(client.controller.pending().unwrap(), [change.as_str()]);
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(!settled(&serving).contains(&change));
@@ -217,7 +226,7 @@ async fn a_stop_mid_command_with_its_cleanup_unproven_stays_pending_through_reco
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     assert!(stopped.uncertain, "{stopped:?}");
-    assert_eq!(recovered["kept"], json!([change]), "{recovered}");
+    assert_eq!(recovered["kept"], kept_by_its_guest(&change), "{recovered}");
     assert_eq!(client.controller.pending().unwrap(), [change.as_str()]);
     assert!(!settled(&serving).contains(&change));
 }
@@ -242,12 +251,26 @@ async fn the_persons_recover_on_a_vm_clears_what_its_guest_answered_under_its_sa
     let recovered = client.recover_helper().await.unwrap();
 
     assert_eq!(recovered["op"], "recover", "{recovered}");
-    assert_eq!(recovered["cleared"], json!([done]));
-    let mut kept: Vec<String> = serde_json::from_value(recovered["kept"].clone()).unwrap();
-    kept.sort();
-    let mut expected = vec![unknown.as_str().to_owned(), vms.as_str().to_owned()];
-    expected.sort();
-    assert_eq!(kept, expected, "Atlas VM's claim is never touched");
+    assert_eq!(
+        recovered["cleared"],
+        json!([{"change": done, "by": "guest"}])
+    );
+    assert_eq!(recovered["guest"], json!({"recovered": true}));
+    let kept = |by: &str| {
+        recovered["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|change| change["by"] == by)
+            .map(|change| change["change"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kept("guest"), [json!(unknown)], "{recovered}");
+    assert_eq!(
+        kept("vm"),
+        [json!(vms)],
+        "Atlas VM's claim waits for its answer"
+    );
     until("settled with the guest", || {
         settled(&serving).contains(&done)
     })
@@ -291,7 +314,7 @@ async fn a_marker_held_once_the_outcome_is_asked_keeps_the_claim_and_leaves_noth
 
     assert!(took < Duration::from_secs(5), "answered in {took:?}");
     assert_eq!(recovered["cleared"], json!([]), "{recovered}");
-    assert_eq!(recovered["kept"], json!([change]), "{recovered}");
+    assert_eq!(recovered["kept"], kept_by_its_guest(&change), "{recovered}");
     assert!(
         serving.fixture.keeper.recovering.try_lock().is_ok(),
         "the recovery ended"
@@ -345,4 +368,40 @@ async fn an_asked_recovery_whose_marker_stays_held_is_refused_busy_and_clears_no
     assert_eq!(recovered["code"], "busy", "{recovered}");
     held.join().unwrap();
     assert_eq!(client.controller.pending().unwrap(), [change.as_str()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_whose_final_reply_a_test_build_keeps_back_stays_pending_until_the_persons_recover() {
+    let (serving, saying, client, _directory) = proven().await;
+    let word = Token::new().to_string();
+    let words = &super::super::change::TEST_DROPS_REPLY;
+    words.lock().unwrap().push(word.clone());
+
+    let lost = client
+        .run_beside(
+            vec!["/bin/echo".to_owned(), word.clone()],
+            Duration::from_secs(20),
+        )
+        .await;
+    words.lock().unwrap().retain(|kept| *kept != word);
+
+    let lost = lost.unwrap_err();
+    assert!(lost.uncertain, "{lost:?}");
+    assert_eq!(saying.runs.lock().unwrap().len(), 1, "its guest ran it");
+    let pending = client.controller.pending().unwrap();
+    assert_eq!(pending.len(), 1, "left pending: {pending:?}");
+    // Neither a new generation's hello nor a later round settles it.
+    restarted(&serving).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(client.controller.pending().unwrap(), pending);
+
+    let recovered = client.recover_helper().await.unwrap();
+
+    assert_eq!(
+        recovered["cleared"],
+        json!([{"change": pending[0], "by": "guest"}]),
+        "{recovered}"
+    );
+    assert_eq!(recovered["kept"], json!([]));
+    assert!(client.controller.pending().unwrap().is_empty());
 }

@@ -395,15 +395,21 @@ impl Controller {
                 "The pending changes cannot be read.",
             ));
         }
-        // A clearing whose folder sync failed left what was read unsynced.
+        self.sync_read()?;
+        Ok(pending)
+    }
+
+    /// Sync the marker's folder, under its lock, before what was read is
+    /// said: a clearing whose folder sync failed left what was read unsynced,
+    /// and a crash could still bring back what it cleared.
+    fn sync_read(&self) -> Result<()> {
         #[cfg(test)]
         if super::faults::marker_sync_fails() {
             return Err(std::io::Error::other("the folder could not be synced").into());
         }
         File::open(&self.directory)
             .and_then(|folder| folder.sync_all())
-            .map_err(context("Sync pending marker folder", &self.directory))?;
-        Ok(pending)
+            .map_err(context("Sync pending marker folder", &self.directory))
     }
 
     /// Every pending change `executor` carries out whose claim no live
@@ -430,6 +436,36 @@ impl Controller {
             .into_iter()
             .filter(|generation| executors.get(generation) == Some(&executor))
             .filter(|generation| !self.in_progress(generation))
+            .collect())
+    }
+
+    /// Every pending change, and who carries each out when it is not the
+    /// desktop's own services, from one read of the marker and its
+    /// executors under the marker lock, waiting at most `wait` for it, and
+    /// synced to disk before it is said, as [`Controller::pending_within`]
+    /// reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`Controller::pending_within`], and when who carries out the
+    /// pending changes cannot be read.
+    pub fn pending_by(&self, wait: Duration) -> Result<Vec<(String, Option<Executor>)>> {
+        let _lock = self.lock_marker_within(wait)?;
+        let pending = pending(&self.marker)?;
+        if pending.iter().any(|entry| entry == UNREADABLE) {
+            return Err(Error::new(
+                Code::State,
+                "The pending changes cannot be read.",
+            ));
+        }
+        let executors = executors::read(&self.executors)?;
+        self.sync_read()?;
+        Ok(pending
+            .into_iter()
+            .map(|generation| {
+                let executor = executors.get(&generation).copied();
+                (generation, executor)
+            })
             .collect())
     }
 

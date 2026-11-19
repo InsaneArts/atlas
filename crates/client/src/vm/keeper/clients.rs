@@ -329,6 +329,20 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             );
             let _ = say(&mut writing, &refused).await;
         }
+        // A change whose final reply a test build kept back is recovered
+        // only when the person's Recover asks: never read back here.
+        Some("read")
+            if request["request"]["op"] == "outcome"
+                && request["request"]["change"]
+                    .as_str()
+                    .is_some_and(|change| keeper.kept_back.holds(change)) =>
+        {
+            let unknown = refusal(
+                Code::NotReady,
+                "This test build keeps back what the change came to until it is recovered.",
+            );
+            let _ = say(&mut writing, &unknown).await;
+        }
         Some("read")
             if request["request"].is_object()
                 && (request["generation"].is_null() || request["generation"].is_u64()) =>

@@ -571,7 +571,6 @@ async fn every_command_not_built_for_a_vm_is_refused_in_one_wording_before_anyth
         client.start_input().await.unwrap_err(),
         client.identity().await.unwrap_err(),
         client.apps().await.unwrap_err(),
-        client.restart().await.unwrap_err(),
     ];
 
     for refused in refused {
