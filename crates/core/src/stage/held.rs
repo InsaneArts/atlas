@@ -154,6 +154,13 @@ impl HeldFile {
         Ok(())
     }
 
+    /// Whether it is the file whose device and inode are `device` and
+    /// `inode`, as it was when it was read.
+    pub fn is(&self, device: u64, inode: u64) -> bool {
+        u64::try_from(self.seen.identity.device).is_ok_and(|own| own == device)
+            && self.seen.identity.inode == inode
+    }
+
     /// The same file held again, for a reader of its own.
     ///
     /// # Errors

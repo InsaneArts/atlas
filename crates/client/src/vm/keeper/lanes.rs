@@ -31,6 +31,9 @@ pub(super) enum Work {
     Picture,
     /// A proof: the guest's hellos and its session proof.
     Observe,
+    /// The keeper's own update of its guest: its stage, update, removal
+    /// and void.
+    Update,
 }
 
 /// What holds every agent's lane: the person's maintenance, by its ID and

@@ -23,6 +23,10 @@
 //! request, and a hold cancels every agent's lane it carries before it is
 //! answered ([`held`]).
 //!
+//! Asked, it brings its guest's Atlas to the very build it runs itself,
+//! only while the station's Stop holds agents, and carries that update on
+//! in every generation until it is done ([`update`]).
+//!
 //! An update of Atlas replaces its program while it runs; it does nothing
 //! on its own then. The update hands it over ([`super::handover`]): asked,
 //! it keeps the station's Stop for the update, says it, leaves its
@@ -38,6 +42,7 @@ mod picture;
 mod program;
 mod recover;
 mod stage;
+mod update;
 
 pub use agent::{install_keeper, install_keeper_held};
 pub(crate) use clients::{CAPABILITIES, PROTOCOL, RESUME_KEY, carries};
@@ -45,6 +50,7 @@ pub(crate) use held::served_while_held;
 pub(crate) use picture::carries_bulk;
 use program::Program;
 pub(crate) use stage::deadline as stage_deadline;
+pub(crate) use update::unsettled as update_unsettled;
 
 use super::{
     Vms,
@@ -267,6 +273,9 @@ async fn started(
         shared: Shared::default(),
         lifecycle: super::lifecycle::Lifecycle::own()?,
         lanes: lanes::Lanes::default(),
+        owner: tokio::sync::Mutex::default(),
+        owner_waking: tokio::sync::Notify::new(),
+        update_writes: Arc::default(),
     });
     keeper.finish_handover()?;
     held::at_start(&keeper).await;
@@ -456,6 +465,13 @@ struct Keeper {
     lifecycle: super::lifecycle::Lifecycle,
     /// The agents' lanes it carries now, and what holds them.
     lanes: lanes::Lanes,
+    /// The update of its guest it owns, taken by one at a time.
+    owner: tokio::sync::Mutex<update::Owner>,
+    /// Told when a client begins an update, so it is carried on at once.
+    owner_waking: tokio::sync::Notify,
+    /// Held through each write of the update's record, to its end: one
+    /// at a time, and none of a generation that ended after the next's.
+    update_writes: Arc<update::Writes>,
 }
 
 /// The live generation, and what the keeper says of its session.
@@ -663,7 +679,11 @@ impl Keeper {
         let work = async {
             let report = report(&session).await;
             self.shared.state().report = Some(report);
-            tokio::join!(self.reconciled(&session), self.recovering(&session));
+            tokio::join!(
+                self.reconciled(&session),
+                self.recovering(&session),
+                self.updating(&session)
+            );
         };
         tokio::pin!(work);
         let ended = loop {

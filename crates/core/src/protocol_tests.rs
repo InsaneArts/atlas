@@ -1071,3 +1071,21 @@ fn an_update_names_its_staged_bundle_and_the_digest_that_bundle_must_still_have(
         "update requires the \"staged\" bundle's path"
     );
 }
+
+#[test]
+fn a_void_names_its_change_by_its_lane_and_is_a_mutation() {
+    let asked = super::parse(
+        json!({"op": "void", "change": CHANGE})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+
+    assert_eq!(asked.request, Request::Void);
+    assert_eq!(asked.change.as_ref().map(Token::as_str), Some(CHANGE));
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        asked.request.policy().phase,
+        ConnectionPhase::Mutation("void")
+    );
+}

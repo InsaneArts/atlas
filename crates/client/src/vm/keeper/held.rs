@@ -47,7 +47,7 @@ pub(crate) fn served_while_held(request: &Value) -> bool {
 
 /// What the VM's lifecycle record says of its maintenance now, and its
 /// name there.
-async fn kept(keeper: &Keeper) -> (Kept, Option<String>) {
+pub(super) async fn kept(keeper: &Keeper) -> (Kept, Option<String>) {
     let (lifecycle, vm) = (keeper.lifecycle.clone(), keeper.vm.clone());
     tokio::task::spawn_blocking(move || Kept::read(Some(&lifecycle), &vm))
         .await

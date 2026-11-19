@@ -5,7 +5,9 @@
 //! clears its claim, and the guest is then told to forget it. An uncertain
 //! answer waits for that proof; anything else stays pending as it is. A
 //! claim another executor carries out (Atlas VM, the station) is never
-//! looked at.
+//! looked at, nor is one an update of the guest's Atlas names: its owner
+//! keeps each answer before it clears a claim ([`super::update`]). While
+//! that update's record cannot be read, nothing is.
 use super::{Keeper, Session, change::live_in, read};
 use atlas_control::executors::Executor;
 use atlas_core::{
@@ -61,15 +63,30 @@ impl Keeper {
         let unheld = super::blocking(move || stop.unheld_by(Executor::Guest, wait))
             .await
             .ok()?;
-        let declared = session.control.declared();
-        if judge(declared, &[CHANGES]).refusal().is_some() {
+        // An update's changes are its owner's to settle, and a record of
+        // one that cannot be read may name any: none is looked at then.
+        let folder = self.folder.clone();
+        let Ok(owned) = super::blocking(move || super::update::owned(&folder)).await else {
             return Some(Recovered {
                 cleared: Vec::new(),
                 kept: unheld,
             });
+        };
+        let (owned, unheld): (Vec<String>, Vec<String>) = unheld
+            .into_iter()
+            .partition(|claim| owned.iter().any(|change| change.as_str() == claim));
+        let declared = session.control.declared();
+        if judge(declared, &[CHANGES]).refusal().is_some() {
+            return Some(Recovered {
+                cleared: Vec::new(),
+                kept: owned.into_iter().chain(unheld).collect(),
+            });
         }
         let proves_ended = judge(declared, &[ENDED]).refusal().is_none();
-        let mut recovered = Recovered::default();
+        let mut recovered = Recovered {
+            cleared: Vec::new(),
+            kept: owned,
+        };
         for (index, claim) in unheld.into_iter().enumerate() {
             let change = Token::parse(&claim)
                 .filter(|_| index < ROUND)
@@ -115,7 +132,7 @@ impl Keeper {
 
 /// What the guest of `session` answers of `change`: none when it does not
 /// answer whole in time.
-async fn outcome(session: &Session, change: &Token) -> Option<Value> {
+pub(super) async fn outcome(session: &Session, change: &Token) -> Option<Value> {
     let mut last = None;
     let asked = json!({"op": "outcome", "change": change});
     read(session, LaneKind::Read, &asked, ASKING, |line| {

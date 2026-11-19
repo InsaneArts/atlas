@@ -321,3 +321,18 @@ fn a_held_files_chunk_is_given_only_while_it_reads_as_it_did() {
     assert!(held_file.chunk(1, size).is_err(), "overwritten in place");
     assert_eq!(held_file.chunk(0, size).unwrap(), vec![7_u8; CHUNK]);
 }
+
+#[test]
+fn a_held_file_is_known_by_the_device_and_inode_it_was_read_as() {
+    use std::os::unix::fs::MetadataExt;
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("atlas");
+    fs::write(&file, b"A").unwrap();
+    let read = fs::metadata(&file).unwrap();
+    let held = Snapshot::held(&file).unwrap();
+    let (_, _, held_file) = held.files().next().unwrap();
+
+    assert!(held_file.is(read.dev(), read.ino()));
+    assert!(!held_file.is(read.dev(), read.ino() + 1));
+    assert!(!held_file.is(read.dev() + 1, read.ino()));
+}

@@ -413,6 +413,10 @@ requests! { request =>
             .ok_or_else(|| bad("remove-copy requires the \"node\" of its copy"))?
             .to_owned(),
     }),
+    /// Settle for good a machine desktop's change named by the lane it is
+    /// asked on, when it was never asked before: kept refused, so it is
+    /// never carried out after. One asked before is never voided.
+    "void" Void = Ok(Request::Void),
     /// Update a machine desktop's Atlas to the bundle staged in it at
     /// `staged`, only while that bundle is still the one whose manifest
     /// digest is `expect`.
@@ -499,6 +503,7 @@ impl Request {
             Self::CopyContents { .. } => (Any, None, Read("copy-contents")),
             Self::RemoveCopy { .. } => (Any, None, Mutation("remove-copy")),
             Self::Update { .. } => (Any, None, Mutation("update")),
+            Self::Void => (Any, None, Mutation("void")),
         };
         Policy {
             console,

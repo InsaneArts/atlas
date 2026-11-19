@@ -117,6 +117,22 @@ where
         .map_err(io)?;
     let request: Value = serde_json::from_slice(&line)?;
     let answered = match &header.kind {
+        LaneKind::Change { change } if request["op"] == "void" => {
+            let voided = stand_in.void(change);
+            if stand_in
+                .dropping
+                .fetch_update(SeqCst, SeqCst, |left| left.checked_sub(1))
+                .is_ok()
+            {
+                return Ok(());
+            }
+            voided
+        }
+        LaneKind::Change { change } | LaneKind::Stage { change }
+            if stand_in.refused_as_voided(change).is_some() =>
+        {
+            stand_in.refused_as_voided(change).unwrap_or_default()
+        }
         // A change to input is kept as any change is, as a real guest keeps
         // it before its input service is asked.
         LaneKind::Change { change }
@@ -131,6 +147,10 @@ where
                 reply
             }
             Asked::Again(Some(reply)) => reply,
+            // An update taken and not settled is answered from its record.
+            Asked::Again(None) if stand_in.unsettled_update(change) => {
+                stand_in.update(change, &request)
+            }
             Asked::Again(None) => serde_json::json!({"ok": false, "code": "uncertain",
                 "error": "This change was asked for before, and what it came to is unknown",
                 "uncertain": true}),
@@ -241,6 +261,15 @@ async fn carried_out(
         && operation.as_deref() == Some("acquire")
     {
         stand_in.ask(owner);
+    }
+    // An update is the guest's own reconciliation's to settle: one taken is
+    // answered pending and stays unsettled.
+    if operation.as_deref() == Some("update") {
+        let reply = stand_in.update(change, &request);
+        if reply["pending"] != true {
+            stand_in.done(change, &reply);
+        }
+        return Some(reply);
     }
     // A copy is removed by the guest's own code, as a change it keeps.
     let reply = if request["op"] == "remove-copy" {

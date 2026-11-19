@@ -1554,6 +1554,17 @@ impl Machine {
                 .await;
             return write(&mut writer, &reply).await;
         }
+        // A void settles a change never asked for good, or says it was.
+        if let LaneKind::Change { change } = &header.kind
+            && let Ok(protocol::Asked {
+                request: Request::Void,
+                ..
+            }) = protocol::parse(&line)
+            && let Ok(request) = serde_json::from_slice::<Value>(&line)
+        {
+            let reply = self.void(change.clone(), request).await;
+            return write(&mut writer, &reply).await;
+        }
         // A change is kept as intended before it runs; one asked before is
         // answered from what it came to, never run again.
         if let LaneKind::Change { change } = &header.kind

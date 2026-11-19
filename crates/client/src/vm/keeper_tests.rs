@@ -142,6 +142,8 @@ pub(super) struct Guest {
     /// as it begins to wait.
     pub(super) lanes_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     pub(super) lanes_waiting: AtomicUsize,
+    /// How many lane dials to come fail.
+    pub(super) lanes_failing: AtomicUsize,
 }
 
 impl Guest {
@@ -212,6 +214,13 @@ impl Reach for Guest {
                             .acquire()
                             .await
                             .map(tokio::sync::SemaphorePermit::forget);
+                    }
+                    if self
+                        .lanes_failing
+                        .fetch_update(SeqCst, SeqCst, |left| left.checked_sub(1))
+                        .is_ok()
+                    {
+                        return Err(Self::failed());
                     }
                     let lanes = self
                         .live
@@ -314,6 +323,9 @@ pub(super) struct Saying {
     pub(super) input: Mutex<Option<Value>>,
     /// Changes made to its hello.
     pub(super) hello: Mutex<Option<fn(&mut Value)>>,
+    /// The build and version its daemon says in its hello, in place of
+    /// its own.
+    pub(super) daemon: Mutex<Option<(String, String)>>,
     /// Whether its input lanes stall: open, and silent.
     pub(super) input_stalls: std::sync::atomic::AtomicBool,
     /// Every command it was asked to run, in order.
@@ -358,6 +370,10 @@ impl Guest {
                         let mut hello = machine_hello(*stop.lock().unwrap());
                         if let Some(change) = *said.hello.lock().unwrap() {
                             change(&mut hello);
+                        }
+                        if let Some((build, version)) = said.daemon.lock().unwrap().clone() {
+                            hello["daemon"]["build"] = json!(build);
+                            hello["daemon"]["version"] = json!(version);
                         }
                         hello
                     }
@@ -404,6 +420,11 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture() -> Fixture {
+    fixture_with(Program::built("b1"))
+}
+
+/// [`fixture`], its keeper running `program`.
+pub(super) fn fixture_with(program: Program) -> Fixture {
     let standin = StandIn::new(
         DesktopId::parse("0123456789abcdef01234567").unwrap(),
         Duration::ZERO,
@@ -439,6 +460,7 @@ pub(super) fn fixture() -> Fixture {
         connections: Mutex::default(),
         lanes_gate: Mutex::default(),
         lanes_waiting: AtomicUsize::new(0),
+        lanes_failing: AtomicUsize::new(0),
     });
     // Short, so Atlas VM's control socket stood in for under it fits.
     let state = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
@@ -460,7 +482,7 @@ pub(super) fn fixture() -> Fixture {
         applied: Mutex::default(),
         forgotten: std::sync::atomic::AtomicBool::new(false),
         folder: state.path().join("station"),
-        program: Program::built("b1"),
+        program,
         instance: atlas_core::process::Instance::current(),
         handing: std::sync::atomic::AtomicBool::new(false),
         ended: tokio::sync::Notify::new(),
@@ -471,6 +493,9 @@ pub(super) fn fixture() -> Fixture {
         shared: Shared::default(),
         lifecycle: crate::vm::lifecycle::Lifecycle::under(state.path()),
         lanes: lanes::Lanes::default(),
+        owner: tokio::sync::Mutex::default(),
+        owner_waking: tokio::sync::Notify::new(),
+        update_writes: Arc::default(),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
     Fixture {
@@ -482,6 +507,17 @@ pub(super) fn fixture() -> Fixture {
     }
 }
 
+impl Fixture {
+    /// The same VM, guest and records, its keeper the one launchd starts
+    /// after it, running `program`.
+    pub(super) fn after(self, program: Program) -> Self {
+        Self {
+            keeper: next_with(&self.keeper, program),
+            ..self
+        }
+    }
+}
+
 /// The keeper launchd starts after `keeper`: of the same VM, over the same
 /// records, guest, Stop and station folder, with nothing of its own yet.
 pub(super) fn next(keeper: &Keeper) -> Arc<Keeper> {
@@ -489,7 +525,7 @@ pub(super) fn next(keeper: &Keeper) -> Arc<Keeper> {
 }
 
 /// [`next`], its program `program`.
-fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
+pub(super) fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
     Arc::new(Keeper {
         vm: keeper.vm.clone(),
         name: keeper.name.clone(),
@@ -513,6 +549,9 @@ fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         shared: Shared::default(),
         lifecycle: keeper.lifecycle.clone(),
         lanes: lanes::Lanes::default(),
+        owner: tokio::sync::Mutex::default(),
+        owner_waking: tokio::sync::Notify::new(),
+        update_writes: keeper.update_writes.clone(),
     })
 }
 

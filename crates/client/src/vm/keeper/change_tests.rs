@@ -394,11 +394,21 @@ async fn a_client_change_asking_the_guest_to_update_is_refused_unsent() {
             "request": {"op": "update", "change": change, "staged": "/Users/Shared/Atlas.app"}})
     };
 
-    for asking in [
-        update("change"),
-        update("input"),
+    let updating = "Only Atlas's own update changes Atlas in the VM; nothing was sent.";
+    let voiding = "Only the keeper voids a change in the VM; nothing was sent.";
+    for (asking, words) in [
+        (update("change"), updating),
+        (update("input"), updating),
         // Refused as an update whatever else it lacks.
-        json!({"op": "change", "request": {"op": "update"}}),
+        (
+            json!({"op": "change", "request": {"op": "update"}}),
+            updating,
+        ),
+        (
+            json!({"op": "change", "lane": "change", "change": change,
+                "generation": generation, "request": {"op": "void", "change": change}}),
+            voiding,
+        ),
     ] {
         let answered = asked(&serving.socket, &asking).await;
 
@@ -406,10 +416,7 @@ async fn a_client_change_asking_the_guest_to_update_is_refused_unsent() {
         assert_eq!(answered[0]["code"], "denied", "{asking}");
         assert_eq!(answered[0]["sent"], false, "{asking}");
         assert_eq!(answered[0]["uncertain"], false, "{asking}");
-        assert_eq!(
-            answered[0]["error"],
-            "Only Atlas's own update changes Atlas in the VM; nothing was sent."
-        );
+        assert_eq!(answered[0]["error"], words, "{asking}");
     }
 
     assert_eq!(admitted(&serving).len(), opened, "no lane was opened");

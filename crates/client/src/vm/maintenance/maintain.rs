@@ -298,6 +298,7 @@ impl Maintainer {
         let going_on = first.is_some();
         // Refused before the person is asked, and judged again once held.
         if !going_on {
+            self.not_updating()?;
             self.first_phase(restart)?;
             if !restart {
                 self.controller
@@ -319,6 +320,7 @@ impl Maintainer {
         let mut record = self.created()?;
         let mut maintenance = match (record.maintenance.clone(), going_on) {
             (None, false) => {
+                self.not_updating()?;
                 let maintenance = Maintenance {
                     change,
                     phase: self.first_phase(restart)?,
@@ -684,6 +686,23 @@ impl Maintainer {
             return Err(Error::new(Code::Stopped, why));
         }
         Ok(record)
+    }
+
+    /// Refuse a maintenance begun while an update of the VM's Atlas may still
+    /// be taken by its guest: an Atlas VM older than that update may never
+    /// end one. A record of it that cannot be read counts as one under way.
+    fn not_updating(&self) -> Result<()> {
+        let station = crate::station::Station::under(self.lifecycle.home()).path_of(&self.vm);
+        if crate::vm::keeper::update_unsettled(&station) {
+            return Err(Error::new(
+                Code::Busy,
+                format!(
+                    "{}'s Atlas is being updated; begin maintenance once it is done.",
+                    self.name
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The VM's lifecycle record.

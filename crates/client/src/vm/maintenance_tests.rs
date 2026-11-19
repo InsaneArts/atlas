@@ -171,3 +171,41 @@ fn a_status_says_the_maintenance_and_one_that_does_not_say_holds_agents() {
     assert_eq!(holds("work", &ending).as_deref(), ending["reason"].as_str());
     assert!(holds("work", &Value::Null).is_some(), "not said");
 }
+
+#[test]
+fn atlas_on_a_vm_is_not_updated_while_its_maintenance_is_kept_and_the_person_is_told_to_end_it_first()
+ {
+    let on = Kept::On(maintenance(Phase::Open))
+        .update_refused("work")
+        .unwrap();
+    let ending = Kept::Ending(maintenance(Phase::Closing))
+        .update_refused("work")
+        .unwrap();
+    let unreadable = Kept::Unreadable.update_refused("work").unwrap();
+
+    assert_eq!(on.code, Code::Busy);
+    assert_eq!(
+        on.error,
+        "work is under maintenance, so its Atlas is not updated."
+    );
+    assert_eq!(
+        on.details["next"],
+        "End it with atlas desktop maintain work --end, then run atlas update."
+    );
+    assert_eq!(ending.code, Code::Busy);
+    assert_eq!(
+        ending.details["next"],
+        "Run atlas desktop maintain work --end again, then run atlas update."
+    );
+    assert_eq!(unreadable.code, Code::State);
+    assert!(
+        unreadable.details["next"]
+            .as_str()
+            .unwrap()
+            .contains("end it with atlas desktop maintain work --end")
+    );
+    for refused in [&on, &ending, &unreadable] {
+        assert!(!refused.error.to_lowercase().contains("helper"));
+    }
+    assert!(Kept::None.update_refused("work").is_none());
+}

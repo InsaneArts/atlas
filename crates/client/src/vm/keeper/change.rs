@@ -7,7 +7,9 @@
 //! reached the guest: no live generation, another one than its command
 //! proved, a guest that keeps no change records, or a lane that did not
 //! open. A client's change that asks the guest to update its Atlas is
-//! refused so before anything else: only the keeper itself asks that. Once its request may have reached the guest, a failure says
+//! refused so before anything else, as is one that voids a change: only the
+//! keeper itself asks those. Once its request may have reached the guest, a
+//! failure says
 //! `"sent": true, "uncertain": true`, and the guest's own record of it is
 //! what tells. A client that hangs up before the final reply has its
 //! change's lane cancelled over control.
@@ -138,11 +140,20 @@ impl Asked {
     /// asks the guest to update its Atlas, which only the keeper itself
     /// asks, or names none of these.
     fn of(request: &Value) -> std::result::Result<Self, Error> {
-        if request["request"]["op"] == "update" {
-            return Err(Error::new(
-                Code::Denied,
-                "Only Atlas's own update changes Atlas in the VM; nothing was sent.",
-            ));
+        match request["request"]["op"].as_str() {
+            Some("update") => {
+                return Err(Error::new(
+                    Code::Denied,
+                    "Only Atlas's own update changes Atlas in the VM; nothing was sent.",
+                ));
+            }
+            Some("void") => {
+                return Err(Error::new(
+                    Code::Denied,
+                    "Only the keeper voids a change in the VM; nothing was sent.",
+                ));
+            }
+            _ => {}
         }
         Self::named(request).ok_or_else(|| {
             Error::new(

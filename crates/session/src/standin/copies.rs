@@ -37,6 +37,8 @@ pub struct Copy {
     /// The manifest it was staged with, which says where each file's
     /// contents begin.
     pub snapshot: Snapshot,
+    /// What it was staged for, when not an agent's own use.
+    pub purpose: Option<String>,
 }
 
 impl StandIn {
@@ -241,6 +243,7 @@ where
                 processes: Some(Vec::new()),
                 contents,
                 snapshot,
+                purpose: request["purpose"].as_str().map(str::to_owned),
             },
         );
         json!({"ok": true, "path": format!("{ROOT}/{change}/{name}"), "digest": digest})

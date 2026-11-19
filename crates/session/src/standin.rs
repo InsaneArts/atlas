@@ -6,6 +6,7 @@ pub mod copies;
 pub mod link;
 pub mod pictures;
 pub mod serve;
+pub mod updates;
 
 use link::Tasks;
 
@@ -129,6 +130,16 @@ pub struct StandIn {
     /// Whether it is an older guest that keeps changes but never proves
     /// one ended, declaring no `ended-v1`.
     pub unended: AtomicBool,
+    /// The capabilities it does not declare, of those a machine guest
+    /// serving everything does.
+    pub undeclared: Mutex<Vec<String>>,
+    /// Whether its own Stop is kept: from a Stop it kept to a Resume.
+    pub halted: AtomicBool,
+    /// Every update it was asked and has not settled, by its change: what
+    /// it was asked.
+    pub updates: Mutex<BTreeMap<Token, Value>>,
+    /// Every update request it heard, in order, whatever it was answered.
+    pub updates_asked: Mutex<Vec<Value>>,
     pub dials: Mutex<Vec<LaneId>>,
     /// The changes the station settled.
     pub settled: Mutex<Vec<atlas_core::files::Token>>,
@@ -229,6 +240,10 @@ impl StandIn {
             on_lift: OnLift::default(),
             plain: std::sync::atomic::AtomicBool::new(false),
             unended: AtomicBool::new(false),
+            undeclared: Mutex::default(),
+            halted: AtomicBool::new(false),
+            updates: Mutex::default(),
+            updates_asked: Mutex::default(),
             dials: Mutex::new(Vec::new()),
             settled: Mutex::new(Vec::new()),
             on_settled: OnSettled::default(),
@@ -303,9 +318,15 @@ impl StandIn {
                     vec![crate::compatibility::STOP_REPORT.to_owned()]
                 } else {
                     let unended = self.unended.load(SeqCst);
+                    let undeclared = self
+                        .undeclared
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
                     crate::compatibility::MACHINE
                         .iter()
                         .filter(|declared| !unended || **declared != crate::compatibility::ENDED)
+                        .filter(|declared| !undeclared.iter().any(|name| name == *declared))
                         .map(|declared| (*declared).to_owned())
                         .collect()
                 }),
@@ -457,6 +478,7 @@ impl Handler {
 impl Guest for Handler {
     fn stop(&self) {
         self.standin.stops.fetch_add(1, SeqCst);
+        self.standin.halted.store(true, SeqCst);
     }
 
     fn release(&self) {
@@ -465,6 +487,7 @@ impl Guest for Handler {
 
     fn resume(&self) {
         self.standin.resumes.fetch_add(1, SeqCst);
+        self.standin.halted.store(false, SeqCst);
     }
 
     fn halt(&self, seq: u64) {
@@ -474,6 +497,9 @@ impl Guest for Handler {
             .unkept
             .fetch_update(SeqCst, SeqCst, |left| left.checked_sub(1))
             .is_ok();
+        if !unkept {
+            self.standin.halted.store(true, SeqCst);
+        }
         self.answer(
             seq,
             if unkept {
@@ -487,7 +513,24 @@ impl Guest for Handler {
     }
 
     fn lift(&self, seq: u64) {
+        // An update not yet settled holds every Resume, as a guest's does.
+        if !self
+            .standin
+            .updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+        {
+            self.answer(
+                seq,
+                Outcome::Refused {
+                    why: crate::control::Refusal::Update,
+                },
+            );
+            return;
+        }
         self.standin.resumes.fetch_add(1, SeqCst);
+        self.standin.halted.store(false, SeqCst);
         self.standin.on_lift.run();
         self.answer(seq, Outcome::Resumed);
     }
@@ -497,7 +540,11 @@ impl Guest for Handler {
         {
             let mut kept = self.standin.records();
             for change in &changes {
-                if kept.get(change).is_some_and(Option::is_some) {
+                // A void stays: its name is retired for good.
+                if kept
+                    .get(change)
+                    .is_some_and(|kept| kept.as_ref().is_some_and(|reply| reply["op"] != "void"))
+                {
                     kept.remove(change);
                 }
             }

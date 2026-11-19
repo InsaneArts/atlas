@@ -88,6 +88,41 @@ impl Kept {
         })
     }
 
+    /// Why Atlas on the VM `name` is not updated: none while no maintenance
+    /// is kept. An Atlas VM older than the build an update brings may never
+    /// end a maintenance it began, so one is ended first.
+    pub(crate) fn update_refused(&self, name: &str) -> Option<Error> {
+        let (code, why, next) = match self {
+            Self::None => return None,
+            Self::On(_) => (
+                Code::Busy,
+                format!("{name} is under maintenance, so its Atlas is not updated."),
+                format!("End it with atlas desktop maintain {name} --end, then run atlas update."),
+            ),
+            Self::Ending(_) => (
+                Code::Busy,
+                format!("{name}'s maintenance is still ending, so its Atlas is not updated."),
+                format!("Run atlas desktop maintain {name} --end again, then run atlas update."),
+            ),
+            Self::Unreadable => (
+                Code::State,
+                format!(
+                    "Whether {name} is under maintenance cannot be read, so its Atlas is not \
+                     updated."
+                ),
+                format!(
+                    "If it is, end it with atlas desktop maintain {name} --end, then run atlas \
+                     update."
+                ),
+            ),
+        };
+        Some(
+            Error::new(code, why)
+                .with("next", json!(next))
+                .held_by(Holder::Person),
+        )
+    }
+
     /// Why the person's Resume of agents on the VM `name` is refused: none
     /// while no maintenance is kept.
     pub(crate) fn resume_refused(&self, name: &str) -> Option<Error> {

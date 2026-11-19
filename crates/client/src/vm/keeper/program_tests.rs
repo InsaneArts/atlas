@@ -66,3 +66,63 @@ fn a_launch_path_that_names_another_file_than_the_image_gives_no_build() {
 
     assert_eq!(launched.digest(), None);
 }
+
+/// An app bundle whose executable is a copy of a signed program.
+fn signed_bundle() -> (tempfile::TempDir, std::path::PathBuf) {
+    let folder = tempfile::tempdir().unwrap();
+    let app = folder.path().join("Atlas.app");
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::write(app.join("Contents/Info.plist"), b"<plist/>").unwrap();
+    let executable = app.join("Contents/MacOS/atlas");
+    std::fs::copy("/usr/bin/true", &executable).unwrap();
+    (folder, executable)
+}
+
+#[test]
+fn a_keepers_own_bundle_is_held_only_while_its_executable_is_the_image_it_runs() {
+    let (_folder, executable) = signed_bundle();
+    let program = Program::signed_at(&executable);
+
+    let (bundle, held) = program.bundle().unwrap();
+
+    assert_eq!(
+        bundle,
+        std::fs::canonicalize(executable.ancestors().nth(3).unwrap()).unwrap()
+    );
+    assert!(
+        held.files()
+            .any(|(entry, _, _)| entry.path == ["Contents", "MacOS", "atlas"])
+    );
+    // The same file, other bytes: not the build it read at its start.
+    std::fs::write(&executable, b"#!/bin/sh\n").unwrap();
+    assert_eq!(program.bundle().unwrap_err(), Unheld::NotOwn);
+}
+
+#[test]
+fn a_keeper_whose_file_was_replaced_or_cannot_be_told_never_holds_a_bundle() {
+    let (_folder, executable) = signed_bundle();
+    let program = Program::signed_at(&executable);
+    let other = executable.with_file_name("atlas.new");
+    std::fs::copy("/usr/bin/true", &other).unwrap();
+    std::fs::rename(&other, &executable).unwrap();
+
+    assert_eq!(program.bundle().unwrap_err(), Unheld::Replaced);
+    assert_eq!(Program::default().bundle().unwrap_err(), Unheld::Replaced);
+    assert_eq!(Program::built("b1").bundle().unwrap_err(), Unheld::Replaced);
+}
+
+#[test]
+fn a_program_not_in_an_app_bundle_or_unsigned_holds_none() {
+    let folder = tempfile::tempdir().unwrap();
+    let loose = folder.path().join("atlas");
+    std::fs::copy("/usr/bin/true", &loose).unwrap();
+    assert_eq!(
+        Program::signed_at(&loose).bundle().unwrap_err(),
+        Unheld::NotOwn
+    );
+
+    let (_bundle, executable) = signed_bundle();
+    let mut unsigned = Program::signed_at(&executable);
+    unsigned.code = Some("00".repeat(20));
+    assert_eq!(unsigned.bundle().unwrap_err(), Unheld::NotOwn);
+}

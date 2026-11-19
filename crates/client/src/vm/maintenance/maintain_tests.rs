@@ -1096,3 +1096,53 @@ async fn a_command_started_while_the_person_is_asked_refuses_the_begin_in_the_vm
     assert!(keeper.asked_for("hold").is_empty());
     drop(running.lock().unwrap().take());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maintenance_is_refused_while_an_update_of_the_vms_atlas_may_still_be_taken() {
+    let staged = json!({"target": {"build": "b2".repeat(32), "version": "0.1.3"},
+        "phase": {"phase": "staged", "stage": Token::new(),
+            "staged": {"path": "/Users/guest/Atlas.app", "digest": "ab".repeat(32)}},
+        "earlier": []});
+    for kept in [staged.to_string().into_bytes(), b"{damaged".to_vec()] {
+        let dir = tempdir();
+        let (client, keeper) = quiet_vm(dir.path());
+        let station = crate::station::Station::under(lifecycle(&client).home())
+            .path_of(&client.desktop().id());
+        std::fs::create_dir_all(&station).unwrap();
+        std::fs::write(station.join("guest-update.json"), kept).unwrap();
+        let person = Person::default();
+
+        let refused = asked(&client, BEGIN, person.allowing()).await.unwrap_err();
+
+        assert_eq!(refused.code, Code::Busy, "{refused:?}");
+        assert_eq!(
+            refused.error,
+            "work's Atlas is being updated; begin maintenance once it is done."
+        );
+        assert!(
+            person.asked().is_empty(),
+            "refused before the person is asked"
+        );
+        assert!(maintenance(&client).is_none());
+        assert!(keeper.asked_for("hold").is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_update_settled_or_only_intended_never_holds_a_maintenance_back() {
+    for phase in [
+        json!({"phase": "intended"}),
+        json!({"phase": "done", "issued": [], "outcome": {"ok": true}}),
+    ] {
+        let dir = tempdir();
+        let (client, _keeper) = quiet_vm(dir.path());
+        let station = crate::station::Station::under(lifecycle(&client).home())
+            .path_of(&client.desktop().id());
+        std::fs::create_dir_all(&station).unwrap();
+        let record = json!({"target": {"build": "b2".repeat(32), "version": "0.1.3"},
+            "phase": phase, "earlier": []});
+        std::fs::write(station.join("guest-update.json"), record.to_string()).unwrap();
+
+        assert!(!crate::vm::keeper::update_unsettled(&station), "{record}");
+    }
+}

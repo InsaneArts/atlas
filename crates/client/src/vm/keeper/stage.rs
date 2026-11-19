@@ -396,7 +396,7 @@ async fn early(
 }
 
 /// Whether `line` is the guest's word that it is ready for a stage's bytes.
-fn ready(line: &str) -> bool {
+pub(super) fn ready(line: &str) -> bool {
     serde_json::from_str::<Value>(line).ok() == Some(json!({"ready": true}))
 }
 
@@ -441,13 +441,13 @@ async fn pass(line: &str, writing: &mut OwnedWriteHalf, between: &AtomicBool) ->
 
 /// A stage lane's reply lines, read by a task of their own and ended with
 /// it: each whole and bounded, as every reply line is.
-struct Replies {
+pub(super) struct Replies {
     lines: mpsc::Receiver<Result<String, Error>>,
     reading: tokio::task::JoinHandle<()>,
 }
 
 impl Replies {
-    fn reading<R: AsyncRead + Send + Unpin + 'static>(lane: R) -> Self {
+    pub(super) fn reading<R: AsyncRead + Send + Unpin + 'static>(lane: R) -> Self {
         let (said, lines) = mpsc::channel(2);
         let reading = tokio::spawn(async move {
             let mut lane = BufReader::new(lane);
@@ -474,7 +474,7 @@ impl Replies {
     }
 
     /// The next line, or why none comes.
-    async fn next(&mut self) -> Result<String, Error> {
+    pub(super) async fn next(&mut self) -> Result<String, Error> {
         self.lines.recv().await.unwrap_or_else(|| {
             Err(Error::new(
                 Code::Transport,

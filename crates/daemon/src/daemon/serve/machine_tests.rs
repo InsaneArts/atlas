@@ -4582,6 +4582,186 @@ async fn a_changed_refusal_that_could_not_be_kept_is_said_uncertain_and_a_retry_
     swapped.never_installed_and_kept_as(refused);
 }
 
+/// Void the change `change` on its own lane: every line the guest said.
+async fn voided(desktop: &Desktop, change: &Token) -> Vec<Value> {
+    ask(
+        desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "void", "change": change}),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_change_never_asked_is_voided_for_good_and_no_stage_or_update_under_its_name_is_taken() {
+    use crate::machine::stop::{Kept, Why};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    kept_as(&served, Kept::Stopped { why: Why::Person }).await;
+    let (_source, tree) = tree_to_stage();
+    let (stage, update) = (Token::new(), Token::new());
+
+    let stage_voided = voided(&desktop, &stage).await;
+    let update_voided = voided(&desktop, &update).await;
+    let again = voided(&desktop, &stage).await;
+    let staged = stage_for(
+        &desktop,
+        &controlling.credit,
+        &stage,
+        &tree,
+        Sending::Whole,
+        Some("update"),
+    )
+    .await;
+    let asked = ask(
+        &desktop,
+        LaneKind::Change {
+            change: update.clone(),
+        },
+        &json!({"op": "update", "staged": "/tmp/Atlas.app", "expect": "ab".repeat(32),
+            "change": update}),
+    )
+    .await;
+
+    for said in [&stage_voided, &update_voided, &again] {
+        assert_eq!(
+            said.last().unwrap(),
+            &json!({"ok": true, "op": "void", "voided": true}),
+            "{said:?}"
+        );
+    }
+    assert_eq!(staged.last().unwrap()["code"], "bad-request", "{staged:?}");
+    assert_eq!(staged.len(), 1, "never told to send its bytes");
+    assert!(!copies(&served).join(stage.as_str()).exists());
+    assert_eq!(asked.last().unwrap()["code"], "bad-request", "{asked:?}");
+    assert!(served.machine.paired.updates.all().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_voided_change_stays_retired_after_its_settlement_and_a_restart() {
+    use crate::machine::stop::{Kept, Why};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    let change = Token::new();
+    voided(&desktop, &change).await;
+
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Settled {
+            changes: vec![change.clone()],
+        })
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        matches!(
+            served.changes.of(&change).unwrap(),
+            Some(State::Done { .. })
+        ),
+        "kept once settled"
+    );
+    let Served { records, vault, .. } = served;
+    let changes = Arc::new(Changes::new(records.path(), vault.clone()));
+    let restarted = Served::on((records, vault, changes)).await;
+    let (controlling, desktop) = restarted.control().await;
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    kept_as(&restarted, Kept::Stopped { why: Why::Person }).await;
+    let (_source, tree) = tree_to_stage();
+    let staged = stage_for(
+        &desktop,
+        &controlling.credit,
+        &change,
+        &tree,
+        Sending::Whole,
+        Some("update"),
+    )
+    .await;
+    let updated = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &json!({"op": "update", "staged": "/tmp/Atlas.app", "expect": "ab".repeat(32),
+            "change": change}),
+    )
+    .await;
+
+    assert!(
+        !controlling.unsettled.contains(&change),
+        "never named to settle again"
+    );
+    assert_eq!(staged.last().unwrap()["code"], "bad-request", "{staged:?}");
+    assert_eq!(
+        updated.last().unwrap()["code"],
+        "bad-request",
+        "{updated:?}"
+    );
+    assert!(restarted.machine.paired.updates.all().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn past_its_bound_a_guest_refuses_another_void_in_words_and_forgets_none() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let kept = json!({"ok": true, "op": "void", "voided": true});
+    for _ in 0..crate::machine::changes::VOIDS {
+        let change = Token::new();
+        served
+            .changes
+            .ask(&change, "void", &json!({"op": "void", "change": change}))
+            .unwrap();
+        served.changes.done(&change, &kept).unwrap();
+    }
+
+    let refused = voided(&desktop, &Token::new()).await;
+
+    let refused = refused.last().unwrap();
+    assert_eq!(refused["code"], "busy", "{refused}");
+    assert_eq!(
+        refused["error"],
+        "This desktop keeps as many voided changes as it can, so this one is not voided."
+    );
+    assert_eq!(
+        served.changes.voided().unwrap(),
+        crate::machine::changes::VOIDS
+    );
+}
+
+#[tokio::test]
+async fn a_change_asked_before_is_never_voided_and_keeps_what_it_came_to() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    let request = json!({"op": "update", "staged": "/tmp/Atlas.app", "expect": "ab".repeat(32),
+        "change": change});
+    let first = ask(
+        &desktop,
+        LaneKind::Change {
+            change: change.clone(),
+        },
+        &request,
+    )
+    .await;
+
+    let void = voided(&desktop, &change).await;
+
+    let refused = void.last().unwrap();
+    assert_eq!(refused["ok"], false, "{void:?}");
+    assert_eq!(refused["code"], "bad-request", "{void:?}");
+    assert_ne!(refused["uncertain"], true, "{void:?}");
+    assert!(
+        matches!(served.changes.of(&change).unwrap(), Some(State::Done { reply }) if Some(&reply) == first.last())
+    );
+}
+
 #[tokio::test]
 async fn an_update_left_unresolved_holds_every_resume() {
     let served = Served::start().await;

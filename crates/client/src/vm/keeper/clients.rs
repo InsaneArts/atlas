@@ -12,6 +12,8 @@
 //! An update asks `handover`, with its change: the keeper keeps the station's
 //! Stop for the update, says it, leaves its generation, answers and ends,
 //! all under its turn, so no Resume comes between.
+//! `update-guest` asks the keeper to bring its guest to the keeper's own
+//! build ([`super::update`]).
 //!
 //! The person's maintenance of the VM holds every agent's request here,
 //! read afresh from the VM's lifecycle record at each one ([`super::held`]);
@@ -50,7 +52,7 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(crate) const CAPABILITIES: [&str; 10] = [
+pub(crate) const CAPABILITIES: [&str; 11] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
@@ -61,6 +63,7 @@ pub(crate) const CAPABILITIES: [&str; 10] = [
     super::stage::CAPABILITY,
     super::picture::CAPABILITY,
     super::held::CAPABILITY,
+    super::update::CAPABILITY,
 ];
 /// The Resume capability's name in the station folder.
 pub(crate) const RESUME_KEY: &str = "resume.key";
@@ -380,6 +383,10 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             if let Some(ticket) = ticket(keeper, Work::Picture, &mut writing).await {
                 super::picture::pictured(keeper, &request, writing, early, &ticket).await;
             }
+        }
+        Some("update-guest") => {
+            let answered = super::update::asked(keeper, deadline).await;
+            let _ = say(&mut writing, &answered).await;
         }
         Some("hold") => {
             let held = held::hold(keeper, &request, deadline).await;

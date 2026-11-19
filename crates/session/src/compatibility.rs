@@ -37,8 +37,10 @@ pub const JOBS: &str = "jobs-v1";
 pub const UPDATES: &str = "updates-v1";
 /// An update names the digest of the bundle staged for it, and the guest
 /// installs only a bundle whose snapshot has that digest, refusing it as
-/// `changed` before anything is installed otherwise. A station asks no
-/// update of a guest that does not declare it.
+/// `changed` before anything is installed otherwise; and a change never
+/// asked can be voided (`void` on its lane), kept refused so no stage or
+/// update is taken under its name later. A station asks no update of a
+/// guest that does not declare it.
 pub const UPDATE_BOUND: &str = "update-bound-v1";
 /// The guest's read hello says its kept Stop and the work it may still run.
 pub const STOP_REPORT: &str = "stop-report-v1";

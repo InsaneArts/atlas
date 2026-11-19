@@ -1311,6 +1311,11 @@ pub(super) async fn answer(
             Code::Platform,
             "Only a machine desktop removes copies of its own",
         ),
+        // A machine desktop voids a change on the lane of that change.
+        Request::Void => failure(
+            Code::Platform,
+            "Only a machine desktop voids a change this way",
+        ),
         // A machine desktop updates its Atlas on the lane of its change.
         Request::Update { .. } => failure(
             Code::Platform,

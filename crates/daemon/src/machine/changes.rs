@@ -47,6 +47,13 @@ pub const STORE: &str = "outcomes";
 /// Changes kept at once; a new one past it is refused as busy.
 pub const BOUND: usize = 1024;
 
+/// The operation a void is kept under.
+pub const VOID: &str = "void";
+
+/// The most voided changes kept: each retires its name for good, so a void
+/// past this is refused rather than one forgotten.
+pub const VOIDS: usize = 256;
+
 /// The most of what a command printed that is kept with what it came to.
 pub(crate) const OUTPUT: usize = 256 * 1024;
 
@@ -537,9 +544,20 @@ impl<V: Vault> Changes<V> {
         let (_, records) = self.trusted(&mut last)?;
         Ok(records
             .values()
-            .filter(|record| matches!(record.state, State::Done { .. }))
+            .filter(|record| matches!(record.state, State::Done { .. }) && !record.retired())
             .map(|record| record.change.clone())
             .collect())
+    }
+
+    /// How many changes are kept voided, each a name retired for good.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store is unknown.
+    pub fn voided(&self) -> Result<usize> {
+        let mut last = self.verified();
+        let (_, records) = self.trusted(&mut last)?;
+        Ok(records.values().filter(|record| record.retired()).count())
     }
 
     /// Every change kept as intended and not yet done: what recovery looks
@@ -602,7 +620,9 @@ impl<V: Vault> Changes<V> {
     }
 
     /// The station settled `changes`: their records go, in one write.
-    /// Settling one that is not kept, or not done, changes nothing.
+    /// Settling one that is not kept, or not done, changes nothing; nor does
+    /// settling a void, whose name stays retired for as long as the desktop
+    /// lives, so nothing under it is ever carried out.
     ///
     /// # Errors
     ///
@@ -614,9 +634,9 @@ impl<V: Vault> Changes<V> {
             .iter()
             .map(Token::as_str)
             .filter(|change| {
-                records
-                    .get(*change)
-                    .is_some_and(|record| matches!(record.state, State::Done { .. }))
+                records.get(*change).is_some_and(|record| {
+                    matches!(record.state, State::Done { .. }) && !record.retired()
+                })
             })
             .collect();
         if done.is_empty() {
@@ -626,6 +646,13 @@ impl<V: Vault> Changes<V> {
             records.remove(*change);
         }
         self.keep(&mut last, &manifest, records, &done)
+    }
+}
+
+impl Record {
+    /// Whether it is a void, done: its name retired for good.
+    fn retired(&self) -> bool {
+        self.operation == VOID && matches!(self.state, State::Done { .. })
     }
 }
 

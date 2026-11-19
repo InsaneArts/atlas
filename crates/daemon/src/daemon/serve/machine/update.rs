@@ -5,6 +5,10 @@
 //! anything; carried to its end by the daemon's own reconciliation, never
 //! by the lane, which answers pending.
 //!
+//! A change that was never asked can be voided: kept refused, so a stage
+//! or an update a station never heard the answer of is never carried out
+//! later under that name.
+//!
 //! A refusal is said as certain only once it is kept as what the change
 //! came to; one that could not be kept is said uncertain. An update refused
 //! as `changed` is never admitted after, by an asking that overlapped it or
@@ -13,7 +17,7 @@
 //! such a refusal until it is kept.
 use super::Machine;
 use crate::machine::{
-    changes::{Asked, State},
+    changes::{Asked, State, VOID, VOIDS},
     stop::Kept,
     update::{Admission, Phase, System as _, Update, outcome, pruned},
 };
@@ -391,6 +395,46 @@ impl Machine {
         })
         .await
         .unwrap_or(Admitted::Uncertain)
+    }
+
+    /// Void the change `change`, asked with `request`: kept refused for good
+    /// when it was never asked, so a stage or an update under that name is
+    /// refused from then on, as one asked with another request is. One asked
+    /// before is refused for certain, never voided: what it came to is its
+    /// own to tell. Answered as kept, or uncertain when that cannot be told.
+    pub(super) async fn void(&self, change: Token, request: Value) -> Value {
+        let changes = self.paired.changes.clone();
+        tokio::task::spawn_blocking(move || {
+            // Each void retires its name for good: past the bound, none more.
+            let full = matches!(changes.of(&change), Ok(None))
+                && changes.voided().is_ok_and(|voided| voided >= VOIDS);
+            if full {
+                return atlas_core::protocol::refused(Error::new(
+                    Code::Busy,
+                    "This desktop keeps as many voided changes as it can, so this one is not \
+                     voided.",
+                ));
+            }
+            match changes.ask(&change, VOID, &request) {
+                Ok(Asked::Begun | Asked::Again(State::Intended)) => {
+                    let voided = json!({"ok": true, "op": "void", "voided": true});
+                    match changes.done(&change, &voided) {
+                        Ok(()) => voided,
+                        Err(_) => {
+                            uncertain("Whether the change was voided cannot be told; ask again")
+                        }
+                    }
+                }
+                Ok(Asked::Again(State::Done { reply })) => reply,
+                // Asked before as something else: it may have been carried out.
+                Err(error) if matches!(error.code, Code::BadRequest | Code::Busy) => {
+                    atlas_core::protocol::refused(error)
+                }
+                Err(_) => uncertain("The change records cannot be read"),
+            }
+        })
+        .await
+        .unwrap_or_else(|_| uncertain("Whether the change was voided cannot be told; ask again"))
     }
 
     /// Refuse the update `change` for `why`, its change settled so.

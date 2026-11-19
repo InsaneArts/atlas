@@ -29,6 +29,11 @@ pub(in crate::vm::keeper) async fn serving(admitted: bool) -> Serving {
 pub(in crate::vm::keeper) async fn serving_with(admitted: bool, plain: bool) -> Serving {
     let fixture = fixture();
     fixture.guest.standin.plain.store(plain, SeqCst);
+    serving_of(fixture, admitted).await
+}
+
+/// [`serving`] of the keeper `fixture` holds.
+pub(in crate::vm::keeper) async fn serving_of(fixture: Fixture, admitted: bool) -> Serving {
     let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let socket = folder.path().join("keeper.sock");
     let capability = capability(folder.path()).unwrap();
@@ -48,6 +53,17 @@ pub(in crate::vm::keeper) async fn serving_with(admitted: bool, plain: bool) -> 
         capability,
         _folder: folder,
         _tasks: vec![running, answering],
+    }
+}
+
+impl Serving {
+    /// End the keeper, as its process ending would: its generations and
+    /// its clients' socket go with it, its fixture left.
+    pub(in crate::vm::keeper) fn end(self) -> Fixture {
+        for task in &self._tasks {
+            task.abort();
+        }
+        self.fixture
     }
 }
 
