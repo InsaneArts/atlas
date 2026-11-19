@@ -40,6 +40,9 @@ extension SettingsController {
     case .removeAccount(let id):
       await run { await self.removeAccount(id) }
       session.alert = nil
+    case .stopVM(let id):
+      await run { await self.stop(id) }
+      session.alert = nil
     }
   }
 

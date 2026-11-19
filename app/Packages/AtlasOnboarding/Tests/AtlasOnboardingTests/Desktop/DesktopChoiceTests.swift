@@ -43,4 +43,16 @@ struct DesktopChoiceTests {
     #expect(DesktopChoice.shown(.cloud, facts: able) == .secondLogin)
     #expect(DesktopChoice.shown(.secondLogin, facts: full) == .secondLogin)
   }
+
+  @Test("added from Settings, Second Login reads added and the VM is picked, or nothing when this Mac cannot run one")
+  func addingBesideSecondLogin() throws {
+    let able = try besideHelper()
+    let rows = DesktopChoice.all(able, adding: true)
+    #expect(rows.map(\.lack) == [.added, nil, .notYet])
+    #expect(DesktopChoice.shown(.secondLogin, facts: able, adding: true) == .vm)
+    let full = try besideHelper(room: ["available": false, "why": "disk"])
+    #expect(DesktopChoice.shown(.vm, facts: full, adding: true) == nil)
+    #expect(DesktopChoice.all(able).first?.canBeChosen == true, "a first setup offers Second Login")
+    #expect(DesktopChoice.all(try onVM(vm()), adding: true).first?.lack == .notYet, "VMs alone add no Second Login")
+  }
 }

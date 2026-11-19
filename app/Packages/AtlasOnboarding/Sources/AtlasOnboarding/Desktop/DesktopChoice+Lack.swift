@@ -3,6 +3,8 @@ extension DesktopChoice {
   public enum Lack: Equatable, Sendable {
     /// Atlas does not offer it yet.
     case notYet
+    /// It is set up already, as when Settings adds another desktop beside it.
+    case added
     /// A VM needs macOS 27 or later on this Mac.
     case macOS
     /// A VM needs Apple silicon that runs virtual machines.

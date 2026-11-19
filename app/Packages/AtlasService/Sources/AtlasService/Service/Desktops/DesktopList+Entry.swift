@@ -17,6 +17,8 @@ extension DesktopList {
     public var standing: OverviewState?
     /// What the person can do with a VM now, such as `start` or `stop`, as the service decides it.
     public var can: [String] = []
+    /// What the service's newest status read of a VM said; nil for Second Login, and while none was read.
+    public var facts: Facts?
 
     /// Creates an entry.
     ///
@@ -27,13 +29,29 @@ extension DesktopList {
     ///   - kind: What kind of desktop it is.
     ///   - isDefault: Whether it is the default.
     ///   - isViewed: Whether the app views it.
-    public init(id: String, key: String, name: String, kind: Kind, isDefault: Bool = false, isViewed: Bool = false) {
+    ///   - standing: What it is doing; not read by default.
+    ///   - can: What the person can do with a VM now; nothing by default.
+    ///   - facts: What the newest status read of a VM said; none by default.
+    public init(
+      id: String,
+      key: String,
+      name: String,
+      kind: Kind,
+      isDefault: Bool = false,
+      isViewed: Bool = false,
+      standing: OverviewState? = nil,
+      can: [String] = [],
+      facts: Facts? = nil
+    ) {
       self.id = id
       self.key = key
       self.name = name
       self.kind = kind
       self.isDefault = isDefault
       self.isViewed = isViewed
+      self.standing = standing
+      self.can = can
+      self.facts = facts
     }
 
     /// The fields of one desktop.
@@ -62,8 +80,9 @@ extension DesktopList {
       isViewed = container.lenientFlag(.isViewed)
       standing = container.lenientText(.standing)
         .map(OverviewState.init(name:))
-      guard let facts = try? container.nestedContainer(keyedBy: FactsKeys.self, forKey: .facts) else { return }
-      can = facts.lenientList(String.self, forKey: .can)
+      facts = try? container.decodeIfPresent(Facts.self, forKey: .facts)
+      guard let said = try? container.nestedContainer(keyedBy: FactsKeys.self, forKey: .facts) else { return }
+      can = said.lenientList(String.self, forKey: .can)
     }
   }
 }

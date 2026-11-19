@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The General page: opening at login and the menu bar's icon; how often the helper's screen updates, as segments,
-/// and muting the helper; and whether Atlas notifies the person. Its values change through the binding.
+/// and muting the helper while a desktop set up has sound; and whether Atlas notifies the person. Its values change
+/// through the binding.
 struct GeneralPage: View {
   /// The page's values, shared with the Activity page.
   @Binding var state: SettingsGeneralState
@@ -12,7 +13,7 @@ struct GeneralPage: View {
       GroupedSection(GeneralRow.menuBar, title: "Menu Bar") { row in
         self.row(row)
       }
-      GroupedSection([GeneralRow.picture, .muteHelper], title: "Helper Screen") { row in
+      GroupedSection(state.hasSound ? [GeneralRow.picture, .muteHelper] : [.picture], title: "Helper Screen") { row in
         self.row(row)
       }
       GroupedSection([GeneralRow.notify], title: "Notifications") { row in

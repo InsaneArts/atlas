@@ -63,6 +63,9 @@ public struct SettingsView: View {
     .onChange(of: state.signIn?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.helper.waiting) { _, waiting in if let waiting { announce(waiting) } }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.desktops?.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.vm?.waiting) { _, waiting in if let waiting { announce(waiting) } }
+    .onChange(of: state.vm?.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.general.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.accounts.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.accountNotice) { _, notice in if let notice { announce(notice.text) } }

@@ -16,6 +16,8 @@ public struct SettingsHelperState: Equatable, Sendable {
   public var readyNote: SettingsNote?
   /// What the last command said, under the pane's last group; nil for nothing.
   public var notice: SettingsNote?
+  /// Whether Add a Desktop… shows at the page's foot: while Second Login is the one desktop set up.
+  public var addsDesktop: Bool
 
   /// Creates the pane's state.
   ///
@@ -27,6 +29,7 @@ public struct SettingsHelperState: Equatable, Sendable {
   ///   - waiting: Why the buttons wait, while another action runs.
   ///   - readyNote: What Check Again found when something isn't ready.
   ///   - notice: What the last command said.
+  ///   - addsDesktop: Whether Add a Desktop… shows at the page's foot; not by default.
   public init(
     account: SettingsHelperAccount,
     closeLogin: SettingsCloseLoginRow? = nil,
@@ -34,7 +37,8 @@ public struct SettingsHelperState: Equatable, Sendable {
     buttons: SettingsHelperButtons,
     waiting: String? = nil,
     readyNote: SettingsNote? = nil,
-    notice: SettingsNote? = nil
+    notice: SettingsNote? = nil,
+    addsDesktop: Bool = false
   ) {
     self.account = account
     self.closeLogin = closeLogin
@@ -43,5 +47,6 @@ public struct SettingsHelperState: Equatable, Sendable {
     self.waiting = waiting
     self.readyNote = readyNote
     self.notice = notice
+    self.addsDesktop = addsDesktop
   }
 }

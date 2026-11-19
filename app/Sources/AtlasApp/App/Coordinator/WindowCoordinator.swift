@@ -28,6 +28,8 @@ final class WindowCoordinator {
   private var closingWindows = false
   /// Whether setup should open once its old window's close has settled.
   private var reopeningOnboarding = false
+  /// Whether setup, opening once its old window's close has settled, opens on its choice of a desktop to add.
+  private var reopeningAdds = false
   /// Whether termination has been requested, so late setup requests cannot reopen a window.
   private var terminating = false
   /// The main window asked for before launch could make its controller, opened once launch finishes.
@@ -125,15 +127,21 @@ final class WindowCoordinator {
     settingsController?.isAsking != true
   }
 
-  /// The setup window; brought forward when already open. Once it closes, the panel reads Open at Login and the
-  /// helper again, as setup may have changed either. Reopening waits for the old close to clear the helper's marker.
-  func showOnboarding() {
+  /// The setup window; brought forward when already open, where it stands. Once it closes, the panel reads Open at
+  /// Login and the helper again, as setup may have changed either. Reopening waits for the old close to clear the
+  /// helper's marker.
+  ///
+  /// - Parameter adding: Whether a window opened now opens on its choice of a desktop to add, as Settings' Add a
+  ///   Desktop… asks; not by default.
+  func showOnboarding(adding: Bool = false) {
     guard !closingWindows, !terminating else { return }
     if let onboarding, !onboarding.window.isPresented {
       reopeningOnboarding = true
+      reopeningAdds = adding
       return
     }
-    present(
+    let opening = onboarding == nil
+    let shown = present(
       \.onboarding,
       controller: { parts?.onboardingController() },
       window: windows.onboarding,
@@ -142,12 +150,13 @@ final class WindowCoordinator {
         self?.parts?.panel?.readOpenAtLogin()
         // Unstructured, as the close callback is synchronous.
         Task { await self?.parts?.panel?.findHelper() }
-        if self?.reopeningOnboarding == true {
-          self?.reopeningOnboarding = false
-          self?.showOnboarding()
+        if let self, reopeningOnboarding {
+          reopeningOnboarding = false
+          showOnboarding(adding: reopeningAdds)
         }
       }
     )
+    if adding, opening { shown?.addDesktop() }
   }
 
   /// 2 s: the longest Atlas waits, quitting, for the service to answer the main window's release; past it Atlas quits

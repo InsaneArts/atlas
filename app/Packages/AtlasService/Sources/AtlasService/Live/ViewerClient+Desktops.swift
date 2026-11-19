@@ -1,6 +1,7 @@
 import Foundation
 
-/// Every desktop the service serves, and the one the app views: reading `desktops.json` and viewing another.
+/// Every desktop the service serves, and the one the app views: reading `desktops.json`, viewing another, and a VM's
+/// power.
 extension ViewerClient {
   /// Reads `desktops.json`, and views from then on the desktop it says the service views.
   ///
@@ -49,5 +50,22 @@ extension ViewerClient {
     }
     _ = try await post("view", Body(desktop: desktop))
     viewed.view(desktop)
+  }
+
+  /// Posts to `desktops/power`: the person starts or stops the VM `desktop` names, whichever desktop is viewed.
+  ///
+  /// - Parameters:
+  ///   - desktop: The VM's ID.
+  ///   - on: Whether it starts.
+  /// - Throws: ``ServiceError`` when the service refuses, as for a VM under maintenance.
+  public func setPower(_ desktop: String, on: Bool) async throws {
+    /// The request: the VM, and whether it starts.
+    struct Body: Encodable {
+      /// The VM's ID.
+      let desktop: String
+      /// Whether it starts.
+      let on: Bool
+    }
+    _ = try await post("desktops/power", Body(desktop: desktop, on: on))
   }
 }

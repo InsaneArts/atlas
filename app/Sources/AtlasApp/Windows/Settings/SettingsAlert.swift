@@ -14,4 +14,6 @@ enum SettingsAlert: Equatable {
   case deletePictures
   /// Take the account with this id off the list?
   case removeAccount(String)
+  /// Stop the VM with this ID?
+  case stopVM(String)
 }

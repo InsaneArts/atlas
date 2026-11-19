@@ -34,6 +34,9 @@ public struct OnboardingFacts: Equatable, Sendable {
   /// The VM a first setup makes: one being added, or the one the settings list alone; nil when there is none, and
   /// once the settings list a Second Login.
   public internal(set) var vm: VMFacts?
+  /// The VM being added beside the desktops the settings list, whatever they are, which a window opened from Settings'
+  /// Add a Desktop… follows; nil while none is.
+  public internal(set) var adding: VMFacts?
 
   /// Atlas.app is not in Applications, where the helper can run it.
   static let notInApplications =
@@ -43,6 +46,15 @@ public struct OnboardingFacts: Equatable, Sendable {
 
   /// Creates facts with nothing known.
   public init() {}
+
+  /// The VM the window follows: the one being added beside the desktops set up, for a window opened from Settings'
+  /// Add a Desktop…; else the VM a first setup makes.
+  ///
+  /// - Parameter choices: What the person has chosen in the window.
+  /// - Returns: The VM, or nil for none.
+  public func followedVM(_ choices: OnboardingChoices) -> VMFacts? {
+    choices.adding ? adding : vm
+  }
 
   /// The facts in a status reply; nil when it is not one.
   ///
@@ -70,6 +82,7 @@ public struct OnboardingFacts: Equatable, Sendable {
       vmLack = room.available == true ? nil : DesktopChoice.Lack(why: room.why)
     }
     vm = raw.vm.map(VMFacts.init)
+    adding = raw.adding.map(VMFacts.init)
     guard let side = raw.helper else { return }
     switch role {
     case .controller:

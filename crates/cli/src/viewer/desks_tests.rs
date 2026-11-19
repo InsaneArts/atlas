@@ -310,6 +310,8 @@ async fn desktops_json_lists_each_desktop_with_its_standing_and_a_vms_facts() {
     assert!(work["standing"].is_string(), "{work}");
     assert!(work["facts"]["can"].is_array(), "{work}");
     assert!(work["facts"].get("macos").is_some(), "{work}");
+    assert!(work["facts"].get("power").is_some(), "{work}");
+    assert!(work["facts"].get("display").is_some(), "{work}");
     assert!(!listed.to_string().contains("helper"), "{listed}");
 }
 

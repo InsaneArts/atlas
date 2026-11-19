@@ -74,6 +74,17 @@ extension SettingsPresenter {
           doneMessage: SettingsWords.removeAccountMessage
         )
       )
+    case .stopVM(let id):
+      HelperAlert.destructive(
+        SettingsWords.stopVMTitle(vmTitle(id, snapshot)),
+        SettingsWords.stopVMMessage,
+        SettingsWords.stopVM,
+        phase: progress.phase(
+          running: SettingsWords.stoppingVM,
+          done: SettingsWords.stopVM,
+          doneMessage: SettingsWords.stopVMMessage
+        )
+      )
     case .install(let version):
       HelperAlert.plain(
         SettingsWords.installTitle(version),
@@ -99,5 +110,17 @@ extension SettingsPresenter {
     snapshot.facts.status.overview.accounts?
       .first { $0.id == id }?
       .name ?? "this account"
+  }
+
+  /// The title of the VM with `id`, as Desktops shows it; "this VM" once it is gone.
+  ///
+  /// - Parameters:
+  ///   - id: The VM's ID.
+  ///   - snapshot: What the controller holds and reads.
+  /// - Returns: Its title.
+  static func vmTitle(_ id: String, _ snapshot: SettingsSnapshot) -> String {
+    snapshot.desktops?.desktops
+      .first { $0.id == id }
+      .map(SettingsWords.title(of:)) ?? "this VM"
   }
 }

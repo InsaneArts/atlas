@@ -147,7 +147,7 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
         HStack(spacing: Spacing.s) {
           titleText
           if let tag {
-            Tag(text: tag, tone: tagTone)
+            Tag(text: tag, tone: tagTone, isCompact: size == .compact)
           }
         }
         detail

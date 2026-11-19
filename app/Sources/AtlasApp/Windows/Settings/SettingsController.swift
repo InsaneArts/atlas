@@ -6,8 +6,8 @@ import Observation
 /// The Settings window's one observed object: where the window stands and has been, the alert asked, the agents and
 /// projects, and the person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
 /// through ``SettingsLinks`` each time the window draws, so they stay one value; ``SettingsPresenter`` decides what
-/// the window shows. Its parts are in `SettingsController+Navigation`, `+Helper`, `+Agents`, `+Updates`, `+Alert` and
-/// the others beside them.
+/// the window shows. Its parts are in `SettingsController+Navigation`, `+Helper`, `+Desktops`, `+Agents`, `+Updates`,
+/// `+Alert` and the others beside them.
 @Observable
 final class SettingsController {
   /// What the window is doing. Written only by the controller's own files.
@@ -45,6 +45,10 @@ final class SettingsController {
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
   @ObservationIgnored var agentsGeneration = 0
+  /// Every desktop the service serves, as last read; nil until read. Written only by the controller's own files.
+  var desktops: DesktopList?
+  /// Reads the desktops while the window shows.
+  @ObservationIgnored var desktopsReading: Task<Void, Never>?
 
   /// Creates the window's controller on the page last shown, with the person's saved choices.
   ///
@@ -91,6 +95,7 @@ final class SettingsController {
         isRemoving: dependencies.installs.isRemoving,
         version: dependencies.version
       ),
+      desktops: desktops,
       accountNoteRead: accountNoteRead,
       signIn: signIn,
       accountIcons: accountIcons
@@ -108,6 +113,13 @@ final class SettingsController {
     switch event {
     case .select(let page): select(page)
     case .openAccount(let id): go(to: .account(id))
+    case .openDesktop(let id): go(to: .desktop(id))
+    case .addDesktop: dependencies.links.addDesktop()
+    case .startVM(let id): Task { await start(id) }
+    case .askStopVM(let id): ask(.stopVM(id))
+    case .maintainVM(let id): Task { await maintain(id, end: false) }
+    case .endMaintenance(let id): Task { await maintain(id, end: true) }
+    case .removeVM(let id): Task { await remove(id) }
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.helper(.switchToHelper))
     case .askRecover: ask(.helper(.recover))
@@ -173,10 +185,11 @@ final class SettingsController {
     }
   }
 
-  /// The window came forward: what the links read is read again, and the agents, the projects, the helper's sound
-  /// and the pictures of agent actions afresh.
+  /// The window came forward: what the links read is read again, the desktops from then on while it shows, and the
+  /// agents, the projects, the helper's sound and the pictures of agent actions afresh.
   func cameForward() {
     revision += 1
+    followDesktops()
     readAgents()
     // Unstructured, as coming forward is synchronous: the readings run beside it.
     Task { await readHelperSound() }
@@ -190,6 +203,8 @@ final class SettingsController {
   func close() {
     agentsReading?.cancel()
     agentsReading = nil
+    desktopsReading?.cancel()
+    desktopsReading = nil
   }
 
   /// One line about what a command just did, on the page that ran it; it stays until the next.

@@ -119,5 +119,7 @@ extension OnboardingFacts {
     let desktops: Desktops?
     /// The VM a first setup makes.
     let vm: VMFacts.Reply?
+    /// The VM being added beside the desktops the settings list.
+    let adding: VMFacts.Reply?
   }
 }

@@ -3,7 +3,7 @@ import AtlasUI
 
 /// What Settings shares with the app's other parts, which only ``WindowCoordinator`` knows: the helper's status as the
 /// menu bar last read it, Open at Login as the panel keeps it, the menu bar's glyph as its item draws it, the picture
-/// as the main window keeps it, switching to the helper, and the setup window. Reached through closures, so Settings
+/// as the main window keeps it, switching to the helper, the desktops and a VM's power, and the setup window. Reached through closures, so Settings
 /// never holds another window, and a value the panel, the menu bar or the main window also shows stays one value.
 struct SettingsLinks {
   /// The helper's latest status, and whether Atlas waits for the service: before its first answer, and again after a
@@ -35,6 +35,13 @@ struct SettingsLinks {
   var removeAccount: @MainActor (ViewerStatus.Account) async throws -> Void = { _ in }
   /// Sets how freely agents act in an account, through the viewer service.
   var setLevel: @MainActor (AccountLevel, ViewerStatus.Account) async throws -> Void = { _, _ in }
+  /// Every desktop the service serves, as `desktops.json` lists them; nil while it cannot say, as an older service
+  /// that serves one desktop.
+  var desktops: @MainActor () async -> DesktopList? = { nil }
+  /// Starts or stops a VM as the person, by its ID, through the service.
+  var setPower: @MainActor (_ desktop: String, _ on: Bool) async throws -> Void = { _, _ in }
+  /// Opens the setup window on its choice of a desktop to add.
+  var addDesktop: @MainActor () -> Void = {}
   /// Starts a held sign-in in the main window, which comes forward on the Screen: what it is for, the site and the
   /// browser. Returns why it couldn't start, or nil when it did.
   var startSignIn: @MainActor (SignInPurpose, String, String?) async -> String? = { _, _, _ in nil }

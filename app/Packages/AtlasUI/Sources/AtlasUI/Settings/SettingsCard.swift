@@ -29,10 +29,14 @@ struct SettingsCard: View {
     }
   }
 
-  /// Where Back goes from the route shown: Accounts from an account's page; nowhere from a page of its own.
+  /// Where Back goes from the route shown: Accounts from an account's page, Desktops from a desktop's; nowhere from a
+  /// page of its own.
   private var back: (page: SettingsPage, title: String)? {
-    guard state.route.account != nil else { return nil }
-    return (.accounts, state.sidebar.title(of: .accounts))
+    switch state.route {
+    case .page: nil
+    case .account: (.accounts, state.sidebar.title(of: .accounts))
+    case .desktop: (.helper, state.sidebar.title(of: .helper))
+    }
   }
 
   /// The card's outline.

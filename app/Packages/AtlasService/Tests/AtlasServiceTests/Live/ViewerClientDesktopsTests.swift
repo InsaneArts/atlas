@@ -132,4 +132,14 @@ struct ViewerClientDesktopsTests {
     }
     #expect(client.viewed.id == "a1")
   }
+
+  @Test("a VM's power is posted to desktops/power whichever desktop is viewed")
+  func powerIsPosted() async throws {
+    let asked = Asked()
+    let client = try client(asked)
+    _ = try await client.desktops()
+    try await client.setPower("b2", on: false)
+    #expect(asked.all.last.map { "\($0.route) \($0.desktop ?? "none")" } == "desktops/power a1")
+    #expect(client.viewed.id == "a1", "the power of another desktop never views it")
+  }
 }

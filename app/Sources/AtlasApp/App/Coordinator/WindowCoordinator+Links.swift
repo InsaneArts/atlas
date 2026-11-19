@@ -46,7 +46,8 @@ extension WindowCoordinator {
 
   /// What Settings shares with the other windows: the panel's status and Open at Login, the menu bar's glyph, the main
   /// window's picture, or the rate saved for the next one while it is closed (``SettingsLinkRules``), switching to the
-  /// helper, and the setup window.
+  /// helper, the desktops and a VM's power through the panel's service, and the setup window, on its choice of a
+  /// desktop for Add a Desktop….
   ///
   /// - Returns: The links.
   func settingsLinks() -> SettingsLinks {
@@ -84,6 +85,12 @@ extension WindowCoordinator {
         guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
         try await service.setLevel(level, of: account)
       },
+      desktops: { [weak self] in try? await self?.parts?.panel?.service.desktops() },
+      setPower: { [weak self] desktop, on in
+        guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
+        try await service.setPower(desktop, on: on)
+      },
+      addDesktop: { [weak self] in self?.showOnboarding(adding: true) },
       startSignIn: { [weak self] purpose, site, browser in
         guard let self else { return SignInWords.noWindow }
         return await startSignIn(purpose, site: site, browser: browser)

@@ -2,17 +2,19 @@ import AtlasStatus
 import AtlasUI
 
 extension SettingsPresenter {
-  /// The sidebar: a row for every page, Helper's saying how the helper stands with its dot's tone.
+  /// The sidebar: a row for every page, Helper's saying how the helper stands with its dot's tone, or, once more than
+  /// one desktop is set up or the one is a VM, standing for the desktops (``desktopsRow(_:)``).
   ///
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The sidebar.
   static func sidebar(_ snapshot: SettingsSnapshot) -> SettingsSidebarState {
     let helper = helperStanding(snapshot.facts)
+    let desktops = desktopsRow(snapshot)
     let rows = SettingsPage.allCases
       .map { page in
-        page == .helper
-          ? SettingsSidebarRow(page: page, title: SettingsWords.page(page), subtitle: helper.word, tone: helper.tone)
-          : SettingsSidebarRow(page: page, title: SettingsWords.page(page))
+        guard page == .helper else { return SettingsSidebarRow(page: page, title: SettingsWords.page(page)) }
+        return desktops
+          ?? SettingsSidebarRow(page: page, title: SettingsWords.page(page), subtitle: helper.word, tone: helper.tone)
       }
     return SettingsSidebarState(rows: rows)
   }

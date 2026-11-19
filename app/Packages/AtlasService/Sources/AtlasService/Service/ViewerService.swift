@@ -22,6 +22,15 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses, as for a desktop it does not serve.
   func view(_ desktop: String) async throws
 
+  /// Starts or stops a VM as the person: a start as an agent's command would make one, a stop kept until Atlas VM
+  /// confirms the VM stopped, ending work there.
+  ///
+  /// - Parameters:
+  ///   - desktop: The VM's ID.
+  ///   - on: Whether it starts.
+  /// - Throws: ``ServiceError`` when the service refuses, as for a VM under maintenance.
+  func setPower(_ desktop: String, on: Bool) async throws
+
   /// Reads the helper's status.
   ///
   /// - Returns: The status as the service reports it, every missing field at its safe default.

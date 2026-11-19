@@ -33,6 +33,19 @@ func onVM(_ vm: [String: Any], room: [String: Any] = ["available": true]) throws
   ])
 }
 
+/// Facts as the person's account reads them with Second Login set up and finished, as Settings' Add a Desktop… opens
+/// the window: `adding` the VM being added beside it, and `room` whether this Mac can make one.
+func besideHelper(adding: [String: Any]? = nil, room: [String: Any] = ["available": true]) throws -> OnboardingFacts {
+  var reply: [String: Any] = [
+    "ok": true, "role": "controller", "me": ["name": "theiskaa"],
+    "app": ["installed": true, "signed": true],
+    "configured": true, "finished": true, "candidates": [],
+    "helper": helper(), "desktops": ["vm": room],
+  ]
+  if let adding { reply["adding"] = adding }
+  return try facts(reply)
+}
+
 /// The VM of a first setup as the status reply writes it, by default being added, its add running.
 func vm(
   adding: Bool = true,

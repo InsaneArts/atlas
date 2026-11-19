@@ -5,6 +5,20 @@ public enum SettingsEvent: Equatable, Sendable {
   case select(SettingsPage)
   /// Shows the page of the account with this id.
   case openAccount(String)
+  /// Shows the page of the desktop with this ID.
+  case openDesktop(String)
+  /// Opens the setup window on its choice of a desktop to add.
+  case addDesktop
+  /// Starts the VM with this ID.
+  case startVM(String)
+  /// Asks to stop the VM with this ID.
+  case askStopVM(String)
+  /// Opens the VM with this ID for the person's own maintenance; the approval window asks first.
+  case maintainVM(String)
+  /// Ends the maintenance of the VM with this ID; the approval window asks first.
+  case endMaintenance(String)
+  /// Removes the VM with this ID; the approval window asks first.
+  case removeVM(String)
   /// Reads the helper's readiness again now.
   case checkAgain
   /// Asks to switch this Mac's screen to the helper.

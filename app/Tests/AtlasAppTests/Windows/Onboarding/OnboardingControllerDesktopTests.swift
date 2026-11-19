@@ -32,8 +32,41 @@ private let added = """
    "vm": {"name": "vm", "kind": "vm", "listed": true, "lifecycle": "created", "steps": [], "ready": true}}
   """
 
+/// Second Login set up and finished, on a Mac that can make a VM, as Settings' Add a Desktop… opens the window.
+private let setUp = """
+  {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
+   "configured": true, "finished": true, "candidates": [], "desktops": {"vm": {"available": true}},
+   "helper": {"exists": true, "uid": 502, "name": "atlas", "paired": true, "answering": true, "hidden": true,
+              "permissions": {"screenCapture": true, "accessibility": true}}}
+  """
+
 @Suite("OnboardingController desktop")
 struct OnboardingControllerDesktopTests {
+  @Test("Add a Desktop opens the choice with Second Login added and the VM picked, then checks the VM its add made")
+  func addADesktopFromSettings() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": setUp,
+      "desktop add": #"{"ok": true, "added": {"name": "vm-2", "kind": "vm"}, "ready": true}"#,
+      "onboarding finish": #"{"ok": true, "ready": true, "desktop": "vm-2"}"#,
+    ])
+    let clock = ManualClock()
+    let controller = OnboardingController.scripted(commands, clock: clock)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.addDesktop()
+      #expect(controller.snapshot.step == .chooseDesktop, "never Second Login's own steps")
+      #expect(controller.snapshot.shownDesktop == .vm)
+      #expect(controller.state.footer.back == nil, "no welcome to go back to")
+      controller.send(.continueDesktop)
+      try await settle("the add never ended") { controller.snapshot.choices.added == "vm-2" }
+      #expect(commands.ran.contains(Action.addVM(name: nil).arguments))
+      #expect(controller.snapshot.step == .finishing)
+      try await controller.untilSettled(commands, clock: clock)
+      try await settle("the check never passed") { controller.snapshot.finish == .passed }
+      #expect(commands.ran.contains(Action.finishVM("vm-2").arguments))
+    }
+  }
+
   @Test("Second Login is picked when the choice opens, and Continue goes to today's account choice")
   func secondLoginIsPickedAsTheChoiceOpens() async throws {
     let commands = ScriptedCommands(["onboarding status": freshWithRoom])
@@ -121,6 +154,25 @@ struct OnboardingControllerDesktopTests {
       try await settle("the agents never came") { controller.snapshot.step == .agents }
       await controller.complete()
       #expect(!commands.ran.contains { $0.prefix(2) == ["onboarding", "files"] })
+      #expect(controller.closeRequested)
+    }
+  }
+
+  @Test("adding a desktop from Settings leaves Open at Login as it was")
+  func addingLeavesOpenAtLogin() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": setUp, "onboarding login": #"{"ok": true}"#, "menubar": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.addDesktop()
+      controller.snapshot.choices.added = "vm-2"
+      controller.snapshot.opensAtLogin = true
+      #expect(!OnboardingPresenter.done(controller.snapshot).offersOpenAtLogin, "Done offers no switch for it")
+      await controller.complete()
+      #expect(!commands.ran.contains { $0.prefix(2) == ["onboarding", "login"] })
+      #expect(commands.ran.contains(Action.openMenuBar.arguments))
       #expect(controller.closeRequested)
     }
   }

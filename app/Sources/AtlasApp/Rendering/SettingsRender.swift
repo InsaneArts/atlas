@@ -59,6 +59,11 @@
       "49-account-failed-unreadable",
       "50-account-long-name",
       "51-accounts-pictures-off",
+      "52-desktops",
+      "53-helper-add-desktop",
+      "54-vm",
+      "55-vm-maintenance",
+      "56-stop-vm",
     ]
 
     /// The window's size: Settings' fixed 740 by 572.

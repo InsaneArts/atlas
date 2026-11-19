@@ -56,6 +56,11 @@
         PreviewState(name: "Account, a change failed, list unreadable", value: settingsAccountFailedUnreadable),
         PreviewState(name: "Account, a long name", value: settingsAccountLongName),
         PreviewState(name: "Accounts, pictures off", value: settingsAccountsPicturesOff),
+        PreviewState(name: "Desktops", value: settingsDesktops),
+        PreviewState(name: "Helper, Add a Desktop", value: settingsHelperAddsDesktop),
+        PreviewState(name: "A VM, running", value: settingsVM),
+        PreviewState(name: "A VM in maintenance", value: settingsVMMaintenance),
+        PreviewState(name: "Stop a VM", value: settingsStopVM),
       ]
     }
 

@@ -75,17 +75,25 @@ struct OnboardingSnapshot {
   /// The screen the facts and choices lead to.
   var step: OnboardingStep { OnboardingStep(facts: facts, choices: choices) }
 
-  /// The kind of desktop the choice shows picked: never one it cannot pick.
-  var shownDesktop: DesktopChoice.Kind { DesktopChoice.shown(pickedDesktop, facts: facts) }
+  /// The kind of desktop the choice shows picked: never one it cannot pick; nil when it can pick none.
+  var shownDesktop: DesktopChoice.Kind? {
+    DesktopChoice.shown(pickedDesktop, facts: facts, adding: choices.adding)
+  }
 
-  /// Whether the person's side goes the VM's path: a VM being added or set up, chosen with Continue, or picked on the
-  /// choice.
+  /// The VM the window follows: the one Settings' Add a Desktop… adds, or the one a first setup makes.
+  var vm: VMFacts? { facts.followedVM(choices) }
+
+  /// The VM the check is of: the one followed, else the one this window's add made.
+  var checkedVM: String? { vm?.name ?? choices.added }
+
+  /// Whether the person's side goes the VM's path: a VM being added or set up, made by this window's add, chosen with
+  /// Continue, or picked on the choice.
   var onVM: Bool {
-    facts.vm != nil || choices.desktop == .vm || (step == .chooseDesktop && shownDesktop == .vm)
+    checkedVM != nil || choices.desktop == .vm || (step == .chooseDesktop && shownDesktop == .vm)
   }
 
   /// How the VM's add stands, from this window's own run and the facts.
-  var vmAdd: VMAdd { VMAdd.of(facts.vm, runningHere: addingHere, failedHere: addFailure) }
+  var vmAdd: VMAdd { VMAdd.of(vm, runningHere: addingHere, failedHere: addFailure) }
 
   /// The account picked, while the choice shows it: never an account it does not list, nor a new one it does not
   /// offer.

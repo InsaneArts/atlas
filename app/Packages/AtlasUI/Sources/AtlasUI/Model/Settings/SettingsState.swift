@@ -9,6 +9,10 @@ public struct SettingsState: Equatable, Sendable {
   public var general: SettingsGeneralState
   /// The Helper page.
   public var helper: SettingsHelperState
+  /// The Desktops page, shown in Helper's place once more than one desktop is set up; nil while one is.
+  public var desktops: SettingsDesktopsState?
+  /// The page of the VM shown: one opened from Desktops, or the one desktop; nil while none shows.
+  public var vm: SettingsVMState?
   /// The Accounts page.
   public var accounts: SettingsAccountsState
   /// The page of the account shown; nil while no account's page shows.
@@ -34,6 +38,8 @@ public struct SettingsState: Equatable, Sendable {
   ///   - sidebar: The sidebar.
   ///   - general: The values of the General and Activity pages.
   ///   - helper: The Helper page.
+  ///   - desktops: The Desktops page; none by default, while one desktop is set up.
+  ///   - vm: The page of the VM shown; none by default.
   ///   - accounts: The Accounts page.
   ///   - account: The page of the account shown; none by default.
   ///   - accountNotice: What the last change asked from an account's page said; none by default.
@@ -47,6 +53,8 @@ public struct SettingsState: Equatable, Sendable {
     sidebar: SettingsSidebarState,
     general: SettingsGeneralState,
     helper: SettingsHelperState,
+    desktops: SettingsDesktopsState? = nil,
+    vm: SettingsVMState? = nil,
     accounts: SettingsAccountsState,
     account: SettingsAccountPageState? = nil,
     accountNotice: SettingsNote? = nil,
@@ -60,6 +68,8 @@ public struct SettingsState: Equatable, Sendable {
     self.sidebar = sidebar
     self.general = general
     self.helper = helper
+    self.desktops = desktops
+    self.vm = vm
     self.accounts = accounts
     self.account = account
     self.accountNotice = accountNotice
@@ -70,12 +80,15 @@ public struct SettingsState: Equatable, Sendable {
     self.signIn = signIn
   }
 
-  /// The title of the route shown, which the bar and the window's title show: its page's, or its account's name.
+  /// The title of the route shown, which the bar and the window's title show: its page's, its account's name, or its
+  /// desktop's title.
   public var title: String {
     switch route {
     case .page(let page): sidebar.title(of: page)
     case .account(let id):
       account.map(\.title) ?? accounts.rows?.first { $0.id == id }?.title ?? sidebar.title(of: .accounts)
+    case .desktop(let id):
+      desktops?.rows.first { $0.id == id }?.title ?? vm?.title ?? sidebar.title(of: .helper)
     }
   }
 }

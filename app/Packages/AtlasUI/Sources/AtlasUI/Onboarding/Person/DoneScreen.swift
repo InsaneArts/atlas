@@ -17,22 +17,24 @@ struct DoneScreen: View {
       OnboardingHeader(title: OnboardingScreen.doneTitle, lede: state.lede) {
         SuccessIcon(tile: OnboardingLayout.doneTile)
       }
-      GroupedList(Self.settings(state)) { setting in
-        ListRow(setting.title, detail: setting.detail, trailing: setting.trailing) {
-          send(Self.toggled(setting.id, in: state))
+      if !Self.settings(state).isEmpty {
+        GroupedList(Self.settings(state)) { setting in
+          ListRow(setting.title, detail: setting.detail, trailing: setting.trailing) {
+            send(Self.toggled(setting.id, in: state))
+          }
+          .disabled(!state.isEnabled)
         }
-        .disabled(!state.isEnabled)
+        .controlSize(.small)
+        .padding(.top, OnboardingLayout.Rhythm.paragraph)
       }
-      .controlSize(.small)
-      .padding(.top, OnboardingLayout.Rhythm.paragraph)
       StatusSlot(note: note)
       Note(text: "Getting Started… in Atlas’s menu brings this window back.")
         .padding(.top, OnboardingLayout.Rhythm.status)
     }
   }
 
-  /// The settings, each with its switch: Open Atlas at login, then keeping the home folder private where it is
-  /// offered.
+  /// The settings, each with its switch: Open Atlas at login and keeping the home folder private, each where it is
+  /// offered; none for a VM added beside a setup already made.
   ///
   /// - Parameter state: The done screen.
   /// - Returns: The settings' rows.
@@ -51,7 +53,7 @@ struct DoneScreen: View {
         trailing: .toggle(isOn: state.keepsHomePrivate)
       ),
     ]
-    return state.offersHomePrivacy ? rows : Array(rows.prefix(1))
+    return rows.filter { $0.id == 0 ? state.offersOpenAtLogin : state.offersHomePrivacy }
   }
 
   /// What pressing a setting's row sends: its switch, turned the other way.

@@ -1,3 +1,4 @@
+import AtlasService
 import AtlasUI
 import Foundation
 
@@ -19,6 +20,8 @@ struct SettingsSnapshot {
   var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
+  /// Every desktop the service serves, as last read; nil until read, and while the service cannot say.
+  var desktops: DesktopList?
   /// When the account whose note the person read was added, in milliseconds since 1970.
   var accountNoteRead: Double = 0
   /// Sign In to a Site…'s sheet, while it shows.

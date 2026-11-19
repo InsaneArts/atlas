@@ -187,6 +187,18 @@ public final class ScriptedService: ViewerService {
     return desktopList
   }
 
+  /// Records a VM's power, as "power ID on" or "power ID off", unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - desktop: The VM's ID.
+  ///   - on: Whether it starts.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func setPower(_ desktop: String, on: Bool) async throws {
+    log.append("power \(desktop) \(on ? "on" : "off")")
+    try await pause("power")
+  }
+
   /// Records viewing `desktop`, and marks it the one viewed in ``desktopList``, unless held or failed.
   ///
   /// - Parameter desktop: The desktop's ID.

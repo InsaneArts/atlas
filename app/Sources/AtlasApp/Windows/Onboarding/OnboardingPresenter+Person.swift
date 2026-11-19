@@ -108,12 +108,12 @@ extension OnboardingPresenter {
       title: headline.title,
       tail: headline.tail,
       // A VM has no helper to name; its check is one line.
-      loggedIn: snapshot.facts.vm == nil ? OnboardingWords.loggedIn(snapshot.facts.helper.title) : "",
+      loggedIn: snapshot.onVM ? "" : OnboardingWords.loggedIn(snapshot.facts.helper.title),
       permissionsNote: StatusWord.allowed.text,
       live: live.state,
       liveNote: live.note,
       failure: live.failure,
-      isVM: snapshot.facts.vm != nil
+      isVM: snapshot.onVM
     )
   }
 
@@ -156,12 +156,14 @@ extension OnboardingPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The done screen.
   static func done(_ snapshot: OnboardingSnapshot) -> OnboardingDoneScreenState {
-    let onVM = snapshot.facts.vm != nil
+    let onVM = snapshot.onVM
     return OnboardingDoneScreenState(
       lede: onVM ? OnboardingWords.vmDoneLede : OnboardingWords.doneLede(snapshot.facts.helper.title),
       opensAtLogin: snapshot.opensAtLogin,
       keepsHomePrivate: snapshot.keepsHomePrivate,
       offersHomePrivacy: !onVM,
+      // A desktop added from Settings leaves Open at Login as the person set it.
+      offersOpenAtLogin: !snapshot.choices.adding,
       isEnabled: snapshot.working == nil
     )
   }

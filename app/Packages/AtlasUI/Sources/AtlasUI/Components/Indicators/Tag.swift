@@ -4,6 +4,9 @@ import SwiftUI
 struct Tag: View {
   /// 20: the capsule's height, which a row of tags keeps even while it holds none.
   static let height: CGFloat = 20
+  /// 18: the capsule's height in a compact row, such as Settings' Desktops list, so it stands about a title's line
+  /// high.
+  static let compactHeight: CGFloat = 18
 
   /// How the tag is coloured.
   enum Tone: Sendable, CaseIterable {
@@ -19,6 +22,8 @@ struct Tag: View {
   let text: String
   /// How it is coloured.
   var tone = Tone.quiet
+  /// Whether it stands in a compact row, at ``compactHeight``.
+  var isCompact = false
 
   /// The word on its capsule.
   var body: some View {
@@ -27,7 +32,7 @@ struct Tag: View {
       .foregroundStyle(ink)
       .lineLimit(1)
       .padding(.horizontal, Spacing.s)
-      .frame(height: Self.height)
+      .frame(height: isCompact ? Self.compactHeight : Self.height)
       .background(
         Capsule()
           .fill(fill)

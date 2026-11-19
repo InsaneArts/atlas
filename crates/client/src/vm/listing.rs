@@ -44,6 +44,25 @@ pub fn list(settings: &Path) -> Result<Value> {
     list_with(&Lifecycle::own()?, &Looking, settings)
 }
 
+/// [`list`], only while a VM's add is under way: none, and nothing asked
+/// of any VM, while none is.
+///
+/// # Errors
+///
+/// As [`list`].
+pub fn while_adding(settings: &Path) -> Result<Option<Value>> {
+    let lifecycle = Lifecycle::own()?;
+    let adding = lifecycle.kept_any()?
+        && lifecycle
+            .records()?
+            .iter()
+            .any(|record| record.state == State::Adding);
+    if !adding {
+        return Ok(None);
+    }
+    list_with(&lifecycle, &Looking, settings).map(Some)
+}
+
 fn list_with(lifecycle: &Lifecycle, looks: &impl Looks, path: &Path) -> Result<Value> {
     let settings = match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,

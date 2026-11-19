@@ -155,6 +155,11 @@ public final class ServiceConnection: ViewerService {
   /// Views another desktop.
   public func view(_ desktop: String) async throws { try await viewing { try await $0.view(desktop) } }
 
+  /// Starts or stops a VM, whichever desktop is viewed.
+  public func setPower(_ desktop: String, on: Bool) async throws {
+    try await viewing { try await $0.setPower(desktop, on: on) }
+  }
+
   /// The service's status.
   public func status() async throws -> ViewerStatus { try await send { try await $0.status() } }
 

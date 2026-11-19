@@ -12,7 +12,7 @@ extension OnboardingPresenter {
   static func desktop(_ snapshot: OnboardingSnapshot) -> OnboardingDesktopScreenState {
     let picked = snapshot.shownDesktop
     return OnboardingDesktopScreenState(
-      items: DesktopChoice.all(snapshot.facts)
+      items: DesktopChoice.all(snapshot.facts, adding: snapshot.choices.adding)
         .map { choice in
           OnboardingDesktopItem(
             id: choice.kind.shown,
@@ -27,7 +27,7 @@ extension OnboardingPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The download's screen.
   static func vmDownload(_ snapshot: OnboardingSnapshot) -> OnboardingVMDownloadScreenState {
-    let progress = snapshot.facts.vm?.progress
+    let progress = snapshot.vm?.progress
     let problem = vmProblem(snapshot)
     return OnboardingVMDownloadScreenState(
       fraction: progress?.downloaded,
@@ -43,7 +43,7 @@ extension OnboardingPresenter {
   /// - Returns: The install's screen.
   static func vmInstall(_ snapshot: OnboardingSnapshot) -> OnboardingVMInstallScreenState {
     OnboardingVMInstallScreenState(
-      steps: (snapshot.facts.vm ?? VMFacts()).makingSteps.map(\.stepState),
+      steps: (snapshot.vm ?? VMFacts()).makingSteps.map(\.stepState),
       problem: vmProblem(snapshot)
     )
   }
@@ -54,7 +54,7 @@ extension OnboardingPresenter {
   /// - Returns: The allow screen.
   static func vmAllow(_ snapshot: OnboardingSnapshot) -> OnboardingVMAllowScreenState {
     OnboardingVMAllowScreenState(
-      steps: (snapshot.facts.vm ?? VMFacts()).allowSteps.map(\.stepState),
+      steps: (snapshot.vm ?? VMFacts()).allowSteps.map(\.stepState),
       problem: vmProblem(snapshot)
     )
   }
@@ -72,7 +72,8 @@ extension OnboardingPresenter {
   }
 
   /// The choice's footer: Back to the welcome, and Continue, ready at once, as Second Login is always picked when
-  /// nothing else is.
+  /// nothing else is. Opened from Settings' Add a Desktop…, it has no welcome to go back to, and Continue waits while
+  /// nothing can be picked.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -81,8 +82,14 @@ extension OnboardingPresenter {
   static func desktopFooter(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingFooterState {
     let idle = snapshot.working == nil
     return OnboardingFooterState(
-      back: OnboardingFooterAction(title: .back, event: .back, isEnabled: idle, isDefault: false),
-      next: OnboardingFooterAction(title: .continue, event: .continueDesktop, isEnabled: idle, isDefault: true),
+      back: snapshot.choices.adding
+        ? nil : OnboardingFooterAction(title: .back, event: .back, isEnabled: idle, isDefault: false),
+      next: OnboardingFooterAction(
+        title: .continue,
+        event: .continueDesktop,
+        isEnabled: idle && snapshot.shownDesktop != nil,
+        isDefault: true
+      ),
       track: step.track(onVM: snapshot.onVM)
     )
   }
@@ -103,7 +110,7 @@ extension OnboardingPresenter {
       case .stopped: OnboardingFooterAction(title: .goOn, event: .goOnAdding, isEnabled: true, isDefault: true)
       case .failed: OnboardingFooterAction(title: .tryAgain, event: .retryAdding, isEnabled: true, isDefault: true)
       }
-    let unmade = step == .downloadVM && snapshot.facts.vm == nil && add != .running
+    let unmade = step == .downloadVM && snapshot.vm == nil && add != .running
     return OnboardingFooterState(
       back: unmade ? OnboardingFooterAction(title: .back, event: .back, isEnabled: true, isDefault: false) : nil,
       next: next,

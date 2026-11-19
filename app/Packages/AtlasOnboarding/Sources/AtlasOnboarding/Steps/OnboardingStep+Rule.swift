@@ -39,6 +39,7 @@ extension OnboardingStep {
       if !asker.accessibility || !asker.screenCapture { return .permissions }
       return .helperDone
     }
+    if choices.adding { return addingStep(facts, choices: choices) }
     // A VM's setup goes by its add, wherever this window started.
     if let vm = facts.vm { return vmStep(vm, choices: choices) }
     if !facts.configured || !facts.helper.exists {
@@ -67,6 +68,23 @@ extension OnboardingStep {
     let allowed = helper.accessibility && helper.screenCapture
     if helper.answering && allowed && helper.hidden { return .finishing }
     return .switchToHelper
+  }
+
+  /// The screen of a window opened from Settings' Add a Desktop…: the choice until the person continues with a VM,
+  /// then its add as it goes, wherever the window started; once this window's add made it, its check until it passed
+  /// and the person went on, then the agents and Done.
+  ///
+  /// - Parameters:
+  ///   - facts: What `atlas onboarding status` reported last.
+  ///   - choices: What the person has chosen in the window.
+  /// - Returns: The screen.
+  private static func addingStep(_ facts: OnboardingFacts, choices: OnboardingChoices) -> OnboardingStep {
+    if let vm = facts.adding { return vmStep(vm, choices: choices) }
+    if choices.added != nil {
+      guard choices.checked else { return .finishing }
+      return choices.agentsDone ? .done : .agents
+    }
+    return choices.desktop == .vm ? .downloadVM : .chooseDesktop
   }
 
   /// The VM path's screen: the download, the install and the permissions as its add goes, then the check until it

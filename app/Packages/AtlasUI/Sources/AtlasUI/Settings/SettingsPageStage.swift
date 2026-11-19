@@ -27,7 +27,21 @@ struct SettingsPageStage: View {
     let general = Binding(get: { state.general }, set: { edit($0) })
     SettingsPageScroll {
       switch state.route {
-      case .page(.helper): HelperPage(state: state.helper, send: send)
+      case .page(.helper):
+        if let desktops = state.desktops {
+          DesktopsPage(state: desktops, send: send)
+        } else if let vm = state.vm {
+          VMPage(state: vm, send: send)
+        } else {
+          HelperPage(state: state.helper, send: send)
+        }
+      case .desktop:
+        // Second Login's page is the Helper page, as with one desktop.
+        if let vm = state.vm {
+          VMPage(state: vm, send: send)
+        } else {
+          HelperPage(state: state.helper, send: send)
+        }
       case .page(.general): GeneralPage(state: general)
       case .page(.activity): ActivityPage(state: general, send: send)
       case .page(.accounts): AccountsPage(state: state.accounts, send: send)

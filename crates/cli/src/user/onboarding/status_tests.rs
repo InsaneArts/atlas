@@ -62,3 +62,18 @@ fn the_vm_of_a_first_setup_is_the_one_being_added_else_the_default_one_and_never
     assert_eq!(setting_up(&listing(json!([user, adding]))), None);
     assert_eq!(setting_up(&listing(json!([]))), None);
 }
+
+#[test]
+fn the_vm_being_added_is_followed_beside_a_second_login_and_never_once_added() {
+    let listing = |desktops: Value| json!({"ok": true, "desktops": desktops});
+    let adding = json!({"name": "vm", "kind": "vm", "listed": false, "lifecycle": "adding"});
+    let added = json!({"name": "work", "kind": "vm", "listed": true, "lifecycle": "created"});
+    let user = json!({"name": "second-login", "kind": "user", "default": true});
+
+    assert_eq!(
+        being_added(&listing(json!([user, added, adding]))),
+        Some(adding.clone())
+    );
+    assert_eq!(being_added(&listing(json!([user, added]))), None);
+    assert_eq!(being_added(&listing(json!([]))), None);
+}

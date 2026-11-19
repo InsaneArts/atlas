@@ -85,7 +85,14 @@
         next.signIn = nil
       case .forgetAccount, .resetBrowser, .signOutAccount:
         break
+      case .openDesktop(let id):
+        next.route = .desktop(id)
+        next.vm = id == settingsVMPane.id ? settingsVMPane : nil
+      case .askStopVM:
+        next.alert = settingsStopVM.alert
       case .checkAgain, .gettingStarted, .showAppInFinder, .showAgentFile, .addApp:
+        break
+      case .addDesktop, .startVM, .maintainVM, .endMaintenance, .removeVM:
         break
       }
       return next

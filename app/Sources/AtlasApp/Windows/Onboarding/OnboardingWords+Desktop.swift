@@ -13,10 +13,11 @@ extension OnboardingWords {
   /// Why a kind of desktop cannot be chosen now, at the end of its row.
   ///
   /// - Parameter lack: What it lacks.
-  /// - Returns: "Not available yet", or what a VM needs.
+  /// - Returns: "Not available yet", "Added" for one set up already, or what a VM needs.
   static func lack(_ lack: DesktopChoice.Lack) -> String {
     switch lack {
     case .notYet: "Not available yet"
+    case .added: "Added"
     case .macOS: "Needs macOS 27"
     case .chip: "Needs Apple silicon"
     case .disk: "Needs 70 GB free"

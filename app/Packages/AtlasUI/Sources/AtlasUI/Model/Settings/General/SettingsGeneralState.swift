@@ -25,6 +25,8 @@ public struct SettingsGeneralState: Equatable, Sendable {
   public var muteHelper: Bool
   /// Why the helper is not muted though the person wants it, with the one step that fixes it; nil when it is fine.
   public var soundProblem: String?
+  /// Whether the row that mutes the helper shows: while a desktop set up has sound, which a VM has not.
+  public var hasSound: Bool
   /// Whether Atlas keeps pictures of the helper's screen around each agent action.
   public var picturesBeforeActions: Bool
   /// How long pictures are kept.
@@ -63,6 +65,7 @@ public struct SettingsGeneralState: Equatable, Sendable {
   ///   - canDeletePictures: Whether there are pictures to delete; there are not by default.
   ///   - notify: Whether Atlas notifies the person when it needs them.
   ///   - notice: What the last change said went wrong; none by default.
+  ///   - hasSound: Whether the row that mutes the helper shows; it does by default.
   public init(
     opensAtLogin: Bool,
     canOpenAtLogin: Bool,
@@ -79,7 +82,8 @@ public struct SettingsGeneralState: Equatable, Sendable {
     storedPictures: String = "",
     canDeletePictures: Bool = false,
     notify: Bool,
-    notice: SettingsNote? = nil
+    notice: SettingsNote? = nil,
+    hasSound: Bool = true
   ) {
     self.opensAtLogin = opensAtLogin
     self.canOpenAtLogin = canOpenAtLogin
@@ -97,5 +101,6 @@ public struct SettingsGeneralState: Equatable, Sendable {
     self.canDeletePictures = canDeletePictures
     self.notify = notify
     self.notice = notice
+    self.hasSound = hasSound
   }
 }

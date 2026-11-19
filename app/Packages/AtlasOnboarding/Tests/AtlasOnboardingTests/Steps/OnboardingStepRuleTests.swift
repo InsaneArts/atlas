@@ -209,4 +209,21 @@ struct OnboardingStepRuleTests {
     #expect(facts.vm?.name == "vm")
     #expect(facts.vm?.ready == true)
   }
+
+  @Test("a window opened from Add a Desktop chooses again beside Second Login and follows the add it asked for")
+  func addingFromSettings() throws {
+    var choices = OnboardingChoices()
+    choices.adding = true
+    #expect(step(try besideHelper(), choices) == .chooseDesktop, "no welcome, and never Second Login's steps")
+    choices.desktop = .vm
+    #expect(step(try besideHelper(), choices) == .downloadVM, "the add asked, nothing made yet")
+    #expect(step(try besideHelper(adding: vm(progress: "downloading")), choices) == .downloadVM)
+    #expect(step(try besideHelper(adding: vm(progress: "installing")), choices) == .installVM)
+    choices.added = "vm-2"
+    #expect(step(try besideHelper(), choices) == .finishing, "once made, its check")
+    choices.checked = true
+    #expect(step(try besideHelper(), choices) == .agents)
+    #expect(try besideHelper(adding: vm()).followedVM(choices)?.name == "vm")
+    #expect(try besideHelper(adding: vm()).followedVM(OnboardingChoices()) == nil, "Getting Started… leaves it")
+  }
 }

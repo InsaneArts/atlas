@@ -21,7 +21,7 @@ extension OnboardingController {
   /// Runs the end-to-end check, or a VM's, then reads the facts again; a check the closing window stopped shows nothing. Once it
   /// passed, its Continue lights up and takes presses ``continueFollows`` later.
   func check() async {
-    let outcome = await commands.run(snapshot.facts.vm.map { .finishVM($0.name) } ?? .finishSetup)
+    let outcome = await commands.run(snapshot.checkedVM.map { .finishVM($0) } ?? .finishSetup)
     guard !closed else { return }
     snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
     refresh()
@@ -32,17 +32,25 @@ extension OnboardingController {
     snapshot.passSettled = true
   }
 
-  /// Done: set Open at Login, keep the home folder private as the box says, open Atlas, then close the window; on any
+  /// Done: set Open at Login on a first setup, keep the home folder private as the box says, open Atlas, then close the window; on any
   /// failure the window stays, saying why. A home folder Atlas couldn't make private stops this Done there, with the
   /// box turned off, and the next Done finishes without it.
   func complete() async {
-    guard let login = await act(.setOpensAtLogin(snapshot.opensAtLogin), OnboardingWords.finishing),
-      login.ok,
+    guard await setOpenAtLogin(),
       await keepHomePrivate(),
       let started = await act(.openMenuBar, OnboardingWords.opening),
       started.ok
     else { return }
     closeRequested = true
+  }
+
+  /// Sets Open at Login as the switch says, on a first setup only: a desktop added from Settings leaves it as the
+  /// person set it.
+  ///
+  /// - Returns: Whether Done goes on; false once setting it failed, which says why, or once the window has closed.
+  func setOpenAtLogin() async -> Bool {
+    guard !snapshot.choices.adding else { return true }
+    return await act(.setOpensAtLogin(snapshot.opensAtLogin), OnboardingWords.finishing)?.ok == true
   }
 
   /// Makes the home folder private when the box is checked, else remembers that it was offered, unless an attempt
@@ -52,7 +60,7 @@ extension OnboardingController {
   ///   window has closed.
   func keepHomePrivate() async -> Bool {
     // A VM has no home folder of the person's to keep private.
-    guard snapshot.facts.vm == nil else { return true }
+    guard !snapshot.onVM else { return true }
     guard snapshot.keepsHomePrivate else {
       // Through `act`, so the switches wait while it runs; a failure to remember the offer only asks again later.
       guard !snapshot.homePrivacyFailed else { return true }

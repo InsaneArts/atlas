@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The Helper page: the helper's card with Switch to Helper…, a login Atlas can close while there is one, whether it
 /// is ready to act with Check Again, and Recover and Log Out for when something goes wrong. While another action runs,
-/// the buttons wait and a line with a spinner names it. When Check Again ends, VoiceOver hears it once.
+/// the buttons wait and a line with a spinner names it. While it is the one desktop, Add a Desktop… stands at its foot.
+/// When Check Again ends, VoiceOver hears it once.
 struct HelperPage: View {
   /// What the page shows.
   let state: SettingsHelperState
@@ -29,8 +30,13 @@ struct HelperPage: View {
       }
       // Check Again always lasts long enough to show, so its marks need no wait before their spinners.
       .environment(\.marksSwapAtOnce, true)
-      GroupedSection(HelperRecovery.allCases, title: "When Something Goes Wrong", notes: notes) { action in
-        actionRow(action)
+      VStack(alignment: .trailing, spacing: Spacing.sPlus) {
+        GroupedSection(HelperRecovery.allCases, title: "When Something Goes Wrong", notes: notes) { action in
+          actionRow(action)
+        }
+        if state.addsDesktop {
+          AddDesktopButton(send: send)
+        }
       }
     }
     .onChange(of: state.buttons.isChecking) { _, isChecking in

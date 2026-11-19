@@ -6,6 +6,11 @@ public struct OnboardingChoices: Equatable, Sendable {
   public var desktop: DesktopChoice.Kind?
   /// The VM's check passed and the person went on past it.
   public var checked = false
+  /// The window opened from Settings' Add a Desktop…: it chooses a desktop to add beside those set up, and follows
+  /// that add.
+  public var adding = false
+  /// The VM this window's add made, by its name, once that add ended: its check comes next.
+  public var added: String?
   /// On the account form rather than the list.
   public var creating = false
   /// The agents screen is behind them.

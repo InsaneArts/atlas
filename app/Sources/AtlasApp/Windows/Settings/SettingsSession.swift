@@ -21,6 +21,10 @@ struct SettingsSession: Equatable {
   var checking = false
   /// Whether Atlas closes a login now, under the person's approval.
   var closing = false
+  /// The desktop whose command runs now, by its ID, so its page's buttons wait; nil while none runs.
+  var desktopWorking: String?
+  /// What the desktop's command running now waits on, in words, which its page shows with a spinner.
+  var desktopWaiting: String?
   /// Whether a change to the accounts list runs now.
   var accountsWorking = false
   /// The level each account is being set to, while its change runs, which its page shows at once.

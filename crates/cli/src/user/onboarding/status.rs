@@ -41,16 +41,23 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     // Settings that list VMs alone: no Second Login to look at.
     if only_vms(config_path) {
         let vm = first_vm(config_path).await;
-        return Ok(on_vms(
+        let mut reply = on_vms(
             me,
             app,
             vm,
             desktops().await,
             crate::menubar::login_decided(),
-        ));
+        );
+        reply["adding"] = adding(config_path).await;
+        return Ok(reply);
     }
 
-    configured(config_path, uid, me, app).await
+    // Settings' Add a Desktop… opens the window on a setup already made:
+    // it chooses again and follows the add it asks for.
+    let mut reply = configured(config_path, uid, me, app).await?;
+    reply["desktops"] = desktops().await;
+    reply["adding"] = adding(config_path).await;
+    Ok(reply)
 }
 
 /// Whether the settings at `config_path` load and list no Second Login.
@@ -119,6 +126,34 @@ fn setting_up(listing: &Value) -> Option<Value> {
     vms()
         .find(|vm| vm["lifecycle"] == "adding")
         .or_else(|| vms().find(|vm| vm["default"] == true && vm["listed"] == true))
+        .cloned()
+}
+
+/// The VM being added beside the desktops the settings list, as `atlas
+/// desktop list` shows it, which Settings' Add a Desktop… follows in the
+/// window; never ready, as it is still being added. Null while no add is
+/// under way, and nothing is asked of any VM then.
+async fn adding(config_path: &Path) -> Value {
+    let path = config_path.to_owned();
+    tokio::task::spawn_blocking(move || atlas_client::vm::listing::while_adding(&path))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+        .and_then(|listing| being_added(&listing))
+        .map_or(Value::Null, |mut vm| {
+            vm["ready"] = json!(false);
+            vm
+        })
+}
+
+/// Of the desktops `listing` shows, the VM being added, whatever else the
+/// settings list.
+fn being_added(listing: &Value) -> Option<Value> {
+    listing["desktops"]
+        .as_array()?
+        .iter()
+        .find(|desktop| desktop["kind"] == "vm" && desktop["lifecycle"] == "adding")
         .cloned()
 }
 

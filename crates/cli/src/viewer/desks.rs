@@ -204,10 +204,14 @@ impl Viewer {
     pub(super) fn note_seen(&self, client: &Client, status: &Value) {
         let mut seen = json!({"standing": status["overview"]["state"]});
         if let Kind::Vm(_) = client.desktop().kind() {
-            let facts: Map<String, Value> = FACTS
+            let mut facts: Map<String, Value> = FACTS
                 .iter()
                 .filter_map(|fact| Some(((*fact).to_owned(), status.get(*fact)?.clone())))
                 .collect();
+            // Its power as its keeper last saw Atlas VM say it, and the size
+            // of its screen while its session proves one.
+            facts.insert("power".to_owned(), status["runner"]["power"].clone());
+            facts.insert("display".to_owned(), status["overview"]["display"].clone());
             seen["facts"] = Value::Object(facts);
         }
         unpoisoned(&self.desks.seen).insert(client.desktop().id().as_str().to_owned(), seen);

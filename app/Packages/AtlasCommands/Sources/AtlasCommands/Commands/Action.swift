@@ -33,6 +33,12 @@ public enum Action: Sendable, Equatable {
   /// Add a VM desktop, or go on with the add of the one named; the person allows it in the approval window. It runs
   /// for as long as macOS takes to download and install, so it is run with ``CommandRunning/runLasting(_:keeping:)``.
   case addVM(name: String?)
+  /// Remove the VM desktop of this name: the VM, its settings entry and what Atlas kept of it; the person allows it in
+  /// the approval window.
+  case removeVM(String)
+  /// Open the VM of this name for the person's own maintenance, or end it: the person allows either in the approval
+  /// window, and agents wait while it is open.
+  case maintainVM(String, end: Bool)
   /// Turn Open at Login on or off at the end of setup.
   case setOpensAtLogin(Bool)
   /// Turn Open at Login on or off from the menu bar, recorded as the person's choice.
@@ -120,6 +126,9 @@ public enum Action: Sendable, Equatable {
     case .finishVM(let name): ["onboarding", "finish", "--desktop", name]
     // The approval window is the confirmation.
     case .addVM(let name): ["desktop", "add", "vm"] + (name.map { ["--name", $0] } ?? [])
+    // The approval window is the confirmation of each.
+    case .removeVM(let name): ["desktop", "remove", name]
+    case .maintainVM(let name, let end): ["desktop", "maintain", name] + (end ? ["--end"] : [])
     case .setOpensAtLogin(let on): ["onboarding", "login", on ? "on" : "off"]
     case .openMenuBar: ["menubar"]
     case .openAtLogin(let on): ["menubar", "--login", on ? "on" : "off"]

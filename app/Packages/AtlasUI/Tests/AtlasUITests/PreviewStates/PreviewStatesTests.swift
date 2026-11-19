@@ -116,9 +116,12 @@
         .map(\.value)
       #expect(Set(states.map(\.route.page)) == Set(SettingsPage.allCases))
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 9,
-        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, home folder Undo, sign-in copies, remove an account"
+        Set(states.compactMap { $0.alert?.title }).count == 10,
+        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, home folder Undo, sign-in copies, remove an account, stop a VM"
       )
+      #expect(states.contains { $0.desktops != nil }, "Desktops, with two desktops")
+      #expect(states.contains { $0.helper.addsDesktop }, "Add a Desktop… under the one desktop")
+      #expect(states.contains { $0.vm?.tone == .link }, "a VM in maintenance")
       #expect(states.contains { $0.accounts.rows == [] }, "no accounts")
       #expect(states.contains { $0.accounts.rows == nil }, "a list Atlas can't read")
       #expect(states.contains { $0.accounts.note != nil }, "the note that Atlas added one")

@@ -89,8 +89,14 @@ extension SettingsPresenter {
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The route.
   static func route(_ snapshot: SettingsSnapshot) -> SettingsRoute {
-    guard let listed = snapshot.facts.status.overview.accounts else { return snapshot.session.route }
-    return snapshot.session.route.kept(accounts: Set(listed.map(\.id)))
+    var route = snapshot.session.route
+    if let listed = snapshot.facts.status.overview.accounts {
+      route = route.kept(accounts: Set(listed.map(\.id)))
+    }
+    if let desktops = snapshot.desktops?.desktops {
+      route = route.kept(desktops: desktops.map(\.id))
+    }
+    return route
   }
 
   /// An account's first letter, as its disc shows it.
