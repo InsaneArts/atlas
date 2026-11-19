@@ -17,7 +17,16 @@
 //! them.
 //!
 //! A previous bundle a keeper still runs from is never removed
-//! ([`running_from`]).
+//! ([`running_from`]). No update is taken while the person's maintenance of
+//! a VM is kept, nor while its guest may be installing an update of its own
+//! ([`updatable`]). Each keeper then brings its guest to its own build
+//! ([`guest`]).
+mod guest;
+
+#[cfg(test)]
+pub(in crate::vm) use guest::asked as update_guest_through;
+pub use guest::update_guest;
+
 use super::keeper;
 use crate::{link::Keeper, station::Station};
 use atlas_control::{Controller, Ownership, StopWhy};
@@ -284,6 +293,28 @@ pub struct Found {
 }
 
 impl Found {
+    /// The VM keyed `key` in the settings at `settings`, as a step an update
+    /// runs for its keeper names it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a key that names no VM, and settings that cannot be read or
+    /// list no such VM.
+    fn of(key: &str, settings: &Path) -> Result<Self> {
+        let (vm, _) = keeper::listed(key, settings)?;
+        let read = Settings::load(settings)?;
+        let listed = read
+            .desktops()
+            .iter()
+            .find(|listed| matches!(&listed.desktop, Chosen::Vm(config) if config.id == vm))
+            .ok_or_else(|| Error::new(Code::ConfigInvalid, "The settings list no such VM."))?;
+        Ok(Self {
+            selected: read.selected(listed),
+            vm,
+            settings: settings.to_owned(),
+        })
+    }
+
     /// The VM's record key, `vm-<id>`.
     #[must_use]
     pub fn key(&self) -> String {
@@ -581,10 +612,19 @@ fn hold(
     } else {
         Some(lifecycle.admit()?)
     };
+    // Before each exclusion, which refuses an update's own pending claims
+    // in words that do not say what holds it; and again under it, which a
+    // maintenance's beginning takes too.
+    for desk in &desks {
+        updatable(lifecycle, desk)?;
+    }
     let exclusions = desks
         .iter()
         .map(Desk::exclusion)
         .collect::<Result<Vec<_>>>()?;
+    for desk in &desks {
+        updatable(lifecycle, desk)?;
+    }
     let held = Held {
         keepers,
         desks,
@@ -595,7 +635,46 @@ fn hold(
     Ok(held)
 }
 
+/// Refuse an update of Atlas while the person's maintenance of `desk`'s VM
+/// is kept, ending or unreadable, as an Atlas VM older than the update's
+/// build may never end it; and while its guest may be installing an update
+/// its keeper asked, until what that came to is kept.
+fn updatable(lifecycle: &super::lifecycle::Lifecycle, desk: &Desk) -> Result<()> {
+    let (kept, _) = super::maintenance::Kept::read(Some(lifecycle), &desk.vm);
+    if let Some(refused) = kept.update_refused(&desk.name) {
+        return Err(refused);
+    }
+    let name = &desk.name;
+    match keeper::update_installing(&desk.folder) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(Error::new(
+            Code::Busy,
+            format!("{name}'s Atlas is being updated now, so Atlas was not updated."),
+        )
+        .with(
+            "next",
+            json!(format!(
+                "Run atlas update again once atlas status --desktop {name} no longer says it is \
+                 updating."
+            )),
+        )),
+        Err(_) => Err(Error::new(
+            Code::State,
+            format!(
+                "Whether {name}'s Atlas is being updated cannot be read, so Atlas was not updated."
+            ),
+        )
+        .with("next", json!(format!("Run atlas doctor --desktop {name}.")))),
+    }
+}
+
 impl Held {
+    /// Whether it holds no VM.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.desks.is_empty()
+    }
+
     /// Refuse, unless `allow_disrupt`, while work runs on any desktop held.
     ///
     /// # Errors
@@ -632,19 +711,8 @@ impl Held {
 /// does not serve in time. The handover stays recorded then, for the next
 /// keeper and the next run.
 pub fn hand_over(key: &str, settings: &Path, allow_disrupt: bool) -> Result<Value> {
-    let (vm, _) = keeper::listed(key, settings)?;
-    let read = Settings::load(settings)?;
-    let listed = read
-        .desktops()
-        .iter()
-        .find(|listed| matches!(&listed.desktop, Chosen::Vm(config) if config.id == vm))
-        .ok_or_else(|| Error::new(Code::ConfigInvalid, "The settings list no such VM."))?;
-    let found = Found {
-        selected: read.selected(listed),
-        vm: vm.clone(),
-        settings: settings.to_owned(),
-    };
-    let desk = Desk::own(listed.name.clone(), vm)?;
+    let found = Found::of(key, settings)?;
+    let desk = Desk::own(found.selected.name.clone(), found.vm.clone())?;
     let admitted = super::lifecycle::Lifecycle::own()?.admit()?;
     handed(
         &Launchd::of(&[found]),

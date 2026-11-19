@@ -566,8 +566,12 @@ impl Client {
                 "maintenance": said,
                 "pending": pending, "unresolved": unresolved},
         });
-        // Whether its Atlas is this Mac's build, or what brings it there.
-        let update = crate::vm::update::said(&self.selected.name, &update_facts(&status));
+        // Whether its Atlas is this Mac's build, or what brings it there,
+        // and how an update its keeper owns stands.
+        let update = crate::vm::update::with_owner(
+            crate::vm::update::said(&self.selected.name, &update_facts(&status)),
+            &status["keeper"]["update"],
+        );
         if let Some(guest) = status["guest"].as_object_mut() {
             guest.insert("update".to_owned(), update);
         }

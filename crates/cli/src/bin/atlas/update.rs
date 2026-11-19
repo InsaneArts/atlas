@@ -55,7 +55,8 @@ fn helper_client(config: Config) -> Result<Client> {
 
 /// Say whether a newer release is out, or update the app, then hand over to
 /// the new executable, so the steps that move the helper onto it are always
-/// the new version's own.
+/// the new version's own. With Atlas current here, each VM whose Atlas is
+/// not this build is brought to it instead, under the update's own hold.
 pub(super) async fn run(
     config: &std::path::Path,
     args: super::cli::Update,
@@ -67,27 +68,24 @@ pub(super) async fn run(
     }
 
     super::dispatch::as_yourself("update")?;
-    update_using(
-        config,
-        args.allow_unnotarized,
-        args.force,
-        args.version,
-        host,
-        allow_disrupt,
-        helper_client,
-    )
-    .await
+    update_using(config, args, host, allow_disrupt, helper_client).await
 }
 
+/// [`run`]'s update, as `args` asks it.
 async fn update_using(
     config: &std::path::Path,
-    allow_unnotarized: bool,
-    force: bool,
-    version: Option<String>,
+    args: super::cli::Update,
     host: Option<&HostSession>,
     allow_disrupt: bool,
     make_client: impl FnOnce(Config) -> Result<Client>,
 ) -> Result<Value> {
+    let super::cli::Update {
+        allow_unnotarized,
+        force,
+        version,
+        retry_vms,
+        ..
+    } = args;
     let source = atlas_client::update::Source::from_env(version);
 
     // Nothing else may control the helper while its app is replaced: no
@@ -132,11 +130,24 @@ async fn update_using(
     .await?;
 
     drop(exclusion);
-    drop(keepers);
 
     if report["updated"] != true {
+        // Atlas is current here: each VM not on this build is brought to
+        // it, under this update's own hold and Stop; one whose update to it
+        // failed only when the person asked to try again.
+        let held = std::sync::Arc::into_inner(keepers).ok_or_else(|| {
+            Error::new(Code::Update, "The update's hold of its VMs was not let go.")
+        })?;
+        if !held.is_empty() {
+            spinner.set("Bringing each VM's Atlas to this build…");
+        }
+        let vms = blocking(move || held.bring_to_this_build(allow_disrupt, retry_vms)).await?;
+        if !vms.is_empty() {
+            report["vms"] = json!(vms);
+        }
         return Ok(report);
     }
+    drop(keepers);
 
     spinner.set("Moving the helper onto the new version…");
     let executable = atlas_core::app_bundle::installed_executable()?;
@@ -156,7 +167,14 @@ async fn update_using(
     // with a token another attempt made.
     let token = atlas_client::update::grant_handover()?;
     let output = authorized(finish.arg("--config").arg(config), token.as_deref())?;
-    let (moved, finished) = helper_moved(&output);
+    let (moved, mut finished) = helper_moved(&output);
+    // What each VM's Atlas came to is the update's own to say.
+    if let Some(vms) = finished
+        .as_object_mut()
+        .and_then(|finished| finished.remove("vms"))
+    {
+        report["vms"] = vms;
+    }
     report["ok"] = json!(moved);
     report["helper"] = finished;
 
@@ -311,7 +329,8 @@ async fn preflight(
 }
 
 /// Move the desktops onto this (just installed) executable: each VM's
-/// session keeper, handed over to this build, then the helper: the shared
+/// session keeper, handed over to this build and asked to bring its VM's
+/// Atlas to it (each answer in `vms`), then the helper: the shared
 /// executable, the daemon, the input service, and (when a setup is
 /// recorded) setup's verification of the new signed build. Stops at the
 /// first failure and names it. With no helper job yet (setup stopped before
@@ -381,37 +400,32 @@ async fn update_finish_with(
     } else {
         Vec::new()
     };
-    let handovers: Vec<[String; 6]> = found
+    let keepers: Vec<(String, String)> = found
         .iter()
-        .map(|keeper| {
-            [
-                "station".into(),
-                "handover".into(),
-                "--key".into(),
-                keeper.key(),
-                "--settings".into(),
-                keeper.settings().display().to_string(),
-            ]
-        })
+        .map(|keeper| (keeper.key(), keeper.settings().display().to_string()))
         .collect();
-    let handovers: Vec<[&str; 6]> = handovers
-        .iter()
-        .map(|step| step.each_ref().map(String::as_str))
-        .collect();
-    let handovers: Vec<&[&str]> = handovers.iter().map(<[&str; 6]>::as_slice).collect();
-    let handed = match run_steps(&handovers, &mut run)? {
+    // Then each one handed over brings its VM's Atlas to this build; what
+    // each came to is said, and none stops the rest.
+    let (handed, vms) = keepers_moved(&keepers, &mut run)?;
+    let with_vms = |mut finished: Value| {
+        if !vms.is_empty() {
+            finished["vms"] = json!(vms);
+        }
+        finished
+    };
+    let handed = match handed {
         Ok(handed) => handed,
-        Err(failed) => return Ok(failed),
+        Err(failed) => return Ok(with_vms(failed)),
     };
 
     // The settings given move the helper and the menu bar alone.
     let Some(settings) = settings_in(config)? else {
-        return Ok(if handed.is_empty() {
+        return Ok(with_vms(if handed.is_empty() {
             json!({"ok": true, "next": "atlas init"})
         } else {
             json!({"ok": true, "completedSteps": handed, "agents": atlas_agents::refresh(),
                 "next": "atlas init"})
-        });
+        }));
     };
     let Ok(loaded) = settings.user() else {
         let finished = if handed.is_empty() {
@@ -419,11 +433,11 @@ async fn update_finish_with(
         } else {
             json!({"ok": true, "completedSteps": handed, "agents": atlas_agents::refresh()})
         };
-        return Ok(move_menubar(
+        return Ok(with_vms(move_menubar(
             finished,
             || stop_menubar_at(menubar_records(&settings)),
             |port| restart_menubar(&executable, config, port),
-        ));
+        )));
     };
 
     let mut client = make_client(loaded.clone())?;
@@ -440,7 +454,7 @@ async fn update_finish_with(
                 if let Some(moved) = failed["completedSteps"].as_array_mut() {
                     moved.splice(0..0, done.into_iter().map(Value::from));
                 }
-                return Ok(failed);
+                return Ok(with_vms(failed));
             }
         }
 
@@ -452,11 +466,67 @@ async fn update_finish_with(
 
     // The menu bar moves here, by this version's rules, even when an older
     // version started the update.
-    Ok(move_menubar(
+    Ok(with_vms(move_menubar(
         finished,
         || stop_menubar_at(client.output_dir().map(std::path::Path::to_path_buf)),
         |port| restart_menubar(&executable, config, port),
-    ))
+    )))
+}
+
+/// Hand each keeper, by its record key and the settings its agent pins,
+/// over to this build, a step each through `run`, stopping at the first that
+/// fails; then ask each one handed over, a handover that failed after it
+/// included, to bring its VM's Atlas to that build ([`guest_updates`]). The
+/// handovers done, or the failed step's report, and what each VM came to.
+fn keepers_moved(
+    keepers: &[(String, String)],
+    mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
+) -> Result<(Steps, Vec<Value>)> {
+    let handovers: Vec<[&str; 6]> = keepers
+        .iter()
+        .map(|(key, settings)| ["station", "handover", "--key", key, "--settings", settings])
+        .collect();
+    let handovers: Vec<&[&str]> = handovers.iter().map(<[&str; 6]>::as_slice).collect();
+    let handed = run_steps(&handovers, &mut run)?;
+    let over = match &handed {
+        Ok(handed) => handed.len(),
+        Err(failed) => failed["completedSteps"].as_array().map_or(0, Vec::len),
+    };
+    let vms = guest_updates(keepers.get(..over).unwrap_or_default(), run);
+    Ok((handed, vms))
+}
+
+/// Ask each keeper, by its record key and the settings its agent pins, to
+/// bring its VM's Atlas to its own build, a step each through `run`: what
+/// each answered, or why it did not, in order. A step that fails stops
+/// none of the rest: each VM's Atlas is its own.
+fn guest_updates(
+    keepers: &[(String, String)],
+    mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
+) -> Vec<Value> {
+    keepers
+        .iter()
+        .map(|(key, settings)| {
+            let step = [
+                "station",
+                "update-guest",
+                "--key",
+                key,
+                "--settings",
+                settings,
+            ];
+            let answered = match run(&step) {
+                Ok(output) => acknowledged(&output, "The VM's update step"),
+                Err(error) => Err(json!({"ok": false,
+                    "error": format!("The VM's update step did not run: {error}")})),
+            };
+            let mut answered = answered.unwrap_or_else(|failed| failed);
+            if answered.get("desktop").is_none() {
+                answered["key"] = json!(key);
+            }
+            answered
+        })
+        .collect()
 }
 
 /// The token the update that started this finish gave it on its standard
@@ -502,12 +572,15 @@ fn authorized(
     child.wait_with_output()
 }
 
+/// The steps an update ran, or the report of the one that failed.
+type Steps = std::result::Result<Vec<String>, Value>;
+
 /// Run `steps` in order through `run`, stopping at the first that fails:
 /// the steps completed, or the failed-step report.
 fn run_steps(
     steps: &[&[&str]],
     mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
-) -> Result<std::result::Result<Vec<String>, Value>> {
+) -> Result<Steps> {
     let mut done = Vec::new();
 
     for step in steps {

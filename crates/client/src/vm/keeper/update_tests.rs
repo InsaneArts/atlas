@@ -11,7 +11,7 @@ use crate::vm::keeper::{
     tests::{Saying, fixture_with, until},
 };
 use atlas_control::StopWhy;
-use atlas_session::standin::StandIn;
+use atlas_session::{compatibility::UPDATE_BOUND, standin::StandIn};
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, sync::atomic::Ordering::SeqCst};
 
 /// A build of Atlas a keeper runs from: a signed executable in an app
@@ -492,7 +492,7 @@ updating_test!(
         let saying = fixture.guest.proving();
         *saying.daemon.lock().unwrap() = Some((older(), atlas_core::VERSION.to_owned()));
 
-        let owed = super::asked(&fixture.keeper, Duration::from_secs(1)).await;
+        let owed = super::asked(&fixture.keeper, Duration::from_secs(1), false).await;
         assert_eq!(owed["state"], "owed", "{owed}");
         assert_eq!(
             owed["why"],
@@ -530,7 +530,7 @@ updating_test!(
         let fixture = fixture_with(Program::signed_at(&bundle.executable));
         let saying = fixture.guest.proving();
         *saying.daemon.lock().unwrap() = Some((older(), atlas_core::VERSION.to_owned()));
-        super::asked(&fixture.keeper, Duration::from_secs(1)).await;
+        super::asked(&fixture.keeper, Duration::from_secs(1), false).await;
         let folder = fixture.keeper.folder.clone();
 
         let updating = Updating {
@@ -1274,14 +1274,14 @@ updating_test!(
         std::fs::create_dir_all(app.join("Resources")).unwrap();
         std::fs::write(app.join("Resources/large"), vec![7_u8; 4 << 20]).unwrap();
         updating.standin().withholding.store(true, SeqCst);
-        let owed = asked(
+        let staging = asked(
             &updating.serving.socket,
             &json!({"op": "update-guest", "deadline_ms": 2_000}),
         )
         .await
         .pop()
         .unwrap();
-        assert_eq!(owed["state"], "owed", "{owed}");
+        assert_eq!(staging["state"], "staging", "{staging}");
         let keeper = updating.keeper();
         let change = crate::test_support::under_maintenance(
             keeper.lifecycle.home(),
@@ -1754,5 +1754,347 @@ updating_test!(
         assert_eq!(updating.session().control.generation(), generation);
         assert_eq!(updating.phase().outcome().unwrap()["update"], "notStaged");
         assert!(updating.standin().refused_as_voided(&stage).is_some());
+    }
+);
+
+/// The keeper of `updating` as the station asks it, over its own socket.
+struct Through(crate::link::Keeper);
+
+impl Through {
+    fn of(updating: &Updating, directory: &std::path::Path) -> Self {
+        let selected = crate::test_support::vm_client(directory, None).selected;
+        Self(crate::link::Keeper::at(
+            Arc::new(selected),
+            updating.keeper().vm.clone(),
+            updating.serving.socket.clone(),
+            Duration::from_secs(10),
+            Arc::new(crate::vm::keeper::clients::tests::Trusting),
+        ))
+    }
+}
+
+impl crate::vm::handover::Keepers for Through {
+    fn loaded(&self, _: &atlas_core::desktop::DesktopId) -> atlas_core::error::Result<bool> {
+        Ok(true)
+    }
+
+    fn runs(&self, _: &atlas_core::desktop::DesktopId) -> bool {
+        true
+    }
+
+    fn ask(
+        &self,
+        _: &atlas_core::desktop::DesktopId,
+        request: &Value,
+        deadline: Duration,
+    ) -> atlas_core::error::Result<Vec<Value>> {
+        self.0.exchange(request, deadline)
+    }
+
+    fn paired(&self, _: &atlas_core::desktop::DesktopId) -> atlas_core::error::Result<bool> {
+        Ok(true)
+    }
+
+    fn ended(&self, _: &atlas_core::process::Instance) -> bool {
+        false
+    }
+
+    fn stopped(&self, _: &atlas_core::desktop::DesktopId) -> bool {
+        false
+    }
+}
+
+updating_test!(
+    the_stations_step_has_the_keeper_bring_its_guest_to_its_own_build_once_the_updates_stop_holds,
+    async {
+        let updating = Updating::new().await;
+        let directory = tempfile::tempdir().unwrap();
+        let keeper = updating.keeper().clone();
+        // The update's own Stop, as `atlas update` keeps it; the keeper says
+        // it to its guest by itself, and the step asks until it is confirmed.
+        keeper.stop.note_stop_unless_noted(StopWhy::Update).unwrap();
+        *updating.serving.fixture.guest.stop.lock().unwrap() = "stopped";
+        let through = Through::of(&updating, directory.path());
+        let desk = crate::vm::handover::Desk::at(
+            "work",
+            keeper.vm.clone(),
+            keeper.stop.clone(),
+            keeper.folder.clone(),
+        );
+        let lifecycle = keeper.lifecycle.clone();
+
+        let answered = tokio::task::spawn_blocking(move || {
+            crate::vm::handover::update_guest_through(
+                &through,
+                &desk,
+                &lifecycle,
+                false,
+                Duration::from_secs(20),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(answered["state"], "updating", "{answered}");
+        assert_eq!(answered["desktop"], "work");
+        let Phase::Asked { staged, update, .. } = updating.phase() else {
+            panic!("not asked: {:?}", updating.phase());
+        };
+        let asked = updating.updates_asked();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0]["change"], json!(update));
+        assert_eq!(asked[0]["expect"], json!(staged.digest));
+        assert_eq!(updating.record().unwrap().target.build, updating.own());
+    }
+);
+
+updating_test!(
+    status_says_an_update_under_way_with_its_phase_and_the_copies_earlier_updates_left,
+    async {
+        let updating = asked_update().await;
+        let directory = tempfile::tempdir().unwrap();
+        let client =
+            crate::vm::keeper::clients::tests::client_of(&updating.serving, directory.path());
+        let target = json!({"build": updating.own(), "version": atlas_core::VERSION});
+
+        let under_way = client.status().await;
+
+        assert_eq!(
+            under_way["guest"]["update"],
+            json!({"state": "updating", "phase": "asked", "target": target}),
+            "{under_way}"
+        );
+
+        // Settled, a copy an earlier build's update left still to remove,
+        // kept by the owner so it is known to last.
+        let mut owner = updating.paused().await;
+        let (stage, update, earlier) = (Token::new(), updating.update(), Token::new());
+        let outcome = json!({"ok": false, "op": "update", "update": "rolledBack"});
+        let settled = Record {
+            target: updating.keeper().target().unwrap(),
+            phase: Phase::Settled {
+                stage,
+                update: Some(update),
+                outcome: outcome.clone(),
+            },
+            earlier: vec![Leftover {
+                stage: earlier.clone(),
+                removal: None,
+            }],
+        };
+        assert!(updating.keeper().keep(&mut owner, &settled).await);
+
+        let settled = client.status().await;
+
+        assert_eq!(
+            settled["guest"]["update"],
+            json!({"state": "available",
+                "next": "Run atlas update to bring work's Atlas to this Mac's build.",
+                "phase": "settled", "outcome": outcome,
+                "earlier": [{"stage": earlier, "removal": null}]}),
+            "{settled}"
+        );
+        assert_eq!(settled["keeper"]["update"]["phase"], "settled");
+        assert!(
+            !settled.to_string().to_lowercase().contains("helper"),
+            "{settled}"
+        );
+    }
+);
+
+updating_test!(
+    the_stations_cleanup_leaves_a_copy_a_superseded_update_left_to_its_owner_which_removes_it,
+    async {
+        let updating = asked_update().await;
+        assert!(
+            updating
+                .standin()
+                .settle_update(&updating.update(), "released")
+        );
+        updating.says_build(&updating.own()).await;
+        updating
+            .until_phase("settled", |phase| matches!(phase, Phase::Settled { .. }))
+            .await;
+        updating.nothing_pending().await;
+        let owner = updating.paused().await;
+        let Phase::Settled { stage, outcome, .. } = updating.phase() else {
+            panic!("not settled");
+        };
+        // The copy is now one an earlier update left, as a fresh update
+        // begun in place of a superseded one keeps it.
+        Record {
+            target: updating.keeper().target().unwrap(),
+            phase: Phase::Done {
+                issued: Vec::new(),
+                outcome,
+            },
+            earlier: vec![Leftover {
+                stage: stage.clone(),
+                removal: None,
+            }],
+        }
+        .keep(&updating.keeper().folder)
+        .unwrap();
+        updating.confirmed().await;
+        let resumed = updating.resumed().await;
+        assert_eq!(resumed["outcome"], "resumed", "{resumed}");
+        let directory = tempfile::tempdir().unwrap();
+        let client =
+            crate::vm::keeper::clients::tests::client_of(&updating.serving, directory.path());
+        let verified = client.verify_vm().await.unwrap();
+
+        let cleaned = crate::vm::copies::removal(&client, &stage, (None, &verified), &[]).await;
+
+        assert!(
+            matches!(cleaned, crate::handoff::CopyRemoval::Unreadable),
+            "never removed around its owner: {cleaned:?}"
+        );
+        assert_eq!(updating.standin().copies().len(), 1);
+
+        drop(owner);
+        let folder = updating.keeper().folder.clone();
+        until("the earlier copy removed", move || {
+            Record::kept(&folder)
+                .ok()
+                .flatten()
+                .is_some_and(|record| record.earlier.is_empty())
+        })
+        .await;
+        assert!(updating.standin().copies().is_empty());
+        updating.nothing_pending().await;
+    }
+);
+
+updating_test!(
+    status_says_a_settlement_whose_record_may_not_last_is_still_settling,
+    async {
+        let updating = asked_update().await;
+        let directory = tempfile::tempdir().unwrap();
+        let client =
+            crate::vm::keeper::clients::tests::client_of(&updating.serving, directory.path());
+        let update = updating.update();
+        {
+            let mut owner = updating.paused().await;
+            assert!(updating.standin().settle_update(&update, "rolledBack"));
+            updating.syncable(false);
+            assert_eq!(updating.step(&mut owner).await, Progress::Waiting);
+            assert!(
+                matches!(updating.phase(), Phase::Settled { .. }),
+                "in place"
+            );
+
+            let unsure = client.status().await;
+
+            assert_eq!(
+                unsure["guest"]["update"],
+                json!({"state": "updating", "phase": "settling",
+                    "target": {"build": updating.own(), "version": atlas_core::VERSION}}),
+                "{unsure}"
+            );
+            assert!(unsure["keeper"]["update"].get("outcome").is_none());
+        }
+        updating.syncable(true);
+        updating.nothing_pending().await;
+
+        let settled = client.status().await;
+
+        assert_eq!(settled["guest"]["update"]["phase"], "settled", "{settled}");
+        assert_eq!(
+            settled["guest"]["update"]["outcome"]["update"],
+            "rolledBack"
+        );
+    }
+);
+
+updating_test!(
+    a_stage_under_way_is_answered_staging_in_plain_words,
+    async {
+        let updating = Updating::new().await;
+        updating.stopped().await;
+        let _owner = updating.paused().await;
+        let staging = Record {
+            target: updating.keeper().target().unwrap(),
+            phase: Phase::Staging {
+                stage: Token::new(),
+                digest: None,
+            },
+            earlier: Vec::new(),
+        };
+
+        let said = updating.keeper().said(Some(&staging), true);
+
+        assert_eq!(
+            said,
+            json!({"ok": true, "op": "update-guest", "state": "staging",
+                "why": "This Mac's Atlas is being copied into work; its Atlas is updated once \
+                        the copy is in place."})
+        );
+    }
+);
+
+updating_test!(
+    an_update_of_this_build_that_failed_is_begun_again_only_when_the_person_asks_to_retry,
+    async {
+        let updating = asked_update().await;
+        assert!(
+            updating
+                .standin()
+                .settle_update(&updating.update(), "rolledBack")
+        );
+        updating
+            .until_phase("settled", |phase| matches!(phase, Phase::Settled { .. }))
+            .await;
+        updating.nothing_pending().await;
+        let first = updating.update();
+
+        let again = updating.asked().await;
+        assert_eq!(again["state"], "refused", "{again}");
+        assert_eq!(updating.updates_asked().len(), 1);
+
+        let retried = asked(
+            &updating.serving.socket,
+            &json!({"op": "update-guest", "retry": true, "deadline_ms": 30_000}),
+        )
+        .await
+        .pop()
+        .unwrap();
+
+        assert_eq!(retried["state"], "updating", "{retried}");
+        let asked = updating.updates_asked();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_ne!(asked[1]["change"], json!(first), "under a fresh name");
+        let record = updating.record().unwrap();
+        assert_eq!(
+            record.earlier.len(),
+            1,
+            "the failed one's copy kept to remove"
+        );
+    }
+);
+
+updating_test!(
+    an_update_of_this_build_never_tried_in_the_guest_is_begun_again_by_a_plain_ask,
+    async {
+        let updating = Updating::new().await;
+        updating.stopped().await;
+        {
+            let mut owner = updating.paused().await;
+            let never = Record {
+                target: updating.keeper().target().unwrap(),
+                phase: Phase::Done {
+                    issued: vec![Token::new()],
+                    outcome: not_asked("Agents resumed before the update was asked."),
+                },
+                earlier: Vec::new(),
+            };
+            assert!(updating.keeper().keep(&mut owner, &never).await);
+        }
+
+        let answer = updating.asked().await;
+
+        assert_eq!(answer["state"], "updating", "{answer}");
+        assert_eq!(updating.updates_asked().len(), 1);
+        assert!(matches!(updating.phase(), Phase::Asked { .. }));
     }
 );

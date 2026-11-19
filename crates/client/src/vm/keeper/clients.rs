@@ -13,7 +13,8 @@
 //! Stop for the update, says it, leaves its generation, answers and ends,
 //! all under its turn, so no Resume comes between.
 //! `update-guest` asks the keeper to bring its guest to the keeper's own
-//! build ([`super::update`]).
+//! build ([`super::update`]); its hello says where the update it owns
+//! stands.
 //!
 //! The person's maintenance of the VM holds every agent's request here,
 //! read afresh from the VM's lifecycle record at each one ([`super::held`]);
@@ -303,7 +304,9 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
         .and_then(|revision| serde_json::from_value::<Option<StopRevision>>(revision.clone()).ok());
     match request["op"].as_str() {
         Some("hello") => {
-            let _ = say(&mut writing, &keeper.hello()).await;
+            let mut hello = keeper.hello();
+            hello["update"] = keeper.update_said().await;
+            let _ = say(&mut writing, &hello).await;
         }
         Some("stop") => {
             let _ = say(&mut writing, &told(keeper, Telling::Stop, deadline).await).await;
@@ -385,7 +388,8 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             }
         }
         Some("update-guest") => {
-            let answered = super::update::asked(keeper, deadline).await;
+            let retry = request["retry"] == true;
+            let answered = super::update::asked(keeper, deadline, retry).await;
             let _ = say(&mut writing, &answered).await;
         }
         Some("hold") => {

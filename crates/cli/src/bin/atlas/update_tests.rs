@@ -94,7 +94,19 @@ async fn updates_and_handover_refuse_active_work_before_replacing_anything() {
     for force in [false, true] {
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            update_using(&settings, false, force, None, None, false, temporary_client),
+            update_using(
+                &settings,
+                super::super::cli::Update {
+                    allow_unnotarized: false,
+                    force,
+                    version: None,
+                    check: false,
+                    retry_vms: false,
+                },
+                None,
+                false,
+                temporary_client,
+            ),
         )
         .await
         .unwrap()
@@ -453,5 +465,136 @@ async fn a_finish_run_by_hand_hands_no_vms_keeper_over() {
     assert_eq!(
         finished,
         json!({"ok": true, "completedSteps": [], "menubarRestarted": null})
+    );
+}
+
+/// Each keeper an update handed over is asked, a step each by its key and
+/// the settings its agent pins, to bring its VM's Atlas to its own build:
+/// every answer is kept in order, and one that fails stops none of the rest.
+#[test]
+fn update_finish_asks_each_handed_over_keeper_to_update_its_guest() {
+    let keepers = [
+        (
+            "vm-0123456789abcdef01234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+        (
+            "vm-89abcdef0123456701234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+        (
+            "vm-fedcba987654321001234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+    ];
+    let mut replies = [
+        exited(
+            0,
+            r#"{"ok":true,"op":"update-guest","state":"updating","desktop":"work"}"#,
+            "",
+        ),
+        exited(
+            1,
+            r#"{"ok":false,"code":"busy","error":"play is under maintenance, so its Atlas is not updated.","desktop":"play"}"#,
+            "",
+        ),
+        exited(0, "not json", ""),
+    ]
+    .into_iter();
+    let mut ran = Vec::new();
+
+    let vms = guest_updates(&keepers, |step| {
+        ran.push(step.join(" "));
+        Ok(replies.next().unwrap())
+    });
+
+    assert_eq!(
+        ran,
+        keepers
+            .iter()
+            .map(|(key, settings)| format!(
+                "station update-guest --key {key} --settings {settings}"
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vms,
+        vec![
+            json!({"ok": true, "op": "update-guest", "state": "updating", "desktop": "work"}),
+            json!({"ok": false, "code": "busy", "desktop": "play",
+                "error": "play is under maintenance, so its Atlas is not updated."}),
+            json!({"ok": false, "error": "The VM's update step did not report",
+                "key": "vm-fedcba987654321001234567"}),
+        ]
+    );
+}
+
+/// A handover that fails stops the handovers after it, but every keeper
+/// handed over before it is still asked to update its guest, and the
+/// reply keeps both.
+#[test]
+fn a_failed_handover_still_has_each_keeper_handed_over_before_it_update_its_guest() {
+    let keepers = [
+        (
+            "vm-0123456789abcdef01234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+        (
+            "vm-89abcdef0123456701234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+        (
+            "vm-fedcba987654321001234567".to_owned(),
+            "/Users/me/.config/atlas.toml".to_owned(),
+        ),
+    ];
+    let mut ran = Vec::new();
+
+    let (handed, vms) = keepers_moved(&keepers, |step| {
+        ran.push(step.join(" "));
+        Ok(match (step[1], step[3]) {
+            ("handover", "vm-89abcdef0123456701234567") => exited(
+                1,
+                r#"{"ok":false,"code":"update","error":"play's new session keeper did not start in time."}"#,
+                "",
+            ),
+            ("handover", _) => exited(0, r#"{"ok":true,"handed":true}"#, ""),
+            _ => exited(
+                0,
+                r#"{"ok":true,"op":"update-guest","state":"updating","desktop":"work"}"#,
+                "",
+            ),
+        })
+    })
+    .unwrap();
+
+    let first = &keepers[0];
+    let second = &keepers[1];
+    assert_eq!(
+        ran,
+        vec![
+            format!("station handover --key {} --settings {}", first.0, first.1),
+            format!(
+                "station handover --key {} --settings {}",
+                second.0, second.1
+            ),
+            format!(
+                "station update-guest --key {} --settings {}",
+                first.0, first.1
+            ),
+        ]
+    );
+    let failed = handed.unwrap_err();
+    assert_eq!(
+        failed["failedStep"],
+        format!(
+            "station handover --key {} --settings {}",
+            second.0, second.1
+        )
+    );
+    assert_eq!(failed["completedSteps"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        vms,
+        vec![json!({"ok": true, "op": "update-guest", "state": "updating", "desktop": "work"})]
     );
 }

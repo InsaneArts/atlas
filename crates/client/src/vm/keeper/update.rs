@@ -34,27 +34,21 @@ use super::{
     lanes::{Ticket, Work},
     read, recover,
 };
+use crate::vm::update::NEEDS;
 use atlas_control::{Ownership, Pending, StopWhy, executors::Executor};
 use atlas_core::{
     error::{Code, Error},
     files::Token,
     outcomes::Outcome,
 };
-use atlas_session::{
-    compatibility::{CHANGES, COPIES, STAGE, UPDATE_BOUND, UPDATES},
-    generation::Generation,
-    lane::LaneKind,
-};
+use atlas_session::{generation::Generation, lane::LaneKind};
 use record::{Leftover, Phase, Record, Removal, Staged, Target};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use tokio::sync::MutexGuard;
 
 /// The keeper's capability to update its guest to its own build.
-pub(super) const CAPABILITY: &str = "update-guest-v1";
-
-/// What the guest must serve to be updated from this keeper.
-const NEEDS: [&str; 5] = [CHANGES, STAGE, COPIES, UPDATES, UPDATE_BOUND];
+pub(crate) const CAPABILITY: &str = "update-guest-v1";
 
 /// How long one of the update's changes has to be answered, and a read of
 /// what one came to.
@@ -206,6 +200,22 @@ fn voided(reply: &Value) -> bool {
     reply["ok"] == true && reply["op"] == "void" && reply["voided"] == true
 }
 
+/// Whether `record` was settled with nothing of it ever tried in the
+/// guest: its update never asked, or its bundle never placed.
+fn never_tried(record: &Record) -> bool {
+    record
+        .phase
+        .outcome()
+        .is_some_and(|outcome| matches!(outcome["update"].as_str(), Some("notAsked" | "notStaged")))
+}
+
+/// Whether `record` was settled once the guest was asked to install it:
+/// refused, rolled back, `changed`, or released, which, while its guest is
+/// still not on its build, was released onto another.
+fn tried(record: &Record) -> bool {
+    record.phase.outcome().is_some() && !never_tried(record)
+}
+
 /// A refusal of `update-guest`, as a client reads one.
 fn refused(error: &Error) -> Value {
     serde_json::to_value(error).unwrap_or_default()
@@ -214,8 +224,11 @@ fn refused(error: &Error) -> Value {
 /// Answer a client's `update-guest`: begin bringing the guest to this
 /// keeper's own build, unless an update is kept already, and say how it
 /// stands once the guest took the update, or it is done, or `deadline`
-/// passes. Every generation carries it on from there.
-pub(super) async fn asked(keeper: &Keeper, deadline: Duration) -> Value {
+/// passes. Every generation carries it on from there. One of this build
+/// settled with nothing of it tried in the guest is begun again in its
+/// place; one the guest tried is begun again only when the person asked for
+/// a `retry`.
+pub(super) async fn asked(keeper: &Keeper, deadline: Duration, retry: bool) -> Value {
     if let Some(held) = keeper.update_held().await {
         return refused(&held);
     }
@@ -232,8 +245,12 @@ pub(super) async fn asked(keeper: &Keeper, deadline: Duration) -> Value {
             Err(error) => return refused(&error),
         };
         match kept {
-            // This keeper's own: carried on, never begun again.
-            Some(record) if record.target == target => {}
+            // This keeper's own: carried on, never begun again unless
+            // nothing of it was tried, or the person asked to try again.
+            Some(record)
+                if record.target == target
+                    && !never_tried(&record)
+                    && !(retry && tried(&record)) => {}
             // Another build's, waiting on the guest: reconciled by what the
             // guest says alone, and none begun until it answered.
             Some(record) if record.phase.outcome().is_none() => {
@@ -1255,6 +1272,19 @@ impl Keeper {
             {
                 state("updating")
             }
+            // Its bundle is being sent, or was placed and the update is
+            // about to be asked, while the VM runs.
+            None if matches!(record.phase, Phase::Staging { .. } | Phase::Staged { .. })
+                && self.shared.live().is_some() =>
+            {
+                let mut said = state("staging");
+                said["why"] = json!(format!(
+                    "This Mac's Atlas is being copied into {}; its Atlas is updated once the \
+                     copy is in place.",
+                    self.name
+                ));
+                said
+            }
             None => {
                 let mut said = state("owed");
                 said["why"] = json!(format!(
@@ -1303,6 +1333,58 @@ pub(crate) fn unsettled(folder: &std::path::Path) -> bool {
         ),
         Ok(None) => false,
         Err(_) => true,
+    }
+}
+
+/// Whether an update kept in the station folder `folder` has asked the
+/// guest to install it and not yet kept what that came to: the guest may be
+/// installing it now.
+///
+/// # Errors
+///
+/// Fails when the record cannot be read, which may say so.
+pub(crate) fn installing(folder: &std::path::Path) -> atlas_core::error::Result<bool> {
+    Ok(Record::kept(folder)?.is_some_and(|record| matches!(record.phase, Phase::Asked { .. })))
+}
+
+/// What an update of the build `build` kept in the station folder `folder`
+/// came to, once the guest tried it: refused, rolled back, `changed`, or
+/// released, which a station asks of only while its guest is still not on
+/// that build. None when none is kept, it is another build's, it is not
+/// settled, or nothing of it was tried in the guest, which a plain update
+/// begins again. Another try at one tried is the person's to ask for.
+///
+/// # Errors
+///
+/// Fails when the record cannot be read, which may say it failed.
+pub(crate) fn failed_for(
+    folder: &std::path::Path,
+    build: &str,
+) -> atlas_core::error::Result<Option<Value>> {
+    Ok(Record::kept(folder)?
+        .filter(|record| record.target.build == build && tried(record))
+        .and_then(|record| record.phase.outcome().cloned()))
+}
+
+impl Keeper {
+    /// What this keeper says of the update it owns, for a status: where it
+    /// stands, as [`Record::said`] says it, what it came to only once the
+    /// owner knows that record lasts; null when none is kept, and an
+    /// unknown phase when its record cannot be read. Read as it is kept,
+    /// never waiting on a write under way, each of which replaces it whole.
+    pub(super) async fn update_said(&self) -> Value {
+        let unknown = || json!({"phase": "unknown"});
+        let folder = self.folder.clone();
+        let writes = self.update_writes.clone();
+        blocking(move || {
+            Ok(match Record::kept(&folder) {
+                Ok(Some(record)) => record.said(writes.lasts(&record)),
+                Ok(None) => Value::Null,
+                Err(_) => unknown(),
+            })
+        })
+        .await
+        .unwrap_or_else(|_| unknown())
     }
 }
 

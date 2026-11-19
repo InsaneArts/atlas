@@ -208,3 +208,50 @@ fn a_build_is_said_and_read_back_whole_and_one_said_by_nobody_is_not_known() {
     assert!(!Build::of(&Value::Null).known());
     assert!(Build::new(None, Some("0.2.0")).known());
 }
+
+#[test]
+fn a_status_says_an_update_its_keeper_owns_as_it_stands_and_the_copies_it_still_removes() {
+    let judged = || json!({"state": "available", "next": "Run atlas update."});
+    let target = json!({"build": "b1", "version": "0.2.0"});
+    let left = json!([{"stage": "s", "removal": null}]);
+
+    assert_eq!(with_owner(judged(), &Value::Null), judged());
+    for phase in ["intended", "staging", "staged", "asked"] {
+        assert_eq!(
+            with_owner(
+                judged(),
+                &json!({"phase": phase, "target": target, "earlier": []})
+            ),
+            json!({"state": "updating", "phase": phase, "target": target}),
+        );
+    }
+    assert_eq!(
+        with_owner(
+            json!({"state": "current"}),
+            &json!({"phase": "cleaning", "target": target, "earlier": left,
+                "outcome": {"ok": true, "update": "released"}}),
+        ),
+        json!({"state": "current", "phase": "cleaning",
+            "outcome": {"ok": true, "update": "released"}, "earlier": left}),
+    );
+    assert_eq!(
+        with_owner(
+            json!({"state": "current"}),
+            &json!({"phase": "done", "target": target, "earlier": [],
+                "outcome": {"ok": true}}),
+        ),
+        json!({"state": "current"}),
+        "a finished update leaves the judgement alone"
+    );
+    assert_eq!(
+        with_owner(
+            json!({"state": "current"}),
+            &json!({"phase": "done", "target": target, "earlier": left, "outcome": {}}),
+        ),
+        json!({"state": "current", "phase": "done", "earlier": left}),
+    );
+    assert_eq!(
+        with_owner(judged(), &json!({"phase": "unknown"})),
+        json!({"state": "available", "next": "Run atlas update.", "phase": "unknown"}),
+    );
+}

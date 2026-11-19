@@ -861,6 +861,11 @@ fn station(asked: cli::Station, settings: &std::path::Path, allow_disrupt: bool)
             settings: pinned,
         } => atlas_daemon::worker::started_by_atlas()
             .and_then(|()| handover::hand_over(&key, &pinned, allow_disrupt)),
+        cli::Station::UpdateGuest {
+            key,
+            settings: pinned,
+        } => atlas_daemon::worker::started_by_atlas()
+            .and_then(|()| handover::update_guest(&key, &pinned)),
         cli::Station::Keep { key, settings } => enrolment::vm_of(&key)
             .and_then(|vm| atlas_daemon::worker::launchd_job(&keeper::label(&vm)))
             .and_then(|()| {

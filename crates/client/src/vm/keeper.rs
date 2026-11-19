@@ -50,7 +50,10 @@ pub(crate) use held::served_while_held;
 pub(crate) use picture::carries_bulk;
 use program::Program;
 pub(crate) use stage::deadline as stage_deadline;
-pub(crate) use update::unsettled as update_unsettled;
+pub(crate) use update::{
+    CAPABILITY as UPDATE_GUEST, failed_for as update_failed_for, installing as update_installing,
+    unsettled as update_unsettled,
+};
 
 use super::{
     Vms,

@@ -7,11 +7,18 @@
 //!
 //! A guest is only ever brought to this Mac's build, never taken back to an
 //! older one: a guest newer than this Mac has this Mac updated instead.
-use atlas_session::compatibility::{UPDATE_BOUND, UPDATES};
+use atlas_session::compatibility::{CHANGES, COPIES, STAGE, UPDATE_BOUND, UPDATES};
 use serde_json::{Value, json};
 
 /// What a guest newer than this Mac is told.
 const NEWER: &str = "Update Atlas on this Mac.";
+
+/// What a guest must serve to be updated from this Mac: changes, stages and
+/// copies to send and remove its new bundle, and updates bound to the bundle
+/// staged. The keeper's update and the station's choice of what to update
+/// both judge a guest by it, through `compatibility::judge`, its protocol
+/// included.
+pub(crate) const NEEDS: [&str; 5] = [CHANGES, STAGE, COPIES, UPDATES, UPDATE_BOUND];
 
 /// How a guest's Atlas stands to this Mac's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,11 +113,11 @@ impl Facts {
         }
     }
 
-    /// Whether the guest declared it takes updates of its own Atlas, each
-    /// bound to the bundle its station staged: only such a guest is ever
-    /// asked one.
-    fn updatable(&self) -> bool {
-        [UPDATES, UPDATE_BOUND]
+    /// Whether the guest declared all an update from this Mac [`NEEDS`],
+    /// each bound to the bundle its station staged: only such a guest is
+    /// ever asked one.
+    pub(crate) fn updatable(&self) -> bool {
+        NEEDS
             .iter()
             .all(|needed| self.declared.iter().any(|declared| declared == needed))
     }
@@ -159,6 +166,42 @@ pub(crate) fn said(name: &str, facts: &Facts) -> Value {
         Verdict::Newer => json!({"state": "newer", "next": NEWER}),
         Verdict::Unknown => json!({"state": "unknown"}),
     }
+}
+
+/// What the status says of updating a VM's Atlas, `judged` by [`said`],
+/// given the update its keeper owns as its hello says it, `owned`: null when
+/// none is kept. One not yet settled, or whose settlement is not yet known
+/// to last (`settling`), is `updating`, with where it stands;
+/// one settled, or one whose record cannot be read, keeps the judgement and
+/// adds its phase and, until it is done, what it came to; the copies earlier
+/// updates left are named until each is removed.
+pub(crate) fn with_owner(judged: Value, owned: &Value) -> Value {
+    let Some(phase) = owned["phase"].as_str() else {
+        return judged;
+    };
+    let earlier = owned["earlier"]
+        .as_array()
+        .filter(|earlier| !earlier.is_empty());
+    let mut said = match phase {
+        "intended" | "staging" | "staged" | "asked" | "settling" => {
+            json!({"state": "updating", "phase": phase, "target": owned["target"]})
+        }
+        "done" if earlier.is_none() => return judged,
+        _ => {
+            let mut said = judged;
+            said["phase"] = json!(phase);
+            if phase != "done"
+                && let Some(outcome) = owned.get("outcome")
+            {
+                said["outcome"] = outcome.clone();
+            }
+            said
+        }
+    };
+    if let Some(earlier) = earlier {
+        said["earlier"] = json!(earlier);
+    }
+    said
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use atlas_core::{
     files::Token,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// Its name in the station folder.
@@ -142,6 +142,19 @@ impl Phase {
         }
     }
 
+    /// Its name, as it is kept and as a status says it.
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Intended => "intended",
+            Self::Staging { .. } => "staging",
+            Self::Staged { .. } => "staged",
+            Self::Asked { .. } => "asked",
+            Self::Settled { .. } => "settled",
+            Self::Cleaning { .. } => "cleaning",
+            Self::Done { .. } => "done",
+        }
+    }
+
     /// What it came to, once it is settled.
     pub(super) fn outcome(&self) -> Option<&Value> {
         match self {
@@ -191,6 +204,33 @@ impl Record {
             | Phase::Done { .. } => None,
         };
         self.earlier.into_iter().chain(own).collect()
+    }
+
+    /// What a status says of it: its phase, the build it brings the guest
+    /// to, what it came to once settled, and each copy an earlier update
+    /// left, by its stage and its removal once one is named. No node and no
+    /// staged path: only what the person reads. A settlement not known to
+    /// last, `lasting` false, is said as `settling`, its outcome unsaid: it
+    /// may yet be lost.
+    pub(super) fn said(&self, lasting: bool) -> Value {
+        let earlier: Vec<Value> = self
+            .earlier
+            .iter()
+            .map(|left| {
+                json!({"stage": left.stage,
+                    "removal": left.removal.as_ref().map(|removal| &removal.remove)})
+            })
+            .collect();
+        let outcome = self.phase.outcome().filter(|_| lasting);
+        let phase = match (self.phase.outcome(), outcome) {
+            (Some(_), None) => "settling",
+            _ => self.phase.name(),
+        };
+        let mut said = json!({"phase": phase, "target": self.target, "earlier": earlier});
+        if let Some(outcome) = outcome {
+            said["outcome"] = outcome.clone();
+        }
+        said
     }
 
     /// The update kept in the station folder `folder`, if any.

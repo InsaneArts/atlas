@@ -423,7 +423,7 @@ async fn a_stop_given_while_a_resume_is_carried_out_is_said_again_in_the_same_ge
 }
 
 /// A keeper trusted whoever listens, for a client of a test's keeper.
-struct Trusting;
+pub(in crate::vm::keeper) struct Trusting;
 
 impl crate::link::Trust for Trusting {
     fn trusts(

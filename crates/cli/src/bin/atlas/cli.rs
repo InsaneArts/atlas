@@ -1048,8 +1048,12 @@ pub(super) struct Update {
     #[arg(long)]
     pub(super) version: Option<String>,
     /// Only say whether a newer release is out; install nothing.
-    #[arg(long, conflicts_with_all = ["allow_unnotarized", "force"])]
+    #[arg(long, conflicts_with_all = ["allow_unnotarized", "force", "retry_vms"])]
     pub(super) check: bool,
+    /// Try again to bring a VM's Atlas to this build when that failed
+    /// before. Hidden until agents can use a VM.
+    #[arg(long, hide = true)]
+    pub(super) retry_vms: bool,
 }
 
 #[derive(clap::Args)]
@@ -1575,6 +1579,16 @@ pub(super) enum Station {
     /// Hand the VM's session keeper over to the build now installed, as an
     /// update does: agents there stay stopped until the person resumes them.
     Handover {
+        /// The VM's record key, vm- and its identifier.
+        #[arg(long)]
+        key: String,
+        /// The settings file the keeper's agent names.
+        #[arg(long)]
+        settings: PathBuf,
+    },
+    /// Ask the VM's session keeper to bring Atlas in the VM to the keeper's
+    /// own build, as an update does once it handed the keeper over.
+    UpdateGuest {
         /// The VM's record key, vm- and its identifier.
         #[arg(long)]
         key: String,
