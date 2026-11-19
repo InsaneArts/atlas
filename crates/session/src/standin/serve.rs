@@ -110,6 +110,21 @@ where
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(header.clone());
+    // A mirror carries bytes both ways from the first: no request line.
+    if let LaneKind::Mirror {
+        connection,
+        endpoint,
+    } = header.kind
+    {
+        return super::mirrors::carried(
+            stand_in,
+            lanes,
+            header.lane,
+            (connection, endpoint),
+            secure,
+        )
+        .await;
+    }
     let mut line = Vec::new();
     BufReader::new((&mut secure).take(REQUEST))
         .read_until(b'\n', &mut line)

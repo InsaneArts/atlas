@@ -250,3 +250,28 @@ async fn a_wait_for_room_on_a_lane_ends_once_it_owes_no_more_than_asked() {
     assert_eq!(credit.owing(LaneId(9)), 0);
     credit.owing_at_most(LaneId(9), 0).await;
 }
+
+#[tokio::test]
+async fn a_lane_its_reader_gave_up_is_repaid_at_once_and_sends_nothing_more_until_it_closes() {
+    let credit = Credit::default();
+    let (mut near, _far) = duplex(1 << 20);
+    credit.send(LANE, &mut near, &[1; CHUNK]).await.unwrap();
+
+    credit.returned(LANE, ENDED);
+    tokio::time::timeout(Duration::from_secs(5), credit.repaid(LANE))
+        .await
+        .expect("repaid at once");
+    tokio::time::timeout(Duration::from_secs(5), credit.given_up(LANE))
+        .await
+        .expect("told");
+    let after = credit.send(LANE, &mut near, &[2; CHUNK]).await;
+    credit.closed(LANE);
+
+    assert!(after.is_err(), "nothing more goes");
+    assert_eq!(left(&credit), BULK as usize, "everything it owed came back");
+    assert!(credit.gone().is_empty(), "forgotten once closed");
+    assert!(
+        credit.send(LaneId(2), &mut near, &[3; 16]).await.is_ok(),
+        "another lane goes on"
+    );
+}

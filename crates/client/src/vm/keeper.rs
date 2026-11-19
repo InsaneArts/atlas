@@ -23,6 +23,11 @@
 //! request, and a hold cancels every agent's lane it carries before it is
 //! answered ([`held`]).
 //!
+//! It mirrors this account's loopback endpoints in its guest for as long
+//! as each generation lives, the person's Stop or not, every connection
+//! carried only to the very process its endpoint was listed for
+//! ([`mirrors`]).
+//!
 //! Asked, it brings its guest's Atlas to the very build it runs itself,
 //! only while the station's Stop holds agents, and carries that update on
 //! in every generation until it is done ([`update`]).
@@ -37,6 +42,7 @@ mod change;
 mod clients;
 mod held;
 mod lanes;
+mod mirrors;
 mod observe;
 mod picture;
 mod program;
@@ -279,6 +285,7 @@ async fn started(
         owner: tokio::sync::Mutex::default(),
         owner_waking: tokio::sync::Notify::new(),
         update_writes: Arc::default(),
+        mirrors: mirrors::Mirrors::new(Arc::new(super::mirrors::Account::default())),
     });
     keeper.finish_handover()?;
     held::at_start(&keeper).await;
@@ -475,6 +482,8 @@ struct Keeper {
     /// Held through each write of the update's record, to its end: one
     /// at a time, and none of a generation that ended after the next's.
     update_writes: Arc<update::Writes>,
+    /// Its mirrors of this account's loopback endpoints in the guest.
+    mirrors: mirrors::Mirrors,
 }
 
 /// The live generation, and what the keeper says of its session.
@@ -679,14 +688,19 @@ impl Keeper {
             state.why = None;
         }
         self.applied().revision = None;
+        let (mirrored, heard) = tokio::sync::mpsc::channel(mirrors::HEARD);
         let work = async {
-            let report = report(&session).await;
-            self.shared.state().report = Some(report);
-            tokio::join!(
-                self.reconciled(&session),
-                self.recovering(&session),
-                self.updating(&session)
-            );
+            let reported = async {
+                let report = report(&session).await;
+                self.shared.state().report = Some(report);
+                tokio::join!(
+                    self.reconciled(&session),
+                    self.recovering(&session),
+                    self.updating(&session)
+                );
+            };
+            // Mirrors never wait for the guest's report.
+            tokio::join!(reported, self.mirroring(&session, heard));
         };
         tokio::pin!(work);
         let ended = loop {
@@ -702,6 +716,12 @@ impl Keeper {
                     // A Resume answered after its own caller stopped waiting:
                     // the guest may run, so the Stop is reconciled again.
                     Some(Event::Applied { outcome: Outcome::Resumed, .. }) => self.resumed(),
+                    // Never waited for: a list's answer lost here is asked
+                    // again, and a connection waits in the guest until it
+                    // gives up on its lane.
+                    Some(event @ (Event::Taken { .. } | Event::Connect { .. })) => {
+                        let _ = mirrored.try_send(event);
+                    }
                     Some(_) => {}
                 },
                 () = &mut work => {}
@@ -777,6 +797,7 @@ impl Keeper {
             "live": state.session.is_some(),
             "why": state.why,
             "report": state.report,
+            "mirrors": self.mirrors.said(&self.name),
             "instance": self.instance,
             "program": self.program.said(),
         })

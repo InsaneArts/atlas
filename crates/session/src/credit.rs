@@ -10,11 +10,16 @@
 //! closes: what is on its way then cannot be told from what never left, and
 //! a closed lane's unread bytes are never read. Credit for a lane that
 //! closed, or beyond what it owes, is never counted.
+//!
+//! A reading end that gives its lane up for good says so with [`ENDED`] in
+//! place of a count: everything the lane owes comes back, a wait for it to
+//! be repaid ends, and nothing more is sent on it. An end of an older build
+//! takes it as a count larger than any debt.
 use crate::lane::LaneId;
 use atlas_core::error::{Code, Error, Result};
 use std::{
-    collections::HashMap,
-    sync::{Mutex, PoisonError},
+    collections::{BTreeSet, HashMap},
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
@@ -25,6 +30,12 @@ use tokio::{
 pub const BULK: u32 = 1 << 20;
 /// The most sent at once on one lane before credit is asked for again.
 pub const CHUNK: usize = 64 * 1024;
+/// What a reading end gives back in place of a count once it gave its lane
+/// up for good.
+pub const ENDED: u64 = u64::MAX;
+/// The most lanes remembered as given up, the newest kept: each is
+/// forgotten once it closes, soon after.
+const GIVEN_UP: usize = 1024;
 
 /// The sending end's credit.
 #[derive(Debug)]
@@ -32,6 +43,8 @@ pub struct Credit {
     available: Semaphore,
     /// What each open lane owes.
     owed: Mutex<HashMap<LaneId, u64>>,
+    /// The lanes their reading end gave up, until they close.
+    given_up: Mutex<BTreeSet<LaneId>>,
     /// Told whenever credit comes back.
     repaying: tokio::sync::Notify,
 }
@@ -41,6 +54,7 @@ impl Default for Credit {
         Self {
             available: Semaphore::new(BULK as usize),
             owed: Mutex::new(HashMap::new()),
+            given_up: Mutex::default(),
             repaying: tokio::sync::Notify::new(),
         }
     }
@@ -68,12 +82,21 @@ impl Credit {
         self.owed.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn gone(&self) -> MutexGuard<'_, BTreeSet<LaneId>> {
+        self.given_up.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether `lane`'s reading end gave it up.
+    fn is_given_up(&self, lane: LaneId) -> bool {
+        self.gone().contains(&lane)
+    }
+
     /// Send `data` on bulk lane `lane`, waiting for credit for each chunk.
     ///
     /// # Errors
     ///
-    /// Fails when the lane does. A lane whose send failed, or was given up,
-    /// is then closed with [`Credit::closed`].
+    /// Fails when the lane does, or its reading end gave it up. A lane whose
+    /// send failed, or was given up, is then closed with [`Credit::closed`].
     pub async fn send<W: AsyncWrite + Unpin>(
         &self,
         lane: LaneId,
@@ -82,11 +105,16 @@ impl Credit {
     ) -> Result<()> {
         for chunk in data.chunks(CHUNK) {
             let bytes = u32::try_from(chunk.len()).unwrap_or(u32::MAX);
-            self.available
+            let permits = self
+                .available
                 .acquire_many(bytes)
                 .await
-                .map_err(|_| Error::new(Code::Transport, "The desktop's link closed."))?
-                .forget();
+                .map_err(|_| Error::new(Code::Transport, "The desktop's link closed."))?;
+            // Its reader gave it up, maybe while it waited: nothing more goes.
+            if self.is_given_up(lane) {
+                return Err(given_up());
+            }
+            permits.forget();
             *self.owed().entry(lane).or_default() += u64::from(bytes);
             let mut owing = Owing {
                 credit: self,
@@ -109,9 +137,29 @@ impl Credit {
     }
 
     /// The reading end read `bytes` more of `lane`: that much may go again.
-    /// More than the lane owes is never given back.
+    /// More than the lane owes is never given back. [`ENDED`] says it gave
+    /// the lane up: everything it owes comes back, and nothing more goes.
     pub fn returned(&self, lane: LaneId, bytes: u64) {
-        self.give_back(lane, bytes);
+        if bytes == ENDED {
+            self.give_up(lane);
+        } else {
+            self.give_back(lane, bytes);
+        }
+    }
+
+    /// `lane`'s reading end gave it up for good.
+    fn give_up(&self, lane: LaneId) {
+        {
+            let mut given_up = self.gone();
+            given_up.insert(lane);
+            while given_up.len() > GIVEN_UP {
+                given_up.pop_first();
+            }
+        }
+        let given = self.owed().get_mut(&lane).map_or(0, std::mem::take);
+        self.available
+            .add_permits(usize::try_from(given).unwrap_or(0));
+        self.repaying.notify_waiters();
     }
 
     fn give_back(&self, lane: LaneId, bytes: u64) {
@@ -140,12 +188,25 @@ impl Credit {
         self.owed().get(&lane).copied().unwrap_or(0)
     }
 
-    /// Completes once `lane` owes at most `bytes`: what keeps one lane from
-    /// having more than that on its way. A wait dropped changes nothing.
+    /// Completes once `lane` owes at most `bytes`, or its reading end gave it
+    /// up: what keeps one lane from having more than that on its way. A
+    /// wait dropped changes nothing.
     pub async fn owing_at_most(&self, lane: LaneId, bytes: u64) {
         loop {
             let repaying = self.repaying.notified();
-            if self.owed().get(&lane).is_none_or(|owing| *owing <= bytes) {
+            let owes = self.owed().get(&lane).is_some_and(|owing| *owing > bytes);
+            if !owes || self.is_given_up(lane) {
+                return;
+            }
+            repaying.await;
+        }
+    }
+
+    /// Completes once `lane`'s reading end gave it up; never otherwise.
+    pub async fn given_up(&self, lane: LaneId) {
+        loop {
+            let repaying = self.repaying.notified();
+            if self.is_given_up(lane) {
                 return;
             }
             repaying.await;
@@ -160,11 +221,16 @@ impl Credit {
 
     /// `lane` closed: what it owes will never be read, and comes back.
     pub fn closed(&self, lane: LaneId) {
+        self.gone().remove(&lane);
         let given = self.owed().remove(&lane).unwrap_or(0);
         self.available
             .add_permits(usize::try_from(given).unwrap_or(0));
         self.repaying.notify_waiters();
     }
+}
+
+fn given_up() -> Error {
+    Error::new(Code::Transport, "The lane's other end gave it up.")
 }
 
 fn io(error: std::io::Error) -> Error {

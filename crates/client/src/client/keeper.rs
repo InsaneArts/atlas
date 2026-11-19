@@ -546,6 +546,8 @@ impl Client {
         if session.is_ok() && mid_update {
             proof["inputWhy"] = json!(crate::vm::proof::MID_UPDATE);
         }
+        // Which of this Mac's ports reach the guest, as its keeper mirrors them.
+        let mirrors = hello["mirrors"].clone();
         let mut status = json!({
             "ok": true,
             "proven": session.is_ok(),
@@ -564,7 +566,7 @@ impl Client {
             },
             "station": {"stop": station, "handover": self.handover_unfinished(),
                 "maintenance": said,
-                "pending": pending, "unresolved": unresolved},
+                "pending": pending, "unresolved": unresolved, "mirrors": mirrors},
         });
         // Whether its Atlas is this Mac's build, or what brings it there,
         // and how an update its keeper owns stands.

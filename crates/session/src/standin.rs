@@ -4,6 +4,7 @@
 //! every kind of desktop passes.
 pub mod copies;
 pub mod link;
+pub mod mirrors;
 pub mod pictures;
 pub mod serve;
 pub mod updates;
@@ -186,6 +187,8 @@ pub struct StandIn {
     pub dials_begun: Arc<AtomicUsize>,
     /// The dials' work, ended when the stand-in goes.
     dial_work: Tasks,
+    /// Its mirrors of the station's loopback endpoints.
+    pub mirroring: mirrors::Mirroring,
     /// The folders its `installed` reads look in, as a machine guest looks
     /// in this Mac's Applications folder and its account's own; none for a
     /// fresh VM, which has no app a test asks after.
@@ -269,6 +272,7 @@ impl StandIn {
             dials_begun: Arc::new(AtomicUsize::new(0)),
             dial_work: Tasks::default(),
             applications: Mutex::default(),
+            mirroring: mirrors::Mirroring::default(),
         })
     }
 
@@ -554,6 +558,12 @@ impl Guest for Handler {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(changes);
+    }
+
+    fn mirror(&self, list: u64, endpoints: Vec<crate::mirror::Endpoint>) {
+        self.standin.mirrored(list, endpoints, |taken| {
+            let _ = self.authority.if_live(|| self.outbox.say(taken));
+        });
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {

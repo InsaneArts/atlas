@@ -114,7 +114,7 @@ pub(super) struct Guest {
     /// When each control dial came, and its connection.
     controls: Mutex<Vec<(tokio::time::Instant, Connection)>>,
     /// How many control dials to come fail.
-    failing: AtomicUsize,
+    pub(super) failing: AtomicUsize,
     /// While set, every dial is refused for trust on these facts.
     untrusted: Mutex<Option<Facts>>,
     facts: Mutex<Option<Facts>>,
@@ -416,6 +416,8 @@ pub(super) struct Fixture {
     pub(super) guest: Arc<Guest>,
     pub(super) kept: Arc<Kept>,
     pub(super) enrolments: Arc<Memory>,
+    /// This account's listeners, as its keeper's mirrors list them.
+    pub(super) listed: Arc<mirrors::tests::Listed>,
     _state: tempfile::TempDir,
 }
 
@@ -465,6 +467,7 @@ pub(super) fn fixture_with(program: Program) -> Fixture {
     // Short, so Atlas VM's control socket stood in for under it fits.
     let state = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let vm = standin.desktop.clone();
+    let listed = Arc::new(mirrors::tests::Listed::default());
     let kept = Arc::new(Kept::default());
     let stop = Controller::of_at(
         &atlas_core::desktop::Desktop::from(atlas_core::vm::Vm { id: vm.clone() }),
@@ -496,6 +499,7 @@ pub(super) fn fixture_with(program: Program) -> Fixture {
         owner: tokio::sync::Mutex::default(),
         owner_waking: tokio::sync::Notify::new(),
         update_writes: Arc::default(),
+        mirrors: mirrors::Mirrors::new(listed.clone()),
     });
     std::fs::create_dir(&keeper.folder).unwrap();
     Fixture {
@@ -503,6 +507,7 @@ pub(super) fn fixture_with(program: Program) -> Fixture {
         guest,
         kept,
         enrolments,
+        listed,
         _state: state,
     }
 }
@@ -552,6 +557,7 @@ pub(super) fn next_with(keeper: &Keeper, program: Program) -> Arc<Keeper> {
         owner: tokio::sync::Mutex::default(),
         owner_waking: tokio::sync::Notify::new(),
         update_writes: keeper.update_writes.clone(),
+        mirrors: keeper.mirrors.for_next(),
     })
 }
 

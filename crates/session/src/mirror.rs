@@ -99,7 +99,7 @@ impl Drop for Closing<'_> {
 /// `sending`, a chunk at a time, each waiting until the last is repaid;
 /// what comes off it is credited back on `returning`. The first end of
 /// stream, from either side, is passed on as a half-close only. It ends
-/// once both sides ended, or either fails.
+/// once both sides ended, either fails, or the other end gives the lane up.
 pub async fn carry<T, R, W>(
     local: T,
     mut from_lane: R,
@@ -151,22 +151,34 @@ pub async fn carry<T, R, W>(
         }
     };
     tokio::pin!(outward, inward);
-    // Both run until each has ended; a failure of either ends both.
+    // Both run until each has ended. A failure of either ends both, and the
+    // other end is told the lane is given up, so a pump of its own waiting
+    // to be repaid, its other way ended, is never left waiting for good; the
+    // other end giving the lane up ends this one alike.
+    let given_up = || {
+        let _ = returning.say(crate::control::Said::Credit {
+            lane,
+            bytes: crate::credit::ENDED,
+        });
+    };
     let (mut out_done, mut in_done) = (false, false);
     while !(out_done && in_done) {
         tokio::select! {
             ended = &mut outward, if !out_done => {
                 if ended.is_none() {
+                    given_up();
                     return;
                 }
                 out_done = true;
             }
             ended = &mut inward, if !in_done => {
                 if ended.is_none() {
+                    given_up();
                     return;
                 }
                 in_done = true;
             }
+            () = sending.given_up(lane) => return,
         }
     }
 }
@@ -175,22 +187,43 @@ pub async fn carry<T, R, W>(
 /// its own endpoint for one.
 pub const SETTING_UP: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Cancels a mirror lane on the desktop however its relay ends, dropped
+/// included, so the desktop's end of the connection never outlives the
+/// station's.
+struct Cancelling<'a> {
+    desktop: &'a crate::station::Desktop,
+    lane: LaneId,
+}
+
+impl Drop for Cancelling<'_> {
+    fn drop(&mut self) {
+        self.desktop.cancel(self.lane);
+    }
+}
+
 /// The station's side of one mirrored connection: open the lane for the
 /// guest's `connection` accepted on `endpoint`, connect to `target` on
 /// this Mac, which is the endpoint itself in production, and carry the two
-/// until both end. Opening and connecting each have [`SETTING_UP`].
+/// until both end, once `serves`, given the connection's own address and
+/// its peer's, passes whoever took it. Opening and connecting each have
+/// [`SETTING_UP`]. However it ends, the lane is cancelled.
 ///
 /// # Errors
 ///
-/// Fails when the lane cannot be opened or the endpoint reached in time.
-pub async fn relay(
+/// Fails when the lane cannot be opened or the endpoint reached in time,
+/// and as `serves` refuses, nothing carried either way.
+pub async fn relay<Checked>(
     desktop: &crate::station::Desktop,
     sending: &Credit,
     returning: &Outbox,
     connection: u64,
     endpoint: Endpoint,
     target: std::net::SocketAddr,
-) -> atlas_core::error::Result<()> {
+    serves: impl FnOnce(std::net::SocketAddr, std::net::SocketAddr) -> Checked,
+) -> atlas_core::error::Result<()>
+where
+    Checked: std::future::Future<Output = atlas_core::error::Result<()>>,
+{
     use atlas_core::error::{Code, Error};
     let late = |what: &str| {
         Error::new(
@@ -205,16 +238,24 @@ pub async fn relay(
     let opened = tokio::time::timeout(SETTING_UP, desktop.open(kind))
         .await
         .map_err(|_| late("lane"))??;
+    let _cancelling = Cancelling {
+        desktop,
+        lane: opened.lane,
+    };
+    let unreached = |error: std::io::Error| {
+        Error::new(
+            Code::Transport,
+            "The mirrored endpoint could not be reached.",
+        )
+        .with_source(error)
+    };
     let local = tokio::time::timeout(SETTING_UP, tokio::net::TcpStream::connect(target))
         .await
         .map_err(|_| late("connection"))?
-        .map_err(|error| {
-            Error::new(
-                Code::Transport,
-                "The mirrored endpoint could not be reached.",
-            )
-            .with_source(error)
-        })?;
+        .map_err(unreached)?;
+    let own = local.local_addr().map_err(unreached)?;
+    let peer = local.peer_addr().map_err(unreached)?;
+    serves(own, peer).await?;
     let (from_lane, to_lane) = tokio::io::split(opened.stream);
     carry(local, from_lane, to_lane, opened.lane, sending, returning).await;
     Ok(())

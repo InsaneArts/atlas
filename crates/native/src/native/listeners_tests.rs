@@ -102,21 +102,45 @@ fn a_listener_on_another_address_is_listed_bound_to_it() {
     assert_eq!(listener.bound, Ipv6Addr::LOCALHOST);
 }
 
+/// This process's IPv4 loopback listener on `port`, as one listing found
+/// it.
+fn ours_on(port: u16) -> Vec<Listener> {
+    listed(port)
+        .into_iter()
+        .filter(|listener| {
+            listener.owner() == me()
+                && listener.family == Family::Ipv4
+                && listener.bound == std::net::Ipv4Addr::LOCALHOST
+        })
+        .collect()
+}
+
 #[test]
 fn a_listener_closed_and_opened_again_is_another_socket() {
-    let first = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = first.local_addr().unwrap().port();
-    let [before] = listed(port)[..] else {
-        panic!("the first listener is listed once");
-    };
-    drop(first);
+    // Another test may take the port between the close and the bind again:
+    // the whole experiment is then made again on a fresh port.
+    for _ in 0..16 {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let [before] = ours_on(port)[..] else {
+            panic!("the first listener is listed once");
+        };
+        drop(first);
 
-    let _second = TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let [after] = listed(port)[..] else {
-        panic!("the second listener is listed once");
-    };
+        let second = match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(second) => second,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => panic!("{error}"),
+        };
+        let [after] = ours_on(port)[..] else {
+            panic!("the second listener is listed once");
+        };
 
-    assert_ne!(before.socket, after.socket);
+        assert_ne!(before.socket, after.socket);
+        drop(second);
+        return;
+    }
+    panic!("no port could be bound again");
 }
 
 #[test]

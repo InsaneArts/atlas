@@ -3264,6 +3264,7 @@ fn relaying(
                     asked.connection,
                     asked.endpoint,
                     target,
+                    |_, _| async { Ok(()) },
                 )
                 .await;
             });

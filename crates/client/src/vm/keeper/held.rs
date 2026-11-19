@@ -10,8 +10,10 @@
 //!
 //! `hold`, naming the maintenance kept, is taken under the keeper's turn: no
 //! lane is admitted from then, every open one is cancelled, and it is
-//! answered only once each ended with its credit back. `release` lets agents
-//! in again only once the record says the maintenance ended, or keeps none.
+//! answered only once each ended with its credit back, mirrors included, and
+//! a live guest that mirrors took the empty list. `release` lets agents in
+//! again, and has the mirrors listed again, only once the record says the
+//! maintenance ended, or keeps none.
 //! A hold asked so stays until its release, should the record go first; one
 //! the keeper took from the record alone goes with it.
 use super::{
@@ -124,7 +126,8 @@ pub(super) async fn resume_refused(keeper: &Keeper) -> Option<Value> {
 
 /// Hold every agent's lane for the maintenance `request` names, under the
 /// keeper's turn: none admitted from then, every open one cancelled, and
-/// answered once each ended with its credit back, within `deadline`.
+/// answered once each ended with its credit back and the guest stopped
+/// mirroring, within `deadline`.
 pub(super) async fn hold(keeper: &Keeper, request: &Value, deadline: Duration) -> Value {
     let Some(change) = change_of(request) else {
         return said(&Error::new(
@@ -142,16 +145,28 @@ pub(super) async fn hold(keeper: &Keeper, request: &Value, deadline: Duration) -
     }
     let told = keeper.lanes.hold(Hold {
         change: Some(change.clone()),
-        name,
+        name: name.clone(),
         asked: true,
     });
-    if tokio::time::timeout(deadline, keeper.lanes.drained())
+    let until = tokio::time::Instant::now() + deadline;
+    if tokio::time::timeout_at(until, keeper.lanes.drained())
         .await
         .is_err()
     {
         return said(&Error::new(
             Code::NotReady,
             "Not every agent's lane on this VM ended in time; agents stay held.",
+        ));
+    }
+    let left = until.saturating_duration_since(tokio::time::Instant::now());
+    if !keeper.unmirrored(left).await {
+        let name = name.as_deref().unwrap_or(UNNAMED_FIRST);
+        return said(&Error::new(
+            Code::NotReady,
+            format!(
+                "{name} did not say in time that it stopped mirroring this Mac's ports; agents \
+                 stay held."
+            ),
         ));
     }
     json!({"ok": true, "op": "hold", "change": change, "cancelled": told})
@@ -180,6 +195,7 @@ pub(super) async fn release(keeper: &Keeper, request: &Value) -> Value {
         ));
     }
     keeper.lanes.release();
+    keeper.mirrors.relist();
     json!({"ok": true, "op": "release", "change": change})
 }
 

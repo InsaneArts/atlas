@@ -34,6 +34,9 @@ pub(super) enum Work {
     /// The keeper's own update of its guest: its stage, update, removal
     /// and void.
     Update,
+    /// A connection in the guest carried to one of this Mac's loopback
+    /// endpoints.
+    Mirror,
 }
 
 /// What holds every agent's lane: the person's maintenance, by its ID and
