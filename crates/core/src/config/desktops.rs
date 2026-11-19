@@ -141,18 +141,60 @@ impl Selected {
         Config::load_settings(path)?.chosen()
     }
 
-    /// The refusal of what a VM desktop cannot do from this build yet, naming
-    /// the VM in one wording for every command and every surface. Its own
-    /// next step, which the command line alone shows, stands in for the one
-    /// its code would give (about this Mac) and names the Second Login to use
-    /// instead when the settings list one. A VM still being added is said to
-    /// be so, and one whose add cannot be told: only the person's Stop
-    /// reaches either until it is added.
+    /// The refusal of what only Second Login does, asked of a VM desktop,
+    /// naming the VM in one wording for every command and every surface. Its
+    /// next step names the Second Login to use instead when the settings list
+    /// one. A VM still being added is said to be so, and one whose add cannot
+    /// be told: only the person's Stop reaches either until it is added.
     pub fn unreachable(&self) -> Error {
+        if let Some(refused) = self.not_added() {
+            return refused;
+        }
+        let next = match &self.user_entry {
+            Some(user) => format!("Run it again with --desktop {user} to use Second Login."),
+            None => "Nothing was sent to it.".to_owned(),
+        };
+        Error::new(
+            Code::Platform,
+            format!(
+                "{} is a VM desktop: this works only with Second Login.",
+                self.name
+            ),
+        )
+        .with("next", serde_json::json!(next))
+    }
+
+    /// The refusal of a VM desktop Atlas cannot reach now, saying `why` when
+    /// it is known: its session keeper is not running, say. One still being
+    /// added, or whose add cannot be told, is refused as
+    /// [`Selected::unreachable`] refuses it.
+    pub fn not_reached(&self, why: Option<&str>) -> Error {
+        if let Some(refused) = self.not_added() {
+            return refused;
+        }
+        let error = match why.map(|why| why.trim_end_matches('.')) {
+            Some(why) if !why.is_empty() => {
+                format!("Atlas cannot reach {} now: {why}.", self.name)
+            }
+            _ => format!("Atlas cannot reach {} now.", self.name),
+        };
+        let next = match &self.user_entry {
+            Some(user) => format!(
+                "Run atlas desktop list to see it, or run this again with --desktop {user} to \
+                 use Second Login."
+            ),
+            None => "Run atlas desktop list to see it.".to_owned(),
+        };
+        Error::new(Code::Platform, error).with("next", serde_json::json!(next))
+    }
+
+    /// The refusal of a VM still being added, or whose add cannot be told;
+    /// none once it is added.
+    fn not_added(&self) -> Option<Error> {
         match self.adding.get() {
-            Admission::Open => {}
-            Admission::Adding => {
-                return Error::new(
+            Admission::Open => None,
+            Admission::Adding => Some(
+                Error::new(
                     Code::NotReady,
                     format!("{} is still being added.", self.name),
                 )
@@ -161,10 +203,10 @@ impl Selected {
                     serde_json::json!(
                         "Wait for atlas desktop add vm to finish, or run it again to go on."
                     ),
-                );
-            }
-            Admission::Uncertain => {
-                return Error::new(
+                ),
+            ),
+            Admission::Uncertain => Some(
+                Error::new(
                     Code::State,
                     format!(
                         "Whether {} is still being added cannot be told: its lifecycle record \
@@ -177,21 +219,9 @@ impl Selected {
                     serde_json::json!(
                         "Run atlas desktop list to see it; only Stop reaches it until then."
                     ),
-                );
-            }
-        }
-        let next = match &self.user_entry {
-            Some(user) => format!("Run it again with --desktop {user} to use Second Login."),
-            None => "Nothing was sent to it. A later Atlas reaches VM desktops.".to_owned(),
-        };
-        Error::new(
-            Code::Platform,
-            format!(
-                "{} is a VM desktop, which this build of Atlas cannot reach yet.",
-                self.name
+                ),
             ),
-        )
-        .with("next", serde_json::json!(next))
+        }
     }
 
     /// A Second Login not yet saved in settings, as onboarding builds one

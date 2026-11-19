@@ -203,7 +203,7 @@ fn an_mcp_status_and_screenshot_over_stdio_name_their_desktop_only_beside_anothe
             .as_str()
             .unwrap();
         assert_eq!(
-            refused, "work is a VM desktop, which this build of Atlas cannot reach yet.",
+            refused, "Atlas cannot reach work now: work's session keeper is not running.",
             "{screenshot}"
         );
     }
@@ -276,7 +276,8 @@ fn an_mcp_screenshot_after_a_rename_names_the_vm_it_was_taken_on_in_its_words_an
             json!({"name": name, "kind": "vm"}),
             "{result}"
         );
-        let words = format!("{name} is a VM desktop, which this build of Atlas cannot reach yet.");
+        let words =
+            format!("Atlas cannot reach {name} now: {name}'s session keeper is not running.");
         assert_eq!(result["content"][0]["text"], words, "{result}");
         assert_eq!(facts["error"]["error"], words);
     }

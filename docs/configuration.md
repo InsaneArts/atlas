@@ -23,7 +23,7 @@ This reads the file; it does not create it or set up another helper. For normal 
 
 ## Settings fields
 
-There are five supported keys and one optional table. Unknown keys are rejected, and the file must be UTF-8 TOML no larger than 16 KiB.
+There are five supported keys and one optional table; settings with more than one desktop use the form in [Desktops](#desktops). Unknown keys are rejected, and the file must be UTF-8 TOML no larger than 16 KiB.
 
 | Key              | Meaning                                                                          | Value written by guided setup                               |
 | ---------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -48,6 +48,19 @@ By default Atlas keeps a picture of the helper's screen right before each agent 
 
 The [example configuration](../examples/config.toml) documents the keys for development. Its UID `502`, `/tmp` socket paths and local `runs` directory are examples, not universal installation defaults. Do not copy its helper identity into an existing installation. `atlas setup --helper NAME` can inspect a proposed setup for an existing account; replace `NAME` with that account's short name.
 
+## Desktops
+
+Settings that list more than one desktop, or a VM, put each desktop in a `[[desktops]]` table and name the `default` at the top. `output_dir` and `[activity]` stay at the top, for every desktop. `atlas desktop add vm` changes the file this way for you, keeping your Second Login as it was and the default.
+
+| Key in a `[[desktops]]` table | Meaning                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `name`                        | The name `--desktop` and `ATLAS_DESKTOP` take: 1 to 32 lowercase letters, digits and dashes, each used once.              |
+| `kind`                        | `user` for Second Login, `vm` for a VM.                                                                                   |
+| `helper_uid` and the others   | For `user` only: the four helper keys above, which then belong in its table, not at the top.                              |
+| `id`                          | For `vm` only: the 24-digit identifier Atlas VM gave the VM, as `atlas desktop add vm` wrote it. Don't change it by hand. |
+
+The settings list at most one Second Login and never one desktop twice, and `default` must be one of the names. A file in the older form, with the helper keys at the top, is one Second Login called `second-login`. See [Desktops](desktops.md) for choosing one.
+
 ## How paths resolve
 
 Relative paths resolve against the configuration file's directory, not the shell's current directory. A `~/` prefix expands to the invoking account's home. Atlas normally obtains that home from macOS's account record, so changing the shell's `HOME` does not redirect its main settings and control records.
@@ -60,18 +73,25 @@ JSON configuration is no longer read. Confirm the TOML values and stop any old p
 
 In this table, `~` means your own account unless the helper is named explicitly.
 
-| Location                                   | Contents                                                                                                                |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `~/.config/atlas.toml`                     | Installed settings.                                                                                                     |
-| `~/Library/Application Support/Atlas/runs` | Default captures, viewer records, activity data and agent session records. A custom `output_dir` changes this location. |
-| `~/Library/Application Support/Atlas`      | Setup records, recorded helper identity, native-dialog observations, project list and update handover record.           |
-| `~/Library/Caches/Atlas`                   | Control locks, pending-action evidence and update scratch files.                                                        |
-| `/Users/Shared/Atlas`                      | The shared executable, staged app copies and retained environment plans or requests.                                    |
-| `<helper-home>/.atlas`                     | Managed helper sockets, logs and service-related files.                                                                 |
-| `<helper-home>/Library/LaunchAgents`       | The managed helper background-job definition.                                                                           |
-| `<helper-home>/.config/atlas`              | Selected environment values and file-provisioning records in the helper.                                                |
+| Location                                      | Contents                                                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `~/.config/atlas.toml`                        | Installed settings.                                                                                                     |
+| `~/Library/Application Support/Atlas/runs`    | Default captures, viewer records, activity data and agent session records. A custom `output_dir` changes this location. |
+| `~/Library/Application Support/Atlas`         | Setup records, recorded helper identity, native-dialog observations, project list and update handover record.           |
+| `~/Library/Caches/Atlas`                      | Control locks, pending-action evidence and update scratch files.                                                        |
+| `/Users/Shared/Atlas`                         | The shared executable, staged app copies and retained environment plans or requests.                                    |
+| `<helper-home>/.atlas`                        | Managed helper sockets, logs and service-related files.                                                                 |
+| `<helper-home>/Library/LaunchAgents`          | The managed helper background-job definition.                                                                           |
+| `<helper-home>/.config/atlas`                 | Selected environment values and file-provisioning records in the helper.                                                |
+| `~/Library/Application Support/Atlas/Service` | The menu bar service's record and its event feed, for every desktop.                                                    |
+| `~/Library/Application Support/Atlas/VMs`     | Each VM's disk and Atlas VM's records of it, and the macOS download kept for the next VM.                               |
+| `~/Library/Application Support/Atlas/Station` | Each VM's pairing and state on this Mac, VMs being added or removed, and the desktop Atlas.app shows.                   |
+| `~/Library/LaunchAgents`                      | For each VM, the background jobs that run it and keep Atlas's connection to it.                                         |
+| `<output_dir>/desktops`                       | Each VM's own records, beside the Second Login's at the top of `output_dir`.                                            |
 
 Viewer and Settings preferences use macOS user defaults separately from the TOML file. These include picture rate, Details visibility, the mini-screen corner, the last Settings page and notification preference.
+
+Atlas keeps each VM's passwords in your login Keychain, under `com.insanearts.atlas.vm`; removing the VM deletes them. A VM's folders hold its pairing and its changes in progress: remove a VM with `atlas desktop remove`, never by deleting its files.
 
 Do not clear control locks or pending-action records to get past a failure. They keep another process from acting before Atlas knows what happened. Use [recovery](troubleshooting.md), and check [maintenance](maintenance.md) before deleting installation data.
 

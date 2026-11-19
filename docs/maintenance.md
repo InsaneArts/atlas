@@ -10,6 +10,10 @@ Choose the operation that matches the problem. Updating changes Atlas's version.
 | Remove Atlas but keep the helper account                   | `atlas uninstall`                                               |
 | Remove Atlas and delete the helper account and its files   | `atlas uninstall --remove-helper`                               |
 | Remove Atlas while keeping configuration, records and logs | `atlas uninstall --keep-config`                                 |
+| Add a VM desktop                                           | `atlas desktop add vm` and [Desktops](desktops.md#add-a-vm)     |
+| Update macOS or install an app in a VM yourself            | `atlas desktop maintain NAME`, then `--end`                     |
+| Start a stopped VM                                         | `atlas desktop start NAME`                                      |
+| Remove a VM                                                | `atlas desktop remove NAME`                                     |
 
 ## Update
 
@@ -54,6 +58,8 @@ atlas doctor --json
 
 Proceed with helper work when `ready` is true. `update --version TAG` chooses a specific release, and `--force` allows reinstalling a release that is not newer. These are deliberate version-management choices, not fixes for missing permissions or a logged-out helper.
 
+With VM desktops, `atlas update` also brings Atlas in each VM to the new version. Agents on each VM it updates are stopped for it and stay stopped until you resume them. While a VM is open for maintenance, the update is refused: end the maintenance first. If a VM's update failed, run `atlas update --retry-vms`. See [Atlas in the VM](desktops.md#atlas-in-the-vm).
+
 If the app was replaced but moving the helper onto it failed, Atlas keeps a handover record and reports the failed step. Resolve that cause and follow the reported instruction to run `atlas update` again. Do not delete the handover record or staged app to make the error disappear. Never bypass signature checks to get an update installed.
 
 ## Repair without reinstalling
@@ -70,13 +76,17 @@ interrupt active sessions or background jobs, run the needed CLI command with
 
 For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` finishes or re-checks the first setup `atlas init` started. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
 
+## Maintain a VM
+
+Atlas doesn't update macOS in a VM: you do, in the VM's own window. `atlas desktop list --json` says the VM's macOS version and whether a newer one is out. Run `atlas desktop maintain NAME` and allow it in Atlas.app: the VM's window opens on your screen and takes your keyboard and mouse, and agents wait. Install the update or the app there. Closing the window does not end maintenance; `atlas desktop maintain NAME --end` does, and then agents may go on. Add `--restart` to the first command when agents' work in the VM keeps maintenance from starting: it stops the VM and starts it again first, ending that work. See [Maintenance](desktops.md#maintenance) in the desktops guide.
+
 ## Records Atlas keeps
 
 Atlas keeps an activity log in its output directory, and records of every action whose outcome is not known yet in your account's cache; the helper keeps its background-job records and output, and its held-input journal, beside its sockets ([Where data lives](configuration.md#where-data-lives)). The activity log names what was done, never typed text, window titles or command output. It keeps the last 30 days of steps, in 64 MB at most; the oldest go first. Pending actions, the held-input journal and unresolved job records are recovery evidence: never delete them to free space or to get past an error.
 
 ## Uninstall
 
-Run uninstall from your own account, with the helper off screen. Save any helper work you need first. Uninstall logs the helper out, so its apps quit. It may ask for your password through macOS.
+Run uninstall from your own account, with the helper off screen. With VM desktops, uninstall first removes every VM, once you allow it in Atlas.app; `--yes` does not stand in for that. Save any helper work you need first. Uninstall logs the helper out, so its apps quit. It may ask for your password through macOS.
 
 To keep the helper account and its files:
 

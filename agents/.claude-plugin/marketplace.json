@@ -7,10 +7,10 @@
     {
       "name": "atlas",
       "source": "./atlas",
-      "description": "Test macOS GUI apps in a hidden second login without touching your desktop."
+      "description": "Test macOS GUI apps in a desktop of its own (a hidden second login or a VM) without touching your desktop."
     }
   ],
   "metadata": {
-    "description": "Atlas: test macOS GUI apps in a hidden second login."
+    "description": "Atlas: test macOS GUI apps in a desktop of its own (a hidden second login or a VM)."
   }
 }

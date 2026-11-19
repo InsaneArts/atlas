@@ -1650,8 +1650,8 @@ fn the_helpers_sound_reads_as_muted_heard_or_why_not() {
 
 #[test]
 fn a_stop_says_which_desktops_it_could_only_hold_here() {
-    let warning = "work is a VM desktop, which this build of Atlas cannot reach yet. Agents are \
-                   stopped here all the same.";
+    let warning = "Atlas cannot reach work now: work's session keeper is not running. Agents \
+                   are stopped here all the same.";
     let shown = show(
         View::Stop,
         json!({"ok": true, "held": true, "desktops": [

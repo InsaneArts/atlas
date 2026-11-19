@@ -174,6 +174,16 @@ const GROUPS: &[(&str, &[Entry])] = &[
             ),
             ("install", &[]),
             ("setup", &[]),
+            (
+                "desktop",
+                &[
+                    "atlas desktop list",
+                    "atlas desktop add vm --name work",
+                    "atlas desktop maintain work",
+                    "atlas desktop maintain work --end",
+                    "atlas desktop remove work",
+                ],
+            ),
             ("config", &[]),
             (
                 "sound",

@@ -1,8 +1,10 @@
 //! Whether apps in the helper are heard on the person's speakers. The
 //! helper keeps the person's choice itself, silent unless told otherwise;
-//! this asks it, and changes it, through the verified helper.
+//! this asks it, and changes it, through the verified helper. A VM has no
+//! sound device, so it is never asked.
 use crate::client::Client;
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     protocol::SOUND,
 };
@@ -21,6 +23,7 @@ const OLDER: &str = "The helper is running an older Atlas that cannot mute its a
 ///
 /// Returns the failure to verify or reach the helper, or its refusal.
 pub async fn show(client: &Client) -> Result<Value> {
+    heard(client)?;
     client.verify_offering(SOUND, OLDER).await?;
     ask(client, &json!({"op": "sound"})).await
 }
@@ -34,8 +37,25 @@ pub async fn show(client: &Client) -> Result<Value> {
 /// lost reply, or a helper that did not confirm the change in time, leaves
 /// it uncertain; `atlas sound` reads it again.
 pub async fn set(client: &Client, muted: bool) -> Result<Value> {
+    heard(client)?;
     client.verify_offering(SOUND, OLDER).await?;
     ask(client, &json!({"op": "sound", "muted": muted})).await
+}
+
+/// Refuse a VM desktop, which has no sound device, before anything is
+/// asked of it.
+fn heard(client: &Client) -> Result<()> {
+    if !matches!(client.desktop().kind(), Kind::Vm(_)) {
+        return Ok(());
+    }
+    Err(Error::new(
+        Code::Platform,
+        format!(
+            "{} is a VM, which has no sound: its apps are never heard.",
+            client.selected.name
+        ),
+    )
+    .with("next", json!("Nothing was sent to it.")))
 }
 
 async fn ask(client: &Client, request: &Value) -> Result<Value> {

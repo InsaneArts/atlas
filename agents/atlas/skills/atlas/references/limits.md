@@ -1,5 +1,10 @@
 ## Limits
 
+A limit that names the helper is Second Login's. A VM shares nothing with this
+Mac: it has no sound and no App Store sign-in, and its own network, process
+list and log; this Mac's `localhost` servers reach it through Atlas, and
+`atlas logout` is refused there.
+
 - A point click on a Dock item uses Accessibility's press action, including
   a tap in the viewer; a right or Control click shows the item's menu. A point
   on the shelf or a separator is refused without
@@ -7,7 +12,7 @@
   Dock; start apps with `atlas open`. The helper disables click-wallpaper-to-show-desktop
   in its own preferences.
 - Drag-and-drop onto a target (selected text, files, list items) does not
-  begin in the helper: macOS starts such a drag only from a real mouse.
+  begin in Atlas's desktop: macOS starts such a drag only from a real mouse.
   `atlas drag` still moves windows and sliders and selects text (a slider
   seldom takes keyboard focus from a click, so drag it rather than pressing
   arrow keys); put files where they belong with `run` instead, and report a
@@ -41,7 +46,7 @@
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
-- Google Chrome and Firefox draw web pages in the helper and take clicks and
+- Google Chrome and Firefox draw web pages in Atlas's desktop and take clicks and
   typing; test web pages there. Safari and other WebKit views (Dictionary,
   help windows, apps built on WebKit web views) can stay blank without
   authenticated Screen Sharing. `capabilities.webContent` in
@@ -74,7 +79,7 @@
   shell (outside your sandbox, if it blocks this):
   `/usr/bin/log show --last 5m --predicate 'process == "App"'` (the full
   path: `log` is also a zsh builtin).
-- An app's notification prompt in the helper is a permission: never answer it
+- An app's notification prompt there is a permission: never answer it
   yourself. Until the person allows it there, check a notification's effect
   instead.
 
@@ -128,13 +133,13 @@ Add `--help` to any command for its options.
   all closed is still found by name while it is in front. A menu bar app may
   start with no window: open one from its menu bar item. Clicks also take
   `--button right`, `--count 2` and `--modifiers cmd`.
-- `atlas open --app NAME FILE` opens the file itself when the helper can read
+- `atlas open --app NAME FILE` opens the file itself when the desktop can read
   it, so the app saves to it. Otherwise Atlas copies it into a read-only
   folder first and lists the copy in `copied`; `atlas close` removes such
   copies once the app has quit and nothing runs from them. In an agent
   session it removes only this session's copies and older ones no session
   named, and counts the rest in `keptOthers`; a copy it could not remove is
-  listed in `failed`. If it cannot read the helper's apps (`busy`, `apps`),
+  listed in `failed`. If it cannot read the desktop's apps (`busy`, `apps`),
   it removes nothing: run it again. Prefer this to
   `atlas run -- /usr/bin/open`.
 
@@ -176,7 +181,7 @@ Add `--help` to any command for its options.
   commands wait until it is done. For several lines, pipe them in on one
   command line: `printf 'one\ntwo\n' | atlas type --app A --stdin`, or
   `atlas type --app A --stdin < notes.txt`. For long text, put it on the
-  helper's pasteboard and paste it:
+  desktop's pasteboard and paste it:
   `atlas run -- /bin/sh -c 'printf %s "$1" | pbcopy' sh "TEXT"`, then
   `atlas key --app A cmd+v`.
 - Autocorrect and smart punctuation are off in the helper, so typed text
@@ -189,23 +194,24 @@ Add `--help` to any command for its options.
 
 ### Running commands
 
-`atlas run -- PROGRAM ARGS` runs a command as the helper, for example to read
-a file the app wrote. It starts in the helper's home (so `./tool` means a file
+`atlas run -- PROGRAM ARGS` runs a command as the desktop's account, for
+example to read a file the app wrote. It starts in that account's home (so `./tool` means a file
 there), finds programs where readiness looks (`.local/bin`, `.cargo/bin`,
 Homebrew and the system folders) and runs in a UTF-8 locale. Your own shell
-expands `~` and `$HOME` before Atlas sees them, so for the helper's home use
+expands `~` and `$HOME` before Atlas sees them, so for the desktop's home use
 `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`.
 
 The reply is `ok` when the command ran: check its `exitCode` (and `timedOut`)
 for the command's own result; Atlas itself exits 1 when that exit code is not
 0 or the command was stopped. `output` holds its text, cut at 1 MiB
-(`outputTruncated`: write longer output to a file in the helper and read parts
+(`outputTruncated`: write longer output to a file there and read parts
 of it); `outputUnfinished` means something the command started still held the
 output, so its end may be missing. `pid` is the command's process.
 
 A command is stopped after 20 seconds; `--timeout SECONDS` allows up to 600.
-If the helper stops while it runs, it fails with the code `restart`; if the
-helper comes on screen, the command is stopped with `on-console`. Both are
+If the desktop stops while it runs, it fails with the code `restart`; if the
+helper (Second Login) comes on screen, the command is stopped with
+`on-console`. Both are
 uncertain. Other agents can act while it runs; recovery, restart and updates
 answer `busy` until it ends. At most 8 commands agents started run at once;
 one more answers `busy` until one ends. A command must end within its
@@ -222,7 +228,7 @@ agents see, so pass `--app` to keyboard commands.
 
 ### Time limits
 
-A command that changes the helper waits its turn while another Atlas command,
+A command that changes the desktop waits its turn while another Atlas command,
 usually another agent's, is changing it: up to 30 seconds, or `--wait SECONDS`
 (0 to 600; `ATLAS_WAIT` sets it for every command; 0 answers `busy` at once).
 Waiting commands go in the order they began. It never waits for the person:
@@ -274,7 +280,7 @@ Never end your turn with an Atlas command still running.
 
 ### Working beside another agent
 
-Several agents can use the helper at once. Their input and other changes
+Several agents can use a desktop at once. Their input and other changes
 take turns, one at a time; programs started with `atlas run` (up to 8) keep
 running beside them.
 
@@ -306,7 +312,7 @@ running beside them.
 ### Background jobs
 
 `atlas job start [--name NAME] [--timeout SECONDS] -- PROGRAM ARGS` starts
-a server or worker in the helper, as `run` would, and returns its `id` at
+a server or worker in the desktop, as `run` would, and returns its `id` at
 once. It keeps running after the command, and after your session, for up
 to `--timeout` (an hour unless given, at most a day). `atlas job list`
 shows this task's jobs, `atlas job log ID` the end of a job's output, and
@@ -314,32 +320,32 @@ shows this task's jobs, `atlas job log ID` the end of a job's output, and
 every job you started before you finish. `left` lists processes that
 left the job's group and still run; Atlas does not stop them, so say so in
 your report. Atlas also ends jobs when the person stops agents or the
-helper comes on screen. A job whose first process is gone ends
+helper (Second Login) comes on screen. A job whose first process is gone ends
 `how: leader-gone`: Atlas signals nothing of it, and `left` lists what
 still runs. A job never sends keys or clicks itself; use Atlas's commands
 for that. After a lost session, `atlas job list --all` shows every job,
 and `atlas job stop ID --task KEY` stops one of an earlier task
 (`atlas job log ID --task KEY` reads its output). `mismatch` on a job
-means the helper's record names another process than your task's: tell
+means the desktop's record names another process than your task's: tell
 the person, and never stop it another way.
 
 Cleanup checks your collected copies first. When the newest copy of a
 file is missing or changed, or a collection's receipt is gone, it keeps
-every file in the helper that a later step would remove (`blocked`,
+every file there that a later step would remove (`blocked`,
 `output-not-kept`) and still stops your jobs: collect the file again, then
 run `atlas cleanup --apply` again.
 
 ### Keeping output files
 
-`atlas collect FILE...` copies files the task made in the helper (a path
+`atlas collect FILE...` copies files the task made in the desktop (a path
 relative to its home, or in /tmp) into Atlas's private folder and replies
 with each copy's `path`, `size` and `sha256`. Use it for a PDF, image or
 export you will report or keep, before cleanup deletes anything. Only
-regular files the helper owns are copied, up to 64 MiB each unless
+regular files the desktop's account owns are copied, up to 64 MiB each unless
 `--max-size` allows up to 1G, and only once nothing has written them for 2
 seconds. For a folder, archive it first:
 `atlas run -- /usr/bin/ditto -c -k --keepParent DIR DIR.zip`. The file in
-the helper is left as it is.
+the desktop is left as it is.
 
 ### Finding your own work
 

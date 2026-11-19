@@ -4,7 +4,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "What is happening in Atlas's hidden helper now: whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.",
+    "description": "What is happening now in Atlas's desktop (a hidden second login or a VM): whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -37,7 +37,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Show the person the helper's screen live, with what the agent is doing and a Stop button. Call it once when visible work in the helper starts. Read-only.",
+    "description": "Show the person Atlas's desktop live, with what the agent is doing and a Stop button. Call it once when visible work there starts. Read-only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -51,7 +51,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Take a screenshot in the helper and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.",
+    "description": "Take a screenshot in Atlas's desktop and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -85,7 +85,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "The helper's newest screen and status: the tiles that changed since the picture named by since, at most longest pixels on its longest side.",
+    "description": "The desktop's newest screen and status: the tiles that changed since the picture named by since, at most longest pixels on its longest side.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -100,7 +100,7 @@
       "type": "object"
     },
     "name": "screen_frame",
-    "title": "Helper screen"
+    "title": "Desktop screen"
   },
   {
     "_meta": {
@@ -117,7 +117,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Stop agents in the helper until the person resumes them.",
+    "description": "Stop agents until the person resumes them.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -141,7 +141,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Let agents act in the helper again.",
+    "description": "Let agents act again.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -165,7 +165,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Recover the helper, as Atlas's menu bar does.",
+    "description": "Recover Atlas's desktop, as Atlas's menu bar does.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -213,7 +213,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Take control of the helper for the person; agents wait.",
+    "description": "Take control of Atlas's desktop for the person; agents wait.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -261,7 +261,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "End the person's control of the helper.",
+    "description": "End the person's control.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -285,7 +285,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Send the person's clicks, scrolls and keys to the helper while they have control.",
+    "description": "Send the person's clicks, scrolls and keys while they have control.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -324,7 +324,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Everything done in the helper lately, newest first, with the pictures taken around it: every session's, or one session's by its key (empty for Terminal's).",
+    "description": "Everything done in Atlas's desktop lately, newest first, with the pictures taken around it: every session's, or one session's by its key (empty for Terminal's).",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

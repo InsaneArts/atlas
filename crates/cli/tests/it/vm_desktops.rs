@@ -1,4 +1,4 @@
-//! A VM desktop named in the settings, which this build cannot reach yet:
+//! A VM desktop named in the settings whose session keeper is not running:
 //! every command on it is refused in one wording, and what a refused
 //! command records lands in the VM's own records, never in Second Login's.
 use serde_json::Value;
@@ -77,11 +77,13 @@ fn every_command_on_a_vm_desktop_is_refused_naming_the_renamed_second_login() {
         assert_eq!(refused["ok"], false, "{command}: {refused}");
         assert_eq!(refused["code"], "platform", "{command}: {refused}");
         assert_eq!(
-            refused["error"], "work is a VM desktop, which this build of Atlas cannot reach yet.",
+            refused["error"], "Atlas cannot reach work now: work's session keeper is not running.",
             "{command}"
         );
         assert_eq!(
-            refused["next"], "Run it again with --desktop main to use Second Login.",
+            refused["next"],
+            "Run atlas desktop list to see it, or run this again with --desktop main to use \
+             Second Login.",
             "{command}"
         );
     }
@@ -101,7 +103,7 @@ fn every_command_on_a_vm_desktop_alone_is_refused_with_no_other_desktop_to_try()
         let refused = on_the_vm(&path, &home, command);
         assert_eq!(refused["code"], "platform", "{command}: {refused}");
         assert_eq!(
-            refused["error"], "work is a VM desktop, which this build of Atlas cannot reach yet.",
+            refused["error"], "Atlas cannot reach work now: work's session keeper is not running.",
             "{command}"
         );
         assert!(

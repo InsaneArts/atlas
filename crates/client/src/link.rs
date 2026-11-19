@@ -1,7 +1,7 @@
 //! How the station reaches a desktop's command service: the helper login's
 //! Unix socket, whose peer the kernel names, or a lane of a machine
-//! desktop's session, whose peer its handshake proves; a desktop this build
-//! cannot reach yet has neither, and is refused.
+//! desktop's session, whose peer its handshake proves; a desktop Atlas
+//! cannot reach now has neither, and is refused.
 use atlas_core::{
     config::desktops::Selected,
     error::{Code, Error, Result},
@@ -54,8 +54,8 @@ pub struct Session {
     pub timeout: Duration,
 }
 
-/// A desktop this build cannot reach yet: every request is refused, in the
-/// one wording its settings give, before anything is opened.
+/// A desktop Atlas cannot reach now: every request is refused, saying why
+/// when that is known, before anything is opened.
 #[derive(Clone, Debug)]
 pub struct Unreachable {
     pub selected: Arc<Selected>,
@@ -63,6 +63,14 @@ pub struct Unreachable {
     /// Why it cannot be reached now, when that is known: its keeper is not
     /// running, say, or it is not paired yet.
     pub why: Option<String>,
+}
+
+impl Unreachable {
+    /// Its refusal: that Atlas cannot reach it now, and why when that is
+    /// known.
+    pub fn refused(&self) -> Error {
+        self.selected.not_reached(self.why.as_deref())
+    }
 }
 
 impl Link {
@@ -161,7 +169,7 @@ impl Link {
                 Ok((pending, unanswered))
             }
             Self::Keeper(keeper) => Err(keeper.selected.unreachable()),
-            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
+            Self::Unreachable(unreachable) => Err(unreachable.refused()),
         }
     }
 
@@ -200,7 +208,7 @@ impl Link {
                     Unanswered(None),
                 ));
             }
-            Self::Unreachable(unreachable) => return Err(unreachable.selected.unreachable()),
+            Self::Unreachable(unreachable) => return Err(unreachable.refused()),
         };
         let (pending, unanswered) = self.connect(kind).await?;
         Ok((pending.dispatch(request).await?, unanswered))
@@ -238,7 +246,7 @@ impl Link {
                     session.desktop.id().as_str()
                 ),
             )),
-            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
+            Self::Unreachable(unreachable) => Err(unreachable.refused()),
         }
     }
 
@@ -268,7 +276,7 @@ impl Link {
                 Code::Platform,
                 "Only a VM desktop takes its changes through its keeper.",
             )),
-            Self::Unreachable(unreachable) => Err(unreachable.selected.unreachable()),
+            Self::Unreachable(unreachable) => Err(unreachable.refused()),
         }
     }
 

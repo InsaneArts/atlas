@@ -1,6 +1,6 @@
 # Command-line guide
 
-The `atlas` command checks the helper, observes its desktop and sends actions to apps there. Run it from your own account. This page helps you choose a command and interpret its result; the [generated command reference](../agents/atlas/skills/atlas/references/commands.md) lists every public command's exact options.
+The `atlas` command checks Atlas's desktop, the helper or a [VM](desktops.md), observes it and sends actions to apps there. Run it from your own account. This page helps you choose a command and interpret its result; the [generated command reference](../agents/atlas/skills/atlas/references/commands.md) lists every public command's exact options.
 
 ## Find a command
 
@@ -105,21 +105,22 @@ Coordinate switching, locking and logging out with the person at the Mac. `logou
 
 ### Look after Atlas
 
-| Command       | Use it to                                                                                                                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `update`      | Check or install a verified release.                                                                                                                                                       |
-| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                                                                                              |
-| `install`     | Put the current executable where the helper can run it. This is not the public download installer.                                                                                         |
-| `setup`       | Inspect setup, or finish or re-check the first setup `init` started. This is an advanced repair command.                                                                                   |
-| `config`      | Show the selected settings and resolved paths.                                                                                                                                             |
-| `sound`       | Show whether apps in the helper can be heard; `on` lets them play, `off` keeps them silent.                                                                                                |
-| `agent-guide` | Print the Markdown guide supplied to agents. `--skill` prints the short version the agent plugins load, `--commands` every command and its options, `--errors` what each error code means. |
+| Command       | Use it to                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `update`      | Check or install a verified release. It also brings Atlas in each VM to the same version; `--retry-vms` tries a VM again after its update failed.                                                                              |
+| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                                                                                                                                  |
+| `install`     | Put the current executable where the helper can run it. This is not the public download installer.                                                                                                                             |
+| `setup`       | Inspect setup, or finish or re-check the first setup `init` started. This is an advanced repair command.                                                                                                                       |
+| `desktop`     | Add a VM desktop with `desktop add vm`, see every desktop with `desktop list`, and `start`, `maintain` or `remove` a VM by its name. Adding, maintaining and removing ask you in Atlas.app first. See [Desktops](desktops.md). |
+| `config`      | Show the selected settings and resolved paths.                                                                                                                                                                                 |
+| `sound`       | Show whether apps in the helper can be heard; `on` lets them play, `off` keeps them silent.                                                                                                                                    |
+| `agent-guide` | Print the Markdown guide supplied to agents. `--skill` prints the short version the agent plugins load, `--commands` every command and its options, `--errors` what each error code means.                                     |
 
 See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. See [Configuration](configuration.md) for settings selection and storage paths.
 
 ## Global options and output
 
-`--config FILE` selects a settings file and takes precedence over `ATLAS_CONFIG`. `--json` requests JSON output. Both are global options, so you can put them before or after a subcommand, but before the `--` that begins a child command's arguments.
+`--config FILE` selects a settings file and takes precedence over `ATLAS_CONFIG`. `--desktop NAME` uses another [desktop](desktops.md) for this command, in place of the default or `ATLAS_DESKTOP`. `--json` requests JSON output. These are global options, so you can put them before or after a subcommand, but before the `--` that begins a child command's arguments.
 
 `--allow-disrupt` permits service replacement while other sessions or background
 jobs are active. It applies to updates, restarts and setup repairs; it preserves
@@ -131,7 +132,7 @@ background job defers replacement. The caller's own recent activity is excluded.
 
 Ordinary command results are readable text in a terminal and JSON when redirected or piped. `ATLAS_JSON` can override that default; explicit `--json` wins. Help, version and `atlas agents status --brief` output are text, and `atlas agent-guide` prints Markdown. Interactive setup and commands that open a UI are not a stream of JSON results.
 
-In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`. Commands that change the helper first wait up to 30 seconds for another Atlas command, in the order they began (`--wait SECONDS` or `ATLAS_WAIT`, up to 600, 0 for none), and `busy` then carries `waited`, the seconds waited. They never wait while the person has control or has stopped agents. `busy` names the agent session that has control in `heldBy`, `focus-changed` the session that last used the app in front in `lastUsedBy`, and the `uncertain` refusal says in `yours` whether the unknown action was this session's.
+In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`. Commands that change the helper first wait up to 30 seconds for another Atlas command, in the order they began (`--wait SECONDS` or `ATLAS_WAIT`, up to 600, 0 for none), and `busy` then carries `waited`, the seconds waited. They never wait while the person has control or has stopped agents. `busy` names the agent session that has control in `heldBy`, `focus-changed` the session that last used the app in front in `lastUsedBy`, and the `uncertain` refusal says in `yours` whether the unknown action was this session's. With more than one desktop set up, each reply and failure names its desktop in `desktop`, with its `name` and `kind`.
 
 The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. A command that changes the helper and is stopped by SIGTERM, SIGHUP or SIGINT exits with 128 plus the signal's number (143, 129 or 130), even when it printed its own result, and a failure it prints has the code `interrupted`. Two useful exceptions to treating `ok` as success are:
 

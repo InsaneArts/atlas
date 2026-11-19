@@ -10,6 +10,8 @@ You need macOS 14 or later and an administrator account for installation and set
 
 The helper is an ordinary account on your Mac. It has its own desktop, pointer, clipboard and files, but shares the Mac's speakers, network and hardware. It is not a virtual machine. See [What the helper shares](using-atlas.md#what-the-helper-shares).
 
+Atlas can also run agents' apps in a macOS VM on this Mac, beside the helper. A VM needs macOS 27 or later, Apple silicon and 70 GB free, and downloads about 26 GB of macOS from Apple. See [Desktops](desktops.md).
+
 ## Install
 
 Run the installer from a terminal in your own administrator account. Do not run the command with `sudo`.
@@ -79,4 +81,4 @@ atlas init
 
 It guides you through the same account, login and permission requirements. Stay with the prompts; this is not unattended setup. When it finishes, run the readiness and screenshot checks above.
 
-Next, [connect your agent](agents.md) or [test an app in the helper](using-atlas.md).
+Next, [connect your agent](agents.md) or [test an app in the helper](using-atlas.md). To add a VM desktop as well, run `atlas desktop add vm` and follow [Add a VM](desktops.md#add-a-vm).

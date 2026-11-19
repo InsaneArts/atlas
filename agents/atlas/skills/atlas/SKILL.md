@@ -1,12 +1,12 @@
 ---
 name: atlas
-description: "See and use macOS GUIs in a hidden second login (the helper) without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or icon), open the build in the helper and check it before saying it works. Also use it to reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it when the person asks to watch the helper, see what you are doing or take over: open the live view for them. Not for unit tests, builds or reading files."
+description: "See and use macOS GUIs in a desktop of its own (a hidden second login or a VM) without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or icon), open the build there and check it before saying it works. Also use it to reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it when the person asks to watch Atlas, see what you are doing or take over: open the live view for them. Not for unit tests, builds or reading files."
 ---
 
 # Atlas
 
-Atlas gives you a hidden macOS login (the helper) to open apps, look, click
-and type while the person uses their desktop. If `atlas` is missing or
+Atlas gives you a hidden macOS login (the helper) or a VM to open apps, look,
+click and type while the person uses their desktop. If `atlas` is missing or
 `doctor` stays not ready, ask them to open Atlas to finish setup.
 
 ## Rules
@@ -14,7 +14,7 @@ and type while the person uses their desktop. If `atlas` is missing or
 - Never act on the person's own desktop. Do the work yourself: open builds,
   copy files in, clean up.
 - Never use sudo, type a password, answer a permission prompt, change privacy
-  settings, or copy credentials, keychains or tokens into the helper.
+  settings, or copy credentials, keychains or tokens in.
 - Never set `ATLAS_ACTOR` or act as the person.
 - Ask the person before `atlas switch` or anything that locks, sleeps or
   logs out; run `atlas logout` only when they ask.
@@ -46,8 +46,8 @@ opened, and never run `atlas close --all`: it quits every app.
 
 Where your host shows Atlas's view (Claude and Codex apps, Cursor), call
 `show_screen` once before visible work; elsewhere `atlas monitor` opens it.
-When the person asks to watch or take control, open it and leave the helper
-alone. Never call Stop, Resume, Take Control or Give Back.
+When the person asks to watch or take control, open it and leave the screen
+to them. Never call Stop, Resume, Take Control or Give Back.
 
 ## Work
 
@@ -88,13 +88,13 @@ a full `atlas screenshot` only when a crop's `overlapping` names a window in
 front. Never reopen a screenshot you read or one marked `unchanged: true`.
 `ok` means delivered, not that the app reacted.
 
-`atlas run -- PROGRAM ARGS` runs a command as the helper (`--timeout` up to
-600, never `&`, never keys or clicks via `osascript` or `cliclick`); a server
+`atlas run -- PROGRAM ARGS` runs a command in Atlas's desktop (`--timeout`
+up to 600, never `&`, never keys or clicks via `osascript` or `cliclick`); a server
 that must keep running takes `atlas job start -- PROGRAM ARGS`. Cancel
 Save/Open panels: make files with `run`, open them with `open`. Use
 Chrome/Firefox for web pages. First read Limits for files and drag-and-drop.
 
-A command that changes the helper waits its turn, up to 30 s (`--wait`).
+A command that changes anything waits its turn, up to 30 s (`--wait`).
 Keep each shell call under your shell tool's limit, and never end your turn
 with an Atlas command still running (see Limits).
 
@@ -116,7 +116,7 @@ with an Atlas command still running (see Limits).
 - `stopped`: the person stopped agents. Stop at once, say what you were
   doing and ask; recover an uncertain reply only once they resume.
 - `on-console`: the helper is on screen; ask the person to switch back.
-- `blocked`: your sandbox keeps your shell from the helper. Run Atlas
+- `blocked`: your sandbox keeps your shell from Atlas. Run Atlas
   outside it; never run `atlas init` for this.
 - `session-changed`, `stale-frame` or `lease-lost`: look again first.
 - `cancelled`: the person stopped your input; look, then ask.

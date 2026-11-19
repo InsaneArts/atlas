@@ -335,7 +335,7 @@ fn a_vm_desktop_is_refused_in_one_wording_that_names_the_second_login() -> Resul
     assert_eq!(refused.code, Code::Platform);
     assert_eq!(
         refused.error,
-        "work is a VM desktop, which this build of Atlas cannot reach yet."
+        "work is a VM desktop: this works only with Second Login."
     );
     assert_eq!(
         refused.details["next"],
@@ -352,7 +352,7 @@ fn a_vm_desktop_alone_is_refused_with_no_other_desktop_to_try() -> Result<()> {
     let refused = selected.unreachable();
     assert_eq!(
         refused.error,
-        "work is a VM desktop, which this build of Atlas cannot reach yet."
+        "work is a VM desktop: this works only with Second Login."
     );
     assert!(!refused.error.contains("--desktop"));
     assert!(
@@ -361,6 +361,32 @@ fn a_vm_desktop_alone_is_refused_with_no_other_desktop_to_try() -> Result<()> {
             .unwrap()
             .contains("--desktop")
     );
+    Ok(())
+}
+
+#[test]
+fn a_vm_atlas_cannot_reach_now_says_why_and_how_to_see_it() -> Result<()> {
+    let settings = parsed(&with_vm().replace("\"second-login\"", "\"main\""))?;
+    let selected = settings.selected(settings.resolve(&named("work"))?);
+    let refused = selected.not_reached(Some("work's session keeper is not running"));
+    assert_eq!(refused.code, Code::Platform);
+    assert_eq!(
+        refused.error,
+        "Atlas cannot reach work now: work's session keeper is not running."
+    );
+    assert_eq!(
+        refused.details["next"],
+        "Run atlas desktop list to see it, or run this again with --desktop main to use Second \
+         Login."
+    );
+    assert_eq!(
+        selected.not_reached(None).error,
+        "Atlas cannot reach work now."
+    );
+
+    let alone = parsed(VM_ONLY)?;
+    let refused = alone.selected(alone.default_desktop()).not_reached(None);
+    assert_eq!(refused.details["next"], "Run atlas desktop list to see it.");
     Ok(())
 }
 

@@ -103,14 +103,14 @@ impl Client {
                 );
                 tokio::task::spawn_blocking(move || crate::link::probe(&selected, &vm, timeout))
                     .await
-                    .map_err(|_| self.unreachable())?
+                    .map_err(|_| self.not_reached(None))?
             }
             (link, _) => link.clone(),
         };
         match link {
             Link::Keeper(keeper) => Ok(keeper),
             Link::Unreachable(unreachable) => {
-                let refused = self.unreachable();
+                let refused = self.not_reached(unreachable.why.as_deref());
                 Err(match unreachable.why {
                     Some(why) => refused.with("why", json!(why)),
                     None => refused,

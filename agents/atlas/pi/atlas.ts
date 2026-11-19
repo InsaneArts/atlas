@@ -21,7 +21,7 @@ export default function (pi: ExtensionAPI) {
       show_screen: 'direct',
       take_screenshot: 'direct',
     },
-    description: "See and use Mac apps in Atlas's hidden helper login.",
+    description: 'See and use Mac apps in a desktop of its own (a hidden second login or a VM).',
   });
 
   let status: Promise<string> | undefined;

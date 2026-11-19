@@ -39,9 +39,10 @@ pub(super) fn initialized(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
         "serverInfo": {"name": "atlas", "title": "Atlas", "version": atlas_core::VERSION},
-        "instructions": "Atlas runs Mac apps in a hidden helper login. Use the atlas command \
-            line to act there (see the atlas skill). Call show_screen once when visible work in \
-            the helper starts, so the person can watch it and stop it.",
+        "instructions": "Atlas runs Mac apps in a desktop of its own (a hidden second login \
+            or a VM). Use the atlas command line to act there (see the atlas skill). Call \
+            show_screen once when visible work there starts, so the person can watch it and stop \
+            it.",
     })
 }
 
@@ -135,19 +136,19 @@ macro_rules! tools {
 }
 
 tools! { none;
-    Status => ("atlas_status", "Atlas status", "What is happening in Atlas's hidden helper now: whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.", Any, Read, none, Public),
-    ShowScreen => ("show_screen", "Atlas", "Show the person the helper's screen live, with what the agent is doing and a Stop button. Call it once when visible work in the helper starts. Read-only.", Any, Read, none, Screen),
-    TakeScreenshot => ("take_screenshot", "Take screenshot", "Take a screenshot in the helper and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.", Any, Read, json!({"type": "object", "properties": {"app": {"type": "string"}, "window": {"type": "integer"}, "region": {"type": "string"}}, "additionalProperties": false}), Public),
-    ScreenFrame => ("screen_frame", "Helper screen", "The helper's newest screen and status: the tiles that changed since the picture named by since, at most longest pixels on its longest side.", Any, Read, json!({"type": "object", "properties": {"since": {"type": "string"}, "longest": {"type": "integer", "minimum": 1}}, "additionalProperties": false}), App),
-    StopAgent => ("stop_agent", "Stop Agent", "Stop agents in the helper until the person resumes them.", Any, Change, none, App),
-    ResumeAgent => ("resume_agent", "Resume Agent", "Let agents act in the helper again.", Views, Change, none, App),
-    Recover => ("recover", "Recover", "Recover the helper, as Atlas's menu bar does.", Any, Change, none, App),
+    Status => ("atlas_status", "Atlas status", "What is happening now in Atlas's desktop (a hidden second login or a VM): whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.", Any, Read, none, Public),
+    ShowScreen => ("show_screen", "Atlas", "Show the person Atlas's desktop live, with what the agent is doing and a Stop button. Call it once when visible work there starts. Read-only.", Any, Read, none, Screen),
+    TakeScreenshot => ("take_screenshot", "Take screenshot", "Take a screenshot in Atlas's desktop and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.", Any, Read, json!({"type": "object", "properties": {"app": {"type": "string"}, "window": {"type": "integer"}, "region": {"type": "string"}}, "additionalProperties": false}), Public),
+    ScreenFrame => ("screen_frame", "Desktop screen", "The desktop's newest screen and status: the tiles that changed since the picture named by since, at most longest pixels on its longest side.", Any, Read, json!({"type": "object", "properties": {"since": {"type": "string"}, "longest": {"type": "integer", "minimum": 1}}, "additionalProperties": false}), App),
+    StopAgent => ("stop_agent", "Stop Agent", "Stop agents until the person resumes them.", Any, Change, none, App),
+    ResumeAgent => ("resume_agent", "Resume Agent", "Let agents act again.", Views, Change, none, App),
+    Recover => ("recover", "Recover", "Recover Atlas's desktop, as Atlas's menu bar does.", Any, Change, none, App),
     OpenViewer => ("open_viewer", "Open in Atlas", "Open Atlas's viewer window.", Any, Change, none, App),
-    TakeControl => ("take_control", "Take Control", "Take control of the helper for the person; agents wait.", Views, Change, none, App),
+    TakeControl => ("take_control", "Take Control", "Take control of Atlas's desktop for the person; agents wait.", Views, Change, none, App),
     KeepControl => ("keep_control", "Keep Control", "Keep the person's control a while longer.", Views, Change, none, App),
-    GiveBack => ("give_back", "Give Back", "End the person's control of the helper.", Views, Change, none, App),
-    SendInput => ("send_input", "Send input", "Send the person's clicks, scrolls and keys to the helper while they have control.", Views, Change, json!({"type": "object", "properties": {"frame": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object"}, "maxItems": ACTIONS}}, "required": ["frame", "actions"], "additionalProperties": false}), App),
-    Activity => ("activity", "Activity", "Everything done in the helper lately, newest first, with the pictures taken around it: every session's, or one session's by its key (empty for Terminal's).", Views, Read, json!({"type": "object", "properties": {"session": {"type": "string"}}, "additionalProperties": false}), App),
+    GiveBack => ("give_back", "Give Back", "End the person's control.", Views, Change, none, App),
+    SendInput => ("send_input", "Send input", "Send the person's clicks, scrolls and keys while they have control.", Views, Change, json!({"type": "object", "properties": {"frame": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object"}, "maxItems": ACTIONS}}, "required": ["frame", "actions"], "additionalProperties": false}), App),
+    Activity => ("activity", "Activity", "Everything done in Atlas's desktop lately, newest first, with the pictures taken around it: every session's, or one session's by its key (empty for Terminal's).", Views, Read, json!({"type": "object", "properties": {"session": {"type": "string"}}, "additionalProperties": false}), App),
     Picture => ("picture", "Picture", "One picture from the activity: a screenshot an agent took, or the screen just before an agent's step; as a thumbnail, or full size as the tiles that changed since the picture named by since.", Views, Read, json!({"type": "object", "properties": {"name": {"type": "string"}, "full": {"type": "boolean"}, "since": {"type": "string"}}, "required": ["name"], "additionalProperties": false}), App),
     SwitchHelper => ("switch_helper", "Switch to the Helper", "Lock the screen so the person can log in to the helper.", Views, Change, none, App),
     LogOutHelper => ("log_out_helper", "Log Out the Helper", "Log the helper out; its apps quit.", Views, Change, none, App),

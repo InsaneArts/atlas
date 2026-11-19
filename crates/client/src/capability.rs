@@ -270,7 +270,7 @@ pub async fn vm_doctor_report(client: &crate::client::Client, status: Value) -> 
         && status["station"]["maintenance"]["state"] == "none"
         && declares_installed(&status);
     let (native, dialogs) = crate::vm::native::native_dialogs(client, &status);
-    let mut report = vm_report(status, client.unreachable());
+    let mut report = vm_report(status, client.not_reached(None));
     if report["capabilities"].is_object() {
         report["capabilities"]["nativeDialogs"] = dialogs;
         let unchecked = json!(vm_native_warning(&name, NativeState::NotChecked));

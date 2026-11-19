@@ -179,7 +179,7 @@ async fn a_stop_on_a_vm_desktop_is_kept_here_and_said_not_to_have_reached_it() {
         reply["warnings"][0]
             .as_str()
             .unwrap()
-            .starts_with(&person.unreachable().error),
+            .starts_with("Atlas cannot reach work now: "),
         "{reply}"
     );
     assert!(person.controller.stop_noted());

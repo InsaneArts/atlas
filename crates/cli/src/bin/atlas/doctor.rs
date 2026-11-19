@@ -126,12 +126,12 @@ pub(super) async fn report(client: &Client, verbose: bool) -> atlas_core::error:
 /// failure's own words.
 async fn vm_report(client: &Client, verbose: bool) -> atlas_core::error::Result<Value> {
     if let Some(why) = client.handover_unfinished() {
-        let refused = client.unreachable();
+        let refused = client.not_reached(None);
         return Err(refused.with("why", json!(why)).with("next", json!(why)));
     }
     let status = client.status().await;
     if status["ok"] != true {
-        let refused = client.unreachable();
+        let refused = client.not_reached(status["why"].as_str());
         let refused = match status["why"].as_str().or(status["error"].as_str()) {
             Some(why) if why != refused.error => refused.with("why", json!(why)),
             _ => refused,

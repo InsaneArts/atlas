@@ -2410,27 +2410,38 @@ async fn an_allow_after_the_observation_freshness_limit_still_runs_through_a_fre
 }
 
 #[tokio::test]
-async fn a_vm_desktops_status_is_its_one_refusal_and_nothing_is_asked() {
+async fn a_vm_desktop_atlas_cannot_reach_says_so_and_what_only_second_login_does_says_that() {
     let dir = tempfile::tempdir().unwrap();
     let client = crate::test_support::vm_client(dir.path(), Some("main"));
     let refused = client.unreachable();
     assert_eq!(
         refused.error,
-        "work is a VM desktop, which this build of Atlas cannot reach yet."
+        "work is a VM desktop: this works only with Second Login."
+    );
+    assert_eq!(
+        refused.details["next"],
+        "Run it again with --desktop main to use Second Login."
     );
     let status = client.status().await;
     assert_eq!(status["ok"], false);
     assert_eq!(status["code"], "platform");
-    assert_eq!(status["error"], refused.error.as_str());
-    assert_eq!(status["next"], refused.details["next"]);
+    let said = status["error"].as_str().unwrap();
+    assert!(said.starts_with("Atlas cannot reach work now"), "{status}");
+    assert!(!said.contains("helper"), "{status}");
     assert!(
         status.get("sessionProof").is_none(),
         "no proof was asked for"
     );
+    let unreached = client.link.call(&json!({"op": "hello"})).await.unwrap_err();
+    assert_eq!(unreached.code, Code::Platform);
+    assert!(
+        unreached.error.starts_with("Atlas cannot reach work now"),
+        "{}",
+        unreached.error
+    );
     for error in [
         client.identity().await.unwrap_err(),
         client.verify().await.unwrap_err(),
-        client.link.call(&json!({"op": "hello"})).await.unwrap_err(),
         client.input_transport().unwrap_err(),
     ] {
         assert_eq!(error.code, Code::Platform);
@@ -2453,7 +2464,11 @@ async fn a_change_to_a_vm_desktop_is_refused_before_anything_is_claimed() {
         .capture(Size::Standard, None, false)
         .await
         .unwrap_err();
-    assert_eq!(shot.error, refused.error);
+    assert!(
+        shot.error.starts_with("Atlas cannot reach work now"),
+        "{}",
+        shot.error
+    );
     assert!(client.controller.pending().unwrap().is_empty());
     let root: Vec<_> = fs::read_dir(dir.path().join("output"))
         .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
@@ -2491,11 +2506,15 @@ async fn discovery_on_a_vm_desktop_is_its_one_refusal_never_a_proof() {
 }
 
 #[tokio::test]
-async fn a_vm_desktops_job_list_is_its_one_refusal_never_an_empty_list() {
+async fn a_vm_desktop_atlas_cannot_reach_refuses_its_job_list_never_an_empty_list() {
     let dir = tempfile::tempdir().unwrap();
     let client = crate::test_support::vm_client(dir.path(), Some("main"));
 
     let refused = crate::jobs::list(&client, true).await.unwrap_err();
 
-    assert_eq!(refused.error, client.unreachable().error);
+    assert!(
+        refused.error.starts_with("Atlas cannot reach work now"),
+        "{}",
+        refused.error
+    );
 }

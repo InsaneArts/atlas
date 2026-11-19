@@ -343,7 +343,10 @@ impl Client {
             {
                 Ok(())
             }
-            Kind::Vm(_) => Err(self.unreachable()),
+            Kind::Vm(_) => Err(match &self.link {
+                Link::Unreachable(unreachable) => self.not_reached(unreachable.why.as_deref()),
+                _ => self.unreachable(),
+            }),
         }
     }
 
@@ -372,6 +375,17 @@ impl Client {
                 crate::vm::add::said(crate::vm::add::standing(lifecycle, &config.id), refused)
             }
             _ => refused,
+        }
+    }
+
+    /// The refusal of a VM desktop Atlas cannot reach now, saying `why`
+    /// when it is known; one still being added is refused as
+    /// [`Client::unreachable`] refuses it.
+    pub fn not_reached(&self, why: Option<&str>) -> Error {
+        if self.admission() == Admission::Open {
+            self.selected.not_reached(why)
+        } else {
+            self.unreachable()
         }
     }
 

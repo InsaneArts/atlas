@@ -24,6 +24,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas doctor
@@ -52,6 +55,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas doctor
@@ -90,6 +96,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas agents
   atlas agents install
@@ -121,6 +130,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas agents project
@@ -147,6 +159,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas agents forget
@@ -173,6 +188,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas agents install
@@ -215,6 +233,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas agents remove
@@ -257,6 +278,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas menubar
@@ -294,6 +318,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas screenshot
@@ -336,6 +363,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas windows
@@ -369,6 +399,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas windows --app TextEdit
@@ -426,6 +459,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas elements --app TextEdit --role AXButton
 ```
@@ -455,6 +491,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas status
@@ -477,6 +516,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas activity
@@ -512,6 +554,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas activity
@@ -580,6 +625,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas click --app TextEdit --name Save
   atlas click --app TextEdit --ref 8123abc.12
@@ -638,6 +686,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas element press --ref 8123abc.12
   atlas element set-value --ref 8123abc.4 --value "hello"
@@ -686,6 +737,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas type "hello"
 ```
@@ -729,6 +783,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas key cmd+s
   atlas key escape return
@@ -761,6 +818,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas move 640 400
@@ -817,6 +877,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas drag 100 200 400 200
 ```
@@ -870,6 +933,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas scroll 640 400 --dy 3
 ```
@@ -907,6 +973,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas input @actions.json
 ```
@@ -941,6 +1010,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas open --app TextEdit
@@ -977,6 +1049,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas close --app TextEdit
 ```
@@ -1012,6 +1087,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas cleanup
@@ -1075,6 +1153,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas wait --app TextEdit
   atlas wait --title Save --gone
@@ -1112,6 +1193,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas run -- /bin/sh -c 'ls "$HOME/atlas-work"'
   atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun
@@ -1146,6 +1230,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas job start --name web -- /usr/bin/python3 -m http.server 8000
@@ -1186,6 +1273,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas job list
@@ -1211,6 +1301,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas job log
@@ -1245,6 +1338,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas job stop
@@ -1279,6 +1375,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas collect
@@ -1313,6 +1412,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas collect atlas-work/report.pdf
   atlas collect --max-size 200M atlas-work/build.zip
@@ -1344,6 +1446,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas readiness --tool git
@@ -1389,6 +1494,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment profile
@@ -1418,6 +1526,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment run
@@ -1451,6 +1562,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment apply
@@ -1477,6 +1591,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment list
@@ -1504,6 +1621,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment rollback
@@ -1533,6 +1653,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas environment discover
@@ -1567,6 +1690,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas install-app
@@ -1595,6 +1721,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas install-app ./build/Release/Probe.app
@@ -1628,6 +1757,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas switch
@@ -1665,6 +1797,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas monitor
@@ -1707,6 +1842,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas monitor
   atlas monitor --terminal
@@ -1736,6 +1874,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas logout
@@ -1767,6 +1908,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas logout
   atlas logout --force
@@ -1792,6 +1936,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas update
@@ -1816,6 +1963,9 @@ Options:
       --check
           Only say whether a newer release is out; install nothing
 
+      --retry-vms
+          Try again to bring a VM's Atlas to this build when that failed before
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -1828,6 +1978,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas uninstall
@@ -1862,6 +2015,9 @@ Global options:
       --config <FILE>
           Use another settings file
 
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
 Examples:
   atlas uninstall
   atlas uninstall --remove-helper
@@ -1887,6 +2043,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas setup
@@ -1917,6 +2076,199 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+```
+
+## atlas desktop
+
+```text
+Add a VM desktop, list every desktop, or start, maintain or remove a VM
+
+Usage: atlas desktop [OPTIONS] <COMMAND>
+
+Commands:
+  add       Add a desktop, once you allow it in Atlas.app. Asked again, an add cut short goes on from where it got
+  remove    Remove a VM desktop, once you allow it in Atlas.app: the VM, its settings entry and what Atlas kept of it. Asked again, a removal cut short goes on from where it got
+  list      Every desktop, by kind: a VM's power, whether Atlas reaches it, and whether it is still being added
+  start     Start a VM, as a command that needs it running does: never while it is being removed, handed to a new build or under maintenance
+  maintain  Open a VM's window for your own maintenance, once you allow it in Atlas.app: it takes your keyboard and mouse, and agents wait until you end it with --end
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+
+Examples:
+  atlas desktop list
+  atlas desktop add vm --name work
+  atlas desktop maintain work
+  atlas desktop maintain work --end
+  atlas desktop remove work
+```
+
+## atlas desktop add
+
+```text
+Add a desktop, once you allow it in Atlas.app. Asked again, an add cut short goes on from where it got
+
+Usage: atlas desktop add [OPTIONS] <COMMAND>
+
+Commands:
+  vm    A macOS VM on this Mac
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+```
+
+## atlas desktop remove
+
+```text
+Remove a VM desktop, once you allow it in Atlas.app: the VM, its settings entry and what Atlas kept of it. Asked again, a removal cut short goes on from where it got
+
+Usage: atlas desktop remove [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          The VM's name, as atlas desktop list shows it
+
+Options:
+      --id <ID>
+          The VM's identifier instead, as its removal names it
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+```
+
+## atlas desktop list
+
+```text
+Every desktop, by kind: a VM's power, whether Atlas reaches it, and whether it is still being added
+
+Usage: atlas desktop list [OPTIONS]
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+```
+
+## atlas desktop start
+
+```text
+Start a VM, as a command that needs it running does: never while it is being removed, handed to a new build or under maintenance
+
+Usage: atlas desktop start [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The VM's name, as atlas desktop list shows it
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
+```
+
+## atlas desktop maintain
+
+```text
+Open a VM's window for your own maintenance, once you allow it in Atlas.app: it takes your keyboard and mouse, and agents wait until you end it with --end
+
+Usage: atlas desktop maintain [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The VM's name, as atlas desktop list shows it
+
+Options:
+      --end
+          End the maintenance: the window takes no input again, and agents may go on
+
+      --restart
+          Stop the VM and start it again first, ending any work there
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas config
@@ -1939,6 +2291,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 ```
 
 ## atlas sound
@@ -1969,6 +2324,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas sound
@@ -2005,6 +2363,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+      --desktop <NAME>
+          Use another desktop, by its name in the settings, for this command only. `ATLAS_DESKTOP` names one for every command it reaches
 
 Examples:
   atlas agent-guide

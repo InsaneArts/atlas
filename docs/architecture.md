@@ -31,6 +31,8 @@ The helper daemon provides session facts, capture, accessibility inspection, run
 
 The Unix transport checks the kernel-reported peer UID. The helper servers also check their caller. Socket access alone is not authorization to act: the client and helper validate the selected account, graphical session, hidden state and current display identity. The helper is still an ordinary macOS account sharing the same hardware and network, not a VM or security sandbox.
 
+A [VM desktop](desktops.md) is a macOS VM on this Mac instead, with nothing of the person's account in it. Atlas VM, a separate signed program, runs each VM in the person's login with Apple's Virtualization framework, under a launchd agent of its own. Inside the VM, Atlas's daemon runs in machine mode with its own input service and consent. Each VM also has a session keeper in the person's login, under its own launchd agent: the one owner of an authenticated, encrypted connection to the guest's daemon, through a socket Atlas VM serves. Every Atlas process reaches the VM through its keeper. In place of the hidden-login checks, the guest proves it is the paired guest, in its own VM, on its own console, by exact display epoch and a fresh challenge. Each pending change names who carries it out (the guest, Atlas VM or the station on this Mac), and only that one's answer settles it. The keeper also passes this account's `localhost` servers into the guest, each connection only to the program that listens. A VM's live picture and the person's control go only to AtlasApp.
+
 ## Rust responsibilities
 
 The Rust code is a workspace under [`crates/`](../crates), one package per layer, each depending only on the layers before it, so the compiler keeps them apart. [crates/AGENTS.md](../crates/AGENTS.md) lists the layers.
@@ -52,6 +54,7 @@ The binary keeps argument parsing, presentation and dispatch separate so library
 | `mcp`, `agents`, `claude_app`                                                            | Embedded host views and installation of supported agent connections.                                                                                                |
 | `environment`                                                                            | Explicit file snapshots, environment profiles and resumable apply/rollback transactions.                                                                            |
 | `user` (one per target; `crates/cli/src/bin/atlas/user/`)                                | The user desktop: its setup (`user::onboarding`, `user::setup`, `user/init.rs`), account identity, managed helper installation or repair, and its other operations. |
+| `vm`                                                                                     | The VM desktop: adding, maintaining, updating and removing a VM, and its session keeper; the `session` crate holds the encrypted connection to its guest.           |
 | `onboarding`, `setup`                                                                    | The person's own preferences, and the setup executor every desktop shares.                                                                                          |
 | `update`, `uninstall`                                                                    | Verified app replacement, helper handover and ordered removal.                                                                                                      |
 
@@ -86,7 +89,7 @@ The input journal records held keys and mouse buttons separately. A replacement 
 
 ## Native and embedded views
 
-The local viewer service supplies pictures, status, activity, sessions, screenshots and control to AtlasApp. Beside it, the menu bar runs the [frame pipe](frame-pipe.md): one demand-driven source of raw pictures that AtlasApp and the terminal viewer share over private Unix sockets, falling back to the viewer's PNG pictures when it is unavailable. Frames have identities and freshness limits; user input is checked against the frame and control lease it came from. Status polling is not proof that a fresh picture has arrived.
+The local viewer service supplies pictures, status, activity, sessions, screenshots and control to AtlasApp. One service serves every listed desktop and shows one of them; a Stop through it stops agents on every desktop. Beside it, the menu bar runs the [frame pipe](frame-pipe.md): one demand-driven source of raw pictures that AtlasApp and the terminal viewer share over private Unix sockets, falling back to the viewer's PNG pictures when it is unavailable. Frames have identities and freshness limits; user input is checked against the frame and control lease it came from. Status polling is not proof that a fresh picture has arrived.
 
 The person's app alone receives `consoleName` in the status: `{"state":"this"}`, `{"state":"another","name":"atlas"}` or `{"state":"unknown"}`. Atlas reads it again at most every 15 seconds; when a reading is late, the last one is used while it is under 30 seconds old, and unknown after that. Other viewer callers receive no `consoleName` field.
 

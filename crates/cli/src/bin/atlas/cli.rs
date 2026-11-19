@@ -39,14 +39,12 @@ pub(super) struct Cli {
     )]
     pub(super) config: Option<PathBuf>,
     /// Use another desktop, by its name in the settings, for this command
-    /// only. `ATLAS_DESKTOP` names one for every command it reaches. Shown
-    /// once there is more than one kind of desktop to choose.
+    /// only. `ATLAS_DESKTOP` names one for every command it reaches.
     #[arg(
         long,
         value_name = "NAME",
         help_heading = "Global options",
-        global = true,
-        hide = true
+        global = true
     )]
     pub(super) desktop: Option<String>,
     /// Show the request with this ID in Atlas.app's approval window: how
@@ -128,10 +126,9 @@ pub(super) enum Command {
     /// and answered through Atlas.app.
     #[command(hide = true, subcommand)]
     Lifecycle(Lifecycle),
-    /// Add or remove a VM desktop, or list the desktops, VMs being added
-    /// among them.
-    /// Hidden until agents can use a VM.
-    #[command(hide = true, subcommand)]
+    /// Add a VM desktop, list every desktop, or start, maintain or remove
+    /// a VM.
+    #[command(subcommand)]
     Desktop(Desktop),
     /// A machine desktop's daemon, started by its installed job alone.
     #[command(hide = true)]
@@ -1051,8 +1048,8 @@ pub(super) struct Update {
     #[arg(long, conflicts_with_all = ["allow_unnotarized", "force", "retry_vms"])]
     pub(super) check: bool,
     /// Try again to bring a VM's Atlas to this build when that failed
-    /// before. Hidden until agents can use a VM.
-    #[arg(long, hide = true)]
+    /// before.
+    #[arg(long)]
     pub(super) retry_vms: bool,
 }
 

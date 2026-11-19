@@ -60,14 +60,14 @@ const ABOUT: [&str; 5] = [
 ];
 
 /// When a skill loads: what Atlas is for, in the words an agent matches.
-const SKILL_DESCRIPTION: &str = "See and use macOS GUIs in a hidden second login (the helper) \
-without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change \
-something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or \
-icon), open the build in the helper and check it before saying it works. Also use it to \
+const SKILL_DESCRIPTION: &str = "See and use macOS GUIs in a desktop of its own (a hidden second \
+login or a VM) without touching the person's desktop, windows, keyboard or mouse. Use it whenever \
+you change something a person could see in a Mac app (a window, dialog, menu, menu bar item, \
+layout or icon), open the build there and check it before saying it works. Also use it to \
 reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test \
-a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it when the person \
-asks to watch the helper, see what you are doing or take over: open the live view for them. Not for unit tests, builds \
-or reading files.";
+a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it \
+when the person asks to watch Atlas, see what you are doing or take over: open the live view for \
+them. Not for unit tests, builds or reading files.";
 
 /// Where the skill's references live, beside its SKILL.md.
 fn references_folder() -> std::path::PathBuf {

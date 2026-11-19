@@ -133,7 +133,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Refuses a VM desktop, whose input this build cannot reach yet.
+    /// Refuses a VM desktop, whose input goes through its keeper instead.
     pub(crate) fn input_transport(&self) -> Result<Transport> {
         match self.desktop().kind() {
             Kind::User(login) => {
