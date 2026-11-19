@@ -508,3 +508,165 @@ async fn a_file_beside_atlass_own_folders_is_staged_and_only_what_is_in_them_or_
     }
     assert_eq!(stage_lanes(&serving).len(), 1, "nothing more staged");
 }
+
+/// The native check's fixture on this Mac, holding `bytes`.
+fn fixture(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = std::fs::canonicalize(folder.path())
+        .unwrap()
+        .join("DesktopFixture");
+    std::fs::write(&path, bytes).unwrap();
+    (folder, path)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_native_checks_in_a_row_reuse_one_copy_of_their_fixture_at_one_path() {
+    let (serving, saying, client, _directory) = proven().await;
+    answering_reads(&saying);
+    let verified = client.verify_vm().await.unwrap();
+    let (_folder, path) = fixture(b"fixture one");
+
+    let first = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+    let second = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+
+    let lanes = stage_lanes(&serving);
+    assert_eq!(lanes.len(), 1, "staged once");
+    assert_eq!(first, second);
+    assert_eq!(
+        first.to_string_lossy(),
+        format!("{ROOT}/{}/DesktopFixture", lanes[0])
+    );
+    assert_eq!(copy(&serving, &lanes[0]).unwrap().contents, b"fixture one");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_fixture_digest_replaces_its_copy_and_the_old_one_is_removed_as_a_change() {
+    let (serving, saying, client, _directory) = proven().await;
+    answering_reads(&saying);
+    let verified = client.verify_vm().await.unwrap();
+    let (_folder, path) = fixture(b"fixture one");
+    let first = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+    let old = stage_lanes(&serving)[0].clone();
+
+    std::fs::write(&path, b"fixture two, rebuilt").unwrap();
+    let replaced = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+
+    let lanes = stage_lanes(&serving);
+    assert_eq!(lanes.len(), 2, "{lanes:?}");
+    assert_ne!(first, replaced);
+    assert!(copy(&serving, &old).is_none(), "the old copy removed");
+    assert_eq!(
+        copy(&serving, &lanes[1]).unwrap().contents,
+        b"fixture two, rebuilt"
+    );
+    let owners = Owners::in_records(client.output_dir().unwrap());
+    assert_eq!(owners.of(&old), Owned::Unknown, "its record gone with it");
+    assert!(matches!(owners.of(&lanes[1]), Owned::By(owner) if owner.fixture.is_some()));
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn neither_close_nor_a_removal_for_any_session_takes_the_native_checks_fixture() {
+    let (serving, saying, client, _directory) = proven().await;
+    answering_reads(&saying);
+    let verified = client.verify_vm().await.unwrap();
+    let (_folder, path) = fixture(b"fixture one");
+    crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+    let kept = stage_lanes(&serving)[0].clone();
+
+    let closed = crate::agent::close(
+        &client
+            .clone()
+            .doing(Doing::new("close").app(Some("DesktopFixture"))),
+        Closing::App("DesktopFixture"),
+    )
+    .await
+    .unwrap();
+    let removal = crate::vm::copies::removal(&client, &kept, (None, &verified), &[]).await;
+
+    assert_eq!(closed["removed"], json!([]), "{closed}");
+    assert_eq!(closed["keptOthers"], 1, "{closed}");
+    assert_eq!(removal, crate::handoff::CopyRemoval::AnotherSession);
+    assert!(copy(&serving, &kept).is_some(), "kept for the next check");
+    let claimed = crate::task::store::Store::at(client.output_dir().unwrap())
+        .all()
+        .iter()
+        .any(|record| {
+            record
+                .claims()
+                .any(|(owned, _)| owned.same(&crate::task::Owned::Copy { id: kept.clone() }))
+        });
+    assert!(!claimed, "no task claims it");
+}
+
+/// What the fixture's kept copy becomes when it is checked again after
+/// `damage` was done to it in the guest: the copy launched, the copy
+/// damaged, and every stage asked.
+async fn checked_again_after(
+    damage: impl FnOnce(&mut atlas_session::standin::copies::Copy),
+) -> (std::path::PathBuf, std::path::PathBuf, Vec<Token>, bool) {
+    let (serving, saying, client, _directory) = proven().await;
+    answering_reads(&saying);
+    let verified = client.verify_vm().await.unwrap();
+    let (_folder, path) = fixture(b"fixture one");
+    let first = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+    let damaged = stage_lanes(&serving)[0].clone();
+    damage(
+        serving
+            .fixture
+            .guest
+            .standin
+            .copies()
+            .get_mut(&damaged)
+            .unwrap(),
+    );
+
+    let again = crate::vm::copies::fixture_copy(&client, &verified, &path)
+        .await
+        .unwrap();
+
+    let gone = copy(&serving, &damaged).is_none();
+    (first, again, stage_lanes(&serving), gone)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_fixture_whose_executable_was_deleted_is_staged_again_never_launched_as_it_was() {
+    let (first, again, stages, gone) = checked_again_after(|copy| {
+        copy.snapshot
+            .entries
+            .retain(|entry| !matches!(entry.kind, atlas_core::stage::Kind::File { .. }));
+        copy.contents.clear();
+    })
+    .await;
+
+    assert_eq!(stages.len(), 2, "staged again: {stages:?}");
+    assert_ne!(first, again);
+    assert!(again.starts_with(format!("{ROOT}/{}", stages[1])));
+    assert!(gone, "the damaged copy removed as a change");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_fixture_whose_executable_was_replaced_is_staged_again_never_launched_as_it_was() {
+    let (first, again, stages, gone) = checked_again_after(|copy| {
+        // Other code of the same length in its place.
+        copy.contents = b"fixture 1!!".to_vec();
+    })
+    .await;
+
+    assert_eq!(stages.len(), 2, "staged again: {stages:?}");
+    assert_ne!(first, again);
+    assert!(gone, "the replaced copy removed as a change");
+}

@@ -203,3 +203,22 @@ fn unreadable_native_evidence_is_distinguished_from_a_missing_check() {
         assert_eq!(doctor["capabilities"]["nativeDialogs"]["state"], "unknown");
     }
 }
+
+#[test]
+fn second_logins_paths_are_compared_as_this_mac_resolves_them() {
+    let folder = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let file = folder.path().join("atlas-fixture.txt");
+    std::fs::write(&file, b"saved").unwrap();
+    let real = std::fs::canonicalize(&file).unwrap();
+    let link = folder.path().join("linked.txt");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+
+    assert!(real.starts_with("/private/tmp"), "{}", real.display());
+    assert!(canary::same_path(file.to_str(), &real));
+    assert!(canary::same_path(link.to_str(), &real));
+    assert!(!canary::same_path(
+        Some("/private/tmp/atlas-canary.Zz9Yy8/atlas-fixture.txt"),
+        std::path::Path::new("/private/tmp/atlas-canary.Zz9Yy8/atlas-fixture.txt")
+    ));
+    assert!(!canary::same_path(None, &real));
+}

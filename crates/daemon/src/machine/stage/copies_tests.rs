@@ -418,3 +418,50 @@ fn every_copy_is_listed_page_by_page_and_one_is_found_by_its_token() {
     assert!(second["next"].is_null());
     assert_eq!(one["copies"][0]["copy"], tokens[PAGE + 5].as_str());
 }
+
+#[test]
+fn a_placed_copys_contents_are_read_afresh_with_no_link_followed() {
+    let guest = guest();
+    let (token, folder) = placed_copy(&guest);
+    let evidence = super::super::Evidence {
+        change: token.clone(),
+        request: json!({"name": "Tool.app", "digest": "0".repeat(64)}),
+    };
+    fs::write(
+        folder.join(super::super::EVIDENCE),
+        serde_json::to_vec(&evidence).unwrap(),
+    )
+    .unwrap();
+    let script = folder.join("Tool.app/Contents/run.sh");
+
+    let staged = contents(&guest.root, &guest.stages, &token);
+    fs::write(&script, b"#!/bin/sh\necho replaced\n").unwrap();
+    let replaced = contents(&guest.root, &guest.stages, &token);
+    fs::remove_file(&script).unwrap();
+    symlink("/bin/sh", &script).unwrap();
+    let linked = contents(&guest.root, &guest.stages, &token);
+    let unknown = contents(&guest.root, &guest.stages, &Token::new());
+
+    let file = |said: &Value| {
+        said["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["path"] == json!(["Contents", "run.sh"]))
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(
+        file(&staged)["kind"],
+        json!({"kind": "file", "size": 19,
+            "sha256": atlas_core::digest::bytes_sha256(b"#!/bin/sh\nsleep 30\n")}),
+        "{staged}"
+    );
+    assert_ne!(file(&replaced)["kind"], file(&staged)["kind"]);
+    assert_eq!(
+        file(&linked)["kind"],
+        json!({"kind": "symlink", "target": "/bin/sh"}),
+        "a link is said as one, never followed"
+    );
+    assert_eq!(unknown["entries"], Value::Null, "{unknown}");
+}

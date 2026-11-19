@@ -10,10 +10,12 @@
 //! the observation is fresh, and both Save and Open passed.
 pub mod canary;
 
-use crate::capability::{Doctor, NativeState, with_capabilities};
+#[cfg(test)]
+use crate::capability::canary::problem;
+use crate::capability::{Doctor, NativeState, canary::Check, with_capabilities};
 use atlas_core::{
     config::home,
-    error::{Code, Error, Result},
+    error::Result,
     session::{Display, Epoch, Observation},
 };
 use serde::{Deserialize, Serialize};
@@ -53,36 +55,6 @@ impl Generation {
     }
 }
 
-/// One native panel a check drives.
-#[derive(Clone, Copy)]
-enum Panel {
-    Save,
-    Open,
-}
-
-impl Panel {
-    /// Every panel a passing record covers, in the order they run.
-    const ALL: [Self; 2] = [Self::Save, Self::Open];
-
-    /// The name the fixture and the record know this panel by.
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Save => "save",
-            Self::Open => "open",
-        }
-    }
-}
-
-/// One native operation's outcome and, if it failed, where.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Check {
-    kind: String,
-    passed: bool,
-    stage: Option<String>,
-    error: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Record {
@@ -96,16 +68,8 @@ struct Record {
 impl Record {
     /// Exactly one check of every panel, and `passed` only if all passed.
     fn consistent(&self) -> bool {
-        let covered = |panel: Panel| self.checks.iter().any(|check| check.kind == panel.kind());
-
-        self.checks.len() == Panel::ALL.len()
-            && Panel::ALL.into_iter().all(covered)
-            && self.passed == self.checks.iter().all(|check| check.passed)
+        Check::consistent(&self.checks, self.passed)
     }
-}
-
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Native, message)
 }
 
 fn record_path(uid: u32) -> Result<PathBuf> {

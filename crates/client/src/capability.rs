@@ -1,7 +1,10 @@
 //! What doctor reports of a helper's native dialogs and web content, a VM
 //! desktop's report from its status, and the summary programs read. The
-//! user desktop's dated check of native Save/Open panels, and its record,
-//! are in [`crate::user::capability`].
+//! dated check of native Save/Open panels is driven by [`canary`] on every
+//! desktop; the user desktop's record of it is in
+//! [`crate::user::capability`], a VM's in its own records folder.
+pub mod canary;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -179,10 +182,7 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
     // A step two checks fail for, as maintenance makes the proof's, is
     // said once.
     next_steps.dedup();
-    let not_checked = |reason: String| json!({"state": NativeState::NotChecked, "reason": reason});
-    let mut warnings = vec![json!(format!(
-        "Native Save/Open is not checked on {name}; use atlas run or atlas open."
-    ))];
+    let mut warnings = vec![json!(vm_native_warning(&name, NativeState::NotChecked))];
     match status["leftovers"].as_str() {
         Some("running") if proven => warnings.push(json!(format!(
             "Work an agent started is still running on {name}."
@@ -200,9 +200,7 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
     status["capabilities"] = json!({
         "observe": observe,
         "input": input,
-        "nativeDialogs": not_checked(format!(
-            "Atlas does not check native Save/Open panels on {name} yet."
-        )),
+        "nativeDialogs": native_unasked(&name, proven),
         "installedApps": installed_unasked(&name, &status),
         "maintenance": maintenance(&name, &status["station"]["maintenance"]),
     });
@@ -210,6 +208,42 @@ fn with_vm_report(mut status: Value, ready: bool) -> Value {
     status["nextSteps"] = json!(next_steps);
     status["warnings"] = json!(warnings);
     status
+}
+
+/// Doctor's word on native dialogs on the VM `name` before its record is
+/// read: judged once it is proven again, else not checked yet.
+fn native_unasked(name: &str, proven: bool) -> Value {
+    let reason = if proven {
+        format!(
+            "Native Save/Open has not been checked on {name}; use atlas run or atlas open \
+             instead, or check it with atlas --desktop {name} verify-native."
+        )
+    } else {
+        format!("Whether native Save/Open works on {name} is judged once it is proven again.")
+    };
+    json!({"state": NativeState::NotChecked, "reason": reason})
+}
+
+/// The warning doctor gives of native dialogs on the VM `name` in `state`.
+fn vm_native_warning(name: &str, state: NativeState) -> String {
+    match state {
+        NativeState::Passed => {
+            format!("Native Save/Open passed a dated check in {name}, not a connection check.")
+        }
+        NativeState::Failed => format!(
+            "Native Save/Open failed its last check in {name}; cancel inert panels and use atlas \
+             run or atlas open."
+        ),
+        NativeState::Stale => {
+            format!("Native Save/Open's check of {name} is stale; use atlas run or atlas open.")
+        }
+        NativeState::Unknown => {
+            format!("Native Save/Open is unqualified on {name}; use atlas run or atlas open.")
+        }
+        NativeState::NotChecked => {
+            format!("Native Save/Open is not checked on {name}; use atlas run or atlas open.")
+        }
+    }
 }
 
 /// The browsers a sign-in opens, which doctor asks a VM after.
@@ -225,7 +259,18 @@ pub async fn vm_doctor_report(client: &crate::client::Client, status: Value) -> 
         && status["proven"] == true
         && status["station"]["maintenance"]["state"] == "none"
         && declares_installed(&status);
+    let (native, dialogs) = crate::vm::native::native_dialogs(client, &status);
     let mut report = vm_report(status, client.unreachable());
+    if report["capabilities"].is_object() {
+        report["capabilities"]["nativeDialogs"] = dialogs;
+        let unchecked = json!(vm_native_warning(&name, NativeState::NotChecked));
+        if let Some(warning) = report["warnings"]
+            .as_array_mut()
+            .and_then(|warnings| warnings.iter_mut().find(|warning| **warning == unchecked))
+        {
+            *warning = json!(vm_native_warning(&name, native));
+        }
+    }
     if asked && report["capabilities"].is_object() {
         report["capabilities"]["installedApps"] =
             match crate::app_selection::installed(client, &BROWSERS).await {
@@ -351,12 +396,7 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
     let guest = &status["guest"];
     let name = status["desktop"]["name"].as_str().unwrap_or("the VM");
     // Asked of the person in the VM's own window, never the helper's.
-    let allow = |setting: &str| {
-        json!(format!(
-            "Ask the person to open {name}'s window with atlas desktop maintain {name} and allow \
-             Atlas in Privacy & Security, {setting}, there."
-        ))
-    };
+    let allow = |setting: &str| json!(allow_in_window(name, setting));
     if guest["permissions"]["screenCapture"] != true {
         return Some(vm_capture_held(guest).with("next", allow("Screen & System Audio Recording")));
     }
@@ -369,6 +409,15 @@ pub fn vm_first_step(status: &Value) -> Option<atlas_core::error::Error> {
         });
     }
     None
+}
+
+/// What the person is asked so Atlas in the VM `name` may use `setting`:
+/// to allow it in the VM's own window, opened for their maintenance.
+pub(crate) fn allow_in_window(name: &str, setting: &str) -> String {
+    format!(
+        "Ask the person to open {name}'s window with atlas desktop maintain {name} and allow \
+         Atlas in Privacy & Security, {setting}, there."
+    )
 }
 
 /// Why a VM whose guest's status is `guest` gives agents no pictures now, in

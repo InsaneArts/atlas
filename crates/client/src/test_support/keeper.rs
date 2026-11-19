@@ -156,8 +156,8 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// runs no app, has none of the apps asked after installed and keeps no
-/// copy, gives a picture of its whole display for a screenshot, settles
+/// runs no app, has none of the apps asked after installed, reads a native
+/// check's folder as a machine guest does and keeps no copy, gives a picture of its whole display for a screenshot, settles
 /// whatever it is asked to, and cannot say whether work agents started runs
 /// there; its keeper holds and releases agents' lanes whenever it is asked.
 /// The VM is added, its lifecycle record kept in `directory`, and runs, as
@@ -583,6 +583,19 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
                 .map(|name| (name.to_owned(), json!(false)))
                 .collect();
             json!({"ok": true, "op": "installed", "installed": installed})
+        }
+        // A native check's folder is read by a machine guest's own code.
+        Some("read") if request["request"]["op"] == "native" => {
+            let line = serde_json::to_vec(&request["request"]).unwrap_or_default();
+            match atlas_core::protocol::parse(&line).map(|asked| asked.request) {
+                Ok(atlas_core::protocol::Request::Native {
+                    action,
+                    directory,
+                    pin,
+                }) => atlas_core::native::answer(&action, &directory, pin),
+                Ok(_) => json!({"ok": false, "code": "bad-request", "error": "Not a native read."}),
+                Err(refusal) => refusal,
+            }
         }
         Some("read") => json!({"ok": true, "outcome": "unknown"}),
         Some("change") if request["request"]["op"] == "job" => {

@@ -79,20 +79,31 @@ const LONGEST: Duration = Duration::from_secs(120);
 /// never a stop of every job; `leftovers` is the guest's word on what work
 /// of its may still run. `open`, `close` and a cleanup read the guest's
 /// apps, and a screenshot of an app or a window its windows, always in the
-/// session their proof pinned, and its copies; a live picture asks whether
+/// session their proof pinned, and its copies, and what one of them holds
+/// now; a live picture asks whether
 /// its capture stopped and drained, naming the session it was proved in;
 /// doctor asks which apps its Applications folder holds, naming them, in
-/// the session its proof pinned. On the input service's own lane, only a
+/// the session its proof pinned; the native check reads its canary folder's
+/// files or its fixture's scan, naming the folder, in the session its proof
+/// pinned. On the input service's own lane, only a
 /// look at an app's elements, held to the epoch the command's proof pinned
 /// and naming its app.
 pub(crate) fn carries(kind: &LaneKind, request: &Value) -> bool {
     match (kind, request["op"].as_str()) {
         (LaneKind::Read, Some("hello" | "outcome" | "leftovers" | "copies")) => true,
+        (LaneKind::Read, Some("copy-contents")) => request["copy"].is_string(),
         (LaneKind::Read, Some("apps" | "windows" | "stream-drain-status")) => {
             request["session"].is_object()
         }
         (LaneKind::Read, Some("installed")) => {
             request["names"].is_array() && request["session"].is_object()
+        }
+        (LaneKind::Read, Some("native")) => {
+            matches!(
+                request["action"].as_str(),
+                Some("files" | "scan" | "resolve")
+            ) && request["directory"].is_string()
+                && request["session"].is_object()
         }
         (LaneKind::Read, Some("job")) => {
             matches!(request["action"].as_str(), Some("show" | "log"))

@@ -305,9 +305,9 @@ async fn execute_with(
 /// Whether `command` is a change this build makes on a VM desktop: a
 /// command, a background job's start or stop, `open` and `close`, an app's
 /// install, a cleanup of what they left, an environment's plans and their
-/// commands (never a discovery), and an agent's input: at a point or of keys
+/// commands (never a discovery), an agent's input: at a point or of keys
 /// and text, checked against the app, window or field it names, and on an
-/// element found by its name or a look.
+/// element found by its name or a look, and the native Save/Open check.
 fn changes_on_vm(command: &Command) -> bool {
     match command {
         Command::Environment(environment) => !matches!(
@@ -329,15 +329,16 @@ fn changes_on_vm(command: &Command) -> bool {
         | Command::Scroll(_)
         | Command::Type(_)
         | Command::Key(_)
-        | Command::Input { .. } => true,
+        | Command::Input { .. }
+        | Command::VerifyNative { .. } => true,
         _ => false,
     }
 }
 
 /// Whether `command`, one this build carries out on a VM desktop, needs the
 /// VM running: a command, a background job's start, `open`, an app's
-/// install, an agent's input, and an environment's preview, apply, undo and
-/// commands. A close,
+/// install, an agent's input, the native Save/Open check, and an
+/// environment's preview, apply, undo and commands. A close,
 /// a cleanup, a job's stop, an environment's list and a look at what
 /// undoing would do never start it.
 fn starts_vm(command: &Command) -> bool {
@@ -482,7 +483,7 @@ async fn carry_out(
         Command::Doctor(args) if args.login_timing => atlas_core::user::login_log::timing(),
         Command::Doctor(args) => doctor::report(&client()?, args.verbose).await,
         Command::VerifyNative { fixture } => {
-            atlas_client::user::capability::canary::verify(&client()?, &fixture).await
+            atlas_client::capability::canary::verify(&client()?, &fixture).await
         }
         Command::Environment(args) => provision(client, args).await,
         Command::Install => client()?.install(),

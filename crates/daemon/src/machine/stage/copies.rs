@@ -716,6 +716,21 @@ pub(crate) fn inventory(
     })
 }
 
+/// What the placed copy `token` holds now: its item read afresh as a
+/// snapshot, no link followed, each file's size and SHA-256 and each link's
+/// target; `null` entries when it is not placed, or its item is not there
+/// or cannot be read whole.
+pub(crate) fn contents(root: &Root, stages: &Stages, token: &Token) -> Value {
+    let listed = inventory(root, stages, Some(token), None);
+    let placed = &listed["copies"][0];
+    let entries = (placed["state"] == "placed")
+        .then(|| placed["path"].as_str())
+        .flatten()
+        .and_then(|path| atlas_core::stage::Snapshot::of(std::path::Path::new(path)).ok())
+        .map_or(Value::Null, |snapshot| json!(snapshot.entries));
+    json!({"ok": true, "op": "copy-contents", "copy": token, "entries": entries})
+}
+
 /// The group of `token` in `groups`, made when it is the first of it.
 fn group(
     groups: &mut std::collections::BTreeMap<String, (Token, Group)>,

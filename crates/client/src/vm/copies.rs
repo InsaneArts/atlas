@@ -27,8 +27,10 @@ use std::{
     sync::Arc,
 };
 
+mod fixture;
 mod owners;
 
+pub(crate) use fixture::fixture_copy;
 pub(crate) use owners::{Owned, Owner, Owners};
 
 /// The most pages of the guest's inventory read in one listing.
@@ -305,6 +307,7 @@ fn kept_for(
             session: session.clone(),
             task: task.clone(),
             plan: None,
+            fixture: None,
         })?;
     }
     Ok(())
@@ -339,6 +342,7 @@ pub(in crate::vm) async fn stage_frozen(
         session: client.host_session.as_ref().map(HostSession::key).cloned(),
         task: client.task.as_ref().map(|task| task.key().clone()),
         plan: Some(payloads.plan().clone()),
+        fixture: None,
     })?;
     let folder = payloads.folder().to_owned();
     let held = tokio::task::spawn_blocking({
@@ -439,7 +443,8 @@ pub(crate) async fn remove(
 /// or none, in the generation of `verified`, the command's own proof, by
 /// the rule every removal of a copy follows: only a copy whose record here
 /// names that session (one with no record, or an unreadable one, is never
-/// taken as anyone's), and never one holding a frozen plan's payloads;
+/// taken as anyone's), and never one holding a frozen plan's payloads or
+/// the native check's fixture;
 /// kept while the guest lists it as anything but placed, and while
 /// anything runs from it or an app in `running` (from a list the guest
 /// gave) does. Its record goes once it is known gone.
@@ -454,8 +459,11 @@ pub(crate) async fn removal(
         Err(error) => return CopyRemoval::Failed(error.error),
     };
     match owners.of(copy) {
-        // A frozen plan's payloads go only with its plan.
-        Owned::By(owner) if owner.plan.is_some() => return CopyRemoval::AnotherSession,
+        // A frozen plan's payloads go only with its plan, and the native
+        // check's fixture only when a check of another fixture replaces it.
+        Owned::By(owner) if owner.plan.is_some() || owner.fixture.is_some() => {
+            return CopyRemoval::AnotherSession;
+        }
         Owned::By(owner) if owner.names(session) => {}
         Owned::By(_) => return CopyRemoval::AnotherSession,
         Owned::Unknown | Owned::Unreadable => return CopyRemoval::Unreadable,

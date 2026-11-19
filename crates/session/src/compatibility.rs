@@ -53,11 +53,15 @@ pub const PICTURES: &str = "pictures-v1";
 /// Which named apps the guest's Applications folder holds, each a real
 /// folder there, never through a link.
 pub const INSTALLED: &str = "installed-v1";
+/// The native Save/Open check's reads of a canary folder the fixture made:
+/// its files, and the fixture's scan of a challenge it was handed, each in
+/// the session its read was pinned to.
+pub const NATIVE_CHECK: &str = "native-check-v1";
 
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 15] = [
+pub const MACHINE: [&str; 16] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
@@ -73,6 +77,7 @@ pub const MACHINE: [&str; 15] = [
     ENVIRONMENT,
     PICTURES,
     INSTALLED,
+    NATIVE_CHECK,
 ];
 
 /// What a guest declares in its hello.

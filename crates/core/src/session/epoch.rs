@@ -89,7 +89,7 @@ impl Console {
 /// The epoch a machine desktop's session is in, compared by exact
 /// equality: a new boot, security session, display or process is another
 /// epoch, and nothing remembered of the last holds in it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineEpoch {
     pub uid: u32,

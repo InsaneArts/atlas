@@ -83,6 +83,12 @@ fn agents_requests(generation: u64) -> Vec<(&'static str, Value)> {
             json!({"op": "read", "request": {"op": "installed", "names": ["Firefox"],
                 "session": session()}, "generation": generation}),
         ),
+        (
+            "a native read",
+            json!({"op": "read", "request": {"op": "native", "action": "files",
+                "directory": "/private/tmp/atlas-canary.Ab12Cd", "session": session()},
+                "generation": generation}),
+        ),
         ("a proof", json!({"op": "observe", "challenge": "c1"})),
         (
             "a run",

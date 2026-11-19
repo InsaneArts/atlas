@@ -8,6 +8,7 @@ fn owner(copy: &Token) -> Owner {
         session: Some(Key::of(Host::Codex, "one")),
         task: None,
         plan: None,
+        fixture: None,
     }
 }
 

@@ -27,6 +27,7 @@ pub mod host;
 pub mod launchd;
 pub mod lenient;
 pub mod name;
+pub mod native;
 pub mod outcomes;
 pub mod own_folder;
 pub mod process;

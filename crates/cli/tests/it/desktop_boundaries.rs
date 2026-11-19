@@ -1308,6 +1308,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: which apps the desktop has installed, and which is Atlas",
     ),
     (
+        "crates/client/src/capability/canary.rs",
+        &["verify"],
+        "owner: the native Save/Open check, run on the desktop it is asked of",
+    ),
+    (
         "crates/client/src/client.rs",
         &[
             "Client::session_proof",

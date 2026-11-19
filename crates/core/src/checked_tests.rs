@@ -215,3 +215,110 @@ fn a_private_folder_is_made_through_its_parent_and_removed_only_when_made() {
     let error = private_folder(&path).unwrap_err();
     assert!(error.error.contains("private (0700)"), "{error}");
 }
+
+#[test]
+fn an_entry_of_an_own_folder_is_read_through_its_descriptor_within_a_bound() {
+    let (_dir, home) = home();
+    let canary = home.join("canary");
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::write(canary.join("state.json"), b"{\"ok\":true}").unwrap();
+
+    let folder = own_folder(&canary).unwrap();
+
+    assert_eq!(
+        folder
+            .read_entry(OsStr::new("state.json"), 11)
+            .unwrap()
+            .as_deref(),
+        Some(&b"{\"ok\":true}"[..])
+    );
+    assert!(folder.read_entry(OsStr::new("state.json"), 10).is_err());
+    assert_eq!(folder.read_entry(OsStr::new("missing"), 64).unwrap(), None);
+}
+
+#[test]
+fn an_own_folder_replaced_by_a_link_after_it_was_opened_is_still_the_one_read() {
+    let (_dir, home) = home();
+    let (canary, elsewhere) = (home.join("canary"), home.join("elsewhere"));
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::write(canary.join("state.json"), b"ours").unwrap();
+    std::fs::write(elsewhere.join("state.json"), b"theirs").unwrap();
+
+    let folder = own_folder(&canary).unwrap();
+    std::fs::rename(&canary, home.join("moved")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &canary).unwrap();
+
+    assert_eq!(
+        folder
+            .read_entry(OsStr::new("state.json"), 64)
+            .unwrap()
+            .as_deref(),
+        Some(&b"ours"[..])
+    );
+    let error = own_folder(&canary).unwrap_err();
+    assert!(credentials(&error), "{error}");
+}
+
+#[test]
+fn an_entry_that_is_a_link_a_fifo_or_a_folder_is_never_read() {
+    let (_dir, home) = home();
+    let canary = home.join("canary");
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::write(home.join("outside.json"), b"outside").unwrap();
+    std::os::unix::fs::symlink(home.join("outside.json"), canary.join("state.json")).unwrap();
+    nix::unistd::mkfifo(&canary.join("events.jsonl"), Mode::S_IRWXU).unwrap();
+    std::fs::create_dir(canary.join("fixture.log")).unwrap();
+
+    let folder = own_folder(&canary).unwrap();
+
+    for name in ["state.json", "events.jsonl", "fixture.log"] {
+        let error = folder.read_entry(OsStr::new(name), 64).unwrap_err();
+        assert!(credentials(&error), "{name}: {error}");
+    }
+    let link = folder.read_entry(OsStr::new("state.json"), 64).unwrap_err();
+    assert!(link.error.contains("a link"), "{link}");
+    let fifo = folder
+        .read_entry(OsStr::new("events.jsonl"), 64)
+        .unwrap_err();
+    assert!(fifo.error.contains("not a plain file"), "{fifo}");
+}
+
+#[test]
+fn an_own_folder_is_refused_when_shared_by_its_mode_or_not_this_accounts() {
+    let (_dir, home) = home();
+    for mode in [0o775, 0o757, 0o1777] {
+        let shared = home.join(format!("shared-{mode:o}"));
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(mode)).unwrap();
+
+        let error = own_folder(&shared).unwrap_err();
+        assert!(credentials(&error), "{mode:o}: {error}");
+    }
+    let file = home.join("file");
+    std::fs::write(&file, b"x").unwrap();
+
+    let roots = own_folder(Path::new("/usr")).unwrap_err();
+    let plain = own_folder(&file).unwrap_err();
+
+    assert!(roots.error.contains("another account"), "{roots}");
+    assert!(plain.error.contains("not a folder"), "{plain}");
+}
+
+#[test]
+fn only_a_plain_file_beside_an_own_folders_descriptor_is_a_file_it_holds() {
+    let (_dir, home) = home();
+    let canary = home.join("canary");
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::write(canary.join("atlas-fixture.txt"), b"saved").unwrap();
+    std::os::unix::fs::symlink(canary.join("atlas-fixture.txt"), canary.join("linked.txt"))
+        .unwrap();
+    std::fs::create_dir(canary.join("folder.txt")).unwrap();
+
+    let folder = own_folder(&canary).unwrap();
+
+    assert!(folder.holds_file(OsStr::new("atlas-fixture.txt")).unwrap());
+    for name in ["linked.txt", "folder.txt", "missing.txt"] {
+        assert!(!folder.holds_file(OsStr::new(name)).unwrap(), "{name}");
+    }
+}

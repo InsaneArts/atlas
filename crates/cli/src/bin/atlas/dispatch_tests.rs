@@ -1647,6 +1647,61 @@ async fn a_stopped_vm_is_started_by_a_jobs_start_by_open_and_by_an_agents_input(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_native_on_a_vm_runs_in_one_proof_and_starts_it_when_needed() {
+    for power in ["running", "stopped"] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+        keeper.runner.set_power(power);
+        // A guest that cannot check, so the check ends at its proof.
+        *keeper.observing.lock().unwrap() = Some(|answer| {
+            let older: Vec<Value> = answer["declared"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|name| **name != "native-check-v1")
+                .cloned()
+                .collect();
+            answer["declared"]["capabilities"] = json!(older);
+            answer["status"]["hello"]["daemon"]["capabilities"] = json!(older);
+        });
+        let fixture = dir.path().join("DesktopFixture");
+        std::fs::write(&fixture, b"fixture").unwrap();
+        let config = dir.path().join("settings.toml");
+        let command = parse(&["verify-native", "--fixture", fixture.to_str().unwrap()])
+            .unwrap()
+            .command
+            .unwrap();
+        let before = keeper.asked_for("observe").len();
+
+        let refused = executed(&config, command, &client).await.unwrap_err();
+
+        assert_eq!(refused.code, Code::Update, "{power}: {refused:?}");
+        assert_eq!(
+            refused.error,
+            "work's Atlas is from an older build and cannot check native Save and Open."
+        );
+        let starts = keeper.runner.asked_for("start").len();
+        assert_eq!(starts, usize::from(power == "stopped"), "{power}");
+        assert_eq!(
+            refused.details.get("started").is_some(),
+            power == "stopped",
+            "{power}: {refused:?}"
+        );
+        if power == "running" {
+            assert_eq!(
+                keeper.asked_for("observe").len() - before,
+                1,
+                "one proof for the whole check"
+            );
+        }
+        assert!(
+            keeper.asked_for("stage").is_empty() && keeper.asked_for("change").is_empty(),
+            "{power}: nothing copied or run"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_vms_status_and_doctor_say_it_is_stopped_and_what_starts_it() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());

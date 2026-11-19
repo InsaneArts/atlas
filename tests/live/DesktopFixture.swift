@@ -132,6 +132,10 @@ struct PanelObservation: Encodable {
     var controls: [ObservedControl] = []
     var diagnostics: [String: Int32] = [:]
     var error: String?
+    // The challenge a check handed this scan, and the session it names,
+    // copied back so only this scan answers it.
+    var challenge: String?
+    var epoch: String?
 }
 
 // This child reads only its fixture parent's AX hierarchy. It never activates
@@ -174,13 +178,31 @@ final class PanelObserver {
         return state
     }
 
+    // A check that asks for a fresh scan writes its challenge here; a check
+    // that does not leaves none, and the scan carries none.
+    private func handedChallenge() -> (challenge: String, epoch: String)? {
+        let path = directory.appendingPathComponent("challenge.json")
+        guard let file = try? FileHandle(forReadingFrom: path) else { return nil }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: 4097), data.count <= 4096,
+            let handed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let challenge = handed["challenge"] as? String, let epoch = handed["epoch"] as? String
+        else { return nil }
+        return (challenge, epoch)
+    }
+
     func run() throws {
         while getppid() == parentPID {
+            // Read before the scan begins, so a scan never answers a challenge
+            // handed after it started.
+            let handed = handedChallenge()
             let state = try fixtureState()
             let panel = state["panel"] as? [String: Any]
             var observation = PanelObservation(
                 parentPID: parentPID, fixtureID: fixtureID,
                 attemptID: panel?["attemptID"] as? String, kind: panel?["kind"] as? String)
+            observation.challenge = handed?.challenge
+            observation.epoch = handed?.epoch
             if observation.trusted, observation.attemptID != nil {
                 inspect(&observation)
             }

@@ -377,11 +377,30 @@ requests! { request =>
         names: installed_names(request)?,
         pin: pin(request)?,
     }),
+    /// A native Save/Open check's read of the canary folder `directory`:
+    /// its files, the fixture's scan of a panel that answers a challenge, or
+    /// what the paths the fixture said name in it.
+    "native" Native { action: crate::native::Action, directory: String, pin: SessionPin } =
+        Ok(Request::Native {
+            action: native_action(request)?,
+            directory: request["directory"]
+                .as_str()
+                .filter(|directory| crate::native::canary(directory))
+                .ok_or_else(|| bad(crate::native::NOT_CANARY))?
+                .to_owned(),
+            pin: pin(request)?.ok_or_else(|| bad("native requires a session pin"))?,
+        }),
     /// The copies a machine desktop keeps: the one `copy` names, or a page
     /// of them in order, after the one `after` names.
     "copies" Copies { copy: Option<Token>, after: Option<Token> } = Ok(Request::Copies {
         copy: token(request, "copy")?,
         after: token(request, "after")?,
+    }),
+    /// What a machine desktop's placed copy `copy` holds now, read afresh
+    /// with no link followed.
+    "copy-contents" CopyContents { copy: Token } = Ok(Request::CopyContents {
+        copy: token(request, "copy")?
+            .ok_or_else(|| bad("copy-contents requires the \"copy\" it reads"))?,
     }),
     /// Remove a machine desktop's copy `copy`, while it is still the folder
     /// `node` says, as `dev:ino`.
@@ -469,7 +488,9 @@ impl Request {
             Self::Outcome { .. } => (Any, None, Read("outcome")),
             Self::Leftovers => (Any, None, Read("leftovers")),
             Self::Installed { pin, .. } => (Any, *pin, Read("installed")),
+            Self::Native { pin, .. } => (Hidden, Some(*pin), Read("native")),
             Self::Copies { .. } => (Any, None, Read("copies")),
+            Self::CopyContents { .. } => (Any, None, Read("copy-contents")),
             Self::RemoveCopy { .. } => (Any, None, Mutation("remove-copy")),
             Self::Update { .. } => (Any, None, Mutation("update")),
         };
@@ -676,6 +697,51 @@ fn argv(request: &Value, operation: &str) -> Result<Vec<String>, Value> {
         return Err(empty());
     }
     Ok(argv)
+}
+
+/// What a `native` read asks: its files, a scan of the attempt it names,
+/// asked with a challenge shaped as one of Atlas's tokens, or what the
+/// paths it names come to in the folder.
+fn native_action(request: &Value) -> Result<crate::native::Action, Value> {
+    match request["action"].as_str() {
+        Some("files") => Ok(crate::native::Action::Files),
+        Some("scan") => Ok(crate::native::Action::Scan {
+            attempt: request["attempt"]
+                .as_str()
+                .filter(|attempt| valid_challenge(attempt))
+                .ok_or_else(|| {
+                    bad("a native scan names its attempt in printable ASCII of 1–128 bytes")
+                })?
+                .to_owned(),
+            challenge: token(request, "challenge")?
+                .ok_or_else(|| bad("a native scan requires its \"challenge\""))?
+                .as_str()
+                .to_owned(),
+        }),
+        Some("resolve") => Ok(crate::native::Action::Resolve {
+            paths: request["paths"]
+                .as_array()
+                .filter(|paths| (1..=crate::native::MOST_PATHS).contains(&paths.len()))
+                .and_then(|paths| {
+                    paths
+                        .iter()
+                        .map(|path| {
+                            path.as_str()
+                                .filter(|path| {
+                                    path.starts_with('/')
+                                        && path.len() <= crate::native::LONGEST_PATH
+                                        && !path.contains('\0')
+                                })
+                                .map(str::to_owned)
+                        })
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    bad("a native resolve names 1 to 4 absolute paths of at most 1024 bytes")
+                })?,
+        }),
+        _ => Err(bad("native's action must be files, scan or resolve")),
+    }
 }
 
 /// The apps an `installed` read names: 1 to [`crate::apps::MOST_NAMES`]

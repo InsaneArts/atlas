@@ -764,11 +764,12 @@ impl Serving {
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
             ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, INSTALLED, JOBS,
-            LEFTOVERS, MACHINE_PROOF, MIRRORS, PICTURES, STAGE, STOP_REPORT, UPDATES,
+            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PICTURES, STAGE, STOP_REPORT, UPDATES,
         };
         match capability {
-            // Its Applications folder is read by the daemon itself.
-            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF | INSTALLED => true,
+            // Its Applications folder and a canary folder are read by the
+            // daemon itself.
+            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF | INSTALLED | NATIVE_CHECK => true,
             // What a change whose outcome is unknown came to is proven by its
             // supervisors, and the environment worker runs under one.
             LEFTOVERS | ENDED | ENVIRONMENT => self.supervising,

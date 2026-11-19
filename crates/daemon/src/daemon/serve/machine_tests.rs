@@ -5394,7 +5394,10 @@ fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_o
         Serving::default().declared(),
         [
             &atlas_session::compatibility::MACHINE[..4],
-            &[atlas_session::compatibility::INSTALLED]
+            &[
+                atlas_session::compatibility::INSTALLED,
+                atlas_session::compatibility::NATIVE_CHECK
+            ]
         ]
         .concat()
     );
@@ -5406,7 +5409,7 @@ fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_o
 
 #[test]
 fn a_machine_guest_declares_installed_v1_in_machines_order() {
-    use atlas_session::compatibility::{INSTALLED, MACHINE, PICTURES};
+    use atlas_session::compatibility::{INSTALLED, MACHINE, NATIVE_CHECK, PICTURES};
     let serving = Serving {
         pictures: true,
         ..Serving::default()
@@ -5414,10 +5417,27 @@ fn a_machine_guest_declares_installed_v1_in_machines_order() {
 
     let declared = serving.declared();
 
-    assert_eq!(MACHINE.last(), Some(&INSTALLED));
-    assert_eq!(declared[declared.len() - 2..], [PICTURES, INSTALLED]);
+    assert_eq!(MACHINE[MACHINE.len() - 2], INSTALLED);
+    assert_eq!(
+        declared[declared.len() - 3..],
+        [PICTURES, INSTALLED, NATIVE_CHECK]
+    );
     assert!(
         Serving::default().serves(INSTALLED),
+        "whatever else it serves"
+    );
+}
+
+#[test]
+fn a_machine_guest_declares_native_check_v1_last_in_machines_order() {
+    use atlas_session::compatibility::{INSTALLED, MACHINE, NATIVE_CHECK};
+
+    let declared = Serving::default().declared();
+
+    assert_eq!(MACHINE.last(), Some(&NATIVE_CHECK));
+    assert_eq!(declared[declared.len() - 2..], [INSTALLED, NATIVE_CHECK]);
+    assert!(
+        Serving::default().serves(NATIVE_CHECK),
         "whatever else it serves"
     );
 }
@@ -5456,6 +5476,50 @@ async fn an_installed_read_says_which_named_apps_are_in_the_guests_applications_
                 "Other": false, "Notes": false}}),
         "{replies:?}"
     );
+}
+
+#[tokio::test]
+async fn a_native_read_of_a_canary_folder_is_answered_in_the_session_it_was_pinned_to() {
+    use base64::Engine;
+    let canary = std::path::PathBuf::from(format!(
+        "/private/tmp/atlas-canary.{}",
+        &atlas_core::files::token()[..12]
+    ));
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::set_permissions(&canary, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    std::fs::write(canary.join("state.json"), b"{\"pid\":7}").unwrap();
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let read = |session: Value| json!({"op": "native", "action": "files", "directory": canary, "session": session});
+
+    let here = ask(
+        &desktop,
+        LaneKind::Read,
+        &read(json!({"securitySessionId": 42, "displayId": 7})),
+    )
+    .await;
+    let elsewhere = ask(
+        &desktop,
+        LaneKind::Read,
+        &read(json!({"securitySessionId": 43, "displayId": 7})),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(&canary);
+
+    let files = &here.last().unwrap()["files"];
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(files["state.json"].as_str().unwrap())
+            .unwrap(),
+        b"{\"pid\":7}",
+        "{here:?}"
+    );
+    assert_eq!(
+        elsewhere.last().unwrap()["code"],
+        "session-changed",
+        "{elsewhere:?}"
+    );
+    assert!(elsewhere.last().unwrap().get("files").is_none());
 }
 
 #[test]

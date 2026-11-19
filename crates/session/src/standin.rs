@@ -416,6 +416,25 @@ impl StandIn {
     }
 }
 
+/// A stand-in's answer to the native read `request`, by a machine guest's
+/// own code: refused as it refuses a bad one, before anything is read,
+/// else the canary folder it names read, or its fixture's scan waited for.
+pub(crate) fn native(request: &Value) -> Value {
+    let line = serde_json::to_vec(request).unwrap_or_default();
+    match atlas_core::protocol::parse(&line).map(|asked| asked.request) {
+        Ok(atlas_core::protocol::Request::Native {
+            action,
+            directory,
+            pin,
+        }) => atlas_core::native::answer(&action, &directory, pin),
+        Ok(_) => atlas_core::protocol::failure(
+            atlas_core::error::Code::BadRequest,
+            "This is not a native read.",
+        ),
+        Err(refusal) => refusal,
+    }
+}
+
 /// What one control connection's reader hands on: to the stand-in, and
 /// each numbered Stop or Resume answered on this connection alone, while
 /// its generation is live.

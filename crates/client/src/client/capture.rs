@@ -272,6 +272,23 @@ impl Client {
             .map(|(frame, _)| frame)
     }
 
+    /// [`Client::frame`] on the proof `verified`, which its command took.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to capture the screen in that proof's session.
+    pub(crate) async fn frame_in(
+        &self,
+        verified: &Verified,
+        maximum: Option<u32>,
+    ) -> Result<Frame> {
+        let size = maximum.map_or(Size::Full, Size::Longest);
+
+        self.framed(size, None, Proof::Looked(verified))
+            .await
+            .map(|(frame, _)| frame)
+    }
+
     /// A frame of the whole display, or of the crop asked for, with what the
     /// desktop says the crop shows, taken on `proof`. When it names an
     /// epoch, the desktop must still be in it when the capture starts, as

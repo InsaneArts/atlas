@@ -920,3 +920,112 @@ fn installed_names_with_a_slash_dot_dot_nul_or_too_many_are_refused_before_anyth
         assert_eq!(refusal["uncertain"], false);
     }
 }
+
+#[test]
+fn a_native_read_names_a_canary_folder_and_its_action_pinned_to_its_session() {
+    let challenge = crate::files::token();
+    let session = json!({"securitySessionId": 42, "displayId": 7});
+    let pin = SessionPin {
+        security_session_id: 42,
+        display_id: 7,
+    };
+
+    let files = parse(
+        json!({"op": "native", "action": "files", "directory": "/private/tmp/atlas-canary.Ab12Cd",
+            "session": session})
+        .to_string()
+        .as_bytes(),
+    );
+    let scan = parse(
+        json!({"op": "native", "action": "scan", "attempt": "8E3F2A10-4B7C-4D2E-9A61-3C5B7D9E0F12", "challenge": challenge,
+            "directory": "/private/tmp/atlas-canary.Ab12Cd", "session": session})
+        .to_string()
+        .as_bytes(),
+    );
+
+    assert_eq!(
+        files,
+        Ok(Request::Native {
+            action: crate::native::Action::Files,
+            directory: "/private/tmp/atlas-canary.Ab12Cd".to_owned(),
+            pin,
+        })
+    );
+    assert_eq!(
+        scan,
+        Ok(Request::Native {
+            action: crate::native::Action::Scan {
+                attempt: "8E3F2A10-4B7C-4D2E-9A61-3C5B7D9E0F12".to_owned(),
+                challenge,
+            },
+            directory: "/private/tmp/atlas-canary.Ab12Cd".to_owned(),
+            pin,
+        })
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        files.unwrap().policy().phase,
+        ConnectionPhase::Read("native")
+    );
+}
+
+#[test]
+fn a_native_read_of_a_folder_that_is_no_canary_folder_or_unpinned_is_refused_before_anything_is_read()
+ {
+    let session = json!({"securitySessionId": 42, "displayId": 7});
+    for directory in [
+        "/tmp/atlas-canary.Ab12Cd",
+        "/private/tmp/atlas-canary.",
+        "/private/tmp/atlas-canary.a-b",
+        "/private/tmp/atlas-canary.Ab/..",
+        "/private/tmp/other.Ab12Cd",
+        "/Users/Shared/atlas-canary.Ab12Cd",
+    ] {
+        let refused = parse(
+            json!({"op": "native", "action": "files", "directory": directory,
+                "session": session})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap_err();
+        assert_eq!(refused["code"], "bad-request", "{directory}: {refused}");
+    }
+    for asked in [
+        json!({"op": "native", "action": "files", "directory": "/private/tmp/atlas-canary.Ab"}),
+        json!({"op": "native", "action": "erase", "directory": "/private/tmp/atlas-canary.Ab",
+            "session": session}),
+        json!({"op": "native", "action": "scan", "attempt": "8E3F2A10-4B7C-4D2E-9A61-3C5B7D9E0F12", "challenge": "not-a-token",
+            "directory": "/private/tmp/atlas-canary.Ab", "session": session}),
+        json!({"op": "native", "action": "scan", "challenge": crate::files::token(),
+            "directory": "/private/tmp/atlas-canary.Ab", "session": session}),
+        json!({"op": "native", "action": "resolve", "paths": [],
+            "directory": "/private/tmp/atlas-canary.Ab", "session": session}),
+        json!({"op": "native", "action": "resolve", "paths": ["relative.txt"],
+            "directory": "/private/tmp/atlas-canary.Ab", "session": session}),
+        json!({"op": "native", "action": "resolve", "paths": ["/a", "/b", "/c", "/d", "/e"],
+            "directory": "/private/tmp/atlas-canary.Ab", "session": session}),
+    ] {
+        let refused = parse(asked.to_string().as_bytes()).unwrap_err();
+        assert_eq!(refused["code"], "bad-request", "{asked}: {refused}");
+    }
+}
+
+#[test]
+fn a_copy_contents_read_names_the_one_copy_it_reads() {
+    let copy = crate::files::Token::new();
+
+    let asked = parse(
+        json!({"op": "copy-contents", "copy": copy})
+            .to_string()
+            .as_bytes(),
+    );
+    let unnamed = parse(json!({"op": "copy-contents"}).to_string().as_bytes()).unwrap_err();
+
+    assert_eq!(asked, Ok(Request::CopyContents { copy }));
+    assert_eq!(unnamed["code"], "bad-request", "{unnamed}");
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        asked.unwrap().policy().phase,
+        ConnectionPhase::Read("copy-contents")
+    );
+}

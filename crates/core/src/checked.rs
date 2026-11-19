@@ -169,6 +169,69 @@ impl Folder {
         }
     }
 
+    /// The plain file `name` directly in this folder, read through the
+    /// folder's own descriptor with no link followed, up to `limit` bytes;
+    /// none when no entry has that name. Whatever now holds this folder's
+    /// path is never read: the entry is the one in the folder opened.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a link, a FIFO, a socket, a device or a folder in its place,
+    /// a file another account owns or may change, and one larger than
+    /// `limit`; returns the I/O error of reading it.
+    pub fn read_entry(&self, name: &OsStr, limit: u64) -> Result<Option<Vec<u8>>> {
+        let opened = match openat(
+            &self.dir,
+            c_name(name)?.as_c_str(),
+            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(opened) => opened,
+            Err(nix::errno::Errno::ENOENT) => return Ok(None),
+            Err(error) => return Err(open_error(Intent::Read, &self.path, error, "in its place")),
+        };
+        let facts = facts_of(&opened)?;
+        if !facts.is_file() {
+            return Err(refused(Intent::Read, "it is not a plain file"));
+        }
+        if !facts.owned_by(this_uid()) {
+            return Err(refused(Intent::Read, "it belongs to another account"));
+        }
+        terminal_holds(&opened, facts, Intent::Read)?;
+        let bytes = crate::files::read_up_to(File::from(opened), limit.saturating_add(1))?;
+        if bytes.len() as u64 > limit {
+            return Err(problem(format!(
+                "{} in {} holds more than {limit} bytes",
+                name.to_string_lossy(),
+                self.path.display()
+            )));
+        }
+        Ok(Some(bytes))
+    }
+
+    /// Whether the entry `name` in this folder is a plain file now, looked
+    /// at beside the folder's descriptor without following a link: a link,
+    /// a folder or anything else of that name is not, nor is no entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of looking at it.
+    pub fn holds_file(&self, name: &OsStr) -> Result<bool> {
+        match fstatat(
+            &self.dir,
+            c_name(name)?.as_c_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => Ok(Facts::from_stat(&stat).is_file()),
+            Err(nix::errno::Errno::ENOENT) => Ok(false),
+            Err(error) => Err(problem(format!(
+                "Could not look at {} in {}: {error}",
+                name.to_string_lossy(),
+                self.path.display()
+            ))),
+        }
+    }
+
     /// Remove the entry `name` from this folder, through its descriptor; an
     /// entry that is not there is already gone.
     ///
@@ -355,6 +418,35 @@ pub fn folder(path: &Path) -> Result<Folder> {
     }
     terminal_holds(&fd, facts, Intent::Write)?;
     let dir = Dir::from_fd(fd).map_err(|error| refused_io(Intent::Write, &resolved, error))?;
+    Ok(Folder {
+        dir,
+        path: resolved,
+    })
+}
+
+/// Open the folder `path` to read from and write into, as [`folder`], and
+/// only while it is this account's own, not root's, and neither its group
+/// nor any other account may write to it by its mode: a folder another
+/// process of this account made for its own files.
+///
+/// # Errors
+///
+/// As [`folder`], and refuses a folder another account owns, root among
+/// them, or that its group or others may write to.
+pub fn own_folder(path: &Path) -> Result<Folder> {
+    let (resolved, fd) = open_source(path, Intent::Read)?;
+    let facts = facts_of(&fd)?;
+    if !facts.is_dir() {
+        return Err(refused(Intent::Read, "it is not a folder"));
+    }
+    if facts.uid != this_uid() {
+        return Err(refused(Intent::Read, "it belongs to another account"));
+    }
+    if facts.mode & 0o022 != 0 {
+        return Err(refused(Intent::Read, "its group or others may change it"));
+    }
+    terminal_holds(&fd, facts, Intent::Read)?;
+    let dir = Dir::from_fd(fd).map_err(|error| refused_io(Intent::Read, &resolved, error))?;
     Ok(Folder {
         dir,
         path: resolved,

@@ -102,6 +102,34 @@ impl StandIn {
         json!({"ok": true, "op": "copies", "copies": listed, "next": null, "unknown": []})
     }
 
+    /// What the copy `request` names holds now, as a guest reads it afresh:
+    /// each file's size and SHA-256 from the bytes it keeps, in the
+    /// manifest's order; `null` entries when it keeps no such copy, or its
+    /// bytes no longer cover what its manifest says.
+    pub(super) fn copy_contents(&self, request: &Value) -> Value {
+        let Some(token) = request["copy"].as_str().and_then(Token::parse) else {
+            return json!({"ok": false, "code": "bad-request",
+                "error": "copy-contents requires the \"copy\" it reads"});
+        };
+        let entries = self.copies().get(&token).and_then(|copy| {
+            let mut offset = 0usize;
+            copy.snapshot
+                .entries
+                .iter()
+                .map(|entry| {
+                    let mut entry = entry.clone();
+                    if let atlas_core::stage::Kind::File { size, sha256 } = &mut entry.kind {
+                        let end = offset.checked_add(usize::try_from(*size).ok()?)?;
+                        *sha256 = atlas_core::digest::bytes_sha256(copy.contents.get(offset..end)?);
+                        offset = end;
+                    }
+                    Some(entry)
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+        json!({"ok": true, "op": "copy-contents", "copy": token, "entries": entries})
+    }
+
     /// What removing the copy `request` names comes to, as a guest removes
     /// it: only while it is still the folder its node says and nothing runs
     /// from it.

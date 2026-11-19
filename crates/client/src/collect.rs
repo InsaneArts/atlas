@@ -14,7 +14,7 @@ mod scavenge;
 pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
-    client::{Client, Pinned},
+    client::{Client, Pinned, Verified},
     link::Link,
     task::{Task, record::OutputEntry, store::Store},
 };
@@ -99,12 +99,30 @@ impl Failure {
 /// completion publishes a collected copy.
 pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
     // What an agent does about a VM's refusal names the VM, never the helper.
-    let collected = collect_from(client, files, max_size).await;
+    let collected = collect_from(client, files, max_size, None).await;
     client.advised_on_vm_for(collected, "Files and Folders")
 }
 
-/// [`collect`], as the desktop answered it.
-async fn collect_from(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
+/// [`collect`] from a VM on the proof `verified` its command took, rather
+/// than one of its own.
+pub(crate) async fn collect_in(
+    client: &Client,
+    verified: &Verified,
+    files: &[String],
+    max_size: u64,
+) -> Result<Value> {
+    let collected = collect_from(client, files, max_size, Some(verified)).await;
+    client.advised_on_vm_for(collected, "Files and Folders")
+}
+
+/// [`collect`], as the desktop answered it, from a VM on `proved` when its
+/// command took that proof.
+async fn collect_from(
+    client: &Client,
+    files: &[String],
+    max_size: u64,
+    proved: Option<&Verified>,
+) -> Result<Value> {
     let started = Instant::now();
     if files.is_empty() || files.len() > MAX_FILES {
         return Err(Error::new(Code::Usage, "Give 1 to 16 files to collect"));
@@ -128,8 +146,15 @@ async fn collect_from(client: &Client, files: &[String], max_size: u64) -> Resul
     }
 
     if on_vm {
-        let verified = client.verify_vm_reading().await?;
-        client.generation_offering(&verified, PICTURES, |name| {
+        let fresh;
+        let verified = match proved {
+            Some(verified) => verified,
+            None => {
+                fresh = client.verify_vm_reading().await?;
+                &fresh
+            }
+        };
+        client.generation_offering(verified, PICTURES, |name| {
             format!("{name}'s Atlas is from an older build that hands this Mac no files.")
         })?;
         let pinned = verified.machine().ok_or_else(|| client.unreachable())?;

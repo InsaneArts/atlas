@@ -796,7 +796,7 @@ async fn a_change_the_stand_in_carried_out_is_named_at_each_hello_until_the_stat
 }
 
 #[tokio::test]
-async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_installed_last() {
+async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_native_check_last() {
     let link = Link::new(Conditions::default());
     let (standin, station) = (
         StandIn::new(desktop(), Duration::ZERO),
@@ -817,7 +817,8 @@ async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_instal
         last,
         [
             crate::compatibility::PICTURES,
-            crate::compatibility::INSTALLED
+            crate::compatibility::INSTALLED,
+            crate::compatibility::NATIVE_CHECK
         ]
     );
 }
@@ -843,5 +844,26 @@ fn a_stand_ins_installed_read_is_answered_by_a_machine_guests_own_code() {
         firefox["installed"],
         serde_json::json!({"Google Chrome": false, "Firefox": true})
     );
+    assert_eq!(refused["code"], "bad-request", "{refused}");
+}
+
+#[test]
+fn a_stand_ins_native_read_is_answered_by_a_machine_guests_own_code() {
+    let canary = std::path::PathBuf::from(format!(
+        "/private/tmp/atlas-canary.{}",
+        &atlas_core::files::token()[..12]
+    ));
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::set_permissions(&canary, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    std::fs::write(canary.join("fixture.log"), b"launched").unwrap();
+    let session = serde_json::json!({"securitySessionId": 42, "displayId": 7});
+
+    let read = super::native(&serde_json::json!({"op": "native", "action": "files",
+        "directory": canary, "session": session}));
+    let refused = super::native(&serde_json::json!({"op": "native", "action": "files",
+        "directory": "/private/tmp/elsewhere", "session": session}));
+    let _ = std::fs::remove_dir_all(&canary);
+
+    assert_eq!(read["files"]["fixture.log"], "bGF1bmNoZWQ=", "{read}");
     assert_eq!(refused["code"], "bad-request", "{refused}");
 }

@@ -28,9 +28,10 @@ const FOLDER: &str = "copies";
 const LONGEST: u64 = 4096;
 
 /// Who one copy was made for: the host session of the command that staged
-/// it, and its task, or none for a command without one; and the frozen
-/// plan whose payloads it holds, when it holds a plan's, which only that
-/// plan's discard removes.
+/// it, and its task, or none for a command without one; the frozen plan
+/// whose payloads it holds, when it holds a plan's, which only that plan's
+/// discard removes; and the digest of the native check's fixture it holds,
+/// when it holds that, which only a check of another fixture replaces.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Owner {
@@ -39,6 +40,8 @@ pub(crate) struct Owner {
     pub(crate) task: Option<Key>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plan: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fixture: Option<String>,
 }
 
 impl Owner {

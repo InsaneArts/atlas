@@ -1258,6 +1258,23 @@ pub(super) async fn answer(
                     )
                 })
         }
+        // The helper login's check reads its folder from the station's
+        // side: refused before the folder is opened.
+        Request::Native { .. } if asker.gate.is_none() => failure(
+            Code::Platform,
+            "Only a machine desktop's daemon reads a native check's folder",
+        ),
+        // The canary folder is opened once and read beside that descriptor;
+        // a scan may wait for the fixture, off the runtime.
+        Request::Native {
+            action,
+            directory,
+            pin,
+        } => tokio::task::spawn_blocking(move || {
+            atlas_core::native::answer(&action, &directory, pin)
+        })
+        .await
+        .unwrap_or_else(|_| failure(Code::Native, "The native check's folder could not be read.")),
         Request::Copies { copy, after } => match daemon.stages.clone() {
             // The helper login's copies are the station's, in its shared folder.
             None => failure(
@@ -1275,6 +1292,18 @@ pub(super) async fn answer(
             })
             .await
             .unwrap_or_else(|_| failure(Code::Io, "The desktop's copies could not be listed")),
+        },
+        Request::CopyContents { copy } => match daemon.stages.clone() {
+            None => failure(
+                Code::Platform,
+                "Only a machine desktop keeps copies of its own",
+            ),
+            Some(stages) => tokio::task::spawn_blocking(move || match stages.root() {
+                Some(root) => crate::machine::stage::copies::contents(root, &stages, &copy),
+                None => failure(Code::State, "The desktop's folder for copies is not ready"),
+            })
+            .await
+            .unwrap_or_else(|_| failure(Code::Io, "The desktop's copy could not be read")),
         },
         // A machine desktop removes a copy on the lane of its change, before
         // here; the helper login has none to remove.

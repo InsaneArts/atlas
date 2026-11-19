@@ -2238,6 +2238,20 @@ async fn the_helper_login_never_says_which_apps_it_has() {
 }
 
 #[tokio::test]
+async fn the_helper_login_never_reads_a_native_checks_folder() {
+    let reply = answered_elsewhere(
+        r#"{"op":"native","action":"files","directory":"/private/tmp/atlas-canary.Ab12Cd","session":{"securitySessionId":42,"displayId":7}}"#,
+    )
+    .await;
+
+    assert_eq!(
+        reply,
+        json!({"ok": false, "code": "platform", "uncertain": false,
+            "error": "Only a machine desktop's daemon reads a native check's folder"})
+    );
+}
+
+#[tokio::test]
 async fn a_resume_never_waits_on_a_recovery_already_under_way() {
     let daemon = daemon(false);
     let _recovering = daemon.keepers.recovering.lock().await;

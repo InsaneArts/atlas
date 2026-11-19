@@ -151,7 +151,19 @@ where
             }
         }
         LaneKind::Read if request["op"] == "copies" => stand_in.inventory(&request),
+        LaneKind::Read if request["op"] == "copy-contents" => stand_in.copy_contents(&request),
         LaneKind::Read if request["op"] == "installed" => stand_in.installed(&request),
+        // A scan may wait for the fixture, off the runtime.
+        LaneKind::Read if request["op"] == "native" => {
+            tokio::task::spawn_blocking(move || super::native(&request))
+                .await
+                .unwrap_or_else(|_| {
+                    atlas_core::protocol::failure(
+                        atlas_core::error::Code::Native,
+                        "The native check's folder could not be read.",
+                    )
+                })
+        }
         LaneKind::Read if request["op"] == "outcome" => {
             let kept = request["change"]
                 .as_str()
