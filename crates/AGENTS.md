@@ -9,7 +9,7 @@ layers above it in this list:
 | `core`    | `atlas-core`    | names, errors, time, wire types, observations, install location     |
 | `session` | `atlas-session` | authenticated, encrypted connections between a station and desktops |
 | `native`  | `atlas-native`  | macOS calls and input execution                                     |
-| `daemon`  | `atlas-daemon`  | the helper daemon, and the helper's layout and launchd actions      |
+| `daemon`  | `atlas-daemon`  | the desktop's daemon: the helper's, and a guest's in machine mode   |
 | `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases        |
 | `client`  | `atlas-client`  | the controller side: verified requests and the work built on them   |
 | `agents`  | `atlas-agents`  | connecting coding agents: plugins, project sections and the guide   |
@@ -75,8 +75,13 @@ that layer's crate. Shipped builds never carry the feature. `cargo test` does bu
 ## Desktop kinds
 
 A desktop is where agents' apps run; `core`'s `desktop::Kind` names each kind.
-Today there is one, `user`: a hidden user on this Mac, which people know as
-Second Login. Each kind's code lives in one module per target, at its root:
+Today there are two: `user`, a hidden user on this Mac that people know as
+Second Login, and `vm`, a macOS VM on this Mac that Atlas VM runs. A VM is a
+machine desktop: it shares nothing with this Mac and is reached only through
+its session keeper (`client/src/vm/keeper`). Its code is `vm.rs` in `core` and
+`vm.rs` and `vm/` in `client`; its guest is machine mode in `daemon`
+(`machine/`, `daemon/serve/machine/`).
+Each kind's code lives in one module per target, at its root:
 `user.rs` and `user/` in `core`, `daemon`, `client`, `cli`'s library and
 `cli/src/bin/atlas`. A root declares its children, which hold that desktop's
 complete operations, grouped by domain; `core`'s also holds `User` and its
@@ -122,8 +127,9 @@ helper-free examples for pure validation. Every ignored result needs a concrete
 best-effort, receiver-gone or retained-recovery reason. Prove every index locally
 or use checked access. Do not replace useful test assertions with silent defaults.
 
-Keep UID, graphical-session, off-console and exact display-epoch guards. Input
-goes only to the session event tap. Normal macOS consent and the same Developer
+Keep UID, graphical-session, off-console and exact display-epoch guards. A
+machine desktop's guard is `require_machine`, never a loosened `require_hidden`.
+Input goes only to the session event tap. Normal macOS consent and the same Developer
 ID identity remain mandatory. Never modify TCC or use a global HID fallback.
 Unsafe code stays denied; prefer safe bindings, and give every necessary local
 allowance its reason and every unsafe block its `SAFETY` explanation.
@@ -136,7 +142,8 @@ to the owner. Isolate a complete slow operation from runtime workers.
 
 Tests name outcomes as sentences. Use barriers, readiness messages and controlled
 time rather than sleeps to order ordinary tests. Real-child tests may use an
-outer watchdog. Unit tests and custom views are not native-helper evidence.
+outer watchdog. Tests never run a real `atlas stop`.
+Unit tests and custom views are not native-helper evidence.
 Coordinate helper ownership before live work and physical lock, sleep or user
 switches with the person. Check installed hashes and the running service's identity.
 
@@ -244,7 +251,9 @@ helper identity through a production default just to simplify fixtures.
 
 Choose its owner, key, model and local `Records` policy, then implement read,
 write, removal, producer/consumer, retention and recovery integration. Reuse
-`core/src/record_folder.rs`. Decide missing, corrupt, future, write-failure and
+`core/src/record_folder.rs`. Atlas's own records go through `core::files`;
+`core::checked` is for paths an agent names.
+Decide missing, corrupt, future, write-failure and
 durability behavior before effects. Retention hooks and privacy projections
 require explicit review; the compiler cannot prove them. Test crash/restart and
 preservation of unknown ownership. Keep recovery records separate from public replies.

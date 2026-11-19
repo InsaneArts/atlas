@@ -140,6 +140,7 @@ fn the_skill_core_keeps_every_rule_an_agent_needs_from_the_start() {
         "atlas job start",
         "atlas collect",
         "check it, then `atlas cleanup --apply` stops its jobs",
+        "A command acts on the one its reply names; pass `--desktop NAME` to choose another.",
     ] {
         assert!(core.contains(rule), "{rule}");
     }

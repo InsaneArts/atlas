@@ -280,6 +280,20 @@ fn the_project_section_lets_a_loaded_skill_stand_for_the_guide() {
 }
 
 #[test]
+fn the_project_section_says_a_command_acts_on_the_desktop_its_reply_names() {
+    let section = PROJECT_SECTION
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        section.contains(
+            "A command acts on the one its reply names; pass `--desktop NAME` to choose another."
+        ),
+        "{section}"
+    );
+}
+
+#[test]
 fn an_instruction_file_linked_into_atlas_own_folder_is_refused_and_its_target_untouched() {
     // A file inside Atlas's own folder: a temporary one of this test's,
     // removed after, wherever that folder really is.

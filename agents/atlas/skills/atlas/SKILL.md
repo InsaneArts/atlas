@@ -15,18 +15,18 @@ and type while the person uses their desktop. If `atlas` is missing or
   copy files in, clean up.
 - Never use sudo, type a password, answer a permission prompt, change privacy
   settings, or copy credentials, keychains or tokens into the helper.
-- Never set `ATLAS_ACTOR` or act as the person: only they take control or
-  resume agents.
+- Never set `ATLAS_ACTOR` or act as the person.
 - Ask the person before `atlas switch` or anything that locks, sleeps or
   logs out; run `atlas logout` only when they ask.
-- Never repeat an action whose outcome is unknown.
 - Never claim a change works on screen without a screenshot that shows it.
+- Atlas may have more than one desktop. A command acts on the one its reply
+  names; pass `--desktop NAME` to choose another.
 
 ## Reading output
 
 Commands print compact JSON when their output is not a terminal and exit
 non-zero on failure; then read both stdout and stderr. A failure has a
-`code`, an `error` and a short `next`. Chain steps with `&&`, never `;`, `|| true` or
+`code`, an `error` and a `next`. Chain steps with `&&`, never `;`, `|| true` or
 `>/dev/null`: those hide failures and `uncertain` replies. Wait with
 `atlas wait`, not `sleep`.
 
@@ -141,8 +141,8 @@ someone's unsaved work. If it is in your way, tell the person.
 
 ## Report
 
-Say briefly what you did and how you checked it, with the screenshot paths
-as evidence, and what you could not check and why (see Limits).
+Say briefly what you did, how you checked it (the screenshot paths), what
+you could not check and why (see Limits).
 
 ## References
 

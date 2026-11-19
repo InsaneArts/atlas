@@ -20,3 +20,5 @@ and test apps without touching my desktop, windows, keyboard or mouse.
 - Never test on my own desktop and never change privacy permissions. If an
   action's outcome is unknown, never repeat it: take a screenshot, run
   `atlas restart` only if that action was yours, look again, and tell me.
+- Atlas may have more than one desktop. A command acts on the one its reply
+  names; pass `--desktop NAME` to choose another.

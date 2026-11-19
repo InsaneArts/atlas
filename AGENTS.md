@@ -11,6 +11,9 @@
   desktop. On a VM desktop they belong to its guest; Atlas VM, each VM's
   runner and its launchd agent, runs in the person's own account.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.
+  A VM desktop keeps the machine proof in place of off-console: its paired
+  guest, in its own VM, on its own console, by exact epoch and a fresh
+  challenge.
   Post only to the session event tap; never fall back to global HID input.
 - Use normal macOS consent. Do not modify TCC. The helper daemon is Atlas's
   own Developer ID-signed app, whose consent persists across updates signed by
@@ -18,6 +21,11 @@
   input executable is a separate process.
 - Cancel ownership independently of event execution. Retain controller exclusion
   through cleanup; keep every unacknowledged mutation pending until recovery.
+  On a VM desktop, each pending change names who carries it out (its guest,
+  Atlas VM or the station), and only that one's answer clears it.
+- A VM path checks only capability names in
+  atlas_session::compatibility::MACHINE, and updates a guest only to its own
+  station's build.
 - Public documentation lives in docs/. Preserve investigation evidence in
   internal/, runs/, local configuration and archived experiments, which stay
   untracked. Keep the remote focused on maintained source.
@@ -36,5 +44,6 @@
   A view draws its state and sends events. Use tokens, never literal sizes;
   one type per file; one chained call per line; sentence-named tests.
 - Unit checks are not desktop evidence. Exercise changed input behavior against
-  the real helper and distinguish native windows/dialogs from custom test views.
+  the real helper, or a real VM's guest for VM paths, and distinguish native
+  windows/dialogs from custom test views.
 - Coordinate physical lock, sleep and user-switch transitions with the person.
