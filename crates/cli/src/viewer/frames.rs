@@ -109,15 +109,16 @@ impl Viewer {
         self.frame_of(&self.client()).await
     }
 
-    /// [`Viewer::frame`] of `client`'s helper, whichever the settings name
-    /// by the time it is read: a caller that checked that helper's privacy
-    /// is shown that helper's screen, never another's. A VM's live picture
-    /// is not shown here, before anything is asked of it.
+    /// [`Viewer::frame`] of `client`'s desktop, whichever the settings name
+    /// by the time it is read: a caller that checked that desktop's privacy
+    /// is shown that desktop's screen, never another's. A VM's is shown
+    /// once it is added and its keeper gives live pictures, each picture
+    /// taken between two proofs of it.
     pub(super) async fn frame_of(
         &self,
         client: &Arc<atlas_client::client::Client>,
     ) -> Result<(String, Arc<Frame>)> {
-        super::shown_in_window(client)?;
+        client.live_window_served().await?;
         let until = tokio::time::Instant::now() + READ_DEADLINE;
 
         loop {
@@ -194,9 +195,14 @@ impl Viewer {
             .map(|(_, visible)| *visible);
         controller.still_visible(admitted)?;
         if under != Some(admitted) {
+            let whose = if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+                format!("{}'s", client.selected.name)
+            } else {
+                "The helper's".to_owned()
+            };
             return Err(Error::new(
                 Code::Busy,
-                "The helper's screen changed privacy since this picture was taken. Try again.",
+                format!("{whose} screen changed privacy since this picture was taken. Try again."),
             )
             .held_by(atlas_core::error::Holder::Person));
         }
@@ -209,7 +215,7 @@ impl Viewer {
         &self,
         client: &Arc<atlas_client::client::Client>,
     ) -> Result<(String, Arc<Frame>)> {
-        let current = client.identity().await?.epoch;
+        let current = client.looking_identity().await?.epoch;
         let revision = {
             let mut frames = self.frames.lock().await;
             frames

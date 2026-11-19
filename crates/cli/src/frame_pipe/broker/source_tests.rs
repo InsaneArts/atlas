@@ -375,3 +375,55 @@ async fn a_picture_is_marked_with_the_privacy_it_was_read_under() {
     assert_ne!(after.visible, Some(before));
     handle.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_withheld_lane_is_said_and_reopened_with_backoff() {
+    use atlas_client::test_support::{TAKEN_OPEN, vm_through_keeper};
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = vm_through_keeper(directory.path());
+    let mut live = Live::new(Arc::new(client), 640, CaptureBackend::CoreGraphics);
+    let budget = Budget::new(atlas_core::frame_pipe::budget::BROKER_PIXELS);
+    let open = |window: (&'static str, u64)| *keeper.window.lock().unwrap() = window;
+
+    let shown = live.acquire(&budget).await.unwrap();
+    assert!(!shown.pixels.as_slice().contains(&TAKEN_OPEN));
+    open(("open", 1));
+    assert_eq!(
+        live.acquire(&budget).await.err(),
+        Some(Reason::Hidden),
+        "the frame taken while the window was open is withheld, and why is said"
+    );
+
+    let proofs = keeper.asked_for("observe").len();
+    let (began, mut asked) = (Instant::now(), 0);
+    while began.elapsed() < Duration::from_millis(1200) {
+        assert_eq!(live.acquire(&budget).await.err(), Some(Reason::Hidden));
+        asked += 1;
+        tokio::time::sleep(CADENCE).await;
+    }
+    let reopened = keeper.asked_for("observe").len() - proofs;
+    assert!(asked >= 15, "asked {asked} times");
+    assert!(
+        (1..=3).contains(&reopened),
+        "{reopened} tries to open it again in {asked} asks"
+    );
+
+    open(("closed", 1));
+    let shown = loop {
+        match live.acquire(&budget).await {
+            Ok(shown) => break shown,
+            Err(reason) => {
+                assert_eq!(reason, Reason::Hidden, "withheld for its reason until then");
+                assert!(began.elapsed() < Duration::from_secs(10), "never reopened");
+                tokio::time::sleep(CADENCE).await;
+            }
+        }
+    };
+    assert!(!shown.pixels.as_slice().contains(&TAKEN_OPEN));
+    assert_eq!(
+        keeper.asked_for("picture").len(),
+        2,
+        "one live picture before the window opened, one after"
+    );
+    live.stop().await.unwrap();
+}

@@ -416,14 +416,16 @@ pub(crate) async fn open_viewer(
     Ok(())
 }
 
-/// [`open_viewer`] on `client`'s desktop, saying that the viewer is open.
+/// [`open_viewer`] on `client`'s desktop, saying that the viewer is open:
+/// a VM's once it is added and its keeper gives live pictures.
 ///
 /// # Errors
 ///
-/// Returns viewer configuration, launch or readiness failures, and the
-/// service's refusal to view that desktop. A failed launch can leave owned
-/// work requiring cleanup.
+/// Returns a VM's refusal of a live window, viewer configuration, launch or
+/// readiness failures, and the service's refusal to view that desktop. A
+/// failed launch can leave owned work requiring cleanup.
 pub async fn monitor(config: &Path, port: u16, client: &Client) -> Result<Value> {
+    client.live_window_served().await?;
     open_viewer(config, port, client.output_dir()?, &client.desktop().id()).await?;
     Ok(json!({"ok": true, "viewer": "open"}))
 }

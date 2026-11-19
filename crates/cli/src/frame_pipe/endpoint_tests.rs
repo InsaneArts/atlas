@@ -36,11 +36,11 @@ fn base() -> tempfile::TempDir {
 }
 
 #[test]
-fn the_owner_is_the_controller_and_helper_pair_alone() {
-    let key = owner_key(501, 502);
-    assert_eq!(key, owner_key(501, 502));
-    assert_ne!(key, owner_key(502, 501));
-    assert_ne!(key, owner_key(501, 503));
+fn second_logins_frame_pipe_key_is_unchanged() {
+    let key = owner_key(501, &Owner::Helper(502));
+    assert_eq!(key, owner_key(501, &Owner::Helper(502)));
+    assert_ne!(key, owner_key(502, &Owner::Helper(501)));
+    assert_ne!(key, owner_key(501, &Owner::Helper(503)));
     let mut hash = Sha256::new();
     hash.update(b"atlas-frame-owner-v1\0\0\0\x01\xf5\0\0\x01\xf6");
     assert_eq!(
@@ -48,15 +48,69 @@ fn the_owner_is_the_controller_and_helper_pair_alone() {
         <[u8; 32]>::from(hash.finalize()),
         "the documented bytes"
     );
+    assert_eq!(
+        hex(&key),
+        "5a1a28819118fc7d98484ccd396997dbf4b556935e7d4a18d96cd8fd6d6e6b18",
+        "every earlier build's key"
+    );
     let path = folder(Path::new(BASE), 501, &key);
     let name = path.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("atlas-fp.501.") && name.len() == "atlas-fp.501.".len() + 16);
 }
 
+/// The VM `work` of the test's own: its record key.
+fn vm() -> Owner {
+    Owner::Vm(atlas_core::desktop::RecordKey::vm(
+        &atlas_core::desktop::DesktopId::parse("0123456789abcdef01234567").unwrap(),
+    ))
+}
+
+#[tokio::test]
+async fn a_vms_frame_service_binds_its_own_endpoint_apart_from_second_logins() {
+    let base = base();
+    let vm = vm();
+    let mut hash = Sha256::new();
+    hash.update(b"atlas-frame-owner-v1\0");
+    hash.update(me().to_be_bytes());
+    hash.update(b"vm-0123456789abcdef01234567");
+    assert_eq!(
+        owner_key(me(), &vm),
+        <[u8; 32]>::from(hash.finalize()),
+        "keyed by its record key"
+    );
+
+    let (_helpers, helper) = bind_in(base.path(), me(), &Owner::Helper(me()))
+        .await
+        .unwrap();
+    let (_vms, vms) = bind_in(base.path(), me(), &vm).await.unwrap();
+
+    assert_ne!(helper.folder, vms.folder, "a folder of its own");
+    assert_ne!(helper.socket("f.sock"), vms.socket("f.sock"));
+    let owner = fs::read_to_string(vms.folder.join("owner.lock")).unwrap();
+    assert_eq!(
+        owner,
+        format!(
+            "{} vm-0123456789abcdef01234567\n",
+            hex(&owner_key(me(), &vm))
+        )
+    );
+    let again = bind_in(base.path(), me(), &vm).await.err().unwrap();
+    assert_eq!(again.code, Code::Busy);
+    assert_eq!(again.error, "Another frame service owns this VM");
+    assert!(
+        bind_in(base.path(), me(), &Owner::Helper(me()))
+            .await
+            .is_err(),
+        "Second Login's stays its own"
+    );
+}
+
 #[tokio::test]
 async fn one_service_binds_private_sockets_and_a_second_is_refused() {
     let base = base();
-    let (_listeners, endpoint) = bind_in(base.path(), me(), 7001).await.unwrap();
+    let (_listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7001))
+        .await
+        .unwrap();
     let folder = endpoint.folder.clone();
     assert_eq!(fs::metadata(&folder).unwrap().mode() & 0o777, 0o700);
     for name in ["c.sock", "f.sock"] {
@@ -65,7 +119,11 @@ async fn one_service_binds_private_sockets_and_a_second_is_refused() {
         assert_eq!(metadata.mode() & 0o777, 0o600);
     }
     assert_eq!(
-        bind_in(base.path(), me(), 7001).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7001))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Busy
     );
     drop(endpoint);
@@ -74,7 +132,9 @@ async fn one_service_binds_private_sockets_and_a_second_is_refused() {
         "its own sockets go with it"
     );
     assert!(
-        bind_in(base.path(), me(), 7001).await.is_ok(),
+        bind_in(base.path(), me(), &Owner::Helper(7001))
+            .await
+            .is_ok(),
         "then it binds again"
     );
 }
@@ -82,11 +142,15 @@ async fn one_service_binds_private_sockets_and_a_second_is_refused() {
 #[tokio::test]
 async fn an_unsafe_folder_is_refused_and_left_as_it_is() {
     let base = base();
-    let path = folder(base.path(), me(), &owner_key(me(), 7002));
+    let path = folder(base.path(), me(), &owner_key(me(), &Owner::Helper(7002)));
     fs::create_dir(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
-        bind_in(base.path(), me(), 7002).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7002))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
     assert_eq!(
@@ -97,10 +161,14 @@ async fn an_unsafe_folder_is_refused_and_left_as_it_is() {
 
     let elsewhere = base.path().join("elsewhere");
     fs::create_dir(&elsewhere).unwrap();
-    let linked = folder(base.path(), me(), &owner_key(me(), 7003));
+    let linked = folder(base.path(), me(), &owner_key(me(), &Owner::Helper(7003)));
     symlink(&elsewhere, &linked).unwrap();
     assert_eq!(
-        bind_in(base.path(), me(), 7003).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7003))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
 }
@@ -109,7 +177,9 @@ async fn an_unsafe_folder_is_refused_and_left_as_it_is() {
 async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_never_removed() {
     let _forks = FORKS.lock().await;
     let base = base();
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7004))
+        .await
+        .unwrap();
     let control = endpoint.socket("c.sock");
     let frame = endpoint.socket("f.sock");
     drop((listeners, endpoint));
@@ -118,7 +188,9 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
     drop(std::os::unix::net::UnixListener::bind(&control).unwrap());
     fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(control.exists());
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7004))
+        .await
+        .unwrap();
 
     // A socket bound in its place later is another's, and stays.
     fs::remove_file(&frame).unwrap();
@@ -133,7 +205,11 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
 
     // One that answers is never taken over.
     assert_eq!(
-        bind_in(base.path(), me(), 7004).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7004))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Busy
     );
     assert!(
@@ -146,7 +222,9 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
 #[tokio::test]
 async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
     let base = base();
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7005).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7005))
+        .await
+        .unwrap();
     let lock = endpoint.folder.join("owner.lock");
     drop((listeners, endpoint));
     let recorded = fs::read_to_string(&lock).unwrap();
@@ -158,14 +236,22 @@ async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
     // Only a prefix of the key names the folder: a collision is caught here.
     fs::write(&lock, format!("{} 7005\n", "0".repeat(64))).unwrap();
     assert_eq!(
-        bind_in(base.path(), me(), 7005).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7005))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
 
     fs::write(&lock, recorded).unwrap();
     fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(
-        bind_in(base.path(), me(), 7005).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7005))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
     assert_eq!(
@@ -179,7 +265,9 @@ async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
 async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
     let _forks = FORKS.lock().await;
     let base = base();
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7006).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7006))
+        .await
+        .unwrap();
     let (lock, control) = (
         endpoint.folder.join("owner.lock"),
         endpoint.socket("c.sock"),
@@ -190,7 +278,11 @@ async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
     fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
     add_acl(&control);
     assert_eq!(
-        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7006))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
     assert!(control.exists(), "not cleared");
@@ -198,18 +290,32 @@ async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
 
     add_acl(&lock);
     assert_eq!(
-        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7006))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
-    assert!(bind_in(base.path(), me(), 7008).await.is_ok());
+    assert!(
+        bind_in(base.path(), me(), &Owner::Helper(7008))
+            .await
+            .is_ok()
+    );
 
     // A folder of its own, so only its ACL is wrong.
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7009).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7009))
+        .await
+        .unwrap();
     let folder = endpoint.folder.clone();
     drop((listeners, endpoint));
     add_acl(&folder);
     assert_eq!(
-        bind_in(base.path(), me(), 7009).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7009))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
     assert!(!folder.join("c.sock").exists());
@@ -222,19 +328,31 @@ async fn a_lock_or_socket_that_is_a_link_is_refused_and_its_target_untouched() {
     fs::write(&target, "kept").unwrap();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
 
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7010).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7010))
+        .await
+        .unwrap();
     let lock = endpoint.folder.join("owner.lock");
     drop((listeners, endpoint));
     fs::remove_file(&lock).unwrap();
     symlink(&target, &lock).unwrap();
-    assert!(bind_in(base.path(), me(), 7010).await.is_err());
+    assert!(
+        bind_in(base.path(), me(), &Owner::Helper(7010))
+            .await
+            .is_err()
+    );
 
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7011).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7011))
+        .await
+        .unwrap();
     let control = endpoint.socket("c.sock");
     drop((listeners, endpoint));
     symlink(&target, &control).unwrap();
     assert_eq!(
-        bind_in(base.path(), me(), 7011).await.err().unwrap().code,
+        bind_in(base.path(), me(), &Owner::Helper(7011))
+            .await
+            .err()
+            .unwrap()
+            .code,
         Code::Identity
     );
     assert_eq!(fs::read_to_string(&target).unwrap(), "kept");
@@ -244,7 +362,9 @@ async fn a_lock_or_socket_that_is_a_link_is_refused_and_its_target_untouched() {
 #[tokio::test]
 async fn sockets_in_a_folder_put_in_its_place_are_never_removed() {
     let base = base();
-    let (listeners, endpoint) = bind_in(base.path(), me(), 7007).await.unwrap();
+    let (listeners, endpoint) = bind_in(base.path(), me(), &Owner::Helper(7007))
+        .await
+        .unwrap();
     let folder = endpoint.folder.clone();
     let moved = base.path().join("moved");
     fs::rename(&folder, &moved).unwrap();

@@ -942,6 +942,15 @@ async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Va
 /// app (`app`) is shown the screen, or the windows on it, while the person
 /// signs the helper in to an account.
 async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool) -> Response {
+    // A VM's live picture is the person's window alone: neither its frame
+    // service nor its frames go to anyone without the app's secret, and
+    // nothing is captured or read for them.
+    if matches!(read, Read::Pipe | Read::Frame)
+        && !app
+        && let Some(refused) = app_only(&viewer.client())
+    {
+        return json_response(403, json!(refused));
+    }
     match read {
         // The person's own app alone is shown which account each row acted in.
         Read::Status => json_response(200, viewer.status_for(app).await),
@@ -958,15 +967,12 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
         Read::Screenshot => viewer.screenshot(query).await,
         Read::Asks => json_response(200, super::accounts::asks(&viewer.client())),
         Read::Desktops => json_response(200, viewer.listed()),
-        // The frame service of the helper served now: one still serving the
-        // helper the settings named before is not offered while it is
+        // The frame service of the desktop served now: one still serving
+        // the desktop the settings named before is not offered while it is
         // replaced.
         Read::Pipe => match unpoisoned(&viewer.pipe).clone().filter(|descriptor| {
-            viewer
-                .client()
-                .link
-                .socket()
-                .is_ok_and(|transport| descriptor["helperUID"] == transport.peer_uid)
+            crate::frame_pipe::owner::Owner::of(&viewer.client())
+                .is_ok_and(|owner| owner.serves(descriptor))
         }) {
             Some(descriptor) => json_response(200, descriptor),
             None => json_response(
@@ -989,6 +995,23 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
             }
         },
     }
+}
+
+/// Why the live picture of `client`'s desktop is refused to anyone but the
+/// app: a VM's is shown only in the person's window. None for Second
+/// Login's.
+fn app_only(client: &Client) -> Option<Error> {
+    crate::frame_pipe::owner::Owner::of(client)
+        .is_ok_and(|owner| owner.app_only())
+        .then(|| {
+            Error::new(
+                Code::Permission,
+                format!(
+                    "{}'s live picture shows only in the Atlas app.",
+                    client.selected.name
+                ),
+            )
+        })
 }
 
 /// A read's reply: what it found, or why the helper could not be read.

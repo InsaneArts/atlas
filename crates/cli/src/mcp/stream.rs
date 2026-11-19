@@ -101,8 +101,9 @@ impl Server {
     async fn frame_service(&self) -> Option<Value> {
         let output = self.client.output_dir().ok()?.to_path_buf();
         let (port, helper) = (self.port, self.client.link.socket().ok()?.peer_uid);
+        let owner = crate::frame_pipe::owner::Owner::Helper(helper);
         tokio::task::spawn_blocking(move || {
-            crate::viewer::frame_service(&crate::viewer::local(&output, port)?, helper)
+            crate::viewer::frame_service(&crate::viewer::local(&output, port)?, &owner)
         })
         .await
         .ok()

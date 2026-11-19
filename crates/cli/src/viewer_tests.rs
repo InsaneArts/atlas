@@ -3343,24 +3343,16 @@ async fn letting_go_is_never_turned_away_while_renewals_are_full() {
     assert_ne!(body["code"], "busy", "{status} {body}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_live_window_and_frame_service_of_a_vm_are_refused_in_one_plain_wording_asking_nothing()
-{
-    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
-    let client = Arc::new(client);
-    let words = "work's live picture shows only in the terminal, read-only: atlas monitor \
-                 --terminal --desktop work.";
-    let (_listener, viewer) = bind(Client::clone(&client), 0, None).await.unwrap();
-
-    let window = viewer.frame().await.err().unwrap();
-    let shown = viewer.shown_frame().await.err().unwrap();
+/// The refusals of `client`'s live window, through each way into it: the
+/// app's pictures and others', and its frame service.
+async fn live_window_refusals(client: &Arc<Client>) -> Vec<Error> {
+    let (_listener, viewer) = bind(Client::clone(client), 0, None).await.unwrap();
     let privacy = crate::frame_pipe::broker::Privacy {
         visible: Arc::new(|| None),
         exempt: Arc::new(|_| false),
     };
     let service = crate::frame_pipe::service::start(
-        client,
+        client.clone(),
         1600,
         Arc::new(|_, _, _| {}),
         privacy,
@@ -3369,22 +3361,266 @@ async fn the_live_window_and_frame_service_of_a_vm_are_refused_in_one_plain_word
     .await
     .err()
     .unwrap();
+    vec![
+        viewer.frame().await.err().unwrap(),
+        viewer.shown_frame().await.err().unwrap(),
+        service,
+    ]
+}
 
-    for refused in [window, shown, service] {
-        assert_eq!(refused.error, words, "{refused:?}");
-        assert_eq!(refused.code, Code::Platform);
-        assert_eq!(
-            refused.details["next"],
-            "Run atlas monitor --terminal --desktop work."
-        );
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_live_window_waits_until_it_is_added_and_its_keeper_gives_live_pictures() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let client = Arc::new(client);
+    let lifecycle = atlas_client::vm::lifecycle::Lifecycle::under(dir.path());
+    let id = client.desktop().id();
+    let mut record = lifecycle.record(&id).unwrap().unwrap();
+    record.state = atlas_client::vm::lifecycle::record::State::Adding;
+    lifecycle.keep_record(&record).unwrap();
+
+    for refused in live_window_refusals(&client).await {
+        assert_eq!(refused.error, client.unreachable().error, "{refused:?}");
         let said = serde_json::to_string(&refused).unwrap();
-        assert!(
-            !said.contains("helper") && !said.contains("macOS only"),
-            "{said}"
+        assert!(!said.contains("helper"), "{said}");
+    }
+    assert!(keeper.asked.lock().unwrap().is_empty(), "nothing asked");
+
+    record.state = atlas_client::vm::lifecycle::record::State::Created;
+    lifecycle.keep_record(&record).unwrap();
+    keeper
+        .serves
+        .lock()
+        .unwrap()
+        .retain(|capability| *capability != "picture-v1");
+    for refused in live_window_refusals(&client).await {
+        assert_eq!(refused.code, Code::Update, "{refused:?}");
+        assert_eq!(
+            refused.error,
+            "work's session keeper is from an older build that gives no live picture."
         );
+        assert_eq!(refused.details["next"], "Run atlas doctor --desktop work.");
+        let said = serde_json::to_string(&refused).unwrap();
+        assert!(!said.contains("helper"), "{said}");
     }
     assert!(keeper.asked_for("picture").is_empty());
-    assert!(keeper.asked_for("observe").is_empty());
+    assert!(keeper.asked_for("observe").is_empty(), "no proof taken");
+}
+
+/// A viewer serving `client`'s VM on a free port, recorded in its output
+/// folder as the running menu bar is, its app listening.
+async fn serving_vm(
+    client: &Client,
+) -> (
+    Arc<Viewer>,
+    u16,
+    tokio::sync::mpsc::UnboundedReceiver<crate::menubar::Line>,
+) {
+    let (listener, viewer) = bind(client.clone(), 0, None).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(accept(
+        listener,
+        viewer.clone(),
+        CONNECTIONS,
+        std::future::pending(),
+    ));
+    let output = client.output_dir().unwrap();
+    std::fs::create_dir_all(output).unwrap();
+    std::fs::write(
+        output.join(MENUBAR_RECORD),
+        json!({"url": viewer.url, "pid": std::process::id()}).to_string(),
+    )
+    .unwrap();
+    let (lines, app) = tokio::sync::mpsc::unbounded_channel();
+    *unpoisoned(&viewer.app) = Some(lines);
+    (viewer, port, app)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn atlas_monitor_opens_the_live_window_on_a_vm() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let (_viewer, port, mut app) = serving_vm(&client).await;
+
+    let opened = monitor(&dir.path().join("settings.toml"), port, &client)
+        .await
+        .unwrap();
+
+    assert_eq!(opened, json!({"ok": true, "viewer": "open"}));
+    assert_eq!(app.recv().await, Some(crate::menubar::Line::Viewer));
+    assert_eq!(keeper.asked_for("hello").len(), 1, "its keeper was asked");
+    assert!(keeper.asked_for("picture").is_empty());
+}
+
+/// `route` read from `viewer` as its app reads it, naming itself by its
+/// secret: the reply's status and body.
+async fn read_as_app(viewer: &Arc<Viewer>, route: &str) -> (u16, Value) {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("{}{route}", viewer.prefix))
+        .header("host", &viewer.authority)
+        .header("origin", format!("http://{}", viewer.authority))
+        .header(http::APP_SECRET_HEADER, &viewer.app_secret)
+        .body(Body::empty())
+        .unwrap();
+    let reply = respond(viewer.clone(), request).await;
+    let status = reply.status().as_u16();
+    let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// A viewer serving the scripted VM, its frame service running and
+/// offered, every picture shown.
+async fn vm_pipe(
+    client: &Client,
+) -> (
+    Arc<Viewer>,
+    crate::frame_pipe::service::Service,
+    tokio::sync::mpsc::UnboundedReceiver<crate::menubar::Line>,
+) {
+    let (viewer, _port, app) = serving_vm(client).await;
+    let controller = client.controller.clone();
+    let privacy = crate::frame_pipe::broker::Privacy {
+        visible: Arc::new(move || controller.screen_visible().ok()),
+        exempt: Arc::new(|_| false),
+    };
+    let service = crate::frame_pipe::service::start(
+        Arc::new(client.clone()),
+        crate::frame_pipe::client::LONGEST,
+        Arc::new(|_, _, _| {}),
+        privacy,
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .await
+    .unwrap();
+    *unpoisoned(&viewer.pipe) = Some(service.descriptor().clone());
+    (viewer, service, app)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_without_the_apps_secret_finds_no_vm_credentials_and_is_refused_pairing() {
+    use crate::frame_pipe::client::{LONGEST, PipeClient};
+    let _alone = crate::frame_pipe::service::SCRIPTED_VM.lock().await;
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, _keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let (viewer, service, _app) = vm_pipe(&client).await;
+    let bootstrap = service.descriptor()["observerBootstrap"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (status, offered) = read_json(&viewer, "pipe.json").await;
+    assert_eq!(status, 403, "{offered}");
+    assert_eq!(offered["code"], "permission");
+    assert_eq!(
+        offered["error"],
+        "work's live picture shows only in the Atlas app."
+    );
+    let control = std::path::PathBuf::from(service.descriptor()["controlPath"].as_str().unwrap());
+    let kept = std::fs::read(control.with_file_name("service.json")).unwrap();
+    let kept: Value = serde_json::from_slice(&kept).unwrap();
+    assert_eq!(kept["desktopKey"], "vm-0123456789abcdef01234567");
+    assert!(kept.get("observerBootstrap").is_none(), "{kept}");
+    for said in [offered.to_string(), kept.to_string()] {
+        assert!(!said.contains(&bootstrap), "the capability leaked: {said}");
+    }
+    assert!(
+        PipeClient::open(&kept, LONGEST).await.is_err(),
+        "the record is no way in"
+    );
+    let mut guessed = kept.clone();
+    guessed["observerBootstrap"] = json!("0".repeat(64));
+    assert!(
+        PipeClient::open(&guessed, LONGEST).await.is_err(),
+        "pairing is refused"
+    );
+
+    let (status, apps) = read_as_app(&viewer, "pipe.json").await;
+    assert_eq!(status, 200, "{apps}");
+    let mut app = PipeClient::open(&apps, LONGEST).await.unwrap();
+    assert_eq!(
+        app.committed().await.unwrap().rgb.len(),
+        64 * 40 * 3,
+        "the app alone watches it"
+    );
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vms_frame_png_without_the_apps_secret_captures_nothing_and_is_refused() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let (viewer, _port, _app) = serving_vm(&client).await;
+
+    let (status, refused) = read_json(&viewer, "frame.png").await;
+
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(refused["code"], "permission");
+    assert_eq!(
+        refused["error"],
+        "work's live picture shows only in the Atlas app."
+    );
+    assert!(keeper.asked.lock().unwrap().is_empty(), "nothing captured");
+    assert!(viewer.frames.lock().await.items.is_empty());
+
+    let second_login = tempfile::tempdir().unwrap();
+    let helper = unreachable(second_login.path()).await;
+    let (status, unshown) = read_json(&helper, "frame.png").await;
+    assert_eq!(status, 503, "Second Login's route is as before: {unshown}");
+    assert_ne!(unshown["code"], "permission");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_terminal_on_a_vm_never_gets_the_apps_credentials_and_shows_frames_through_its_own_checks()
+ {
+    use crate::frame_pipe::owner::Owner;
+    let _alone = crate::frame_pipe::service::SCRIPTED_VM.lock().await;
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let id = client.desktop().id();
+    let (_viewer, service, _app) = vm_pipe(&client).await;
+
+    let record = record_for(client.output_dir().unwrap());
+    let owner = Owner::of(&client).unwrap();
+    let found = tokio::task::spawn_blocking(move || shared_service(&record, &owner))
+        .await
+        .unwrap();
+    assert!(found.is_none(), "the app's frame service is not offered");
+
+    let terminal = TerminalService::start(
+        client,
+        &dir.path().join("unused.toml"),
+        640,
+        atlas_core::protocol::CaptureBackend::CoreGraphics,
+    )
+    .await
+    .unwrap();
+    let mut frames = terminal.frames();
+    let shown = frames.next().await.unwrap();
+    assert_eq!(shown.rgb.unwrap().len(), 64 * 40 * 3);
+    let pictures = keeper.asked_for("picture");
+    assert_eq!(pictures.len(), 1, "its own live picture: {pictures:?}");
+    assert_eq!(pictures[0]["request"]["maxDimension"], 640);
+
+    atlas_client::test_support::under_maintenance(
+        dir.path(),
+        &id,
+        atlas_client::vm::lifecycle::record::Phase::Open,
+    );
+    let began = std::time::Instant::now();
+    let held = loop {
+        if let Err(held) = frames.next().await {
+            break held;
+        }
+        assert!(began.elapsed() < Duration::from_secs(10), "still shown");
+    };
+    assert_eq!(held.code, Code::Busy, "{held:?}");
+    assert!(
+        held.error.starts_with("work is under maintenance"),
+        "{held:?}"
+    );
+    terminal.shutdown().await.unwrap();
+    service.stop().await;
 }
 
 #[tokio::test]

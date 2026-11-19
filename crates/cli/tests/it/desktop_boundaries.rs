@@ -1249,6 +1249,11 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "owner: the frame pipe's endpoint, keyed for the user desktop by its two accounts",
     ),
     (
+        "crates/cli/src/frame_pipe/owner.rs",
+        &["Owner::of"],
+        "owner: whose pictures a frame service serves, the user desktop's by its helper's account",
+    ),
+    (
         "crates/cli/src/lib.rs",
         &["mod user"],
         "declares: the user desktop's module",
@@ -1574,16 +1579,6 @@ const KEPT: &[(&str, &str, &str)] = &[
         "crates/agents/src/project.rs",
         "PROJECT_SECTION",
         "a project's section calls the desktop a second login on this Mac",
-    ),
-    (
-        "crates/cli/src/frame_pipe/endpoint.rs",
-        "owner_key",
-        "the frame pipe is keyed by the controller's and the helper's user IDs, not by a desktop",
-    ),
-    (
-        "crates/cli/src/frame_pipe/service.rs",
-        "start",
-        "the frame pipe is keyed by the controller's and the helper's user IDs, not by a desktop",
     ),
     (
         "crates/cli/src/mcp/resources.rs",

@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     net::UnixListener,
 };
 
@@ -100,6 +100,15 @@ impl crate::link::Trust for Trusting {
 /// How a scripted keeper's observations differ from what it says otherwise.
 pub type Observing = Option<fn(&mut Value)>;
 
+/// Atlas VM's window, `closed` or `open`, and its picture fence, as a
+/// scripted keeper's observations and live pictures read them.
+pub type Window = Arc<Mutex<(&'static str, u64)>>;
+
+/// What every pixel of a live frame the scripted guest took while the VM's
+/// window was open is: no frame of the guest's own sequence is ever all of
+/// it.
+pub const TAKEN_OPEN: u8 = 0xEE;
+
 /// The keeper a test scripts, and what it was asked.
 pub struct ScriptedKeeper {
     /// Every request it was asked, in order.
@@ -128,6 +137,11 @@ pub struct ScriptedKeeper {
     /// Whether the keeper acknowledges a hold of every agent's lane: else
     /// it answers that not every lane ended in time.
     pub holds: Arc<Mutex<bool>>,
+    /// Atlas VM's window and picture fence: closed, at fence 0, at first.
+    pub window: Window,
+    /// What the keeper says it serves in its hello: every capability of
+    /// this build's keepers at first.
+    pub serves: Arc<Mutex<Vec<&'static str>>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -161,7 +175,9 @@ pub const GENERATION: u64 = 7;
 /// check's folder as a machine guest does and keeps no copy, gives a picture of its whole display for a screenshot, settles
 /// whatever it is asked to, and cannot say whether work agents started runs
 /// there; its keeper holds and releases agents' lanes whenever it is asked,
-/// and recovers nothing when asked to.
+/// and recovers nothing when asked to. A live picture comes frame by frame
+/// as its keeper passes one on, held to Atlas VM's window and fence
+/// ([`ScriptedKeeper::window`]) as a real keeper holds it.
 /// The VM is added, its lifecycle record kept in `directory`, and runs, as
 /// Atlas VM, stood in for there too, says.
 #[must_use]
@@ -188,6 +204,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let observing: Arc<Mutex<Observing>> = Arc::new(Mutex::new(None));
     let leftovers = Arc::new(Mutex::new("unknown"));
     let holds = Arc::new(Mutex::new(true));
+    let window: Window = Arc::new(Mutex::new(("closed", 0)));
+    let serves = Arc::new(Mutex::new(crate::vm::keeper::CAPABILITIES.to_vec()));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
         let (asked, stop, away, held, answering, refusing_once, observing) = (
@@ -199,7 +217,12 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             refusing_once.clone(),
             observing.clone(),
         );
-        let (leftovers, holds) = (leftovers.clone(), holds.clone());
+        let (leftovers, holds, window, serves) = (
+            leftovers.clone(),
+            holds.clone(),
+            window.clone(),
+            serves.clone(),
+        );
         async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let observing = *observing.lock().unwrap_or_else(PoisonError::into_inner);
@@ -215,6 +238,11 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                 );
                 let leftovers = *leftovers.lock().unwrap_or_else(PoisonError::into_inner);
                 let holds = *holds.lock().unwrap_or_else(PoisonError::into_inner);
+                let serves = serves
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                let window = window.clone();
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
                     let mut line = String::new();
@@ -254,6 +282,9 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                     {
                         json!({"ok": false, "code": "transport", "uncertain": false,
                             "error": "The control connection to the desktop failed."})
+                    } else if request["op"] == "picture" && request["request"]["op"] == "stream" {
+                        live_picture(&mut stream, &window).await;
+                        return;
                     } else {
                         let guest = Guest {
                             stop,
@@ -263,6 +294,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                             holds,
                             peer: &peer,
                             own: &own,
+                            serves: &serves,
+                            window: *window.lock().unwrap_or_else(PoisonError::into_inner),
                         };
                         let mut answer = answered(&request, &guest, job_stopped);
                         if let Some(differ) = observing.filter(|_| request["op"] == "observe") {
@@ -318,6 +351,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             observing,
             leftovers,
             holds,
+            window,
+            serves,
             serving,
         },
     )
@@ -494,6 +529,10 @@ struct Guest<'a> {
     /// Its key, and the station's.
     peer: &'a Value,
     own: &'a Value,
+    /// What its keeper says it serves.
+    serves: &'a [&'static str],
+    /// Atlas VM's window and picture fence.
+    window: (&'static str, u64),
 }
 
 impl Guest<'_> {
@@ -535,7 +574,7 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
     match request["op"].as_str() {
         Some("hello") => json!({"ok": true, "op": "hello",
             "keeper": {"protocol": crate::vm::keeper::PROTOCOL,
-                "capabilities": crate::vm::keeper::CAPABILITIES, "build": "1.0.0"},
+                "capabilities": guest.serves, "build": "1.0.0"},
             "guest": {"protocol": atlas_session::compatibility::PROTOCOL,
                 "capabilities": atlas_session::compatibility::MACHINE, "version": "1.0.0",
                 "build": "b1"},
@@ -550,7 +589,8 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
                 "sessionProof": {"ok": true, "challenge": request["challenge"],
                     "proof": screen()}},
             "runner": {"ok": true, "power": "running", "confirmed": true,
-                "window": "closed", "incarnation": "6f1c0de2-run", "fence": 0}}),
+                "window": guest.window.0, "incarnation": "6f1c0de2-run",
+                "fence": guest.window.1}}),
         Some("read") if request["request"]["op"] == "hello" => guest.hello(),
         Some("read") if request["request"]["op"] == "leftovers" => {
             json!({"ok": true, "leftovers": guest.leftovers})
@@ -574,6 +614,13 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
                     "title": "OK", "enabled": true,
                     "window": {"x": 10, "y": 20, "width": 400, "height": 300},
                     "frame": {"x": 20, "y": 30, "width": 60, "height": 20}}]})
+        }
+        // Its daemon gives back a live picture's source as soon as its
+        // lane ends.
+        Some("read") if request["request"]["op"] == "stream-drain-status" => {
+            let asked = &request["request"];
+            json!({"ok": true, "queryID": asked["queryID"], "daemonPID": DAEMON,
+                "producerGeneration": SOURCE, "state": "stopped", "drained": true})
         }
         Some("read") if request["request"]["op"] == "copies" => {
             json!({"ok": true, "op": "copies", "copies": [], "next": null, "unknown": []})
@@ -673,4 +720,91 @@ fn screenshot(request: &Value) -> Value {
     png.resize(33, 0);
     json!({"ok": true, "png": STANDARD.encode(png), "width": width, "height": height,
         "scale": 2.0, "offDisplayWindows": []})
+}
+
+/// The scripted guest's daemon, whose process its proofs name, and the
+/// generation of its live picture's source.
+const DAEMON: u64 = 123;
+const SOURCE: u64 = 5;
+
+/// Carry a live picture to the client on `stream`, as a keeper passes on
+/// what the scripted guest's daemon sends: the keeper's word, the daemon's
+/// acceptance, then one frame for each readiness the client says, until it
+/// stops the picture or hangs up. It is admitted only while `window` says
+/// Atlas VM's window is closed, and each frame goes only while the window
+/// and its fence are as they were then: else the keeper says why in the
+/// frame's place and ends the picture, as a real keeper does. Frame `n` is
+/// 64 × 40 pixels of `n`; one the guest took while the window was open is
+/// all [`TAKEN_OPEN`].
+async fn live_picture<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, window: &Window) {
+    let now = || *window.lock().unwrap_or_else(PoisonError::into_inner);
+    let took_input = json!({"ok": false, "code": "on-console", "uncertain": false,
+        "error": "The VM's window took the person's input, so its picture stopped."});
+    let admitted = now();
+    if admitted.0 != "closed" {
+        let _ = stream.write_all(format!("{took_input}\n").as_bytes()).await;
+        return;
+    }
+    if stream
+        .write_all(b"{\"ok\":true,\"op\":\"picture\"}\n")
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let accepted = json!({"ok": true, "stream": atlas_core::protocol::RGB_STREAM,
+        "daemonPID": DAEMON, "producerGeneration": SOURCE});
+    if framed(stream, &accepted, &[]).await.is_err() {
+        return;
+    }
+    let mut sequence = 0_u64;
+    loop {
+        let Ok(said) = stream.read_u8().await else {
+            return;
+        };
+        if said == 0 {
+            let Ok(id) = stream.read_u64().await else {
+                return;
+            };
+            let stopped = json!({"ok": true, "daemonPID": DAEMON, "producerGeneration": SOURCE,
+                "stopRequestID": id, "drained": true});
+            let _ = framed(stream, &stopped, &[]).await;
+            return;
+        }
+        sequence += 1;
+        let taken = now();
+        let fill = if taken.0 == "closed" {
+            u8::try_from(sequence % 200).unwrap_or_default()
+        } else {
+            TAKEN_OPEN
+        };
+        if taken != admitted {
+            let _ = framed(stream, &took_input, &[]).await;
+            return;
+        }
+        let header = json!({"ok": true, "sequence": sequence, "width": 64, "height": 40,
+            "scale": 2.0, "session": screen(), "daemonPID": DAEMON, "captureBackend": "cg",
+            "captureMs": 1.5});
+        if framed(stream, &header, &vec![fill; 64 * 40 * 3])
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
+/// Say `header` as a guest's daemon frames one, its length first, then
+/// `pixels`.
+async fn framed<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    header: &Value,
+    pixels: &[u8],
+) -> std::io::Result<()> {
+    let header = serde_json::to_vec(header)?;
+    let length = u32::try_from(header.len()).map_err(std::io::Error::other)?;
+    stream.write_all(&length.to_be_bytes()).await?;
+    stream.write_all(&header).await?;
+    stream.write_all(pixels).await?;
+    stream.flush().await
 }

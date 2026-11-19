@@ -30,7 +30,7 @@ pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, local_checked,
     local_serving, post_local, process, read_record, record_for, recorded, recorded_port, running,
-    serving_events,
+    serving_events, shared_service,
 };
 pub(crate) use reads::{Named, activity_of};
 pub(crate) use terminal::{TerminalFrames, TerminalService};
@@ -65,20 +65,6 @@ const INCARNATION_HEADER: &str = "x-atlas-incarnation";
 
 /// The record of the running viewer, in the output folder.
 pub(crate) const MENUBAR_RECORD: &str = "menubar.json";
-
-/// Refuse Atlas.app's live window of the VM `client` acts on, in the one
-/// wording its frame service gives too: a VM's live picture is watched only
-/// in the terminal. Second Login's is shown as before.
-///
-/// # Errors
-///
-/// `platform`, for a VM; nothing is asked of it.
-pub fn shown_in_window(client: &Client) -> atlas_core::error::Result<()> {
-    if matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
-        return Err(crate::frame_pipe::live_refused(client));
-    }
-    Ok(())
-}
 
 /// One running viewer: the helper it serves, the control lease the app
 /// holds, and the frames it has shown.

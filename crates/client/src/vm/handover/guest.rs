@@ -12,7 +12,11 @@
 //! whose update to that build already failed, unless the person asks to try
 //! again, is left as it is, and no Stop is kept for it.
 use super::{Desk, Found, HELLO, Held, Keepers, LOOK, Launchd};
-use crate::vm::{lifecycle::Lifecycle, maintenance::Kept, update::Build};
+use crate::vm::{
+    lifecycle::Lifecycle,
+    maintenance::Kept,
+    update::{Facts, listed},
+};
 use atlas_control::StopWhy;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
@@ -177,7 +181,7 @@ fn judged(keepers: &dyn Keepers, desk: &Desk, retry: bool) -> Option<Value> {
         Ok(hello) => hello,
         Err(error) => return refused(error),
     };
-    let facts = facts_of(&hello);
+    let facts = Facts::of_hello(&hello);
     let left = || {
         let mut said = crate::vm::update::said(&desk.name, &facts);
         said["ok"] = json!(true);
@@ -245,34 +249,9 @@ fn declared_of(hello: &Value) -> Option<atlas_session::compatibility::Declared> 
     let guest = &hello["guest"];
     Some(atlas_session::compatibility::Declared {
         protocol: u32::try_from(guest["protocol"].as_u64()?).ok()?,
-        capabilities: strings(&guest["capabilities"]),
+        capabilities: listed(&guest["capabilities"]),
         version: guest["version"].as_str()?.to_owned(),
     })
-}
-
-fn strings(said: &Value) -> Vec<String> {
-    said.as_array()
-        .map(|said| {
-            said.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// What the guest of a keeper whose hello is `hello` is judged on: what it
-/// declared, the build it runs, and the keeper's own beside it.
-fn facts_of(hello: &Value) -> crate::vm::update::Facts {
-    let guest = &hello["guest"];
-    crate::vm::update::Facts {
-        declared: strings(&guest["capabilities"]),
-        guest: Build::new(guest["build"].as_str(), guest["version"].as_str()),
-        own: Build::new(
-            hello["program"]["build"].as_str(),
-            hello["keeper"]["build"].as_str(),
-        ),
-    }
 }
 
 /// The hello of `desk`'s keeper.

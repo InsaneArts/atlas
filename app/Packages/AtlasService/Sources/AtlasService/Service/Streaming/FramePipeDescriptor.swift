@@ -13,6 +13,8 @@ public struct FramePipeDescriptor: Sendable, Equatable, Decodable {
   public let brokerPID: Int32
   /// The account that serves them: this app's own.
   public let controllerUID: UInt32
+  /// The VM it shows, by its record key; none for Second Login's.
+  public let desktopKey: String?
 
   /// Creates a descriptor.
   ///
@@ -23,13 +25,15 @@ public struct FramePipeDescriptor: Sendable, Equatable, Decodable {
   ///   - observerBootstrap: The observer capability.
   ///   - brokerPID: The process that serves both lanes.
   ///   - controllerUID: The account that serves them.
+  ///   - desktopKey: The VM it shows, by its record key, when it shows one.
   public init(
     controlPath: String,
     framePath: String,
     serviceInstance: String,
     observerBootstrap: String,
     brokerPID: Int32,
-    controllerUID: UInt32
+    controllerUID: UInt32,
+    desktopKey: String? = nil
   ) {
     self.controlPath = controlPath
     self.framePath = framePath
@@ -37,5 +41,12 @@ public struct FramePipeDescriptor: Sendable, Equatable, Decodable {
     self.observerBootstrap = observerBootstrap
     self.brokerPID = brokerPID
     self.controllerUID = controllerUID
+    self.desktopKey = desktopKey
+  }
+
+  /// What is said once its pictures stop coming: a VM's desktop is never called the helper.
+  var unavailable: String {
+    desktopKey?.hasPrefix("vm-") == true
+      ? "This desktop's pictures are unavailable" : "The helper's pictures are unavailable"
   }
 }

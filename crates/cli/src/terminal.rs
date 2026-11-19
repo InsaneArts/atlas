@@ -188,11 +188,7 @@ async fn discover(found: Discovery) -> Option<(String, Value)> {
     let record = found.record?;
     let helper = found.helper?;
     tokio::task::spawn_blocking(move || {
-        let found = viewer::read_record(&record)?;
-        let port = viewer::recorded_port(&found)?;
-        let running = viewer::running(&record, port)?;
-        let url = viewer::address(&running)?.to_owned();
-        viewer::frame_service(&url, helper).map(|descriptor| (url, descriptor))
+        viewer::shared_service(&record, &crate::frame_pipe::owner::Owner::Helper(helper))
     })
     .await
     .ok()

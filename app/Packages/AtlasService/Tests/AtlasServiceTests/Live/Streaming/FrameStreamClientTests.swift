@@ -5,13 +5,14 @@ import Testing
 
 @Suite("Frame stream client")
 struct FrameStreamClientTests {
-  /// A client paired with a scripted broker.
-  private static func opened(_ script: [ScriptedFramePipeBroker.Answer]) async throws -> (
-    FrameStreamClient, ScriptedFramePipeBroker
-  ) {
+  /// A client paired with a scripted broker, through `descriptor`.
+  private static func opened(
+    _ script: [ScriptedFramePipeBroker.Answer],
+    descriptor: FramePipeDescriptor = ScriptedFramePipeBroker.descriptor
+  ) async throws -> (FrameStreamClient, ScriptedFramePipeBroker) {
     let broker = ScriptedFramePipeBroker(script: script)
     let (control, frame) = await broker.lanes()
-    let client = FrameStreamClient(descriptor: ScriptedFramePipeBroker.descriptor, control: control, frame: frame)
+    let client = FrameStreamClient(descriptor: descriptor, control: control, frame: frame)
     try await client.open(longest: 1_600)
     return (client, broker)
   }
@@ -89,6 +90,28 @@ struct FrameStreamClientTests {
       let (client, broker) = try await Self.opened(script + [.picture])
       await #expect(throws: ServiceError.self) { try await client.next(longest: 1_600) }
       #expect(await broker.kinds.filter { $0 == .credit }.count == FrameStreamClient.unservedCredits)
+      await client.close()
+    }
+  }
+
+  @Test("pictures of a VM that stop coming are said of this desktop, never of the helper")
+  func unservedOnVM() async throws {
+    let helper = ScriptedFramePipeBroker.descriptor
+    let vm = FramePipeDescriptor(
+      controlPath: helper.controlPath,
+      framePath: helper.framePath,
+      serviceInstance: helper.serviceInstance,
+      observerBootstrap: helper.observerBootstrap,
+      brokerPID: helper.brokerPID,
+      controllerUID: helper.controllerUID,
+      desktopKey: "vm-0123456789abcdef01234567"
+    )
+    let said = [
+      (vm, "This desktop's pictures are unavailable"), (helper, "The helper's pictures are unavailable"),
+    ]
+    for (descriptor, words) in said {
+      let (client, _) = try await Self.opened(Self.expiring(FrameStreamClient.unservedCredits), descriptor: descriptor)
+      await #expect(throws: ServiceError(words)) { try await client.next(longest: 1_600) }
       await client.close()
     }
   }

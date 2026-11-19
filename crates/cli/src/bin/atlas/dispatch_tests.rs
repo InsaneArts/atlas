@@ -2002,9 +2002,13 @@ fn an_environment_plans_steps_record_no_activity_and_still_heed_the_stop_as_an_a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn atlas_apps_live_window_of_a_vm_is_refused_through_dispatch_in_its_one_wording() {
+async fn atlas_monitor_on_a_vm_still_being_added_is_refused_in_its_adds_words_asking_nothing() {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let (client, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let lifecycle = atlas_client::vm::lifecycle::Lifecycle::under(dir.path());
+    let mut record = lifecycle.record(&client.desktop().id()).unwrap().unwrap();
+    record.state = atlas_client::vm::lifecycle::record::State::Adding;
+    lifecycle.keep_record(&record).unwrap();
     let config = dir.path().join("settings.toml");
     let command = parse(&["monitor"]).unwrap().command.unwrap();
     let policy = Policy::of(&command);
@@ -2014,21 +2018,9 @@ async fn atlas_apps_live_window_of_a_vm_is_refused_through_dispatch_in_its_one_w
         .await
         .unwrap_err();
 
-    assert_eq!(refused.code, Code::Platform, "{refused:?}");
-    assert_eq!(
-        refused.error,
-        "work's live picture shows only in the terminal, read-only: atlas monitor --terminal \
-         --desktop work."
-    );
-    assert_eq!(
-        refused.details["next"],
-        "Run atlas monitor --terminal --desktop work."
-    );
+    assert_eq!(refused.error, client.unreachable().error, "{refused:?}");
     let said = serde_json::to_string(&refused).unwrap();
-    assert!(
-        !said.contains("helper") && !said.contains("macOS only"),
-        "{said}"
-    );
+    assert!(!said.contains("helper"), "{said}");
     assert!(keeper.asked.lock().unwrap().is_empty());
 }
 

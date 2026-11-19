@@ -203,16 +203,15 @@ async fn a_terminal_watching_a_vm_asks_its_keeper_for_the_vms_own_live_picture()
     .unwrap();
     let mut frames = service.frames();
 
-    // The scripted keeper gives no live pictures: what matters is where
-    // the terminal asked for one.
-    let unanswered = frames.next().await.err().unwrap();
+    let shown = frames.next().await.unwrap();
 
     let pictures = keeper.asked_for("picture");
     assert_eq!(pictures.len(), 1, "{pictures:?}");
     assert_eq!(pictures[0]["request"]["op"], "stream");
     assert_eq!(pictures[0]["request"]["maxDimension"], 640);
     assert!(pictures[0]["request"]["session"].is_object());
-    assert_eq!(unanswered.error, "Not scripted.", "{unanswered:?}");
-    assert!(!frames.live());
+    assert_eq!(shown.pixels, (64, 40));
+    assert_eq!(shown.rgb.unwrap().len(), 64 * 40 * 3);
+    assert!(frames.live());
     service.shutdown().await.unwrap();
 }

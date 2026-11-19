@@ -97,6 +97,20 @@ pub(crate) struct Facts {
 }
 
 impl Facts {
+    /// What the guest of a keeper whose hello is `hello` is judged on: what
+    /// it declared, the build it runs, and the keeper's own beside it.
+    pub(crate) fn of_hello(hello: &Value) -> Self {
+        let guest = &hello["guest"];
+        Self {
+            declared: listed(&guest["capabilities"]),
+            guest: Build::new(guest["build"].as_str(), guest["version"].as_str()),
+            own: Build::new(
+                hello["program"]["build"].as_str(),
+                hello["keeper"]["build"].as_str(),
+            ),
+        }
+    }
+
     /// How the guest's Atlas stands to this Mac's. The same digest is the
     /// same build; otherwise the versions tell, and another build of the
     /// same version is older only once both digests are known to differ.
@@ -121,6 +135,19 @@ impl Facts {
             .iter()
             .all(|needed| self.declared.iter().any(|declared| declared == needed))
     }
+}
+
+/// The words a hello lists in `said`, such as what it declares; none when
+/// it lists nothing.
+pub(crate) fn listed(said: &Value) -> Vec<String> {
+    said.as_array()
+        .map(|said| {
+            said.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// What to do about the VM `name`, whose guest judged on `facts` does not

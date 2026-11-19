@@ -532,11 +532,7 @@ async fn carry_out(
                 .await?;
             Ok(Value::Null)
         }
-        Command::Monitor { port, .. } => {
-            let client = client()?;
-            viewer::shown_in_window(&client)?;
-            viewer::monitor(config, port, &client).await
-        }
+        Command::Monitor { port, .. } => viewer::monitor(config, port, &client()?).await,
         Command::Screenshot(args) => {
             let client = client()?;
             client.controller.shown(screenshot(&client, args)).await

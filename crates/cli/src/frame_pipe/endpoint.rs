@@ -1,8 +1,9 @@
-//! The broker's private endpoint for one controller and helper: a folder
-//! only the controller can reach, its lifetime lock, its two sockets and
+//! The broker's private endpoint for one controller and the desktop whose
+//! pictures it serves: a folder only the controller can reach, its lifetime lock, its two sockets and
 //! its record. A reachable or unverifiable socket is never taken over, an
 //! unsafe folder is refused rather than repaired, and only the sockets this
 //! instance bound are ever removed.
+use super::owner::Owner;
 use atlas_client::client::Client;
 use atlas_core::{
     context::context,
@@ -29,14 +30,19 @@ const SOCKET_PATH_MAX: usize = 103;
 /// once, and one that neither answers nor refuses in time counts as alive.
 const STALE: Duration = Duration::from_secs(1);
 
-/// The broker's identity for a controller and helper, whatever paths or
-/// sessions serve them.
-pub(crate) fn owner_key(controller: u32, helper: u32) -> [u8; 32] {
+/// The broker's identity for a controller and the desktop `owner` whose
+/// pictures it serves, whatever paths or sessions serve them. A VM's record
+/// key is far longer than an account's four bytes, so no VM's key is ever a
+/// helper's.
+pub(crate) fn owner_key(controller: u32, owner: &Owner) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"atlas-frame-owner-v1");
     hash.update([0]);
     hash.update(controller.to_be_bytes());
-    hash.update(helper.to_be_bytes());
+    match owner {
+        Owner::Helper(uid) => hash.update(uid.to_be_bytes()),
+        Owner::Vm(key) => hash.update(key.as_str().as_bytes()),
+    }
     hash.finalize().into()
 }
 
@@ -149,10 +155,11 @@ fn owner_lock(path: &Path, controller: u32) -> Result<LockFile> {
 }
 
 /// Record the full owner in the held lock file, or refuse a folder another
-/// controller and helper own: only part of the key names the folder.
-fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<()> {
+/// controller and desktop own: only part of the key names the folder.
+fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], owner: &Owner) -> Result<()> {
     use std::io::{Read, Seek, Write};
-    let owner = format!("{} {helper}\n", hex(key));
+    let called = owner.called();
+    let owner = format!("{} {}\n", hex(key), owner.recorded());
     let mut file = &lock.0;
     let mut found = String::new();
     file.take(256)
@@ -168,7 +175,7 @@ fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<
     if found != owner {
         return Err(unsafe_folder(
             folder,
-            "belong to this controller and helper",
+            &format!("belong to this controller and {called}"),
         ));
     }
     Ok(())
@@ -177,7 +184,7 @@ fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<
 /// Remove `socket` if it was left behind: this account's socket that no one
 /// answers, still in the folder `place` names. Anything else there is
 /// refused.
-async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<()> {
+async fn clear_stale(socket: &Path, controller: u32, place: Identity, owner: &Owner) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(socket) else {
         return Ok(());
     };
@@ -205,14 +212,14 @@ async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<
             {
                 return Err(Error::new(
                     Code::Busy,
-                    "Another frame service is starting for this helper",
+                    format!("Another frame service is starting for {}", owner.called()),
                 ));
             }
             fs::remove_file(socket).map_err(context("Remove the stale socket", socket))
         }
         _ => Err(Error::new(
             Code::Busy,
-            "Another frame service answers for this helper",
+            format!("Another frame service answers for {}", owner.called()),
         )),
     }
 }
@@ -224,21 +231,27 @@ async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<
 /// Refuses an unsafe folder or socket, a service that already runs, or a
 /// socket path too long for a Unix address; returns failures to bind.
 pub(crate) async fn bind(controller: u32, client: &Client) -> Result<(Listeners, Endpoint)> {
-    match client.desktop().kind() {
+    let owner = match client.desktop().kind() {
         // Keyed by the two accounts, as every earlier build keys it, so
         // builds before and after this one still exclude each other.
-        Kind::User(user) => bind_in(Path::new(BASE), controller, user.uid).await,
-        Kind::Vm(_) => Err(super::live_refused(client)),
-    }
+        Kind::User(user) => Owner::Helper(user.uid),
+        Kind::Vm(_) => Owner::Vm(client.desktop().record_key()),
+    };
+    bind_in(Path::new(BASE), controller, &owner).await
 }
 
-async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners, Endpoint)> {
-    let folder = folder(base, controller, &owner_key(controller, helper));
+async fn bind_in(base: &Path, controller: u32, owner: &Owner) -> Result<(Listeners, Endpoint)> {
+    let key = owner_key(controller, owner);
+    let folder = folder(base, controller, &key);
     let place = prepare(&folder, controller)?;
     let lock = owner_lock(&folder.join("owner.lock"), controller)?;
-    FileExt::try_lock_exclusive(&lock.0)
-        .map_err(|_| Error::new(Code::Busy, "Another frame service owns this helper"))?;
-    claim(&lock, &folder, &owner_key(controller, helper), helper)?;
+    FileExt::try_lock_exclusive(&lock.0).map_err(|_| {
+        Error::new(
+            Code::Busy,
+            format!("Another frame service owns {}", owner.called()),
+        )
+    })?;
+    claim(&lock, &folder, &key, owner)?;
 
     // Made first, so a failure part way removes what was already bound.
     let mut endpoint = Endpoint {
@@ -256,7 +269,7 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
                 format!("The socket path {} is too long", socket.display()),
             ));
         }
-        clear_stale(&socket, controller, place).await?;
+        clear_stale(&socket, controller, place, owner).await?;
         let listener = UnixListener::bind(&socket).map_err(context("Bind", &socket))?;
         // Owned for cleanup from the moment it exists.
         // Not known to be this socket, so not removed: the next start finds

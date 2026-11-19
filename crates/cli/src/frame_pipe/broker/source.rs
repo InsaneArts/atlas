@@ -4,10 +4,14 @@
 //! way, and a source left without demand gives the helper's stream back.
 //! A screen that stays still is read less often, until it changes or input
 //! is sent; every picture is still read anew and timed when it was read.
+//! A VM's picture that ended is opened again only after a pause that grows
+//! with each try, so a lane its keeper keeps withholding is not asked for
+//! again and again; meanwhile it stays withheld for the same reason.
 use atlas_client::client::{Client, live::LiveStream};
 use atlas_control::Visible;
 use atlas_core::{
-    error::Code,
+    desktop::Kind,
+    error::{Code, Error, Holder},
     frame_pipe::{
         budget::Budget,
         diagnostics::{Reason, Ring},
@@ -35,6 +39,10 @@ const STILL_CADENCE: Duration = Duration::from_millis(250);
 /// How many pictures in a row must match the one before for the screen to
 /// count as still.
 const STILL_AFTER: u32 = 10;
+/// How long a VM's picture waits before it is opened again once it ended,
+/// at first and at most: each try that ends too doubles it.
+const REOPEN_FIRST: Duration = Duration::from_millis(250);
+const REOPEN_LONGEST: Duration = Duration::from_secs(4);
 
 /// One verified picture of the helper, shared by every observer it serves.
 pub(crate) struct Picture {
@@ -245,7 +253,7 @@ async fn read(acquire: &mut impl Acquire, budget: &Budget) -> Result<Picture, Re
     }
 }
 
-/// The helper's live stream as a source.
+/// The desktop's live stream as a source.
 pub(crate) struct Live {
     client: Arc<Client>,
     longest: u32,
@@ -254,6 +262,45 @@ pub(crate) struct Live {
     stream: Option<(LiveStream, CaptureBackend)>,
     ring: Ring,
     sequence: u64,
+    /// When a VM's picture that ended may be opened again, and why it
+    /// ended; none while one is open or none ended since the last picture.
+    reopen: Option<Reopen>,
+}
+
+/// A VM's picture that ended: when it may be opened again, how long it
+/// waited this time, and why it ended.
+#[derive(Clone, Copy, Debug)]
+struct Reopen {
+    at: tokio::time::Instant,
+    waited: Duration,
+    reason: Reason,
+}
+
+impl Reopen {
+    /// The pause after one that waited `before`, for `reason`.
+    fn after(before: Option<Self>, reason: Reason) -> Self {
+        let waited = before.map_or(REOPEN_FIRST, |before| {
+            (before.waited * 2).min(REOPEN_LONGEST)
+        });
+        Self {
+            at: tokio::time::Instant::now() + waited,
+            waited,
+            reason,
+        }
+    }
+}
+
+/// Why a VM's picture was withheld, as observers are told: its window took
+/// the person's input, so its keeper's fence moved; Atlas VM's run or the
+/// session's generation moved since it was proved; or the person's
+/// maintenance holds its pictures. None for any other failure.
+fn withheld(error: &Error) -> Option<Reason> {
+    match error.code {
+        Code::OnConsole => Some(Reason::Hidden),
+        Code::SessionChanged => Some(Reason::EpochChanged),
+        Code::Busy if error.holder == Some(Holder::Person) => Some(Reason::Paused),
+        _ => None,
+    }
 }
 
 /// Why a reading failed, and, when the first picture of a stream opened for
@@ -282,20 +329,64 @@ impl Live {
             stream: None,
             ring: Ring::default(),
             sequence: 0,
+            reopen: None,
+        }
+    }
+
+    /// Whether the source reads a VM, whose pictures that end are opened
+    /// again only after a pause.
+    fn on_vm(&self) -> bool {
+        matches!(self.client.desktop().kind(), Kind::Vm(_))
+    }
+
+    /// Why `error` withheld a VM's picture; none for Second Login's, and
+    /// for any other failure.
+    fn withheld(&self, error: &Error) -> Option<Reason> {
+        self.on_vm().then(|| withheld(error)).flatten()
+    }
+
+    /// Why `error` ended a picture: a VM's withheld one by why, anything
+    /// else by its code, or `fallback` when that says more.
+    fn reason(&self, error: &Error, fallback: Option<Reason>) -> Reason {
+        self.withheld(error)
+            .or(fallback)
+            .unwrap_or(Reason::of(error.code))
+    }
+
+    /// Note that a VM's picture ended for `reason`: it is opened again only
+    /// after a longer pause than the last.
+    fn ended(&mut self, reason: Reason) {
+        if self.on_vm() {
+            self.reopen = Some(Reopen::after(self.reopen, reason));
         }
     }
 
     /// The next picture of the open stream, opening one with `backend`
-    /// first when none is open.
+    /// first when none is open. A VM's picture that ended is not asked for
+    /// again until its pause is over: until then it fails as it ended.
     async fn read(&mut self, backend: CaptureBackend, budget: &Budget) -> Result<Picture, Failure> {
         let opening = self.stream.is_none();
+        if opening
+            && let Some(reopen) = self.reopen
+            && tokio::time::Instant::now() < reopen.at
+        {
+            return Err(reopen.reason.into());
+        }
         let (stream, backend) = match &mut self.stream {
             Some(open) => open,
             None => {
-                let opened = LiveStream::connect(&self.client, self.longest, backend)
-                    .await
-                    .map_err(|error| Reason::of(error.code))?
-                    .ok_or(Reason::SourceStartFailed)?;
+                let opened = match LiveStream::connect(&self.client, self.longest, backend).await {
+                    Ok(Some(opened)) => opened,
+                    Ok(None) => {
+                        self.ended(Reason::SourceStartFailed);
+                        return Err(Reason::SourceStartFailed.into());
+                    }
+                    Err(error) => {
+                        let reason = self.reason(&error, None);
+                        self.ended(reason);
+                        return Err(reason.into());
+                    }
+                };
                 self.stream.insert((opened, backend))
             }
         };
@@ -305,6 +396,7 @@ impl Live {
             .await
         {
             Ok(frame) => {
+                self.reopen = None;
                 self.sequence += 1;
                 let display = &frame.epoch.display;
                 let measure = |value: f64| Measure::new(value).ok_or(Reason::WrongGeometry);
@@ -327,15 +419,19 @@ impl Live {
                 })
             }
             Err(error) => {
-                let reason = self
-                    .ring
-                    .last()
-                    .map_or(Reason::of(error.code), |record| record.reason);
+                let recorded = self.ring.last().map(|record| record.reason);
                 // Only a stream left at a frame boundary is read again.
                 if stream.can_retry(&error) {
-                    return Err(reason.into());
+                    return Err(self.reason(&error, recorded).into());
                 }
-                self.stop().await?;
+                let reason = self.reason(&error, recorded);
+                self.ended(reason);
+                if let Err(unconfirmed) = self.stop().await {
+                    // A withheld picture's lane was ended by its keeper,
+                    // and the guest gives its source back as its lane
+                    // ends: why it was withheld is what is said.
+                    return Err(self.withheld(&error).unwrap_or(unconfirmed).into());
+                }
                 Err(Failure {
                     reason,
                     first_picture: opening.then_some(error.code),

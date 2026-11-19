@@ -405,6 +405,42 @@ impl Client {
         Leftovers::of(&keeper.one(&read).await?)
     }
 
+    /// Whether the person's live window may show this desktop: Second
+    /// Login's always; a VM's once it is added and its keeper carries live
+    /// pictures. Only the keeper's hello is read: no picture is asked and
+    /// the VM is never started.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a VM still being added in its add's words, and one whose
+    /// keeper declares no live pictures with what to do next in the one
+    /// advice; fails when the keeper cannot be reached or does not answer.
+    pub async fn live_window_served(&self) -> Result<()> {
+        if !matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
+            return Ok(());
+        }
+        if self.admission() != Admission::Open {
+            return Err(self.unreachable());
+        }
+        let hello = self.keeper().await?.one(&json!({"op": "hello"})).await?;
+        if hello["ok"] != true {
+            return Err(atlas_core::transport::refusal(&hello));
+        }
+        let carries = crate::vm::update::listed(&hello["keeper"]["capabilities"])
+            .iter()
+            .any(|capability| capability == crate::vm::keeper::PICTURE);
+        if carries {
+            return Ok(());
+        }
+        let name = &self.selected.name;
+        let next = crate::vm::update::advice(name, &crate::vm::update::Facts::of_hello(&hello));
+        Err(Error::new(
+            Code::Update,
+            format!("{name}'s session keeper is from an older build that gives no live picture."),
+        )
+        .with("next", json!(next)))
+    }
+
     /// Why the VM's guest holds agents now, as its own hello read through
     /// the keeper says; none when its Stop is clear and its agents go on.
     /// A hello that cannot be read holds them as a Stop not known, unless

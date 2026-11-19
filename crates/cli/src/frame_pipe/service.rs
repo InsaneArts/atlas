@@ -1,7 +1,7 @@
 //! The frame service as the menu bar's viewer runs it: the private endpoint
-//! for this controller and helper, one live source and the broker serving
-//! it, with a private record clients find it by. It lives as long as the
-//! viewer that started it.
+//! for this controller and the desktop it shows, one live source and the
+//! broker serving it, with a private record clients find it by. It lives as
+//! long as the viewer that started it.
 use super::{
     auth::Gate,
     broker::{
@@ -9,6 +9,7 @@ use super::{
         source::{self, Live},
     },
     endpoint::{self, Endpoint},
+    owner::Owner,
 };
 use atlas_client::client::Client;
 use atlas_core::{
@@ -18,7 +19,6 @@ use atlas_core::{
         budget::{BROKER_PIXELS, Budget},
         model::{Hex32, Hex64, Right, UpdateKind},
     },
-    protocol::CaptureBackend,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -48,16 +48,20 @@ impl Service {
     }
 }
 
-/// Start the frame service for `client`'s helper, reading pictures at most
+/// Start the frame service for `client`'s desktop, reading pictures at most
 /// `longest` pixels on their longest side, telling `witness` of each
 /// committed picture, showing each observer what `privacy` lets it see, and
-/// leaving a still screen's slower pace on each notice on `input`.
+/// leaving a still screen's slower pace on each notice on `input`. A VM's
+/// endpoint is its own, apart from Second Login's, and its record names it
+/// by its record key: its guest's account is none of this Mac's, so it is
+/// left out. Its observer capability is kept out of its record: the viewer
+/// hands it to the app alone.
 ///
 /// # Errors
 ///
-/// Refuses a VM in the one wording for its live window; returns the
-/// endpoint's refusals (an unsafe folder, another service for this helper)
-/// and failures to write its record.
+/// Refuses a VM not yet added or whose keeper gives no live pictures;
+/// returns the endpoint's refusals (an unsafe folder, another service for
+/// this desktop) and failures to write its record.
 pub(crate) async fn start(
     client: Arc<Client>,
     longest: u32,
@@ -65,23 +69,32 @@ pub(crate) async fn start(
     privacy: Privacy,
     input: Arc<Notify>,
 ) -> Result<Service> {
-    crate::viewer::shown_in_window(&client)?;
+    client.live_window_served().await?;
     let controller = nix::unistd::getuid().as_raw();
-    let helper = client.link.socket()?.peer_uid;
+    let owner = Owner::of(&client)?;
+    let (named, said) = owner.said();
     let (listeners, endpoint) = endpoint::bind(controller, &client).await?;
     let (service, bootstrap) = (Hex32::random(), Hex64::random());
-    let descriptor = json!({
+    let mut descriptor = json!({
         "recordVersion": 1,
         "protocolMajor": 1,
         "controllerUID": controller,
-        "helperUID": helper,
         "brokerPID": std::process::id(),
         "serviceInstance": service.as_str(),
         "observerBootstrap": bootstrap.as_str(),
         "controlPath": endpoint.socket("c.sock"),
         "framePath": endpoint.socket("f.sock"),
     });
-    files::write_private(&endpoint.record(), &serde_json::to_vec(&descriptor)?)?;
+    descriptor[named] = said;
+    // A VM's observer capability goes only to the app, by the viewer:
+    // its record keeps no way in for anyone else of this account.
+    let mut record = descriptor.clone();
+    if owner.app_only()
+        && let Some(record) = record.as_object_mut()
+    {
+        record.remove("observerBootstrap");
+    }
+    files::write_private(&endpoint.record(), &serde_json::to_vec(&record)?)?;
     let gate = Gate::new(
         service.clone(),
         bootstrap,
@@ -89,7 +102,7 @@ pub(crate) async fn start(
         vec![UpdateKind::Full],
     );
     let source = source::spawn(
-        Live::new(client, longest, CaptureBackend::ScreenCaptureKit),
+        Live::new(client, longest, owner.backend()),
         Budget::new(BROKER_PIXELS),
         input,
         privacy.visible.clone(),
@@ -113,3 +126,12 @@ pub(crate) async fn start(
         endpoint,
     })
 }
+
+/// Held by every test that starts a frame service for the scripted VM,
+/// whose endpoint is the same for each.
+#[cfg(test)]
+pub(crate) static SCRIPTED_VM: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;

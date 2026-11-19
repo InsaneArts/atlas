@@ -173,7 +173,7 @@ public actor FrameStreamClient {
           case .creditExpired:
             unserved += 1
             guard unserved < Self.unservedCredits else {
-              throw ServiceError("The helper's pictures are unavailable")
+              throw ServiceError(descriptor.unavailable)
             }
             break reading
           case .state: try note(metadata)

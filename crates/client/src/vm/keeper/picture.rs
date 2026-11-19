@@ -44,7 +44,7 @@ use tokio::{
 };
 
 /// The keeper's capability to carry pictures and file reads.
-pub(super) const CAPABILITY: &str = "picture-v1";
+pub(crate) const CAPABILITY: &str = "picture-v1";
 
 /// How long a client is given to take each chunk the guest sends, a live
 /// picture's included.

@@ -176,11 +176,30 @@ pub(crate) fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) ->
 }
 
 /// The description of the frame service the local viewer at `url` runs,
-/// when it runs one for `helper`'s account.
-pub(crate) fn frame_service(url: &str, helper: u32) -> Option<serde_json::Value> {
+/// when it runs one for `owner`'s pictures.
+pub(crate) fn frame_service(
+    url: &str,
+    owner: &crate::frame_pipe::owner::Owner,
+) -> Option<serde_json::Value> {
     let body = fetch(url, "pipe.json", Duration::from_secs(2), 16 * 1024).ok()?;
     let descriptor: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    (descriptor["helperUID"].as_u64() == Some(u64::from(helper))).then_some(descriptor)
+    owner.serves(&descriptor).then_some(descriptor)
+}
+
+/// The menu bar recorded at `record`, while it runs: its address and the
+/// description of the frame service it runs for `owner`'s pictures. Every
+/// observer of a desktop, the app and the terminal alike, finds that one
+/// service so. It blocks for a few seconds at most: call it off the async
+/// runtime.
+pub(crate) fn shared_service(
+    record: &Path,
+    owner: &crate::frame_pipe::owner::Owner,
+) -> Option<(String, serde_json::Value)> {
+    let found = read_record(record)?;
+    let port = recorded_port(&found)?;
+    let running = running(record, port)?;
+    let url = address(&running)?.to_owned();
+    frame_service(&url, owner).map(|descriptor| (url, descriptor))
 }
 
 /// A GET from the local viewer at `url`. Anything but a 200 is refused.
