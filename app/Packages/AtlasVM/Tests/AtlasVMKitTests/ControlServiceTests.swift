@@ -53,6 +53,29 @@ struct ControlServiceTests {
     #expect(try JSONDecoder().decode(ControlReply.self, from: nonsense).ok == false)
   }
 
+  @Test("a window opened for a new VM's setup is opened as one, and a window of before reads back as it was kept")
+  func setupWindow() async throws {
+    let folders = try Folders()
+    let host = FakeHost(power: .running)
+    let (service, _) = try service(host, in: folders)
+    let setup = #"{"op":"window","change":"\#(ChangeID.repeating("e1").text)","input":true,"setup":true}"#
+    let before = #"{"op":"window","change":"\#(ChangeID.repeating("e2").text)","input":true}"#
+
+    let decoder = JSONDecoder()
+    let decoded = try decoder.decode(ControlOperation.self, from: Data(setup.utf8))
+    let older = try decoder.decode(ControlOperation.self, from: Data(before.utf8))
+    let encoder = JSONEncoder()
+    let encoded = try encoder.encode(older)
+    let written = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    #expect(await service.answer(decoded).outcome == .done)
+
+    #expect(decoded == .window(.repeating("e1"), input: true, setup: true))
+    #expect(older == .window(.repeating("e2"), input: true))
+    #expect(written?["setup"] == nil, "written as before")
+    #expect(await host.setups == [true])
+    #expect(ControlHello.ours.capabilities.contains("window-setup"))
+  }
+
   @Test("a state says whether the window is open, as the line its station reads")
   func windowState() async throws {
     let folders = try Folders()

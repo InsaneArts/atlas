@@ -8,9 +8,13 @@
 //! guest paired, its secret is never asked for again. Once its guest is
 //! closed, its setup window opens on this Mac's screen for the person to
 //! allow Atlas there, and the add is set up once that window takes no input
-//! again; agents wait until the person's Resume ends it.
+//! again. Under the same grant, the add then resumes its new VM once, and
+//! ends: only a Stop the guest set itself before any agent was admitted is
+//! lifted, and only while this Mac's Stop of it is clear. Otherwise agents
+//! wait until the person's Resume ends it.
 mod bootstrap;
 mod real;
+mod resume;
 mod setup;
 
 use bootstrap::Progress;
@@ -36,7 +40,10 @@ use atlas_core::{
     error::{Code, Error, Result},
     files::Token,
 };
-use atlas_session::keys::PairingSecret;
+use atlas_session::{
+    control::{GuestStop, Outcome as Applied},
+    keys::PairingSecret,
+};
 use serde_json::{Value, json};
 use std::{
     future::Future,
@@ -88,7 +95,7 @@ const RECLOSING: u32 = 3;
 trait Means {
     /// Ask the person to allow `operation` through Atlas.app, and use the
     /// grant they gave.
-    fn grant(&self, operation: &grant::Operation) -> Result<()>;
+    fn grant(&self, operation: &grant::Operation) -> Result<Granted>;
     /// This Atlas, as a VM's Keychain items are made by it.
     fn provenance(&self) -> Result<Provenance>;
     /// Check the station's key is one the keeper can read.
@@ -122,6 +129,31 @@ trait Means {
     /// What `vm`'s guest says of itself over its session, through its
     /// keeper, as `selected` names it.
     fn posture(&self, selected: &Selected, vm: &DesktopId) -> Result<Posture>;
+    /// Whether this Mac's Stop of `vm` holds agents: one that cannot be read
+    /// does.
+    fn stopped(&self, vm: &DesktopId) -> bool;
+    /// Whether `vm`'s keeper, and its guest in the generation live now,
+    /// keep a Resume's outcome under its change, as `selected` names it.
+    fn keeps_resumes(&self, selected: &Selected, vm: &DesktopId) -> Result<bool>;
+    /// Claim `change` as the add's own on `vm`, before it is sent: what the
+    /// guest keeps of it stays until the claim is cleared.
+    fn claim(&self, vm: &DesktopId, change: &Token) -> Result<()>;
+    /// Tell `vm`'s keeper the add's own Resume, asked as `change`, for the
+    /// guest's own Stop `only` alone, with the keeper's Resume capability
+    /// and this Mac's Stop clear: its answer.
+    fn resume(
+        &self,
+        selected: &Selected,
+        vm: &DesktopId,
+        change: &Token,
+        only: &GuestStop,
+    ) -> Result<Value>;
+    /// What `vm`'s keeper knows of the add's own Resume `change`: whether it
+    /// said it in the live generation, and what the guest says it came to.
+    fn word(&self, selected: &Selected, vm: &DesktopId, change: &Token) -> Result<Value>;
+    /// Clear the claim on `change`, then tell `vm`'s guest it may forget
+    /// what it came to.
+    fn settle(&self, selected: &Selected, vm: &DesktopId, change: &Token) -> Result<()>;
     /// Let `how_long` go by.
     fn wait(&self, how_long: Duration);
     /// Now, as the waits count it.
@@ -154,6 +186,9 @@ struct Posture {
     /// What it says it waits for, in its own words, for each of them not
     /// allowed.
     waiting: Vec<String>,
+    /// Its own Stop, as its daemon's run took it in; none when it cannot
+    /// be told.
+    own: Option<GuestStop>,
 }
 
 impl Posture {
@@ -178,7 +213,16 @@ impl Posture {
             recording,
             accessibility,
             waiting,
+            own: GuestStop::of_hello(hello),
         }
+    }
+
+    /// The guest's own Stop when the add's own Resume may lift it: none
+    /// held, or one the guest set itself before any agent was admitted, as
+    /// its session to this Mac was lost or it restarted to take Screen
+    /// Recording. Never the person's, nor one not known.
+    fn own_stop(&self) -> Option<&GuestStop> {
+        self.own.as_ref().filter(|own| own.liftable())
     }
 
     /// Whether Screen Recording and Accessibility are both allowed.
@@ -247,7 +291,7 @@ fn add_with(
         "Asking you in Atlas.app to allow adding the VM \u{201c}{}\u{201d}.",
         prospect.name
     ));
-    means.grant(&operation)?;
+    let granted = means.grant(&operation)?;
     let admitted = lifecycle.admit()?;
     let own = means.provenance()?;
     begun(lifecycle, &prospect.id, &own, &settings)?;
@@ -286,19 +330,25 @@ fn add_with(
         record,
         say,
         hello: None,
+        granted: &granted,
     };
     match adding.steps() {
         Ok(()) => {
             let record = &adding.record;
-            say(READY);
-            Ok(json!({
+            let ready = record.state == State::Created;
+            say(if ready { resume::ADDED } else { READY });
+            let mut added = json!({
                 "ok": true,
                 "added": {"name": record.name, "id": record.id, "kind": "vm"},
                 "resumed": reservation.resumed,
                 "settings": atlas_core::config::tilde(&record.settings),
                 "setup": "done",
-                "next": setup::RESUME,
-            }))
+                "ready": ready,
+            });
+            if !ready {
+                added["next"] = json!(setup::RESUME);
+            }
+            Ok(added)
         }
         Err(error) => {
             adding.record.failed(&error);
@@ -309,47 +359,121 @@ fn add_with(
     }
 }
 
+/// What is known of the add's own Resume, by the guest's word on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Word {
+    /// The guest resumed it.
+    Resumed,
+    /// The guest refused it, or proved its work ended, its outcome unknown:
+    /// it holds agents no more than the guest's own Stop says.
+    Refused,
+    /// The guest has no word on it, and it was not said in the generation
+    /// live now: it was never carried out, and never will be.
+    Never,
+    /// The guest has no word on it yet, and it was said in the generation
+    /// live now: it may still be carried out.
+    Pending,
+}
+
+/// What the keeper's answer `known` says of the add's own Resume: whether it
+/// said it in the generation live now, and what the guest says it came to
+/// there; none when that cannot be told.
+pub(crate) fn word_of(known: &Value) -> Option<Word> {
+    if known["ok"] != true || known["outcome"]["ok"] != true {
+        return None;
+    }
+    match known["outcome"]["outcome"].as_str()? {
+        "done" => Some(match Applied::of_kept(&known["outcome"]["reply"]) {
+            Some(Applied::Resumed) => Word::Resumed,
+            // Refused, or proven ended with what it came to unknown.
+            Some(_) | None => Word::Refused,
+        }),
+        "unknown" if known["said"] == true => Some(Word::Pending),
+        "unknown" => Some(Word::Never),
+        _ => None,
+    }
+}
+
 /// Where the add of a VM still being added stands, as its record says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Standing {
-    /// Under way, or cut short.
+    /// Under way, or cut short, before its setup window opened.
     Adding,
-    /// Its setup window is open, and the guest waits for this, in its own
-    /// words.
-    Waiting(String),
+    /// Its setup window is open, and the guest waits for its permissions:
+    /// these, in its own words, when it says.
+    Waiting(Option<String>),
+    /// Both allowed: its window's input is being closed, and the add's own
+    /// Resume asked, or left to the person.
+    Resuming,
     /// Set up: the person's Resume ends it.
     SetUp,
+}
+
+impl Standing {
+    /// Where its setup stands, as a status and the desktop list say it:
+    /// none before its window opened.
+    #[must_use]
+    pub(crate) const fn setup(&self) -> Option<&'static str> {
+        match self {
+            Self::Adding => None,
+            Self::Waiting(_) => Some("waiting"),
+            Self::Resuming => Some("resuming"),
+            Self::SetUp => Some("done"),
+        }
+    }
+}
+
+/// Where the add `record` keeps stands; none once it is not being added.
+pub(crate) fn standing_of(record: &Record) -> Option<Standing> {
+    if record.state != State::Adding {
+        return None;
+    }
+    Some(if record.has(Step::Ready) {
+        Standing::SetUp
+    } else if record.has(Step::Allowed) {
+        Standing::Resuming
+    } else if record.has(Step::Shown) {
+        Standing::Waiting(
+            record
+                .setup
+                .as_ref()
+                .and_then(|setup| setup.waiting.clone()),
+        )
+    } else {
+        Standing::Adding
+    })
 }
 
 /// Where the add of the VM `vm` stands, its record read in `lifecycle`;
 /// none when it is not being added, or that cannot be read.
 pub(crate) fn standing(lifecycle: &Lifecycle, vm: &DesktopId) -> Option<Standing> {
-    let record = lifecycle
-        .record(vm)
-        .ok()
-        .flatten()
-        .filter(|record| record.state == State::Adding)?;
-    if record.has(Step::Ready) {
-        return Some(Standing::SetUp);
-    }
-    let waiting = record.setup.and_then(|setup| setup.waiting);
-    Some(waiting.map_or(Standing::Adding, Standing::Waiting))
+    standing_of(&lifecycle.record(vm).ok().flatten()?)
 }
 
 /// `refused`, the refusal of a VM still being added, saying where its add
-/// stands: that the person's Resume ends a set-up one, or what its guest
-/// waits for while its setup window is open.
+/// stands: where its setup is, that the person's Resume ends a set-up one,
+/// and what its guest waits for while its setup window is open.
 pub(crate) fn said(standing: Option<Standing>, refused: Error) -> Error {
+    let Some(standing) = standing else {
+        return refused;
+    };
+    let refused = match standing.setup() {
+        Some(setup) => refused.with("setup", json!(setup)),
+        None => refused,
+    };
     match standing {
-        Some(Standing::SetUp) => refused.with("next", json!(READY)),
-        Some(Standing::Waiting(words)) => refused.with("waiting", json!(words)),
-        Some(Standing::Adding) | None => refused,
+        Standing::SetUp => refused.with("next", json!(READY)),
+        Standing::Waiting(Some(words)) => refused.with("waiting", json!(words)),
+        Standing::Waiting(None) | Standing::Resuming | Standing::Adding => refused,
     }
 }
 
 /// Run `resume`, the person's Resume of the VM `vm` named `name`, whose add
 /// is set up, under its station-operation lock, and end the add once that
-/// Resume let agents go on: the VM is added, and agents reach it.
+/// Resume let agents go on: the VM is added, and agents reach it. The add's
+/// own Resume, when one is left in the record by an add cut short, is
+/// settled first by `settled`, by the guest's word on it; while that word
+/// is not known, it stays claimed, for recovery to settle.
 ///
 /// # Errors
 ///
@@ -361,6 +485,7 @@ pub(crate) async fn resumed(
     vm: &DesktopId,
     name: &str,
     resume: impl Future<Output = Result<Value>>,
+    settled: impl AsyncFnOnce(&Token) -> bool,
 ) -> Result<Value> {
     let admitted = lifecycle.admit()?;
     let Some(_hold) = super::hold_in(&lifecycle.vms(), vm, &admitted)? else {
@@ -383,6 +508,13 @@ pub(crate) async fn resumed(
                 format!("{name}'s add changed while agents resumed; nothing was ended."),
             )
         })?;
+    let left = record.setup.as_ref().and_then(|setup| setup.resume.clone());
+    if let Some(change) = left
+        && settled(&change).await
+        && let Some(setup) = record.setup.as_mut()
+    {
+        setup.resume = None;
+    }
     record.state = State::Created;
     record.failure = None;
     lifecycle.keep_record(&record)?;
@@ -446,6 +578,19 @@ fn listed_as(settings: Option<&Settings>, vm: &DesktopId) -> bool {
     })
 }
 
+/// The person's grant of an add, taken by this run: the add's own Resume is
+/// asked only under it, and only the means' grant makes one.
+struct Granted {
+    _taken: (),
+}
+
+impl Granted {
+    /// The grant the person gave, once it was used.
+    const fn taken() -> Self {
+        Self { _taken: () }
+    }
+}
+
 /// An add under way, under the VM's station-operation lock.
 struct Adding<'a, M> {
     lifecycle: &'a Lifecycle,
@@ -455,6 +600,8 @@ struct Adding<'a, M> {
     say: &'a dyn Fn(&str),
     /// What Atlas VM declared, once it answered.
     hello: Option<Hello>,
+    /// The grant this run took, which its own Resume needs.
+    granted: &'a Granted,
 }
 
 impl<M: Means> Adding<'_, M> {
@@ -480,8 +627,11 @@ impl<M: Means> Adding<'_, M> {
                 install: install.clone(),
             })?;
         }
-        // Still adding: only the person's Resume ends it.
-        self.set_up()?;
+        // Set up, and resumed by the add itself under its grant when it may
+        // be; else still adding, and only the person's Resume ends it.
+        if self.set_up()? {
+            self.record.state = State::Created;
+        }
         self.record.failure = None;
         self.keep()
     }

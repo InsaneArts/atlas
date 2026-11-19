@@ -53,6 +53,11 @@ pub const STOP_REPORT: &str = "stop-report-v1";
 /// Stops and Resumes numbered by the station, each answered once carried
 /// out ([`crate::control::Said::Applied`]).
 pub const ACKNOWLEDGED: &str = "acknowledged-v1";
+/// A numbered Resume may name a change ([`crate::control::Said::Lift`]):
+/// the guest keeps that Resume's intent under it before carrying it out,
+/// and what it came to before it answers, served on `outcome` until the
+/// station settles it, and never carries out again one it kept done.
+pub const RESUME_OUTCOME: &str = "resume-outcome-v1";
 /// The guest's read hello says what the station proves it by: its display,
 /// permissions, machine and build, beside its challenged session proof.
 pub const MACHINE_PROOF: &str = "machine-proof-v1";
@@ -79,10 +84,11 @@ pub const NATIVE_CHECK: &str = "native-check-v1";
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 18] = [
+pub const MACHINE: [&str; 19] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
+    RESUME_OUTCOME,
     MACHINE_PROOF,
     LEFTOVERS,
     ENDED,

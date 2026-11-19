@@ -125,6 +125,8 @@ pub struct StandIn {
     pub unkept: AtomicUsize,
     /// Run as each numbered Resume is carried out, before it is answered.
     pub on_lift: OnLift,
+    /// Its daemon's run, which a Resume for a Stop of its own names.
+    pub run: Token,
     /// Whether it is an older guest, declaring no numbered Stops and
     /// Resumes, no input lanes and no machine proof.
     pub plain: std::sync::atomic::AtomicBool,
@@ -241,6 +243,7 @@ impl StandIn {
             resumes: AtomicUsize::new(0),
             unkept: AtomicUsize::new(0),
             on_lift: OnLift::default(),
+            run: Token::new(),
             plain: std::sync::atomic::AtomicBool::new(false),
             unended: AtomicBool::new(false),
             undeclared: Mutex::default(),
@@ -479,6 +482,28 @@ impl Handler {
     }
 }
 
+impl Handler {
+    /// Carry out a numbered Resume, as a guest does: refused while an
+    /// update is not yet settled.
+    fn lifted(&self) -> Outcome {
+        if !self
+            .standin
+            .updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+        {
+            return Outcome::Refused {
+                why: crate::control::Refusal::Update,
+            };
+        }
+        self.standin.resumes.fetch_add(1, SeqCst);
+        self.standin.halted.store(false, SeqCst);
+        self.standin.on_lift.run();
+        Outcome::Resumed
+    }
+}
+
 impl Guest for Handler {
     fn stop(&self) {
         self.standin.stops.fetch_add(1, SeqCst);
@@ -516,27 +541,34 @@ impl Guest for Handler {
         );
     }
 
-    fn lift(&self, seq: u64) {
-        // An update not yet settled holds every Resume, as a guest's does.
-        if !self
-            .standin
-            .updates
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_empty()
+    fn lift(&self, seq: u64, change: Option<Token>, only: Option<crate::control::GuestStop>) {
+        // One kept done is answered as it came to, never carried out again;
+        // one kept, it keeps what it comes to before it is answered.
+        if let Some(change) = &change
+            && let Asked::Again(Some(kept)) = self.standin.ask(change)
+            && let Some(outcome) = Outcome::of_kept(&kept)
         {
-            self.answer(
-                seq,
-                Outcome::Refused {
-                    why: crate::control::Refusal::Update,
-                },
-            );
+            self.answer(seq, outcome);
             return;
         }
-        self.standin.resumes.fetch_add(1, SeqCst);
-        self.standin.halted.store(false, SeqCst);
-        self.standin.on_lift.run();
-        self.answer(seq, Outcome::Resumed);
+        // One for a Stop of its own lifts only that very Stop: this run's,
+        // with no Stop taken in since.
+        let outcome = match only {
+            Some(only)
+                if only.run != self.standin.run
+                    || only.stops != self.standin.stops.load(SeqCst) as u64
+                    || !only.liftable() =>
+            {
+                Outcome::Refused {
+                    why: crate::control::Refusal::LaterStop,
+                }
+            }
+            _ => self.lifted(),
+        };
+        if let Some(change) = &change {
+            self.standin.done(change, &outcome.kept());
+        }
+        self.answer(seq, outcome);
     }
 
     fn settled(&self, changes: Vec<atlas_core::files::Token>) {

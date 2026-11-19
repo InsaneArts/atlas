@@ -117,7 +117,7 @@ actor GuestInstaller {
     let admin = Remote(
       user: Self.admin,
       address: address,
-      password: try GuestPassword.of("\(desktop).admin"),
+      password: try GuestPassword.admin(desktop),
       folder: folder
     )
     _ = try admin.sudo("-v")
@@ -221,7 +221,7 @@ actor GuestInstaller {
       )
       try keep(&progress, .jobs)
     }
-    let adminPassword = try GuestPassword.of("\(desktop).admin")
+    let adminPassword = try GuestPassword.admin(desktop)
     if !progress.passed(.admin) {
       try setup(atlas, root("admin --name \(Self.admin)"), payload: adminPassword)
       try keep(&progress, .admin)

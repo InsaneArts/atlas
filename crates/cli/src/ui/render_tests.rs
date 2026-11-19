@@ -1711,6 +1711,16 @@ fn desktops_are_listed_by_kind_a_vms_power_apart_from_whether_atlas_reaches_it()
         "{}",
         added.out
     );
+
+    let resumed_itself = show(
+        View::DesktopAdd,
+        json!({"ok": true, "added": {"name": "work", "id": "0123456789abcdef01234567"},
+               "settings": "~/.config/atlas.toml", "setup": "done", "ready": true}),
+    );
+    assert_eq!(
+        resumed_itself.out, "✓ The VM \u{201c}work\u{201d} is added to ~/.config/atlas.toml",
+        "finished, with no Resume asked of the person"
+    );
 }
 
 #[test]

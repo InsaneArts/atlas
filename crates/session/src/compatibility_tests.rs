@@ -208,6 +208,7 @@ fn a_machine_guest_declares_exactly_these_names_in_this_order() {
             "changes-v1",
             "stop-report-v1",
             "acknowledged-v1",
+            "resume-outcome-v1",
             "machine-proof-v1",
             "leftovers-v1",
             "ended-v1",

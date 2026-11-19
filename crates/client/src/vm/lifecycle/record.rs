@@ -17,7 +17,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[serde(rename_all = "lowercase")]
 pub enum State {
     /// Being added: every command on it but the person's Stop is refused,
-    /// and, once its setup is done, the person's Resume, which ends its add.
+    /// and, once its setup is done, the person's Resume, which ends its add
+    /// when the add's own Resume did not.
     Adding,
     /// Added.
     Created,
@@ -55,8 +56,12 @@ pub enum Step {
     /// Atlas VM confirmed its window takes no input, as the setup window's
     /// proof says.
     Hidden,
-    /// Its setup is done: the person's Resume ends its add.
+    /// Its setup is done, and agents still wait: the person's Resume ends
+    /// its add.
     Ready,
+    /// The add's own Resume let agents go on: its guest resumed it, and no
+    /// Stop of this Mac's held them. Its add ends.
+    Resumed,
 }
 
 /// A change Atlas VM was asked for, kept before it was sent: its ID, what
@@ -203,6 +208,10 @@ pub struct Setup {
     /// the VM, while the window is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// The change the add's own Resume is asked as, kept before it is
+    /// claimed or sent, until what it came to is settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Token>,
 }
 
 /// A VM's lifecycle record.

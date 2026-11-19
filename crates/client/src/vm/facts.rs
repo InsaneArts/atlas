@@ -145,8 +145,29 @@ pub(crate) fn facts(seen: &Seen<'_>) -> Value {
             .said(seen.name),
         "atlas": seen.atlas,
         "adder": adder(seen.record),
+        "setup": setup(seen.record),
+        "waiting": waiting(seen.record),
         "can": can(seen),
     })
+}
+
+/// Where the setup of an add under way stands, `waiting` for its
+/// permissions, `resuming` or `done`; null before its window opened, and
+/// once the add ended.
+fn setup(record: Option<&Record>) -> Value {
+    record
+        .and_then(crate::vm::add::standing_of)
+        .and_then(|standing| standing.setup())
+        .map_or(Value::Null, |setup| json!(setup))
+}
+
+/// What the guest of an add whose setup window is open says it waits for,
+/// in its own words; null otherwise.
+fn waiting(record: Option<&Record>) -> Value {
+    match record.and_then(crate::vm::add::standing_of) {
+        Some(crate::vm::add::Standing::Waiting(Some(words))) => json!(words),
+        _ => Value::Null,
+    }
 }
 
 /// How far making the VM of an add under way got, as Atlas VM keeps it for

@@ -128,7 +128,9 @@ pub fn label(vm: &DesktopId) -> String {
 
 /// The Resume capability `vm`'s keeper made at its start, which the
 /// person's own surface, the viewer service, reads in the station folder to
-/// send with the person's Resume. No agent command reads it.
+/// send with the person's Resume; and the add of a new VM, only once it used
+/// the person's grant of that add, to resume it once. No agent command reads
+/// it.
 ///
 /// # Errors
 ///
@@ -541,6 +543,10 @@ struct Session {
     /// The changes carried in it, settled once the station holds no claim
     /// on them.
     carried: change::Carried,
+    /// Every Resume naming its change said in it: one the guest has no
+    /// word on yet may still be carried out while it lives, and never once
+    /// it is gone.
+    resumes: Mutex<std::collections::BTreeSet<atlas_core::files::Token>>,
     /// Set once the keeper left it, for what it relays to end with it.
     retired: tokio::sync::watch::Sender<bool>,
 }
@@ -688,6 +694,7 @@ impl Keeper {
             desktop,
             guest,
             carried,
+            resumes: Mutex::default(),
             retired: tokio::sync::watch::Sender::new(false),
         });
         {

@@ -1646,3 +1646,251 @@ async fn a_vm_set_up_reads_as_stopped_waiting_for_the_persons_resume() {
     assert_eq!(kept_state(&client), State::Adding);
     assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_naming_its_change_is_kept_by_the_guest_and_read_back_after_its_keeper_is_gone() {
+    use atlas_control::executors::Executor;
+    let serving = serving(true).await;
+    let change = Token::new();
+    // Claimed as the station's own, so no hello settles it meanwhile.
+    drop(
+        serving
+            .fixture
+            .keeper
+            .stop
+            .quarantine_by(change.as_str(), Executor::Station)
+            .unwrap(),
+    );
+
+    let said = asked(
+        &serving.socket,
+        &json!({"op": "resume-word", "change": change}),
+    )
+    .await;
+    let resumed = asked(
+        &serving.socket,
+        &json!({"op": "resume", "capability": serving.capability, "revision": null,
+            "change": change, "only": own_stop(&serving)}),
+    )
+    .await;
+    let word = asked(
+        &serving.socket,
+        &json!({"op": "resume-word", "change": change}),
+    )
+    .await;
+    let fixture = serving
+        .end()
+        .after(crate::vm::keeper::program::Program::built("b1"));
+    let serving = serving_of(fixture, true).await;
+    let read = asked(
+        &serving.socket,
+        &json!({"op": "read", "request": {"op": "outcome", "change": change}}),
+    )
+    .await;
+
+    assert_eq!(said[0]["said"], false, "not said yet: {said:?}");
+    assert_eq!(resumed[0]["outcome"], "resumed", "{resumed:?}");
+    assert_eq!(resumed[0]["lifted"], "already-clear", "{resumed:?}");
+    assert_eq!(word[0]["said"], true, "{word:?}");
+    assert_eq!(
+        crate::vm::add::word_of(&word[0]),
+        Some(crate::vm::add::Word::Resumed)
+    );
+    let read = read.last().unwrap();
+    assert_eq!(read["outcome"], "done", "{read}");
+    assert_eq!(
+        atlas_session::control::Outcome::of_kept(&read["reply"]),
+        Some(atlas_session::control::Outcome::Resumed)
+    );
+    assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 1);
+    // Once its claim goes, the guest is told it may forget it.
+    serving
+        .fixture
+        .keeper
+        .stop
+        .clear_if(change.as_str())
+        .unwrap();
+    let settled = asked(
+        &serving.socket,
+        &json!({"op": "settle", "changes": [change]}),
+    )
+    .await;
+    assert_eq!(settled[0]["settled"], json!([change]), "{settled:?}");
+    until("forgotten", || {
+        serving.fixture.guest.standin.outcome(&change).is_none()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_naming_its_change_is_never_said_to_a_guest_that_keeps_no_resumes_outcome() {
+    let fixture = fixture();
+    fixture
+        .guest
+        .standin
+        .undeclared
+        .lock()
+        .unwrap()
+        .push(atlas_session::compatibility::RESUME_OUTCOME.to_owned());
+    let serving = serving_of(fixture, true).await;
+
+    let refused = asked(
+        &serving.socket,
+        &json!({"op": "resume", "capability": serving.capability, "revision": null,
+            "change": Token::new(), "only": own_stop(&serving)}),
+    )
+    .await;
+    let malformed = asked(
+        &serving.socket,
+        &json!({"op": "resume", "capability": serving.capability, "revision": null,
+            "change": "not a token"}),
+    )
+    .await;
+
+    assert_eq!(refused[0]["ok"], false, "{refused:?}");
+    assert_eq!(refused[0]["code"], "update", "{refused:?}");
+    assert_eq!(refused[0]["sent"], false, "{refused:?}");
+    assert_eq!(malformed[0]["code"], "bad-request", "{malformed:?}");
+    assert_eq!(serving.fixture.guest.standin.resumes.load(SeqCst), 0);
+}
+
+/// The stand-in guest's own Stop as it took it in, for a Resume of the
+/// add's own.
+fn own_stop(serving: &Serving) -> Value {
+    let standin = &serving.fixture.guest.standin;
+    json!({"run": standin.run, "stops": standin.stops.load(SeqCst)})
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_for_a_guest_stop_another_stop_came_after_is_refused_by_the_guest_and_kept_so() {
+    use atlas_control::executors::Executor;
+    let serving = serving(true).await;
+    let change = Token::new();
+    drop(
+        serving
+            .fixture
+            .keeper
+            .stop
+            .quarantine_by(change.as_str(), Executor::Station)
+            .unwrap(),
+    );
+    let seen = own_stop(&serving);
+    // A Stop reaches the guest after the add looked, this Mac's own lifted
+    // meanwhile: only the guest can tell.
+    asked(&serving.socket, &json!({"op": "stop"})).await;
+    serving.fixture.keeper.stop.note_stop(false).unwrap();
+
+    let told = asked(
+        &serving.socket,
+        &json!({"op": "resume", "capability": serving.capability, "revision": null,
+            "change": change, "only": seen}),
+    )
+    .await;
+
+    assert_eq!(
+        told[0]["outcome"],
+        json!({"refused": {"why": "later-stop"}}),
+        "{told:?}"
+    );
+    assert!(
+        serving.fixture.guest.standin.halted.load(SeqCst),
+        "nothing lifted"
+    );
+    let word = asked(
+        &serving.socket,
+        &json!({"op": "resume-word", "change": change}),
+    )
+    .await;
+    assert_eq!(
+        crate::vm::add::word_of(&word[0]),
+        Some(crate::vm::add::Word::Refused)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_left_claimed_on_an_added_vm_is_settled_by_recovery_from_the_guests_word_never_dropped()
+ {
+    use crate::vm::lifecycle::{
+        Provenance, Reservation,
+        record::{Record, Setup, State},
+    };
+    use atlas_control::executors::Executor;
+    let serving = serving(true).await;
+    let keeper = &serving.fixture.keeper;
+    let (settled_one, pending_one) = (Token::new(), Token::new());
+    let reservation = Reservation {
+        name: "work".to_owned(),
+        id: keeper.vm.clone(),
+        named: true,
+        resumed: false,
+    };
+    let mut record = Record::adding(
+        &reservation,
+        "/Users/someone/.config/atlas.toml".into(),
+        Provenance {
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            requirement: "identifier \"com.insanearts.atlas\"".to_owned(),
+        },
+    );
+    record.state = State::Created;
+    let mut outcomes = Vec::new();
+    for (change, kept) in [(&settled_one, true), (&pending_one, false)] {
+        record.setup = Some(Setup {
+            resume: Some(change.clone()),
+            ..Setup::default()
+        });
+        keeper.lifecycle.keep_record(&record).unwrap();
+        drop(
+            keeper
+                .stop
+                .quarantine_by(change.as_str(), Executor::Station)
+                .unwrap(),
+        );
+        if kept {
+            // What the guest kept it came to.
+            let standin = &serving.fixture.guest.standin;
+            standin.ask(change);
+            standin.done(change, &atlas_session::control::Outcome::Resumed.kept());
+        } else {
+            // Said in the live generation, and no word from the guest yet.
+            let session = keeper.shared.live().unwrap();
+            session.resumes.lock().unwrap().insert(change.clone());
+        }
+        let generation = keeper.shared.state().generation.unwrap().0;
+
+        let recovered = asked(
+            &serving.socket,
+            &json!({"op": "recover", "generation": generation}),
+        )
+        .await;
+
+        let pending = keeper.stop.pending_within(Duration::ZERO).unwrap();
+        outcomes.push((
+            recovered[0].clone(),
+            pending.iter().any(|claim| claim == change.as_str()),
+        ));
+    }
+
+    let (recovered, still) = &outcomes[0];
+    assert_eq!(recovered["cleared"], json!([settled_one]), "{recovered}");
+    assert!(!still, "settled by the guest's word");
+    until("the guest told to forget it", || {
+        serving
+            .fixture
+            .guest
+            .standin
+            .outcome(&settled_one)
+            .is_none()
+    })
+    .await;
+    let (recovered, still) = &outcomes[1];
+    assert!(
+        recovered["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kept| kept["change"] == json!(pending_one)),
+        "{recovered}"
+    );
+    assert!(still, "kept claimed while the guest has no word on it");
+}

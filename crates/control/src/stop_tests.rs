@@ -250,3 +250,37 @@ fn a_stop_noted_only_when_none_is_leaves_one_noted_with_its_reason_and_revision(
     assert_eq!(controller.stop_revision().unwrap(), person);
     assert_eq!(person.unwrap().why(), StopWhy::Person);
 }
+
+#[test]
+fn what_a_resume_sends_runs_only_while_the_stop_it_read_still_holds_and_a_stop_waits_for_it() {
+    let (directory, controller) = controller();
+
+    let clear = controller.unless_stopped_since(None, || "sent").unwrap();
+    // A Stop noted while it runs waits for the marker's lock: it comes after.
+    let during = controller
+        .unless_stopped_since(None, || {
+            let stopping = std::thread::spawn({
+                let other = also(&directory);
+                move || other.note_stop(true).unwrap()
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let noted_meanwhile = also(&directory).stop_noted();
+            (stopping, noted_meanwhile)
+        })
+        .unwrap()
+        .unwrap();
+    during.0.join().unwrap();
+    let since = controller.unless_stopped_since(None, || "sent").unwrap();
+
+    assert_eq!(clear, Some("sent"));
+    assert!(!during.1, "no Stop is noted while it runs");
+    assert_eq!(since, None, "a Stop given since holds");
+    let read = controller.stop_revision().unwrap();
+    assert_eq!(
+        controller
+            .unless_stopped_since(read.as_ref(), || "sent")
+            .unwrap(),
+        Some("sent"),
+        "the very Stop a Resume read"
+    );
+}

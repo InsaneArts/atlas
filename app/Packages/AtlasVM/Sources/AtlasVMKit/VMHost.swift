@@ -18,8 +18,9 @@ public protocol VMHost: Sendable {
   func start() async throws
   /// Stop the VM.
   func stop() async throws
-  /// Open the VM's window, with input.
-  func openWindow() async throws
+  /// Open the VM's window, with input: for a new VM's setup when `setup`,
+  /// its administrator's name and password shown in it.
+  func openWindow(setup: Bool) async throws
   /// Close the VM's window, returning once it is gone.
   func closeWindow() async throws
   /// Whether the VM's window is open now.

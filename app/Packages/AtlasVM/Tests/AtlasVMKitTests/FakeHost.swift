@@ -111,8 +111,20 @@ actor FakeHost: VMHost {
     }
   }
 
-  func openWindow() async throws {
+  /// Whether each window opened was for a VM's setup, in order.
+  var setups: [Bool] = []
+  /// The administrator's password a setup window shows, as the VM's
+  /// creation kept it, and the row it shows, while it is open.
+  var adminPassword: String?
+  var shownHint: AdminHint?
+
+  /// Keep `password` as the VM's creation kept its administrator's.
+  func setAdminPassword(_ password: String) { adminPassword = password }
+
+  func openWindow(setup: Bool) async throws {
     try call("openWindow")
+    setups.append(setup)
+    shownHint = AdminHint(setup: setup, password: adminPassword)
     if holdsWindow {
       await withCheckedContinuation { continuation in
         heldWindow = continuation

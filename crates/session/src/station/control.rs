@@ -11,7 +11,7 @@
 //! the guest's own state is what tells.
 use crate::{
     compatibility::Declared,
-    control::{self, Outbox, Outcome, Said, Station},
+    control::{self, GuestStop, Outbox, Outcome, Said, Station},
     credit::Credit,
     generation::Generation,
     keys::Keypair,
@@ -355,10 +355,38 @@ impl Control {
         self.ask(Said::resume_to)
     }
 
+    /// Say a Resume under the change `change`, which the guest keeps it
+    /// under, and what it came to, until the station settles it; for the
+    /// guest's own Stop `only` alone, which it lifts only while its Stop is
+    /// still that one.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a guest that does not keep a Resume's outcome, before
+    /// anything is said; fails as [`Control::resume`] does.
+    pub fn resume_as(&self, change: &Token, only: &GuestStop) -> Result<Asked> {
+        if let Some(refused) = crate::compatibility::judge(
+            &self.declared,
+            &[
+                crate::compatibility::ACKNOWLEDGED,
+                crate::compatibility::RESUME_OUTCOME,
+            ],
+        )
+        .refusal()
+        {
+            return Err(refused);
+        }
+        self.ask(|_, seq| Said::Lift {
+            seq,
+            change: Some(change.clone()),
+            only: Some(only.clone()),
+        })
+    }
+
     /// Say what `numbered` makes of the next number: numbered, its answer
     /// awaited before it goes, for a guest that acknowledges; unnumbered
     /// and unconfirmed otherwise.
-    fn ask(&self, numbered: fn(&Declared, u64) -> Said) -> Result<Asked> {
+    fn ask(&self, numbered: impl FnOnce(&Declared, u64) -> Said) -> Result<Asked> {
         let mut state = self.numbering.lock();
         if state.lost {
             return Err(Error::new(

@@ -10,9 +10,10 @@
 //! the owner it was taken for, are gone only once the input service itself
 //! said, after the change was no longer carried out here, that no owner
 //! holds input and nothing is held: its owner's cleanup acknowledged,
-//! whatever owner it was. A vanished lane or handler proves nothing. A
-//! kind with no such evidence here is never judged: what it came to stays
-//! unknown.
+//! whatever owner it was. A Resume kept under its change is carried out
+//! by its daemon alone: once no longer carried out here, it is gone. A
+//! vanished lane or handler proves nothing. A kind with no such evidence
+//! here is never judged: what it came to stays unknown.
 use super::{
     changes::Intended,
     processes::{Remembered, Supervised, done_with},
@@ -41,6 +42,10 @@ pub(crate) const OWNER: &str = "owner";
 /// Input taken, sent, kept or let go of on the input service's own lanes,
 /// and the owner it was for.
 pub(crate) const INPUT: [&str; 5] = ["acquire", "input", "renew", "release", OWNER];
+/// A Resume kept under its change: carried out by the daemon that kept it
+/// and by nothing else, so one no longer carried out here has nothing of
+/// it running.
+const RESUME: &str = atlas_session::control::RESUME;
 
 /// What a change's work is judged by.
 pub(crate) struct Evidence<'a> {
@@ -88,18 +93,25 @@ impl Evidence<'_> {
     /// record read later names every supervisor it ever had, unless
     /// retired, which only one proven done with is.
     pub(crate) fn proven_gone(&self, unresolved: Vec<Intended>) -> Vec<Token> {
-        let (input, judged): (Vec<Intended>, Vec<Intended>) = unresolved
+        let (resumes, unresolved): (Vec<Intended>, Vec<Intended>) = unresolved
             .into_iter()
             .filter(|intended| !(self.carried)(&intended.change))
+            .partition(|intended| intended.operation == RESUME);
+        let (input, judged): (Vec<Intended>, Vec<Intended>) = unresolved
+            .into_iter()
             .filter(|intended| {
                 RUN_LIKE.contains(&intended.operation.as_str())
                     || intended.operation == JOB
                     || INPUT.contains(&intended.operation.as_str())
             })
             .partition(|intended| INPUT.contains(&intended.operation.as_str()));
-        let mut gone: Vec<Token> = input
+        let mut gone: Vec<Token> = resumes
             .into_iter()
-            .filter(|intended| (self.released)(&intended.change))
+            .chain(
+                input
+                    .into_iter()
+                    .filter(|intended| (self.released)(&intended.change)),
+            )
             .map(|intended| intended.change)
             .collect();
         if judged.is_empty() {

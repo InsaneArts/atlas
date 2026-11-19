@@ -258,12 +258,15 @@ final class Machine {
     }
   }
 
-  /// Open its window, with input.
-  func openWindow() throws {
+  /// Open its window, with input: for its setup when `setup`, showing its
+  /// second administrator's name and password, read only from the Keychain
+  /// item its creation kept.
+  func openWindow(setup: Bool) throws {
     guard let running, running.state == .running else { throw AtlasVMError.notRunning }
     if let window, window.isOpen, window.shows(running) { return }
     closeWindow()
-    window = VMWindow(machine: running, title: "Atlas VM")
+    let hint = AdminHint(setup: setup, password: setup ? GuestPassword.shownAdmin(desktop) : nil)
+    window = VMWindow(machine: running, title: "Atlas VM", hint: hint)
   }
 
   /// Close its window.

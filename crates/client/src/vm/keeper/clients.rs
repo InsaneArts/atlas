@@ -6,9 +6,12 @@
 //!
 //! Resume is the person's alone: it is taken only with the capability the
 //! keeper made at its start and keeps in its station folder, which the
-//! person's own surface reads there. So is the person's own control of the
-//! guest's input, carried with that capability alone. What a client says of
-//! itself, that it is the viewer included, counts for nothing.
+//! person's own surface reads there, and the add of a VM the person allowed
+//! through Atlas.app, which reads it there under that grant to resume its
+//! new VM once. A Resume naming its change is said to a guest only when it
+//! keeps that Resume's outcome under it. So is the person's own control of
+//! the guest's input, carried with that capability alone. What a client
+//! says of itself, that it is the viewer included, counts for nothing.
 //!
 //! An update asks `handover`, with its change: the keeper keeps the station's
 //! Stop for the update, says it, leaves its generation, answers and ends,
@@ -33,7 +36,10 @@ use atlas_core::{
     files::Token,
 };
 use atlas_session::{
-    control::Outcome, keys::PairingSecret, lane::LaneKind, station::control::Answer,
+    control::{GuestStop, Outcome},
+    keys::PairingSecret,
+    lane::LaneKind,
+    station::control::Answer,
 };
 use serde_json::{Value, json};
 use std::{
@@ -54,10 +60,11 @@ use tokio::{
 /// The keeper's protocol, which a client checks in its hello.
 pub(crate) const PROTOCOL: u32 = 1;
 /// What the keeper serves beside its hello.
-pub(crate) const CAPABILITIES: [&str; 11] = [
+pub(crate) const CAPABILITIES: [&str; 12] = [
     "read-v1",
     "stop-v1",
     "resume-v1",
+    atlas_session::compatibility::RESUME_OUTCOME,
     "handover-v1",
     super::observe::CAPABILITY,
     super::change::CAPABILITY,
@@ -253,8 +260,10 @@ async fn admitted(stream: &UnixStream, admit: Arc<dyn Admit>) -> bool {
 enum Telling {
     Stop,
     /// The person's Resume, and the station's Stop as it was read before it
-    /// was asked: lifted by the keeper once the guest resumed.
-    Resume(Option<StopRevision>),
+    /// was asked: lifted by the keeper once the guest resumed. The add's
+    /// own names its change, which the guest keeps it under, and the
+    /// guest's own Stop it is for alone.
+    Resume(Option<StopRevision>, Option<(Token, GuestStop)>),
 }
 
 /// Take one request on `stream` and answer it, the client judged once its
@@ -322,9 +331,24 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
             )
             .await;
         }
+        Some("resume") if !request["change"].is_null() && kept_resume(&request).is_none() => {
+            let refused = refusal(
+                Code::BadRequest,
+                "A Resume naming its change names it as a token, and the guest's own Stop it \
+                 is for.",
+            );
+            let _ = say(&mut writing, &refused).await;
+        }
         Some("resume") if revision.is_some() => {
-            let telling = Telling::Resume(revision.flatten());
+            let telling = Telling::Resume(revision.flatten(), kept_resume(&request));
             let _ = say(&mut writing, &told(keeper, telling, deadline).await).await;
+        }
+        Some("resume-word") => {
+            let word = match request["change"].as_str().and_then(Token::parse) {
+                Some(change) => resume_word(keeper, &change).await,
+                None => refusal(Code::BadRequest, "Name the Resume's change as a token."),
+            };
+            let _ = say(&mut writing, &word).await;
         }
         Some("read")
             if request["request"].is_object()
@@ -465,7 +489,18 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
         return unsaid(keeper.shared.state().why.clone());
     };
     let _turn = match &telling {
-        Telling::Resume(revision) => {
+        Telling::Resume(revision, change) => {
+            // One naming its change goes only to a guest that keeps what it
+            // came to under it: never said otherwise.
+            if change.is_some()
+                && let Some(lacking) = atlas_session::compatibility::judge(
+                    session.control.declared(),
+                    &[atlas_session::compatibility::RESUME_OUTCOME],
+                )
+                .refusal()
+            {
+                return super::change::unsent(lacking);
+            }
             let turn = keeper.turn.lock().await;
             // A Resume of a Stop that is no longer the one kept is never said:
             // a Stop given since holds agents.
@@ -490,8 +525,33 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
         }
         Telling::Stop => None,
     };
-    let asked = match telling {
-        Telling::Resume(_) => session.control.resume(),
+    let asked = match &telling {
+        Telling::Resume(revision, kept) => {
+            // Said under the lock a Stop is noted under, looked at once more:
+            // one noted first refuses it unsaid, one noted after it comes
+            // after it on control. Nothing here waits, so no Stop waits long.
+            let (stop, saying, revision, kept) = (
+                keeper.stop.clone(),
+                session.clone(),
+                revision.clone(),
+                kept.clone(),
+            );
+            let said = super::blocking(move || {
+                stop.unless_stopped_since(revision.as_ref(), || resume_said(&saying, kept.as_ref()))
+            })
+            .await;
+            match said {
+                Ok(Some(asked)) => asked,
+                Ok(None) => {
+                    return refusal(
+                        Code::Stopped,
+                        "A Stop given since this Resume read it still holds agents; nothing was \
+                         said.",
+                    );
+                }
+                Err(error) => Err(error),
+            }
+        }
         Telling::Stop => session.control.stop(),
     };
     let asked = match asked {
@@ -505,7 +565,8 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
         Ok(Answer::Unconfirmed) | Err(_) => json!("unconfirmed"),
     };
     let mut told = json!({"ok": true, "said": true, "seq": seq, "outcome": outcome});
-    if let (Telling::Resume(revision), Ok(Answer::Applied(Outcome::Resumed))) = (telling, answer) {
+    if let (Telling::Resume(revision, _), Ok(Answer::Applied(Outcome::Resumed))) = (telling, answer)
+    {
         let stop = keeper.stop.clone();
         told["lifted"] = match super::blocking(move || stop.lift_stop(revision.as_ref())).await {
             Ok(Resumed::Cleared) => json!("cleared"),
@@ -515,6 +576,63 @@ async fn told(keeper: &Keeper, telling: Telling, deadline: Duration) -> Value {
         };
     }
     told
+}
+
+/// Say a Resume on `session`: the add's own, `kept`, under its change and
+/// for the guest's own Stop alone, noted as said in it first; the person's
+/// otherwise.
+fn resume_said(
+    session: &super::Session,
+    kept: Option<&(Token, GuestStop)>,
+) -> atlas_core::error::Result<atlas_session::station::control::Asked> {
+    let Some((change, only)) = kept else {
+        return session.control.resume();
+    };
+    let lock = || {
+        session
+            .resumes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    lock().insert(change.clone());
+    let asked = session.control.resume_as(change, only);
+    // Nothing was said: it is not this session's.
+    if asked.is_err() {
+        lock().remove(change);
+    }
+    asked
+}
+
+/// The add's own Resume `request` names: its change and the guest's own
+/// Stop it is for; none when it names either wrongly.
+fn kept_resume(request: &Value) -> Option<(Token, GuestStop)> {
+    let change = request["change"].as_str().and_then(Token::parse)?;
+    let only = serde_json::from_value(request["only"].clone()).ok()?;
+    Some((change, only))
+}
+
+/// What is known of the add's own Resume `change`: whether it was said in
+/// the live generation, and what the guest says it came to there (null
+/// when it did not answer whole in time).
+async fn resume_word(keeper: &Keeper, change: &Token) -> Value {
+    let Some(session) = keeper.shared.live() else {
+        return refusal(Code::Transport, "The VM's session is not live.");
+    };
+    json!({
+        "ok": true,
+        "said": said_in(&session, change),
+        "generation": session.control.generation(),
+        "outcome": super::recover::outcome(&session, change).await,
+    })
+}
+
+/// Whether the add's own Resume `change` was said in `session`.
+pub(super) fn said_in(session: &super::Session, change: &Token) -> bool {
+    session
+        .resumes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(change)
 }
 
 /// Hand the session over for the update `change`, the caller holding the

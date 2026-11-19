@@ -84,7 +84,8 @@ Run `atlas desktop list` and `atlas --desktop NAME status` for the VM, replacing
 - **"NAME is a VM desktop: this works only with Second Login."** The command is Second Login's alone. Run it with `--desktop` and your Second Login's name, or do without it on the VM.
 - **"NAME is still being added."** The add is under way or was cut short. Run `atlas desktop add vm` again to go on; `status` says what the VM waits for, such as a permission in its window.
 - **The window was closed, or Atlas is not allowed yet.** Run the add again: it opens the VM's window again. Allow Screen & System Audio Recording and Accessibility for Atlas there, as macOS asks.
-- **"Setup is done. Resume agents from the Atlas menu bar to let them use the VM."** Choose **Resume** in Atlas.app while it shows the VM. Atlas.app shows the default desktop, so make the VM the default first if it isn't.
+- **"Setup is done. Resume agents from the Atlas menu bar to let them use the VM."** The add did not let agents go on itself, as you stopped them or the VM's Atlas waits for your Resume. Choose **Resume** in Atlas.app while it shows the VM. Atlas.app shows the default desktop, so make the VM the default first if it isn't.
+- **"Atlas has not heard yet whether the VM let agents go on."** Run the add again: it asks the VM what came of it, and goes on.
 - **`stopped` on a VM.** You stopped agents, an update stopped them, or the VM's Atlas waits for your Resume. Only you resume them, in Atlas.app.
 - **Agents wait during maintenance.** While `atlas desktop maintain` keeps the VM open for you, agents can't use it. End it with `atlas desktop maintain NAME --end`.
 - **"NAME's live picture shows only in the Atlas app."** and **"Only the Atlas app can do this on NAME."** A VM's live picture and control are Atlas.app's alone. Watch it there, or read-only with `atlas --desktop NAME monitor --terminal`.

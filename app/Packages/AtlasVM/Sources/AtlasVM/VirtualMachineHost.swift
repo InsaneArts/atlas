@@ -39,8 +39,8 @@ final class VirtualMachineHost: VMHost {
   /// Stop it.
   func stop() async throws { try await machine.stop() }
 
-  /// Open its window, its input the person's.
-  func openWindow() async throws { try await machine.openWindow() }
+  /// Open its window, its input the person's, for its setup when `setup`.
+  func openWindow(setup: Bool) async throws { try await machine.openWindow(setup: setup) }
 
   /// Close its window.
   func closeWindow() async throws { await machine.closeWindow() }

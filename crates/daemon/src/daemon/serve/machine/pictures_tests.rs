@@ -499,7 +499,7 @@ async fn an_idle_resumed_guest_restarted_for_screen_recording_stays_stopped_unti
     );
     assert!(refused_as_stopped(&desktop).await, "stopped until resumed");
     assert_eq!(
-        hello_of(&desktop).await["stop"],
+        without_epoch(&hello_of(&desktop).await["stop"]),
         json!({"state": "stopped", "why": "recording"})
     );
 
@@ -680,7 +680,7 @@ async fn a_guest_ended_while_macos_asks_and_started_able_to_record_stays_stopped
         }
     );
     assert_eq!(
-        hello_of(&desktop).await["stop"],
+        without_epoch(&hello_of(&desktop).await["stop"]),
         json!({"state": "stopped", "why": "recording"})
     );
     let record = super::super::recording::Record::at(reopened.machine.paired.recording.clone());
@@ -889,4 +889,13 @@ fn a_queued_streams_capture_never_begins_once_its_station_hangs_up_before_its_ca
         assert_eq!(CAPTURES.load(SeqCst), 0, "the queued capture never began");
         left_at(&*guest_credit(&served).await, BULK as usize).await;
     });
+}
+
+/// A hello's Stop without the run and count it was read at.
+fn without_epoch(stop: &Value) -> Value {
+    let mut stop = stop.clone();
+    if let Some(stop) = stop.as_object_mut() {
+        assert!(stop.remove("epoch").is_some(), "its epoch is said");
+    }
+    stop
 }

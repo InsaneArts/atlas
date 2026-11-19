@@ -5264,7 +5264,16 @@ async fn a_numbered_resume_is_answered_resumed_once_agents_are_admitted() {
     );
     assert!(refused_as_stopped(&desktop).await);
 
-    let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+    let outcome = answered(
+        &controlling,
+        Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        },
+        2,
+    )
+    .await;
 
     assert_eq!(outcome, Outcome::Resumed);
     assert!(!served.machine.daemon.halted.borrow().halted);
@@ -5292,7 +5301,16 @@ async fn a_numbered_resume_while_input_is_not_ready_is_refused_for_input() {
         Outcome::Stopped
     );
 
-    let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+    let outcome = answered(
+        &controlling,
+        Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        },
+        2,
+    )
+    .await;
 
     assert_eq!(
         outcome,
@@ -5315,7 +5333,14 @@ async fn a_numbered_resume_whose_last_checks_put_the_stop_back_is_never_answered
         Outcome::Stopped
     );
     served.machine.halting.reopening.send_replace(false);
-    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    controlling
+        .outbox
+        .say(Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        })
+        .unwrap();
     kept_as(&served, Kept::Clear).await;
 
     // Work not known to have ended turns up between the disk and reopening.
@@ -5347,7 +5372,14 @@ async fn a_stop_that_comes_while_a_numbered_resume_reopens_is_answered_after_it_
         Outcome::Stopped
     );
     served.machine.halting.reopening.send_replace(false);
-    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    controlling
+        .outbox
+        .say(Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        })
+        .unwrap();
     kept_as(&served, Kept::Clear).await;
 
     controlling.outbox.say(Said::Halt { seq: 3 }).unwrap();
@@ -5398,7 +5430,14 @@ async fn a_resume_and_a_stop_said_back_to_back_are_answered_in_order_and_leave_a
         Outcome::Stopped
     );
 
-    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    controlling
+        .outbox
+        .say(Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        })
+        .unwrap();
     let last = answered(&controlling, Said::Halt { seq: 3 }, 3).await;
 
     assert_eq!(last, Outcome::Stopped);
@@ -5435,7 +5474,14 @@ async fn a_generation_lost_during_a_numbered_resume_leaves_it_unanswered_and_age
         Outcome::Stopped
     );
     served.machine.halting.reopening.send_replace(false);
-    controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+    controlling
+        .outbox
+        .say(Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        })
+        .unwrap();
     kept_as(&served, Kept::Clear).await;
 
     served.link.set(Conditions {
@@ -5487,14 +5533,25 @@ async fn the_hello_says_the_guests_stop_is_clear_kept_with_why_or_unknown() {
     std::fs::write(served.records.path().join("stop"), b"{}").unwrap();
     let unknown = hello_of(&desktop).await;
 
-    assert_eq!(clear["stop"], json!({"state": "clear"}));
+    assert_eq!(clear["stop"]["state"], "clear");
+    assert_eq!(clear["stop"]["epoch"]["stops"], 0);
     assert_eq!(clear["agents"]["stopped"], false);
+    assert_eq!(stopped["stop"]["state"], "stopped");
+    assert_eq!(stopped["stop"]["why"], "person");
     assert_eq!(
-        stopped["stop"],
-        json!({"state": "stopped", "why": "person"})
+        stopped["stop"]["epoch"]["stops"], 1,
+        "the person's Stop taken in"
+    );
+    assert_eq!(
+        stopped["stop"]["epoch"]["run"],
+        clear["stop"]["epoch"]["run"]
     );
     assert_eq!(stopped["agents"]["stopped"], true);
-    assert_eq!(unknown["stop"], json!({"state": "unknown"}));
+    assert_eq!(
+        unknown["stop"],
+        json!({"state": "unknown"}),
+        "no epoch for a Stop not known"
+    );
 }
 
 #[tokio::test]
@@ -5594,7 +5651,11 @@ async fn live_a_real_guest_answers_a_numbered_stop_and_resume_once_applied() {
 
     controlling
         .outbox
-        .say(atlas_session::control::Said::Lift { seq: 2 })
+        .say(atlas_session::control::Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        })
         .unwrap();
     let lifted = tokio::time::timeout(Duration::from_secs(60), controlling.heard.applied(2))
         .await
@@ -5689,7 +5750,16 @@ async fn a_numbered_resume_while_the_guest_is_open_or_unknown_is_refused_and_kee
         );
         served.machine.seen_as(posture);
 
-        let outcome = answered(&controlling, Said::Lift { seq: 2 }, 2).await;
+        let outcome = answered(
+            &controlling,
+            Said::Lift {
+                seq: 2,
+                change: None,
+                only: None,
+            },
+            2,
+        )
+        .await;
 
         assert_eq!(
             outcome,
@@ -5746,7 +5816,14 @@ async fn a_numbered_resume_whose_guest_opens_before_it_reopens_puts_the_stop_bac
             Outcome::Stopped
         );
         served.machine.halting.reopening.send_replace(false);
-        controlling.outbox.say(Said::Lift { seq: 2 }).unwrap();
+        controlling
+            .outbox
+            .say(Said::Lift {
+                seq: 2,
+                change: None,
+                only: None,
+            })
+            .unwrap();
         kept_as(&served, Kept::Clear).await;
 
         // Seen open, or not to be told, after the Stop was lifted on disk.
@@ -6080,7 +6157,7 @@ fn a_machine_guest_serving_everything_declares_every_name_the_station_reads_in_o
     assert_eq!(
         Serving::default().declared(),
         [
-            &atlas_session::compatibility::MACHINE[..4],
+            &atlas_session::compatibility::MACHINE[..5],
             &[
                 atlas_session::compatibility::INSTALLED,
                 atlas_session::compatibility::NATIVE_CHECK
@@ -6755,3 +6832,216 @@ async fn a_change_whose_worker_could_not_say_what_it_did_stays_unknown_until_its
 
 #[path = "machine/pictures_tests.rs"]
 mod pictures;
+
+#[tokio::test]
+async fn a_resume_naming_its_change_is_kept_before_it_is_carried_out_and_its_outcome_before_it_is_answered()
+ {
+    use crate::machine::stop::Kept;
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    let change = Token::new();
+    // Held between the Stop lifted on disk and agents let go on.
+    served.machine.halting.reopening.send_replace(false);
+
+    controlling
+        .outbox
+        .say(Said::Lift {
+            seq: 2,
+            change: Some(change.clone()),
+            only: None,
+        })
+        .unwrap();
+    kept_as(&served, Kept::Clear).await;
+
+    assert_eq!(
+        served.machine.paired.changes.of(&change).unwrap(),
+        Some(State::Intended),
+        "kept as intended before it is carried out"
+    );
+    assert!(
+        !controlling
+            .heard
+            .applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(seq, _)| *seq == 2),
+        "not answered while it is carried out"
+    );
+    served.machine.halting.reopening.send_replace(true);
+    let outcome = tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(2))
+        .await
+        .expect("an answer");
+    // Read as the answer came: what it came to was kept before it.
+    let kept = served.machine.paired.changes.of(&change).unwrap();
+    assert_eq!(outcome, Outcome::Resumed);
+    let Some(State::Done { reply }) = kept else {
+        panic!("not kept done: {kept:?}");
+    };
+    assert_eq!(Outcome::of_kept(&reply), Some(Outcome::Resumed));
+    let served_on_outcome = answered_by(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+        |reply| reply["outcome"] == "done",
+    )
+    .await;
+    assert_eq!(
+        Outcome::of_kept(&served_on_outcome["reply"]),
+        Some(Outcome::Resumed)
+    );
+    assert!(
+        served
+            .machine
+            .paired
+            .changes
+            .unsettled()
+            .unwrap()
+            .contains(&change),
+        "kept until the station settles it"
+    );
+}
+
+#[tokio::test]
+async fn a_resume_kept_done_is_answered_as_it_came_to_and_never_carried_out_again() {
+    use atlas_session::control::{Outcome, Said};
+    let served = Served::start().await;
+    let (controlling, desktop) = served.control().await;
+    updates_read(&served).await;
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+        Outcome::Stopped
+    );
+    let change = Token::new();
+    let lift = |seq| Said::Lift {
+        seq,
+        change: Some(change.clone()),
+        only: None,
+    };
+    assert_eq!(answered(&controlling, lift(2), 2).await, Outcome::Resumed);
+    assert_eq!(
+        answered(&controlling, Said::Halt { seq: 3 }, 3).await,
+        Outcome::Stopped
+    );
+
+    let again = answered(&controlling, lift(4), 4).await;
+
+    assert_eq!(again, Outcome::Resumed, "what it came to, as kept");
+    assert!(
+        served.machine.daemon.halted.borrow().halted,
+        "the Stop since still holds agents"
+    );
+    assert!(refused_as_stopped(&desktop).await);
+}
+
+#[tokio::test]
+async fn a_resume_kept_intended_by_a_daemon_gone_since_is_proven_ended_when_its_outcome_is_asked() {
+    let served = Served::start().await;
+    let (_controlling, desktop) = served.control().await;
+    let change = Token::new();
+    served
+        .machine
+        .paired
+        .changes
+        .ask(
+            &change,
+            atlas_session::control::RESUME,
+            &json!({"op": atlas_session::control::RESUME}),
+        )
+        .unwrap();
+
+    let asked = answered_by(
+        &desktop,
+        LaneKind::Read,
+        &json!({"op": "outcome", "change": change}),
+        |reply| reply["outcome"] == "done",
+    )
+    .await;
+
+    assert_eq!(asked["reply"]["uncertain"], true, "{asked}");
+    assert_eq!(asked["reply"]["ended"], true, "{asked}");
+    assert_eq!(
+        atlas_session::control::Outcome::of_kept(&asked["reply"]),
+        None
+    );
+}
+
+/// The guest's own Stop as its read hello says it now.
+async fn own_stop(desktop: &Desktop) -> atlas_session::control::GuestStop {
+    let hello = answered_by(desktop, LaneKind::Read, &json!({"op": "hello"}), |hello| {
+        hello["stop"]["epoch"].is_object()
+    })
+    .await;
+    atlas_session::control::GuestStop::of_hello(&hello).expect("its own Stop")
+}
+
+#[tokio::test]
+async fn a_resume_for_the_guests_own_stop_lifts_it_and_never_a_stop_the_person_gave_since() {
+    use crate::machine::stop::{Kept, Why};
+    use atlas_session::control::{Outcome, Refusal, Said};
+    let lifted = Served::start().await;
+    let held = Served::start().await;
+    let mut answers = Vec::new();
+    for (served, person_stops) in [(&lifted, false), (&held, true)] {
+        let (controlling, desktop) = served.control().await;
+        updates_read(served).await;
+        assert!(served.machine.stop_for_recording().await);
+        let seen = own_stop(&desktop).await;
+        assert_eq!(seen.why.as_deref(), Some("recording"), "{seen:?}");
+        if person_stops {
+            // Taken in after the look, its first reason kept on disk.
+            assert_eq!(
+                answered(&controlling, Said::Halt { seq: 1 }, 1).await,
+                Outcome::Stopped
+            );
+            kept_as(
+                served,
+                Kept::Stopped {
+                    why: Why::Recording,
+                },
+            )
+            .await;
+        }
+        let change = Token::new();
+        let lift = Said::Lift {
+            seq: 2,
+            change: Some(change.clone()),
+            only: Some(seen),
+        };
+        controlling.outbox.say(lift).unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(20), controlling.heard.applied(2))
+            .await
+            .expect("an answer");
+        let kept = served.machine.paired.changes.of(&change).unwrap();
+        answers.push((outcome, kept, served.machine.daemon.halted.borrow().halted));
+    }
+
+    let (outcome, kept, halted) = &answers[0];
+    assert_eq!(*outcome, Outcome::Resumed);
+    assert!(!halted);
+    assert!(
+        matches!(kept, Some(State::Done { reply }) if Outcome::of_kept(reply) == Some(Outcome::Resumed))
+    );
+    let (outcome, kept, halted) = &answers[1];
+    let refused = Outcome::Refused {
+        why: Refusal::LaterStop,
+    };
+    assert_eq!(*outcome, refused, "certain, nothing lifted");
+    assert!(*halted, "the person's Stop holds");
+    assert!(
+        matches!(kept, Some(State::Done { reply }) if Outcome::of_kept(reply) == Some(refused)),
+        "kept so under its change: {kept:?}"
+    );
+    assert_eq!(
+        held.machine.paired.stop.kept().unwrap(),
+        Kept::Stopped {
+            why: Why::Recording
+        }
+    );
+}

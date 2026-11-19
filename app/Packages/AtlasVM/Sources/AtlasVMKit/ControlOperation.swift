@@ -16,8 +16,10 @@ public enum ControlOperation: Equatable, Sendable {
   case start(ChangeID)
   /// Stop the VM.
   case stop(ChangeID)
-  /// Open the VM's window with input, or close it.
-  case window(ChangeID, input: Bool)
+  /// Open the VM's window with input, or close it. One opened for a new
+  /// VM's setup shows its administrator's name and password while it takes
+  /// input.
+  case window(ChangeID, input: Bool, setup: Bool = false)
   /// Put Atlas inside the VM's guest.
   case install(ChangeID, InstallRequest)
   /// Go on with the install of this change, already handed its secret,
@@ -44,7 +46,7 @@ public enum ControlOperation: Equatable, Sendable {
     switch self {
     case .hello, .state, .latest, .outcome:
       nil
-    case .create(let change), .start(let change), .stop(let change), .window(let change, _),
+    case .create(let change), .start(let change), .stop(let change), .window(let change, _, _),
       .install(let change, _), .installResume(let change), .paired(let change, _, _), .closed(let change, _),
       .forget(let change), .void(let change):
       change
@@ -111,6 +113,7 @@ extension ControlOperation: Codable {
     case enrolment
     case secret
     case install
+    case setup
   }
 
   /// Read from one request: its `op`, and the fields it needs.
@@ -141,7 +144,8 @@ extension ControlOperation: Codable {
     case "window":
       self = .window(
         try fields.decode(ChangeID.self, forKey: .change),
-        input: try fields.decode(Bool.self, forKey: .input)
+        input: try fields.decode(Bool.self, forKey: .input),
+        setup: try fields.decodeIfPresent(Bool.self, forKey: .setup) ?? false
       )
     case "install":
       self = .install(
@@ -182,9 +186,13 @@ extension ControlOperation: Codable {
     case .outcome(let change), .create(let change), .start(let change), .stop(let change), .forget(let change),
       .installResume(let change), .void(let change):
       try fields.encode(change, forKey: .change)
-    case .window(let change, let input):
+    case .window(let change, let input, let setup):
       try fields.encode(change, forKey: .change)
       try fields.encode(input, forKey: .input)
+      // Written only when set, so a window of before reads as it was kept.
+      if setup {
+        try fields.encode(setup, forKey: .setup)
+      }
     case .install(let change, let request):
       try fields.encode(change, forKey: .change)
       try fields.encode(request.bundle, forKey: .bundle)

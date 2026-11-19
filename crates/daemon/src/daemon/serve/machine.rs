@@ -13,6 +13,7 @@ use crate::machine::{
 use atlas_core::{
     desktop::DesktopId,
     error::{Code, Error, Result},
+    files::Token,
     protocol::{self, ConnectionPhase, MAX_REQUEST, Request, failure},
     session::key::PeerKey,
 };
@@ -145,8 +146,25 @@ enum Transition {
     Stop(Why, Option<Answer>),
     /// A Resume, from the generation it came in, after so many Stops came:
     /// lifted only while that generation is live and no Stop came since;
-    /// answered when numbered.
-    Resume(Authority, u64, Option<Answer>),
+    /// answered when numbered, and kept under the change it names; for the
+    /// guest's own Stop it names alone, when it names one.
+    Resume(
+        Authority,
+        u64,
+        Option<Answer>,
+        Option<Token>,
+        Option<control::GuestStop>,
+    ),
+}
+
+/// What a Resume naming its change finds kept under it.
+enum KeptResume {
+    /// Nothing yet, or no outcome: kept as intended now, to be carried out.
+    Begun,
+    /// What it came to, kept before: answered so, never carried out again.
+    Done(Outcome),
+    /// Its intent cannot be kept: it is never carried out.
+    Unkept,
 }
 
 /// How long a numbered Stop waits for the work it ended to have ended
@@ -208,11 +226,64 @@ struct Worker {
     /// How closed the guest is: a numbered Resume is answered `resumed` only
     /// where agents' changes are admitted.
     posture: Arc<Seen>,
+    /// Where a Resume naming its change is kept, as any change is.
+    changes: Arc<Changes<Arc<dyn Vault>>>,
+    /// This daemon's run, which a Resume for a Stop of its own names.
+    run: Token,
     #[cfg(test)]
     reopening: watch::Receiver<bool>,
 }
 
 impl Worker {
+    /// Whether the Stop kept now is still `only`, the guest's own Stop a
+    /// Resume taken in after `at` Stops is for: this run's, no Stop taken in
+    /// since, and kept for the same reason, one the guest set itself. A Stop
+    /// that comes after this look is caught by the Resume's own checks.
+    async fn still(&self, only: &control::GuestStop, at: u64) -> bool {
+        if only.run != self.run || only.stops != at || !only.liftable() {
+            return false;
+        }
+        let reading = self.stop.clone();
+        let kept = tokio::task::spawn_blocking(move || reading.kept()).await;
+        let why = match kept {
+            Ok(Ok(StopKept::Clear)) => None,
+            Ok(Ok(StopKept::Stopped { why })) => serde_json::to_value(why)
+                .ok()
+                .and_then(|why| why.as_str().map(str::to_owned)),
+            Ok(Err(_)) | Err(_) => return false,
+        };
+        why == only.why && self.since.load(SeqCst) == at
+    }
+
+    /// What is kept under the Resume's change `change`: kept as intended
+    /// now when nothing is, or when what is says no outcome of a Resume's.
+    async fn kept(&self, change: &Token) -> KeptResume {
+        let (changes, asked) = (self.changes.clone(), change.clone());
+        let request = serde_json::json!({"op": control::RESUME});
+        let found = tokio::task::spawn_blocking(move || {
+            match changes.ask(&asked, control::RESUME, &request) {
+                Ok(Asked::Again(State::Done { reply })) => Ok(Outcome::of_kept(&reply)),
+                Ok(Asked::Begun | Asked::Again(State::Intended)) => Ok(None),
+                Err(refused) => Err(refused),
+            }
+        })
+        .await;
+        match found {
+            Ok(Ok(Some(outcome))) => KeptResume::Done(outcome),
+            Ok(Ok(None)) => KeptResume::Begun,
+            Ok(Err(_)) | Err(_) => KeptResume::Unkept,
+        }
+    }
+
+    /// Keep `outcome` as what the Resume's change `change` came to: whether
+    /// it was kept, before which it is never answered.
+    async fn keep(&self, change: &Token, outcome: Outcome) -> bool {
+        let (changes, kept) = (self.changes.clone(), change.clone());
+        tokio::task::spawn_blocking(move || changes.done(&kept, &outcome.kept()))
+            .await
+            .is_ok_and(|kept| kept.is_ok())
+    }
+
     /// Carry out a Stop for `why`: saved, then its work ended. Whether it
     /// was saved.
     async fn stop(&self, why: Why) -> bool {
@@ -379,6 +450,8 @@ impl Halting {
         stop: Arc<Stop<Arc<dyn Vault>>>,
         gate: Arc<crate::machine::update::Gate>,
         posture: Arc<Seen>,
+        changes: Arc<Changes<Arc<dyn Vault>>>,
+        run: Token,
     ) -> Arc<Self> {
         let (transitions, mut coming) = tokio::sync::mpsc::unbounded_channel();
         let received = Arc::new(AtomicU64::new(0));
@@ -392,6 +465,8 @@ impl Halting {
             since: received.clone(),
             turn: turning.clone(),
             posture,
+            changes,
+            run,
             #[cfg(test)]
             reopening: reopening.subscribe(),
         };
@@ -415,9 +490,44 @@ impl Halting {
                             });
                         }
                     }
-                    Transition::Resume(authority, at, answer) => {
-                        let numbered = answer.is_some();
-                        let resumed = worker.resume(&authority, at, unsaved, numbered).await;
+                    Transition::Resume(authority, at, answer, change, only) => {
+                        // Carried out here while it is, so a daemon that
+                        // started since proves one it kept intended ended.
+                        let _carrying = change
+                            .as_ref()
+                            .map(|change| worker.daemon.keepers.carry(change));
+                        match match &change {
+                            Some(change) => worker.kept(change).await,
+                            None => KeptResume::Begun,
+                        } {
+                            KeptResume::Done(outcome) => {
+                                if let Some(answer) = answer {
+                                    answer.give(outcome);
+                                }
+                                continue;
+                            }
+                            KeptResume::Unkept => {
+                                if let Some(answer) = answer {
+                                    answer.give(Outcome::Refused {
+                                        why: Refusal::Unkept,
+                                    });
+                                }
+                                continue;
+                            }
+                            KeptResume::Begun => {}
+                        }
+                        let resumed = match &only {
+                            // Another Stop than the one it is for: refused,
+                            // certain, nothing lifted.
+                            Some(only) if !worker.still(only, at).await => {
+                                Resumed::Refused(Refusal::LaterStop)
+                            }
+                            _ => {
+                                worker
+                                    .resume(&authority, at, unsaved, answer.is_some())
+                                    .await
+                            }
+                        };
                         let why = match resumed {
                             Resumed::Lifted => None,
                             Resumed::Refused(why) => Some(why),
@@ -428,9 +538,15 @@ impl Halting {
                                 Some(why)
                             }
                         };
-                        if let Some(answer) = answer {
-                            answer
-                                .give(why.map_or(Outcome::Resumed, |why| Outcome::Refused { why }));
+                        let outcome = why.map_or(Outcome::Resumed, |why| Outcome::Refused { why });
+                        // What it came to is kept before it is answered: one
+                        // not kept is never answered, and its intent says.
+                        let kept = match &change {
+                            Some(change) => worker.keep(change, outcome).await,
+                            None => true,
+                        };
+                        if let (Some(answer), true) = (answer, kept) {
+                            answer.give(outcome);
                         }
                     }
                 }
@@ -461,12 +577,19 @@ impl Halting {
     }
 
     /// The person's Resume, in `authority`'s generation, giving `answer`
-    /// when there is one.
-    fn resume(&self, authority: Authority, answer: Option<Answer>) {
+    /// when there is one, kept under `change` and for the guest's own Stop
+    /// `only` alone when it names them.
+    fn resume(
+        &self,
+        authority: Authority,
+        answer: Option<Answer>,
+        change: Option<Token>,
+        only: Option<control::GuestStop>,
+    ) {
         let at = self.received.load(SeqCst);
         let _ = self
             .transitions
-            .send(Transition::Resume(authority, at, answer));
+            .send(Transition::Resume(authority, at, answer, change, only));
     }
 }
 
@@ -506,7 +629,8 @@ impl Guest for Hand {
     }
 
     fn resume(&self) {
-        self.halting.resume(self.authority.clone(), None);
+        self.halting
+            .resume(self.authority.clone(), None, None, None);
     }
 
     fn halt(&self, seq: u64) {
@@ -514,9 +638,9 @@ impl Guest for Hand {
         self.halting.halt(Why::Person, Some(self.answer(seq)));
     }
 
-    fn lift(&self, seq: u64) {
+    fn lift(&self, seq: u64, change: Option<Token>, only: Option<control::GuestStop>) {
         self.halting
-            .resume(self.authority.clone(), Some(self.answer(seq)));
+            .resume(self.authority.clone(), Some(self.answer(seq)), change, only);
     }
 
     /// The station dials every lane itself: the guest is never asked to.
@@ -766,13 +890,14 @@ impl Serving {
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
             ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, INSTALLED, JOBS,
-            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PERSON_INPUT, PICTURES, STAGE,
-            STOP_REPORT, UPDATE_BOUND, UPDATES,
+            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PERSON_INPUT, PICTURES,
+            RESUME_OUTCOME, STAGE, STOP_REPORT, UPDATE_BOUND, UPDATES,
         };
         match capability {
             // Its Applications folder and a canary folder are read by the
-            // daemon itself.
-            CHANGES | STOP_REPORT | ACKNOWLEDGED | MACHINE_PROOF | INSTALLED | NATIVE_CHECK => true,
+            // daemon itself, and a Resume is kept with its changes.
+            CHANGES | STOP_REPORT | ACKNOWLEDGED | RESUME_OUTCOME | MACHINE_PROOF | INSTALLED
+            | NATIVE_CHECK => true,
             // What a change whose outcome is unknown came to is proven by its
             // supervisors, and the environment worker runs under one.
             LEFTOVERS | ENDED | ENVIRONMENT => self.supervising,
@@ -849,6 +974,9 @@ pub struct Machine {
     /// The person's control of its input as their own lane carried it: what
     /// a page opened for them goes under, checked right before it starts.
     persons: Arc<PersonGrants>,
+    /// This daemon's run, which its hello's Stop names, so a Resume for that
+    /// very Stop is told apart from any Stop after it.
+    run: Token,
 }
 
 /// How long a reading of how closed the guest is holds before an agent's
@@ -925,6 +1053,7 @@ impl Machine {
         daemon.halted.send_modify(|halt| halt.halted = true);
         daemon.keepers.orphans(true);
         let daemon = Arc::new(daemon);
+        let run = Token::new();
         // Taken as unresolved until the record is read: no Resume passes an
         // update not yet looked at.
         let gate = Arc::new(crate::machine::update::Gate::new(true));
@@ -958,6 +1087,8 @@ impl Machine {
             paired.stop.clone(),
             gate.clone(),
             posture.clone(),
+            paired.changes.clone(),
+            run.clone(),
         );
         let starting = tokio::spawn(start(
             daemon.clone(),
@@ -984,6 +1115,7 @@ impl Machine {
             progress: Held::new(paced::BULK_PROGRESS),
             said: Arc::default(),
             persons: Arc::default(),
+            run,
         })
     }
 
@@ -1405,13 +1537,18 @@ impl Machine {
                 self.jobs.clone(),
                 self.paired.stop.clone(),
             );
+            let (run, received) = (self.run.clone(), self.halting.received.clone());
             let recording = self.daemon.screen.recording;
             let saying = bounded::off_runtime(&self.blocking, move || {
                 let posture = READ_POSTURE();
                 let work = work(&daemon, jobs.as_deref());
+                // Counted before the Stop is read: one taken in after the
+                // count is never taken for this one.
+                let epoch = Some((run, received.load(SeqCst)));
                 let stop = super::super::facts::Stop {
                     kept: kept.kept().ok(),
                     halted: daemon.halted.borrow().halted,
+                    epoch,
                 };
                 // Read last, after what may have taken a while, and whole.
                 let (standing, failure) = service

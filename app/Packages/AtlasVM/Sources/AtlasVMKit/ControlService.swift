@@ -349,12 +349,12 @@ public actor ControlService {
         try await host.start()
       case .stop:
         try await host.stop()
-      case .window(_, input: true):
+      case .window(_, input: true, let setup):
         // Moved on before the window can take any input.
         fence.beginOpening()
         defer { fence.endOpening() }
-        try await host.openWindow()
-      case .window(_, input: false):
+        try await host.openWindow(setup: setup)
+      case .window(_, input: false, _):
         try await host.closeWindow()
       case .install(let change, let request):
         // Told by its own phases, and closed only on the station's word.
@@ -400,7 +400,7 @@ public actor ControlService {
       guard power.confirmed else { return nil }
       return effect(of: operation, on: power.value)
         .map { $0 ? .done : refusal }
-    case .window(_, let input):
+    case .window(_, let input, _):
       // Off only once it is seen gone.
       return await host.windowOpen() == input ? .done : refusal
     case .install, .installResume, .paired, .closed, .forget:
@@ -444,7 +444,7 @@ public actor ControlService {
       let power = await host.power()
       guard power.confirmed, let held = effect(of: operation, on: power.value) else { return nil }
       return held ? .done : .refused("Its runner went before it was seen done; it is not in effect.")
-    case .window(_, let input):
+    case .window(_, let input, _):
       guard vmGone else { return nil }
       // No window of that run's is left: off holds, on does not.
       return input ? .refused("Its runner went; its window is closed.") : .done

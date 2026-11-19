@@ -755,7 +755,8 @@ impl Client {
         match adding {
             None => resume.await,
             Some((lifecycle, vm)) => {
-                crate::vm::add::resumed(lifecycle, &vm, &self.selected.name, resume).await
+                let settled = async |change: &Token| self.add_resume_settled(change).await;
+                crate::vm::add::resumed(lifecycle, &vm, &self.selected.name, resume, settled).await
             }
         }
     }
@@ -773,6 +774,36 @@ impl Client {
         };
         (crate::vm::add::standing(lifecycle, &config.id) == Some(crate::vm::add::Standing::SetUp))
             .then(|| (lifecycle, config.id.clone()))
+    }
+
+    /// Settle the add's own Resume `change`, left claimed by an add cut
+    /// short, by the guest's word on it through the keeper: its claim
+    /// cleared and the guest told it may forget it, once it came to
+    /// anything or can no longer be carried out. Whether it was settled; one
+    /// whose word is not known stays claimed.
+    async fn add_resume_settled(&self, change: &Token) -> bool {
+        let Ok(keeper) = self.keeper().await else {
+            return false;
+        };
+        let asked = json!({"op": "resume-word", "change": change});
+        let word = keeper
+            .one(&asked)
+            .await
+            .ok()
+            .and_then(|known| crate::vm::add::word_of(&known));
+        if word.is_none_or(|word| word == crate::vm::add::Word::Pending) {
+            return false;
+        }
+        let (controller, claim) = (self.controller.clone(), change.as_str().to_owned());
+        let cleared = tokio::task::spawn_blocking(move || {
+            controller.clear_known_within(&claim, PENDING_READ)
+        })
+        .await
+        .is_ok_and(|cleared| cleared.is_ok());
+        if cleared {
+            self.settle_guest(std::slice::from_ref(change)).await;
+        }
+        cleared
     }
 
     /// Tell the keeper the person's Resume, with its `capability` and the

@@ -9,8 +9,9 @@ final class VMWindow {
   private let window: NSWindow
   private let machine: VZVirtualMachine
 
-  /// A window on `machine`, shown at once.
-  init(machine: VZVirtualMachine, title: String) {
+  /// A window on `machine`, shown at once, with `hint` above the VM while
+  /// it takes input, when there is one.
+  init(machine: VZVirtualMachine, title: String, hint: AdminHint?) {
     self.machine = machine
     let view = VZVirtualMachineView()
     view.virtualMachine = machine
@@ -27,6 +28,9 @@ final class VMWindow {
     window.title = title
     window.isReleasedWhenClosed = false
     window.contentView = view
+    if let hint {
+      window.addTitlebarAccessoryViewController(AdminHintAccessory(hint: hint))
+    }
     window.center()
     window.makeKeyAndOrderFront(nil)
     NSApplication.shared

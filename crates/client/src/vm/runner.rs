@@ -73,8 +73,14 @@ pub enum Operation {
     Start(Token),
     /// Stop it.
     Stop(Token),
-    /// Open its window with input, or close it.
-    Window { change: Token, input: bool },
+    /// Open its window with input, or close it. One opened for an add's
+    /// setup says so, and shows the administrator's name and password while
+    /// it takes input.
+    Window {
+        change: Token,
+        input: bool,
+        setup: bool,
+    },
     /// Put Atlas inside its guest.
     Install { change: Token, install: Install },
     /// Go on with the install of this change, already handed its secret,
@@ -177,7 +183,16 @@ impl Operation {
             | Self::Stop(change)
             | Self::Forget(change)
             | Self::InstallResume(change) => json!({"op": op, "change": change}),
-            Self::Window { change, input } => json!({"op": op, "change": change, "input": input}),
+            Self::Window {
+                change,
+                input,
+                setup: false,
+            } => json!({"op": op, "change": change, "input": input}),
+            Self::Window {
+                change,
+                input,
+                setup: true,
+            } => json!({"op": op, "change": change, "input": input, "setup": true}),
             Self::Install { change, install } => json!({
                 "op": op,
                 "change": change,

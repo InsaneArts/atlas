@@ -65,9 +65,10 @@ Without `--name`, the VM is called `vm`, then `vm-2` and so on. Adding takes a w
 
 1. Atlas.app asks you to allow it. The request says which app asked and that Atlas downloads macOS from Apple, makes a VM and opens its window once. Allow it only if you asked for this.
 2. Atlas VM checks this Mac, downloads macOS, installs it and starts the VM, then puts Atlas in it. `atlas desktop list --json` shows the progress.
-3. The VM's window opens on your screen. In it, allow **Screen & System Audio Recording**, then **Accessibility**, for Atlas, as macOS asks. Atlas in the VM restarts once after the first. `atlas --desktop work status` says what it waits for.
-4. Once both are allowed, the window stops taking your keyboard and mouse, and the add says: "Setup is done. Resume agents from the Atlas menu bar to let them use the VM."
-5. Choose **Resume** in the Atlas menu bar. Agents can use the VM from then on.
+3. The VM's window opens on your screen. In it, allow **Screen & System Audio Recording**, then **Accessibility**, for Atlas, as macOS asks. Atlas in the VM restarts once after the first. If macOS asks for an administrator, the VM's window shows the name and password: choose **Show** to see the password, and type it without spaces. Atlas never types it, and it is shown nowhere else. `atlas --desktop work status` says what it waits for.
+4. Once both are allowed, the window stops taking your keyboard and mouse, and the add lets agents go on in the VM itself, under the same approval: "Setup is done. Agents can use the VM now."
+
+If you stopped agents meanwhile, or the VM's Atlas waits for your Resume for another reason, the add says instead: "Setup is done. Resume agents from the Atlas menu bar to let them use the VM." Then choose **Resume** in the Atlas menu bar. `atlas desktop list --json` says where the setup stands in `setup`: `waiting` for the permissions (and `waiting` names them), `resuming`, then `done`.
 
 If the add is cut short, run the same command again: it goes on from where it got, and a cut download resumes. If you close the VM's window before both permissions are allowed, the add stops; run it again to open the window again. The add waits for the permissions for about half an hour, then stops with the window open.
 
@@ -75,7 +76,7 @@ Atlas.app's Resume is for the desktop it shows. When the new VM isn't the defaul
 
 ## Agents wait for your Resume
 
-Agents never use a VM until you resume them there. A new VM waits after its setup, and a VM waits again whenever its Atlas needs your Resume, for example after its Screen Recording changed. Until then, agents get `stopped` and wait. **Stop** in Atlas.app stops agents on every desktop; **Resume** lets them go on, on the desktop Atlas.app shows. Only you resume agents.
+Agents never use a VM until it is resumed there. A new VM is resumed by its add once you allowed both permissions, unless you stopped agents; a VM waits again whenever its Atlas needs your Resume, for example after its Screen Recording changed. Until then, agents get `stopped` and wait. **Stop** in Atlas.app stops agents on every desktop; **Resume** lets them go on, on the desktop Atlas.app shows. Only you resume agents.
 
 ## Watch and control a VM
 

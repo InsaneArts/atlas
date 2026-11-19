@@ -214,6 +214,31 @@ impl Controller {
         Ok(Resumed::Cleared)
     }
 
+    /// Run `then` only while the Stop noted is still `revision`, as a Resume
+    /// read it, all under the marker's lock: no Stop is noted between the
+    /// look and `then`, and one noted after `then` comes wholly after it.
+    /// What `then` gave; none when a Stop given since holds agents. `then`
+    /// must not wait: every Stop waits for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures reading the marker or taking its lock: nothing is
+    /// run then.
+    pub fn unless_stopped_since<T>(
+        &self,
+        revision: Option<&StopRevision>,
+        then: impl FnOnce() -> T,
+    ) -> Result<Option<T>> {
+        self.refuse_linked_directory()?;
+        let _held = self.lock_stop()?;
+        let now = self.read_stop()?;
+        let unchanged = match revision {
+            Some(revision) => &now == revision,
+            None => !now.is_stopped(),
+        };
+        Ok(unchanged.then(then))
+    }
+
     /// The marker's lock, beside it, with bounded patience.
     fn lock_stop(&self) -> Result<LockFile> {
         self.make_directory()?;

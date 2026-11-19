@@ -735,7 +735,14 @@ async fn a_replaced_generations_numbered_stop_is_never_answered_on_the_one_after
     })
     .await
     .expect("the replaced generation's Stop came");
-    say(&second_station, Said::Lift { seq: 1 });
+    say(
+        &second_station,
+        Said::Lift {
+            seq: 1,
+            change: None,
+            only: None,
+        },
+    );
 
     let answered = tokio::time::timeout(Duration::from_secs(10), second_station.heard.applied(1))
         .await

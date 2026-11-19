@@ -79,8 +79,20 @@ pub enum Said {
     Halt { seq: u64 },
     /// The person's Resume, numbered `seq` in this generation, for a guest
     /// that acknowledges: answered with [`Said::Applied`] once carried out
-    /// or refused.
-    Lift { seq: u64 },
+    /// or refused. One naming its `change`, said only to a guest declaring
+    /// [`crate::compatibility::RESUME_OUTCOME`], is kept by the guest under
+    /// that change as any change is: its intent before it is carried out,
+    /// what it came to before it is answered. One naming the guest's own
+    /// Stop it is `only` for lifts nothing else: the guest refuses it,
+    /// certain, unless its Stop is still that very one when it is carried
+    /// out.
+    Lift {
+        seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        change: Option<Token>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<GuestStop>,
+    },
     /// From the guest: what the Stop or Resume numbered `seq` came to.
     Applied { seq: u64, outcome: Outcome },
     /// The station cancels a lane, open or not.
@@ -127,6 +139,75 @@ pub enum Outcome {
     Refused { why: Refusal },
 }
 
+/// The operation a Resume naming its change is kept under by the guest.
+pub const RESUME: &str = "resume";
+
+/// The guest's own Stops a Resume naming the Stop it is for may lift: set
+/// by the guest itself before any agent was admitted, as its session to the
+/// station was lost or it restarted to take Screen Recording.
+pub const OWN_STOPS: [&str; 2] = ["control-lost", "recording"];
+
+/// A guest's own Stop as its read hello said it: the run of its daemon, how
+/// many Stops that run had taken in, and why it held agents then, none when
+/// it did not. A Resume naming one is carried out only while the guest's
+/// Stop is still exactly it: the same run, no Stop taken in since, and the
+/// same reason, one of [`OWN_STOPS`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuestStop {
+    pub run: Token,
+    pub stops: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+impl GuestStop {
+    /// The one a guest's read `hello` says it holds, when it says one.
+    #[must_use]
+    pub fn of_hello(hello: &serde_json::Value) -> Option<Self> {
+        let stop = &hello["stop"];
+        let why = match stop["state"].as_str()? {
+            "clear" => None,
+            "stopped" => Some(stop["why"].as_str()?.to_owned()),
+            _ => return None,
+        };
+        Some(Self {
+            run: stop["epoch"]["run"].as_str().and_then(Token::parse)?,
+            stops: stop["epoch"]["stops"].as_u64()?,
+            why,
+        })
+    }
+
+    /// Whether a Resume may lift it at all: none held, or one the guest set
+    /// itself; never the person's, nor any other.
+    #[must_use]
+    pub fn liftable(&self) -> bool {
+        self.why
+            .as_deref()
+            .is_none_or(|why| OWN_STOPS.contains(&why))
+    }
+}
+
+impl Outcome {
+    /// What a Resume naming its change came to, as the guest keeps it under
+    /// that change and serves it on `outcome`.
+    #[must_use]
+    pub fn kept(self) -> serde_json::Value {
+        serde_json::json!({"ok": true, "op": RESUME, "outcome": self})
+    }
+
+    /// What a Resume came to, as the guest kept it in `reply`; none for a
+    /// reply that is no Resume's outcome, such as one whose work was proven
+    /// ended with its outcome unknown.
+    #[must_use]
+    pub fn of_kept(reply: &serde_json::Value) -> Option<Self> {
+        if reply["ok"] != true || reply["op"] != RESUME {
+            return None;
+        }
+        serde_json::from_value(reply["outcome"].clone()).ok()
+    }
+}
+
 /// Why a numbered Stop or Resume was not carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -162,7 +243,11 @@ impl Said {
     /// it serves is told it: unnumbered unless it acknowledges.
     pub fn resume_to(declared: &crate::compatibility::Declared, seq: u64) -> Self {
         if declared.acknowledges() {
-            Self::Lift { seq }
+            Self::Lift {
+                seq,
+                change: None,
+                only: None,
+            }
         } else {
             Self::Resume
         }
@@ -428,9 +513,10 @@ pub trait Guest: Send + Sync {
     fn resume(&self);
     /// The person's Stop numbered `seq` came: answered once carried out.
     fn halt(&self, seq: u64);
-    /// The person's Resume numbered `seq` came, in the generation live now:
-    /// answered once carried out or refused.
-    fn lift(&self, seq: u64);
+    /// The person's Resume numbered `seq` came, in the generation live now,
+    /// naming the `change` it is kept under and the guest's own Stop it is
+    /// `only` for when it names them: answered once carried out or refused.
+    fn lift(&self, seq: u64, change: Option<Token>, only: Option<GuestStop>);
     /// The station's endpoints to mirror now. It must not wait.
     fn mirror(&self, _list: u64, _endpoints: Vec<crate::mirror::Endpoint>) {}
     /// The station asks for lane `lane`: open one and send its header.
@@ -471,9 +557,9 @@ pub async fn guest_reads<R: AsyncRead + Unpin>(
                 }
             }
             Ok(Said::Halt { seq }) => guest.halt(seq),
-            Ok(Said::Lift { seq }) => {
+            Ok(Said::Lift { seq, change, only }) => {
                 if authority.check().is_ok() {
-                    guest.lift(seq);
+                    guest.lift(seq, change, only);
                 }
             }
             Ok(Said::Cancel { lane }) => lanes.cancel(lane),

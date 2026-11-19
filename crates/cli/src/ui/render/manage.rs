@@ -286,14 +286,16 @@ pub(super) fn uninstall(value: &Value) -> String {
 
 pub(super) fn desktop_added(value: &Value) -> String {
     let name = text::printable(value["added"]["name"].as_str().unwrap_or("the VM")).into_owned();
-    format!(
-        "{} The VM \u{201c}{name}\u{201d} is added to {}\n  {}",
+    let added = format!(
+        "{} The VM \u{201c}{name}\u{201d} is added to {}",
         style::ok(),
         text::printable(value["settings"].as_str().unwrap_or("the settings")),
-        style::dim(text::printable(value["next"].as_str().unwrap_or(
-            "Resume agents from the Atlas menu bar to let them use the VM."
-        )))
-    )
+    );
+    // A VM the add resumed itself needs nothing more of the person.
+    match value["next"].as_str() {
+        Some(next) => format!("{added}\n  {}", style::dim(text::printable(next))),
+        None => added,
+    }
 }
 
 pub(super) fn desktop_maintained(value: &Value) -> String {

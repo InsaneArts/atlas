@@ -294,6 +294,7 @@ async fn a_window_off_done_by_a_run_gone_since_is_asked_again_of_the_run_answeri
     kept.sending(&crate::vm::runner::Operation::Window {
         change: close.clone(),
         input: false,
+        setup: false,
     })
     .unwrap();
     lifecycle(&client).keep_record(&kept).unwrap();

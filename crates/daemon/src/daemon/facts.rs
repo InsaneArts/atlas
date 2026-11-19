@@ -206,13 +206,7 @@ pub(super) fn machine_hello(
             "failure": input.failure.as_ref().map(|failure| json!({"code": failure.code, "error": failure.error})),
             "held": input.held(),
         },
-        "stop": match &stop.kept {
-            Some(crate::machine::stop::Kept::Clear) => json!({"state": "clear"}),
-            Some(crate::machine::stop::Kept::Stopped { why }) => {
-                json!({"state": "stopped", "why": why})
-            }
-            None => json!({"state": "unknown"}),
-        },
+        "stop": stop.said(),
         "work": {
             "state": work.state(),
             "jobs": told(work.jobs),
@@ -255,6 +249,27 @@ impl Itself {
 pub(super) struct Stop {
     pub(super) kept: Option<crate::machine::stop::Kept>,
     pub(super) halted: bool,
+    /// The daemon's run and how many Stops it had taken in, read before
+    /// what is kept: what a Resume for this very Stop names.
+    pub(super) epoch: Option<(atlas_core::files::Token, u64)>,
+}
+
+impl Stop {
+    /// As a hello says it: whether it is kept and why, and, when it can be
+    /// told, the run and count of Stops it was read at.
+    fn said(&self) -> Value {
+        let mut said = match &self.kept {
+            Some(crate::machine::stop::Kept::Clear) => json!({"state": "clear"}),
+            Some(crate::machine::stop::Kept::Stopped { why }) => {
+                json!({"state": "stopped", "why": why})
+            }
+            None => return json!({"state": "unknown"}),
+        };
+        if let Some((run, stops)) = &self.epoch {
+            said["epoch"] = json!({"run": run, "stops": stops});
+        }
+        said
+    }
 }
 
 /// What work may still run on a machine desktop, each part none when it

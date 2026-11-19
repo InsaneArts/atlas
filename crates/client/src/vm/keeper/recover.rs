@@ -107,8 +107,46 @@ impl Keeper {
             }
             recovered.kept.push(claim);
         }
+        self.leftover_resume(session, &mut recovered).await;
         self.settling(session).await;
         Some(recovered)
+    }
+
+    /// Settle the add's own Resume left claimed by an add cut short once
+    /// the VM was added: by the guest's word on it, once it came to anything
+    /// or can no longer be carried out; kept claimed while that word is not
+    /// known, never dropped. It is the station's own claim, so no other
+    /// recovery looks at it.
+    async fn leftover_resume(&self, session: &Session, recovered: &mut Recovered) {
+        let (lifecycle, vm, stop) = (self.lifecycle.clone(), self.vm.clone(), self.stop.clone());
+        let left = super::blocking(move || {
+            let record = lifecycle.record(&vm)?;
+            let change = record
+                .filter(|record| record.state == crate::vm::lifecycle::record::State::Created)
+                .and_then(|record| record.setup)
+                .and_then(|setup| setup.resume);
+            let pending = stop.pending_within(Duration::ZERO)?;
+            Ok(change.filter(|change| pending.iter().any(|claim| claim == change.as_str())))
+        })
+        .await;
+        let Ok(Some(change)) = left else {
+            return;
+        };
+        let known = json!({
+            "ok": true,
+            "said": super::clients::said_in(session, &change),
+            "outcome": outcome(session, &change).await,
+        });
+        let settles = crate::vm::add::word_of(&known)
+            .is_some_and(|word| word != crate::vm::add::Word::Pending);
+        if settles {
+            session.carried.keep(change.clone());
+            if self.cleared(change.as_str()).await {
+                recovered.cleared.push(change);
+                return;
+            }
+        }
+        recovered.kept.push(change.as_str().to_owned());
     }
 
     /// Recover in `session` now, then every [`RECOVERING`], for its life.

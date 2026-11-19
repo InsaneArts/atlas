@@ -5,8 +5,8 @@
 //! through its keeper, riding the restart that takes Screen Recording. Then
 //! its window-on is settled for good, its input is turned off, and the
 //! setup is done only on the proof the window gives. The VM is still being
-//! added all the while, and after: no agent reaches it until the person's
-//! Resume ends the add.
+//! added all the while: no agent reaches it until the add's own Resume
+//! ([`super::resume`]), or the person's, ends the add.
 use super::{Adding, Means};
 use crate::vm::{
     guest_words,
@@ -37,6 +37,9 @@ const OPENING: &str = "Opening the VM's window. In it, allow Screen & System Aud
 const CLOSING: &str = "Both are allowed. Closing the window's input.";
 /// What to run to go on.
 const AGAIN: &str = "Run atlas desktop add vm again to go on.";
+/// Atlas VM's word that it shows the administrator's name and password in
+/// a setup window.
+const WINDOW_SETUP: &str = "window-setup";
 
 /// The guest's own word that both are allowed: half an hour from the
 /// first look, however long each look takes, a look every 2 seconds.
@@ -87,19 +90,18 @@ impl<M: Means> AtlasVm for OnVm<'_, M> {
 
 impl<'a, M: Means> Adding<'a, M> {
     /// The setup window opened, both permissions allowed in it, and its
-    /// input confirmed off, each kept once done: the add is set up.
-    pub(super) fn set_up(&mut self) -> Result<()> {
-        if self.record.has(Step::Ready) {
-            return Ok(());
-        }
-        if !self.record.has(Step::Hidden) {
+    /// input confirmed off, each kept once done; then the add's own Resume.
+    /// Whether that Resume let agents go on, which ends the add; else it is
+    /// set up, for the person's Resume to end.
+    pub(super) fn set_up(&mut self) -> Result<bool> {
+        if !self.record.has(Step::Ready) && !self.record.has(Step::Hidden) {
             if !self.record.has(Step::Allowed) {
                 self.shown()?;
                 self.allowed()?;
             }
             self.hidden()?;
         }
-        self.done(Step::Ready)
+        self.resumed_itself(self.granted)
     }
 
     /// Atlas VM, reached through the add's means.
@@ -112,7 +114,7 @@ impl<'a, M: Means> Adding<'a, M> {
     }
 
     /// The setup window as the record keeps it, kept from now.
-    fn setup(&mut self) -> &mut Setup {
+    pub(super) fn setup(&mut self) -> &mut Setup {
         self.record.setup.get_or_insert_with(Setup::default)
     }
 
@@ -144,9 +146,20 @@ impl<'a, M: Means> Adding<'a, M> {
         let open = self.setup().open.get_or_insert_with(Token::new).clone();
         self.keep()?;
         let uncertain = self.record.sent(&open).is_some();
-        let operation = Operation::Window {
-            change: open,
+        // Marked as the add's setup window for an Atlas VM that shows its
+        // administrator then; one an earlier build kept is asked as kept.
+        let marked = self
+            .hello
+            .as_ref()
+            .is_some_and(|hello| hello.can(WINDOW_SETUP));
+        let setup = |setup| Operation::Window {
+            change: open.clone(),
             input: true,
+            setup,
+        };
+        let operation = match self.record.sent(&open) {
+            Some(kept) if kept.request != setup(marked).digest() => setup(!marked),
+            _ => setup(marked),
         };
         let atlas = self.atlas();
         match window::ask(&atlas, &mut self.record, &operation, uncertain, WINDOWING)? {
@@ -301,6 +314,7 @@ impl<'a, M: Means> Adding<'a, M> {
             let operation = Operation::Window {
                 change: close.clone(),
                 input: false,
+                setup: false,
             };
             match window::ask(&atlas, &mut self.record, &operation, uncertain, WINDOWING)? {
                 Asked::Came {

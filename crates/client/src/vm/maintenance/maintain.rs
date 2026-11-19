@@ -368,6 +368,7 @@ impl Maintainer {
         let window = Operation::Window {
             change: open.clone(),
             input: true,
+            setup: false,
         };
         let uncertain = record.sent(&open).is_some();
         match self.ask(&mut record, &window, uncertain)? {
@@ -530,6 +531,7 @@ impl Maintainer {
             let window = Operation::Window {
                 change: close.clone(),
                 input: false,
+                setup: false,
             };
             let uncertain = record.sent(&close).is_some();
             match self.ask(record, &window, uncertain)? {

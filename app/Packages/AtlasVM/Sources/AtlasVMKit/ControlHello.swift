@@ -11,7 +11,7 @@ public struct ControlHello: Codable, Equatable, Sendable {
     version: 1,
     capabilities: [
       "changes", "outcomes", "power", "window-input", "install", "install-resume", "void", "progress", "disk",
-      "latest-macos",
+      "latest-macos", "window-setup",
     ]
   )
 }

@@ -50,8 +50,19 @@ fn each_operation_is_asked_as_atlas_vm_reads_it() {
             Operation::Window {
                 change: change.clone(),
                 input: true,
+                setup: false,
             },
             json!({"op": "window", "change": change, "input": true}),
+        ),
+        (
+            // A setup window says it is one, and nothing more: no password
+            // goes from this Mac to Atlas VM, which reads its own.
+            Operation::Window {
+                change: change.clone(),
+                input: true,
+                setup: true,
+            },
+            json!({"op": "window", "change": change, "input": true, "setup": true}),
         ),
         (
             Operation::Install {

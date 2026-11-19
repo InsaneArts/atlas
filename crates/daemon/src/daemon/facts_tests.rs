@@ -223,6 +223,7 @@ fn clear() -> Stop {
     Stop {
         kept: Some(crate::machine::stop::Kept::Clear),
         halted: false,
+        epoch: None,
     }
 }
 
@@ -362,6 +363,7 @@ fn the_machine_hello_says_whether_its_stop_is_clear_kept_and_why_or_unknown() {
     let stopped = |why| Stop {
         kept: Some(Kept::Stopped { why }),
         halted: true,
+        epoch: None,
     };
 
     let clear = reporting(&clear(), idle());
@@ -371,6 +373,7 @@ fn the_machine_hello_says_whether_its_stop_is_clear_kept_and_why_or_unknown() {
         &Stop {
             kept: None,
             halted: true,
+            epoch: None,
         },
         idle(),
     );

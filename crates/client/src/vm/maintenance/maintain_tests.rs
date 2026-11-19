@@ -506,6 +506,7 @@ pub(super) fn cut_short(client: &Client, boundary: Boundary, phase: Phase, input
     let window = Operation::Window {
         change: change.clone(),
         input,
+        setup: false,
     };
     match boundary {
         Boundary::Kept | Boundary::Claimed => {}
@@ -870,6 +871,7 @@ async fn a_window_on_still_on_its_way_is_voided_before_the_window_off_and_never_
             &Operation::Window {
                 change: open.clone(),
                 input: true,
+                setup: false,
             },
         )
         .unwrap();
@@ -920,6 +922,7 @@ async fn a_window_off_kept_before_the_window_on_was_settled_never_proves_the_end
             &Operation::Window {
                 change: early.clone(),
                 input: false,
+                setup: false,
             },
         )
         .unwrap();

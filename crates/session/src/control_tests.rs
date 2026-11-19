@@ -106,8 +106,11 @@ impl Guest for Told {
         self.numbered.lock().unwrap().push(Said::Halt { seq });
     }
 
-    fn lift(&self, seq: u64) {
-        self.numbered.lock().unwrap().push(Said::Lift { seq });
+    fn lift(&self, seq: u64, change: Option<atlas_core::files::Token>, only: Option<GuestStop>) {
+        self.numbered
+            .lock()
+            .unwrap()
+            .push(Said::Lift { seq, change, only });
     }
 
     fn dial(&self, lane: LaneId, _: LaneKind) {
@@ -602,7 +605,14 @@ fn numbered_stops_resumes_and_their_answers_read_as_written_beside_the_unnumbere
         (Said::Stop, json!("stop")),
         (Said::Resume, json!("resume")),
         (Said::Halt { seq: 3 }, json!({"halt": {"seq": 3}})),
-        (Said::Lift { seq: 4 }, json!({"lift": {"seq": 4}})),
+        (
+            Said::Lift {
+                seq: 4,
+                change: None,
+                only: None,
+            },
+            json!({"lift": {"seq": 4}}),
+        ),
         (
             Said::Applied {
                 seq: 3,
@@ -634,7 +644,14 @@ fn a_guest_is_told_numbered_stops_and_resumes_only_when_it_acknowledges() {
     let older = Declared::ours(Vec::new());
 
     assert_eq!(Said::stop_to(&acknowledging, 7), Said::Halt { seq: 7 });
-    assert_eq!(Said::resume_to(&acknowledging, 8), Said::Lift { seq: 8 });
+    assert_eq!(
+        Said::resume_to(&acknowledging, 8),
+        Said::Lift {
+            seq: 8,
+            change: None,
+            only: None,
+        }
+    );
     assert_eq!(Said::stop_to(&older, 7), Said::Stop);
     assert_eq!(Said::resume_to(&older, 8), Said::Resume);
 }
@@ -646,7 +663,11 @@ async fn numbered_stops_and_resumes_are_handed_on_in_order_and_a_resume_only_whi
     let (mut near, far) = duplex(1 << 16);
     for said in [
         Said::Halt { seq: 1 },
-        Said::Lift { seq: 2 },
+        Said::Lift {
+            seq: 2,
+            change: None,
+            only: None,
+        },
         Said::Halt { seq: 3 },
     ] {
         let mut line = serde_json::to_vec(&said).unwrap();
@@ -662,7 +683,11 @@ async fn numbered_stops_and_resumes_are_handed_on_in_order_and_a_resume_only_whi
         *told.numbered.lock().unwrap(),
         [
             Said::Halt { seq: 1 },
-            Said::Lift { seq: 2 },
+            Said::Lift {
+                seq: 2,
+                change: None,
+                only: None,
+            },
             Said::Halt { seq: 3 }
         ]
     );
@@ -744,5 +769,51 @@ async fn a_station_hears_what_each_numbered_stop_and_resume_came_to_in_order() {
     assert_eq!(
         *answered.0.lock().unwrap(),
         [(1, Outcome::Stopped), (2, refused)]
+    );
+}
+
+#[test]
+fn a_resume_naming_its_change_is_written_with_it_and_one_naming_none_as_before() {
+    let change = atlas_core::files::Token::new();
+    let named = Said::Lift {
+        seq: 5,
+        change: Some(change.clone()),
+        only: None,
+    };
+
+    let written = serde_json::to_value(&named).unwrap();
+
+    assert_eq!(written, json!({"lift": {"seq": 5, "change": change}}));
+    assert_eq!(serde_json::from_value::<Said>(written).unwrap(), named);
+    assert_eq!(
+        serde_json::from_value::<Said>(json!({"lift": {"seq": 5}})).unwrap(),
+        Said::Lift {
+            seq: 5,
+            change: None,
+            only: None,
+        }
+    );
+}
+
+#[test]
+fn what_a_resume_came_to_is_read_back_only_from_a_resumes_own_kept_reply() {
+    let refused = Outcome::Refused {
+        why: Refusal::Posture,
+    };
+
+    assert_eq!(
+        Outcome::of_kept(&Outcome::Resumed.kept()),
+        Some(Outcome::Resumed)
+    );
+    assert_eq!(Outcome::of_kept(&refused.kept()), Some(refused));
+    assert_eq!(
+        Outcome::of_kept(&json!({"ok": false, "code": "uncertain", "uncertain": true,
+            "ended": true})),
+        None,
+        "ended with its outcome unknown"
+    );
+    assert_eq!(
+        Outcome::of_kept(&json!({"ok": true, "op": "run", "outcome": "resumed"})),
+        None
     );
 }

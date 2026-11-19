@@ -75,6 +75,7 @@ fn another_request_under_a_kept_change_is_refused() {
         .sending(&Operation::Window {
             change: change.clone(),
             input: true,
+            setup: false,
         })
         .unwrap();
 
@@ -82,6 +83,7 @@ fn another_request_under_a_kept_change_is_refused() {
         .sending(&Operation::Window {
             change,
             input: false,
+            setup: false,
         })
         .unwrap_err();
 
