@@ -117,6 +117,24 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("a Stop that failed on one desktop names it and the one it stopped, never saying agents stopped everywhere")
+  func aStopThatFailedOnOneDesktopNamesIt() async throws {
+    let service = ScriptedService()
+    var outcome = StopOutcome(warnings: ["work could not be told"])
+    outcome.held = false
+    outcome.stopped = ["main"]
+    outcome.failed = ["work"]
+    outcome.uncertain = ["work"]
+    service.stopOutcome = outcome
+    let viewer = ViewerController.scripted(service)
+    await viewer.setStopped(true)
+    #expect(
+      viewer.session.notice
+        == "Agents stopped on main, but Atlas couldn't stop them on work. work could not be told."
+    )
+    viewer.close()
+  }
+
   @Test("pausing drops a reading under way, and resuming reads once")
   func pausingDropsAReadingStillUnderWayAndResumingReadsOnce() async throws {
     let service = ScriptedService()

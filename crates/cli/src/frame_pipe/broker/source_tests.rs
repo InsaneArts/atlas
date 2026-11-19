@@ -427,3 +427,61 @@ async fn a_withheld_lane_is_said_and_reopened_with_backoff() {
     );
     live.stop().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maintenance_kept_in_the_vms_record_is_said_paused_from_the_first_frame() {
+    use atlas_client::{
+        test_support::{under_maintenance, vm_through_keeper},
+        vm::lifecycle::record::Phase,
+    };
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = vm_through_keeper(directory.path());
+    let id = client.desktop().id();
+    let mut live = Live::new(Arc::new(client), 640, CaptureBackend::CoreGraphics);
+    let budget = Budget::new(atlas_core::frame_pipe::budget::BROKER_PIXELS);
+    live.acquire(&budget).await.unwrap();
+
+    // Maintenance opens the VM's window, and its keeper ends the picture
+    // as it does for any window that took the person's input.
+    under_maintenance(directory.path(), &id, Phase::Open);
+    *keeper.window.lock().unwrap() = ("open", 1);
+
+    let began = Instant::now();
+    while began.elapsed() < Duration::from_millis(1200) {
+        assert_eq!(
+            live.acquire(&budget).await.err(),
+            Some(Reason::Paused),
+            "paused for maintenance from the first frame, never hidden"
+        );
+        tokio::time::sleep(CADENCE).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_keepers_refusal_for_maintenance_is_said_paused_rather_than_hidden_or_unconfirmed() {
+    use atlas_client::test_support::vm_through_keeper;
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let (client, keeper) = vm_through_keeper(directory.path());
+    let mut live = Live::new(Arc::new(client), 640, CaptureBackend::CoreGraphics);
+    let budget = Budget::new(atlas_core::frame_pipe::budget::BROKER_PIXELS);
+    live.acquire(&budget).await.unwrap();
+
+    // The keeper cancels the picture as the window opens, and refuses the
+    // drain that follows in its maintenance words.
+    *keeper.refusing_once.lock().unwrap() = Some(serde_json::json!({
+        "ok": false, "code": "busy", "holder": "person", "sent": false, "uncertain": false,
+        "error": "This VM is under maintenance, so agents wait until it ends."
+    }));
+    *keeper.window.lock().unwrap() = ("open", 1);
+
+    assert_eq!(live.acquire(&budget).await.err(), Some(Reason::Paused));
+    assert!(
+        keeper.refusing_once.lock().unwrap().is_none(),
+        "the drain was asked, and refused"
+    );
+    assert_eq!(
+        live.acquire(&budget).await.err(),
+        Some(Reason::Paused),
+        "said so until it may be opened again"
+    );
+}

@@ -96,6 +96,8 @@ struct StopOutcomeTests {
       let stopped = try outcome(everyDesktop(order))
       #expect(stopped.held, "\(order)")
       #expect(stopped.uncertain == ["work"], "\(order)")
+      #expect(stopped.stopped == ["main"], "\(order)")
+      #expect(stopped.failed.isEmpty, "\(order)")
       #expect(stopped.refused.map(\.id) == ["7c2e91a04b3f"], "\(order)")
       #expect(stopped.jobsLeft == 1, "\(order)")
       #expect(stopped.warnings.count == 2, "\(order)")
@@ -121,6 +123,8 @@ struct StopOutcomeTests {
     ])
     #expect(!stopped.held)
     #expect(stopped.uncertain == ["work"])
+    #expect(stopped.stopped == ["main"])
+    #expect(stopped.failed == ["work"])
     #expect(stopped.warnings == ["work could not be told"])
   }
 
@@ -128,5 +132,7 @@ struct StopOutcomeTests {
   func oneDesktopNamesNone() throws {
     let stopped = try outcome(["ok": true, "held": true, "delivered": false])
     #expect(stopped.uncertain.isEmpty)
+    #expect(stopped.stopped.isEmpty)
+    #expect(stopped.failed.isEmpty)
   }
 }

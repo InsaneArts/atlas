@@ -142,7 +142,8 @@ impl Client {
 
     /// Why the person's maintenance of this VM holds agents now; none
     /// while none is kept, and for any other desktop.
-    pub(crate) fn maintenance_held(&self) -> Option<Error> {
+    #[must_use]
+    pub fn maintenance_held(&self) -> Option<Error> {
         self.maintenance().held(&self.selected.name)
     }
 

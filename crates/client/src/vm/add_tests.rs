@@ -357,6 +357,10 @@ struct World {
     /// When the test began, and how long its waits made it since.
     began: Instant,
     waited: Cell<Duration>,
+    /// How long each look at the guest takes once its window is open, and
+    /// when, on the clock its waits move, each such look began.
+    look_takes: Cell<Duration>,
+    looked_at: RefCell<Vec<Duration>>,
 }
 
 impl World {
@@ -377,6 +381,8 @@ impl World {
             meanwhile: RefCell::new(None),
             began: Instant::now(),
             waited: Cell::new(Duration::ZERO),
+            look_takes: Cell::new(Duration::ZERO),
+            looked_at: RefCell::new(Vec::new()),
         }
     }
 
@@ -608,6 +614,10 @@ impl Means for World {
             return Err(Error::new(Code::Transport, "work is not paired yet"));
         }
         vm.events.push("posture");
+        if vm.events.contains(&"window-on") {
+            self.looked_at.borrow_mut().push(self.waited.get());
+            self.waited.set(self.waited.get() + self.look_takes.get());
+        }
         let look = vm
             .events
             .contains(&"window-on")
@@ -1189,6 +1199,34 @@ fn the_add_waits_for_both_permissions_through_a_guest_restart() {
         [true, false],
         "one window, through the restart"
     );
+}
+
+#[test]
+fn slow_replies_still_end_the_permission_wait_at_thirty_minutes_of_elapsed_time() {
+    let world = World::new();
+    world.vm.borrow_mut().recording = false;
+    // Each look at the guest takes most of a minute: counted in looks,
+    // half an hour's worth would take some fifteen hours.
+    world.look_takes.set(Duration::from_secs(58));
+
+    let (waited, _) = world.add(Some("work"), Kill::Never);
+
+    let waited = waited.unwrap_err();
+    assert_eq!(waited.code, Code::NotReady, "{waited:?}");
+    assert!(
+        waited.error.contains("not allowed in the VM yet"),
+        "{}",
+        waited.error
+    );
+    let looked_at = world.looked_at.borrow();
+    let first = looked_at[0];
+    let spent = world.waited.get() - first;
+    let half_hour = Duration::from_secs(30 * 60);
+    assert!(
+        spent <= half_hour && spent > half_hour - Duration::from_secs(60),
+        "ended {spent:?} after the first look"
+    );
+    assert_eq!(looked_at.len(), 30, "a look a minute, for half an hour");
 }
 
 #[test]

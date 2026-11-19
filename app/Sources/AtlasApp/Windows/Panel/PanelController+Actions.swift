@@ -17,14 +17,14 @@ extension PanelController {
   }
 
   /// Asks the service to stop or resume agents through the shared actions, then reads the status; a refusal says why,
-  /// and so does a Stop that warned or left background jobs it could not end.
+  /// and so does a Stop that failed on a desktop, warned or left background jobs it could not end.
   ///
   /// - Parameter stopped: Whether agents stop.
   private func setStopped(_ stopped: Bool) async {
     session.notice = nil
     do {
       let outcome = try await actions.setStopped(stopped)
-      if stopped, !outcome.isComplete || !outcome.warnings.isEmpty {
+      if stopped, !outcome.failed.isEmpty || !outcome.isComplete || !outcome.warnings.isEmpty {
         session.notice = HelperWords.stopped(outcome)
       }
     } catch {

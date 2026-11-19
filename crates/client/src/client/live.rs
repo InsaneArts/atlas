@@ -11,7 +11,7 @@ use crate::link::Stream;
 use atlas_core::{
     buffer::Buffer,
     desktop::Kind,
-    error::{Code, Error, Result},
+    error::{Code, Error, Holder, Result},
     frame_pipe::{
         budget::Budget,
         diagnostics::{Backend, Outcome, Reason, Record, Ring, Stage, Timing, nanos},
@@ -470,7 +470,9 @@ impl LiveStream {
     ///
     /// Returns an error when the daemon does not confirm the source stopped
     /// and drained in time; its source then stays quarantined there,
-    /// refusing every capture until it is confirmed.
+    /// refusing every capture until it is confirmed. A VM's keeper that
+    /// refuses the query because the person's maintenance holds the VM is
+    /// that refusal, held by the person, at once.
     pub async fn stop(&mut self, client: &Client) -> Result<()> {
         let until = tokio::time::Instant::now() + DEADLINE;
         let Some(Served {
@@ -536,6 +538,10 @@ impl LiveStream {
                     return Ok(());
                 }
                 Ok(Ok(reply)) if reply["state"] == "active" || reply["state"] == "stopping" => {}
+                // Nothing more is answered while the person holds the VM.
+                Ok(Ok(reply)) if held_by_person(&reply) => {
+                    return Err(refusal(&reply).held_by(Holder::Person));
+                }
                 _ => break,
             }
             if tokio::time::Instant::now() + DRAIN_QUERY >= until {
@@ -861,6 +867,14 @@ fn on_vm(client: &Client, error: Error) -> Error {
         ),
         _ => error,
     }
+}
+
+/// Whether `reply` is a keeper's refusal, busy and held by the person, as
+/// it refuses every agent's request while their maintenance holds the VM.
+fn held_by_person(reply: &Value) -> bool {
+    reply["ok"] == false
+        && reply["code"] == "busy"
+        && reply["holder"].as_str().and_then(Holder::parse) == Some(Holder::Person)
 }
 
 /// The daemon serving a stream, as it was when the stream opened, and the

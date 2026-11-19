@@ -220,8 +220,9 @@ public struct ViewerClient: ViewerService {
   /// Posts to `control/hold`.
   ///
   /// - Parameter stopped: Whether agents stop.
-  /// - Returns: The reply as a Stop's outcome; one with nothing left when the reply says nothing of it.
-  /// - Throws: ``ServiceError`` when the service refuses.
+  /// - Returns: The reply as a Stop's outcome; one with nothing left when the reply says nothing of it. A refusal that
+  ///   names what each desktop's Stop came to is read as one too, so the desktops it did stop are not lost.
+  /// - Throws: ``ServiceError`` when the service refuses without naming each desktop's.
   @discardableResult
   public func setStopped(_ stopped: Bool) async throws -> StopOutcome {
     /// The request: whether agents stop.
@@ -229,7 +230,13 @@ public struct ViewerClient: ViewerService {
       /// Whether agents stop.
       let on: Bool
     }
-    let data = try await post("control/hold", Body(on: stopped))
+    let (data, response) = try await posted("control/hold", Body(on: stopped))
+    guard Self.acknowledged(data, response) else {
+      guard let each = Self.decoded(StopOutcome.self, from: data), each.namesEachDesktop else {
+        throw unsecured(Self.failure(data, fallback: "Request was refused"))
+      }
+      return each
+    }
     guard let outcome = Self.decoded(StopOutcome.self, from: data) else {
       // A reply that does not read says no more than that agents are held as asked.
       var asked = StopOutcome()
@@ -305,18 +312,37 @@ public struct ViewerClient: ViewerService {
   /// - Returns: The reply's body.
   /// - Throws: ``ServiceError`` with the service's error, or ``lateReply`` when no reply came in time.
   func post(_ route: String, _ body: some Encodable & Sendable) async throws -> Data {
-    let data: Data
-    let response: URLResponse
-    do {
-      (data, response) = try await session.data(for: request(route, body: body))
-    } catch let error as URLError where error.code == .timedOut {
-      throw ServiceError(Self.lateReply)
-    }
-    let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
-    guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {
+    let (data, response) = try await posted(route, body)
+    guard Self.acknowledged(data, response) else {
       throw unsecured(Self.failure(data, fallback: "Request was refused"))
     }
     return data
+  }
+
+  /// POST `body` to `route`; the reply, whatever it says.
+  ///
+  /// - Parameters:
+  ///   - route: The route, under the capability URL.
+  ///   - body: The request's JSON body.
+  /// - Returns: The reply's body and response.
+  /// - Throws: ``ServiceError`` with ``lateReply`` when no reply came in time; any other error of the session's.
+  func posted(_ route: String, _ body: some Encodable & Sendable) async throws -> (Data, URLResponse) {
+    do {
+      return try await session.data(for: request(route, body: body))
+    } catch let error as URLError where error.code == .timedOut {
+      throw ServiceError(Self.lateReply)
+    }
+  }
+
+  /// Whether a POST's reply says it worked: a 200 whose body says `ok`.
+  ///
+  /// - Parameters:
+  ///   - data: The reply's body.
+  ///   - response: The reply's response.
+  /// - Returns: Whether it worked.
+  static func acknowledged(_ data: Data, _ response: URLResponse) -> Bool {
+    let ok = decoded(Acknowledgement.self, from: data)?.ok == true
+    return (response as? HTTPURLResponse)?.statusCode == 200 && ok
   }
 
   /// A refusal as the person reads it: one for want of this launch's secret says how to get it back, never what the

@@ -7,7 +7,7 @@
 //! setup is done only on the proof the window gives. The VM is still being
 //! added all the while, and after: no agent reaches it until the person's
 //! Resume ends the add.
-use super::{Adding, Means, Patience};
+use super::{Adding, Means};
 use crate::vm::{
     guest_words,
     lifecycle::{
@@ -38,8 +38,12 @@ const CLOSING: &str = "Both are allowed. Closing the window's input.";
 /// What to run to go on.
 const AGAIN: &str = "Run atlas desktop add vm again to go on.";
 
-/// The guest's own word that both are allowed: about half an hour.
-const ALLOWING: Patience = Patience::of(2, 900);
+/// The guest's own word that both are allowed: half an hour from the
+/// first look, however long each look takes, a look every 2 seconds.
+const ALLOWING: window::Patience = window::Patience {
+    within: Duration::from_secs(30 * 60),
+    every: Duration::from_secs(2),
+};
 /// A window change, followed until Atlas VM says what it came to.
 const WINDOWING: window::Patience = window::Patience {
     within: Duration::from_secs(60),
@@ -181,14 +185,14 @@ impl<'a, M: Means> Adding<'a, M> {
     /// Screen Recording and Accessibility both allowed, as the guest's own
     /// hello says: what it says it waits for is kept and said as it changes.
     /// A guest that does not answer, as while it restarts to take Screen
-    /// Recording, is waited for.
+    /// Recording, is waited for. The wait is bounded by the time gone by
+    /// since its first look, on the means' monotonic clock, so slow replies
+    /// never stretch it: no look starts once the next would be past it.
     fn allowed(&mut self) -> Result<()> {
         let selected = self.selected()?;
         let vm = self.vm();
-        for at in 0..ALLOWING.tries {
-            if at > 0 {
-                self.means.wait(ALLOWING.every);
-            }
+        let began = self.means.now();
+        loop {
             if let Ok(posture) = self.means.posture(&selected, &vm) {
                 if posture.allowed() {
                     self.setup().waiting = None;
@@ -203,6 +207,11 @@ impl<'a, M: Means> Adding<'a, M> {
                      desktop add vm again to open it again.",
                 ));
             }
+            let spent = self.means.now().saturating_duration_since(began);
+            if spent + ALLOWING.every >= ALLOWING.within {
+                break;
+            }
+            self.means.wait(ALLOWING.every);
         }
         Err(Error::new(
             Code::NotReady,

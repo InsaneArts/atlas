@@ -339,16 +339,30 @@ impl Live {
         matches!(self.client.desktop().kind(), Kind::Vm(_))
     }
 
-    /// Why `error` withheld a VM's picture; none for Second Login's, and
-    /// for any other failure.
-    fn withheld(&self, error: &Error) -> Option<Reason> {
-        self.on_vm().then(|| withheld(error)).flatten()
+    /// Why `error` withheld a VM's picture, and `then`, what the stop that
+    /// followed it was answered: paused whenever the person's maintenance
+    /// is why, as either says or the VM's record does, however else its
+    /// keeper ended the picture (as its window opening for maintenance);
+    /// else why `error` says. None for Second Login's, and for any other
+    /// failure.
+    fn withheld(&self, error: &Error, then: Option<&Error>) -> Option<Reason> {
+        if !self.on_vm() {
+            return None;
+        }
+        let paused = |said: &Error| withheld(said) == Some(Reason::Paused);
+        let maintained = paused(error)
+            || then.is_some_and(paused)
+            || self.client.maintenance_held().as_ref().is_some_and(paused);
+        if maintained {
+            return Some(Reason::Paused);
+        }
+        withheld(error)
     }
 
     /// Why `error` ended a picture: a VM's withheld one by why, anything
     /// else by its code, or `fallback` when that says more.
     fn reason(&self, error: &Error, fallback: Option<Reason>) -> Reason {
-        self.withheld(error)
+        self.withheld(error, None)
             .or(fallback)
             .unwrap_or(Reason::of(error.code))
     }
@@ -358,6 +372,15 @@ impl Live {
     fn ended(&mut self, reason: Reason) {
         if self.on_vm() {
             self.reopen = Some(Reopen::after(self.reopen, reason));
+        }
+    }
+
+    /// Give the open stream's source back, if one is open; else why it was
+    /// not confirmed, in its own words.
+    async fn give_back(&mut self) -> Result<(), Error> {
+        match self.stream.take() {
+            Some((mut stream, _)) => stream.stop(&self.client).await,
+            None => Ok(()),
         }
     }
 
@@ -424,13 +447,19 @@ impl Live {
                 if stream.can_retry(&error) {
                     return Err(self.reason(&error, recorded).into());
                 }
-                let reason = self.reason(&error, recorded);
-                self.ended(reason);
-                if let Err(unconfirmed) = self.stop().await {
+                let given_back = self.give_back().await;
+                let reason = match &given_back {
                     // A withheld picture's lane was ended by its keeper,
                     // and the guest gives its source back as its lane
                     // ends: why it was withheld is what is said.
-                    return Err(self.withheld(&error).unwrap_or(unconfirmed).into());
+                    Err(unconfirmed) => self
+                        .withheld(&error, Some(unconfirmed))
+                        .unwrap_or(Reason::DrainUnconfirmed),
+                    Ok(()) => self.reason(&error, recorded),
+                };
+                self.ended(reason);
+                if given_back.is_err() {
+                    return Err(reason.into());
                 }
                 Err(Failure {
                     reason,
@@ -464,13 +493,7 @@ impl Acquire for Live {
     }
 
     async fn stop(&mut self) -> Result<(), Reason> {
-        match self.stream.take() {
-            Some((mut stream, _)) => stream
-                .stop(&self.client)
-                .await
-                .map_err(|_| Reason::DrainUnconfirmed),
-            None => Ok(()),
-        }
+        self.give_back().await.map_err(|_| Reason::DrainUnconfirmed)
     }
 }
 

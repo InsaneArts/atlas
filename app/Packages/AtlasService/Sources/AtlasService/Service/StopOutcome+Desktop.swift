@@ -5,8 +5,13 @@ extension StopOutcome {
     var name = ""
     /// What its Stop came to; one that failed holds nothing and warns of its error.
     var reply = StopOutcome()
-    /// Whether its Stop is not certain.
+    /// Whether the service said its Stop is not certain.
     var uncertain = false
+    /// Whether its Stop failed.
+    var failed = false
+
+    /// Whether its Stop held its agents for certain: it did not fail, says they are held, and is not uncertain.
+    var isStopped: Bool { !failed && !uncertain && reply.held }
 
     /// The fields of one desktop's part.
     private enum CodingKeys: String, CodingKey {
@@ -34,6 +39,7 @@ extension StopOutcome {
         failure.lenientBool(.ok) != true
       else { return }
       let error = failure.lenientText(.error)
+      failed = true
       reply.held = false
       reply.warnings = error.map { [$0] } ?? []
     }
