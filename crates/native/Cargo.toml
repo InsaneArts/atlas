@@ -24,7 +24,7 @@ unicode-segmentation.workspace = true
 [dev-dependencies]
 atlas-core = { workspace = true, features = ["test-support"] }
 image = { workspace = true, features = ["png"] }
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "net", "socket"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

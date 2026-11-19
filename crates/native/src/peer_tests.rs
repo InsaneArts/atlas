@@ -69,3 +69,12 @@ fn this_programs_own_code_is_the_build_its_file_is_signed_as() {
     assert_eq!(own_code(), file_cdhash(&me));
     assert_eq!(own_code().map(|code| code.len()), Some(20));
 }
+
+#[test]
+fn a_process_satisfies_a_requirement_only_its_running_code_meets() {
+    let me = crate::native::process_token::Token::of(std::process::id() as i32).unwrap();
+
+    assert!(process_satisfies(me.words(), "always"));
+    assert!(!process_satisfies(me.words(), "anchor apple"));
+    assert!(!process_satisfies([0; 8], "always"), "no process");
+}

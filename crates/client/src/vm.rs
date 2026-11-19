@@ -14,6 +14,11 @@ pub mod keeper;
 pub mod lifecycle;
 pub mod listing;
 pub(crate) mod maintenance;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the keeper does not mirror endpoints yet")
+)]
+pub(crate) mod mirrors;
 pub(crate) mod native;
 pub(crate) mod proof;
 mod removal;

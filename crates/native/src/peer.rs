@@ -71,6 +71,14 @@ pub fn running_code(token: [u32; 8]) -> Option<Vec<u8>> {
     cdhash_of(&code)
 }
 
+/// Whether the running code of the process the audit token `token` names
+/// is valid and satisfies `requirement`: never once that process ended or
+/// ran another program.
+#[must_use]
+pub fn process_satisfies(token: [u32; 8], requirement: &str) -> bool {
+    guest(&token).is_some_and(|code| satisfies(&code, requirement))
+}
+
 /// The code directory hash of this program's own code: which build it is.
 /// It is read from the program's file, so a long-lived program reads it at
 /// its start, before an update may move or delete that file.
