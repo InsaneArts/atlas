@@ -1,10 +1,14 @@
 //! Changes the person makes in the helper through the viewer: taking,
 //! renewing and ending control under a lease, input sent under it, and
-//! recovery and cleanup, which wait until no control is held.
+//! recovery and cleanup, which wait until no control is held. On a VM the
+//! lease holds an owner of its guest's input of the person's own, which
+//! neither Stop refuses or ends there, and which a new generation of its
+//! session ends.
 use super::{LEASE_SECONDS, Viewer, frames::Observation, unpoisoned};
-use atlas_client::client::Client;
+use atlas_client::client::{Client, GuestOwner};
 use atlas_control::{ActionPermit, Beside};
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     session::Epoch,
 };
@@ -92,9 +96,14 @@ impl Viewer {
     /// End `owner`'s control (any control, without one) in the helper it
     /// was taken on.
     pub(super) async fn release(&self, owner: Option<&str>) -> Result<()> {
-        let (previous, client) = {
+        let (previous, client, guest) = {
             let mut lease = self.lease.lock().await;
-            (lease.begin_release(owner)?, self.holder())
+            let previous = lease.begin_release(owner)?;
+            // Taken with the lease it was kept for, so it is let go of once.
+            let guest = previous
+                .as_ref()
+                .and_then(|_| unpoisoned(&self.guest_owner).take());
+            (previous, self.holder(), guest)
         };
 
         // A sign-in under this lease ends with it: the screen is shown to
@@ -104,9 +113,15 @@ impl Viewer {
             None => false,
         };
 
-        let completion = match previous.as_deref() {
-            Some(previous) => release_native(&client, previous, false).await,
-            None => Ok(None),
+        // On a VM an acquire still under way lets go of what it took itself.
+        let completion = match (previous.as_deref(), guest) {
+            (Some(_), Some(guest)) => {
+                release_guest(&client, guest, self.persons_capability(&client)).await
+            }
+            (Some(previous), None) if !on_vm(&client) => {
+                release_native(&client, previous, false).await
+            }
+            (Some(_) | None, _) => Ok(None),
         };
         // A password the person typed while they had control names the
         // account they signed in to: Atlas lists it. Never after a guided
@@ -172,19 +187,7 @@ impl Viewer {
         epoch: &Epoch,
         beside: Beside,
     ) -> Result<String> {
-        let token = {
-            let mut lease = self.lease.lock().await;
-
-            // Settings that moved to another helper meanwhile refuse it.
-            if !Arc::ptr_eq(client, &self.client()) {
-                return Err(Error::session_changed());
-            }
-
-            let token = lease.acquire_beside(&client.controller, beside)?;
-            *unpoisoned(&self.lease_client) = Some(client.clone());
-            *self.lease_epoch.lock().await = Some(epoch.clone());
-            token
-        };
+        let token = self.lease_beside(client, epoch, beside).await?;
 
         // Nothing was asked of the helper yet, so a lease ended this soon
         // just fails here.
@@ -224,6 +227,87 @@ impl Viewer {
             Ok(_) => error,
             Err(mut cleanup) => {
                 cleanup.error = format!("{} {}", error.error, cleanup.error);
+                cleanup
+            }
+        })
+    }
+
+    /// A new lease on `client`'s desktop, in `epoch`, going on only beside
+    /// what `beside` names: its token. Nothing is asked of the desktop yet.
+    async fn lease_beside(
+        &self,
+        client: &Arc<Client>,
+        epoch: &Epoch,
+        beside: Beside,
+    ) -> Result<String> {
+        let mut lease = self.lease.lock().await;
+
+        // Settings that moved to another helper meanwhile refuse it.
+        if !Arc::ptr_eq(client, &self.client()) {
+            return Err(Error::session_changed());
+        }
+
+        let token = lease.acquire_beside(&client.controller, beside)?;
+        *unpoisoned(&self.lease_client) = Some(client.clone());
+        *self.lease_epoch.lock().await = Some(epoch.clone());
+        Ok(token)
+    }
+
+    /// Take control of `client`'s VM for a new lease, from `frame`: proved
+    /// for the person's control in the session the frame shows, then taken
+    /// beside nothing pending at all, a command an agent started that still
+    /// runs included (the person's input would land beside it there), under
+    /// an owner of its guest's input of the person's own, kept as the
+    /// lease's. Until the
+    /// guest answers, the acquire counts as input in progress. When the
+    /// lease ended meanwhile, the owner is let go of again.
+    async fn take_vm_control(&self, client: &Arc<Client>, frame: &Observation) -> Result<String> {
+        let proof = client.person_proof_on_vm().await?;
+        if *proof.epoch() != frame.epoch {
+            return Err(Error::session_changed());
+        }
+        let capability = self.persons_capability(client)?;
+        let token = self
+            .lease_beside(client, &frame.epoch, Beside::Nothing)
+            .await?;
+
+        // Nothing was asked of the guest yet, so a lease ended this soon
+        // just fails here.
+        let _acquiring = ActionPermit::begin(self.lease.clone(), &token).await?;
+        let acquired = client
+            .person_acquire_on_vm(&token, &proof, &capability)
+            .await;
+        let mut lease = self.lease.lock().await;
+
+        let (owner, lost) = match acquired {
+            Ok(owner) => match lease.require(&token) {
+                Ok(()) => {
+                    *unpoisoned(&self.guest_owner) = Some(owner);
+                    return Ok(token);
+                }
+                Err(lost) => (owner, lost),
+            },
+            // What it took, if anything, is let go of already: the lease
+            // just ends.
+            Err(error) => {
+                if lease.require(&token).is_ok() {
+                    lease.release();
+                }
+                return Err(error);
+            }
+        };
+
+        // Taken with no lease left to hold it: let it go again.
+        let ending = lease.begin_release(Some(&token));
+        drop(lease);
+        let cleanup = release_guest(client, owner, Ok(capability)).await;
+        if matches!(ending, Ok(Some(_))) {
+            self.lease.lock().await.end_release();
+        }
+        Err(match cleanup {
+            Ok(_) => lost,
+            Err(mut cleanup) => {
+                cleanup.error = format!("{} {}", lost.error, cleanup.error);
                 cleanup
             }
         })
@@ -273,6 +357,10 @@ impl Viewer {
     pub(super) async fn acquire(&self, key: &str) -> Result<Value> {
         let frame = self.observed(key).await?;
         let client = self.client();
+        if on_vm(&client) {
+            let token = self.take_vm_control(&client, &frame).await?;
+            return Ok(json!({"ok": true, "lease": token, "ttlSeconds": LEASE_SECONDS}));
+        }
         let current = client.identity().await?;
         if current.epoch != frame.epoch {
             return Err(Error::session_changed());
@@ -301,7 +389,9 @@ impl Viewer {
         Ok(frame)
     }
 
-    /// Renew `owner`'s lease, in the helper control was taken on.
+    /// Renew `owner`'s lease, in the helper control was taken on. A VM's
+    /// guest is asked to keep their control too: when it does not, or its
+    /// answer is lost, their control ends.
     pub(super) async fn renew(&self, owner: &str, key: &str) -> Result<Value> {
         self.controlled_frame(owner, key).await?;
         let client = {
@@ -310,8 +400,51 @@ impl Viewer {
             self.holder()
         };
 
+        if on_vm(&client) {
+            let renewed = async {
+                let generation = self.guest_generation()?;
+                let capability = self.persons_capability(&client)?;
+                client
+                    .person_renew_on_vm(owner, generation, &capability)
+                    .await
+            };
+            if let Err(error) = renewed.await {
+                let _ = self.release(Some(owner)).await;
+                return Err(error);
+            }
+            return Ok(json!({"ok": true}));
+        }
         client.native_control("renew", owner).await?;
         Ok(json!({"ok": true}))
+    }
+
+    /// The capability `client`'s VM keeper carries the person's own control
+    /// with, read in this service's station, as their own surface reads it;
+    /// none in a service that keeps no station.
+    fn persons_capability(&self, client: &Client) -> Result<String> {
+        let desktop = client.desktop();
+        let Kind::Vm(vm) = desktop.kind() else {
+            return Err(client.unreachable());
+        };
+        match unpoisoned(&self.station_home).clone() {
+            Some(home) => atlas_client::vm::keeper::resume_capability_in(&home, &vm.id),
+            None => Err(Error::new(
+                Code::Permission,
+                format!(
+                    "Only the Atlas app can do this on {}.",
+                    client.selected.name
+                ),
+            )),
+        }
+    }
+
+    /// The generation of the VM's session the person's control of it was
+    /// taken in.
+    fn guest_generation(&self) -> Result<u64> {
+        unpoisoned(&self.guest_owner)
+            .as_ref()
+            .map(GuestOwner::generation)
+            .ok_or_else(|| Error::new(Code::LeaseLost, "Control was released or expired"))
     }
 
     /// Send `actions` for `owner` to the helper control was taken on, as
@@ -328,13 +461,29 @@ impl Viewer {
         // first event, and again once the last is done: a long paste must
         // not wait out a still screen's slower pace.
         self.input_sent.notify_one();
-        let result = client
-            .input(
-                actions,
-                Some((&frame.epoch, frame.at)),
-                Some((&self.lease, owner)),
-            )
-            .await;
+        let result = if on_vm(&client) {
+            async {
+                let generation = self.guest_generation()?;
+                let capability = self.persons_capability(&client)?;
+                client
+                    .person_input_on_vm(
+                        (owner, generation),
+                        (actions, &frame.epoch, frame.at),
+                        &self.lease,
+                        &capability,
+                    )
+                    .await
+            }
+            .await
+        } else {
+            client
+                .input(
+                    actions,
+                    Some((&frame.epoch, frame.at)),
+                    Some((&self.lease, owner)),
+                )
+                .await
+        };
 
         self.frames.lock().await.input_revision += 1;
         self.input_sent.notify_one();
@@ -377,9 +526,40 @@ pub(super) async fn release_native(
     }
 }
 
+/// Let go of the person's `owner` of `client`'s VM guest input. Its claim
+/// stays pending, for the keeper's recovery, until the guest acknowledges
+/// it let go. No account the person typed a password for meanwhile is
+/// listed from it: the accounts listed are Second Login's.
+async fn release_guest(
+    client: &Client,
+    owner: GuestOwner,
+    capability: Result<String>,
+) -> Result<Option<Value>> {
+    let released = match capability {
+        Ok(capability) => client.person_release_on_vm(owner, &capability).await,
+        Err(error) => Err(error),
+    };
+    released.map(|_| None).map_err(|error| {
+        let message = format!(
+            "Control stopped accepting input, but {} did not confirm it let go: {error}",
+            client.selected.name
+        );
+        Error::new(Code::Uncertain, message).uncertain()
+    })
+}
+
+/// Whether `client`'s desktop is a VM.
+fn on_vm(client: &Client) -> bool {
+    matches!(client.desktop().kind(), Kind::Vm(_))
+}
+
 /// The session a cleanup route names, by its key.
 pub(super) fn cleanup_session(given: Option<&str>) -> Result<atlas_core::host::Key> {
     given
         .and_then(atlas_core::host::Key::parse)
         .ok_or_else(|| Error::new(Code::Input, "Name a session by its key"))
 }
+
+#[cfg(test)]
+#[path = "control_tests.rs"]
+mod tests;

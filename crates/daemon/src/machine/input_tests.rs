@@ -29,9 +29,10 @@ pub(crate) const ANSWER: &str = "answer";
 
 /// A scripted input service a test of the daemon starts in its place,
 /// serving the channel on its standard input for the folder after `--`:
-/// ready, holding and releasing as it is told, and answering a look at an
-/// app's elements only once the test lets it, so a look can be held part
-/// way while the daemon goes on.
+/// ready, holding and releasing as it is told, taking, keeping and letting
+/// go of control and sending input for whoever asks, and answering a look
+/// at an app's elements only once the test lets it, so a look can be held
+/// part way while the daemon goes on.
 #[test]
 fn a_scripted_input_service_runs_when_started_for_these_tests() {
     use std::os::fd::AsFd;
@@ -116,6 +117,10 @@ async fn scripted_answer(request: &serde_json::Value, folder: &Path) -> serde_js
             serde_json::json!({"ok": true, "look": "8123abc", "elements": [],
                 "truncated": false, "reasons": [], "errors": {}})
         }
+        Some("acquire" | "renew") => serde_json::json!({"ok": true}),
+        Some("input") => serde_json::json!({"ok": true,
+            "performed": request["actions"].as_array().map_or(0, Vec::len)}),
+        Some("release") => serde_json::json!({"ok": true, "released": true}),
         _ => serde_json::json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
     }
 }

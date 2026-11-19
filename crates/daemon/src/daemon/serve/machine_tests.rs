@@ -2206,6 +2206,141 @@ async fn a_stop_while_an_apps_elements_are_looked_at_lets_the_look_be_answered_a
     assert_eq!(taken["code"], "stopped", "{taken}");
 }
 
+/// Say the person's Stop on `controlling`, and wait until the guest
+/// `served` has taken `stops` Stops in all.
+async fn stopped(served: &Served, controlling: &Controlling, stops: u64) {
+    controlling
+        .outbox
+        .say(atlas_session::control::Said::Stop)
+        .unwrap();
+    let mut halted = served.machine.daemon.halted.subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        halted.wait_for(|halt| halt.halted && halt.stops >= stops),
+    )
+    .await
+    .expect("the Stop took hold")
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_persons_control_goes_on_while_agents_stay_stopped_and_no_stop_refuses_it() {
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::scripted_for_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    stopped(&served, &controlling, 1).await;
+    let (owner, agents) = (Token::new(), Token::new());
+    let persons = |op: &str, change: &Token| {
+        let mut request = json!({"op": op, "owner": owner, "person": true, "change": change});
+        match op {
+            "acquire" => request["epoch"] = json!({"uid": 502}),
+            "input" => {
+                request["epoch"] = json!({"uid": 502});
+                request["actions"] = json!([{"kind": "click", "x": 1, "y": 1}]);
+            }
+            _ => {}
+        }
+        request
+    };
+    let asked = |op: &'static str| {
+        let change = Token::new();
+        let request = persons(op, &change);
+        let desktop = &desktop;
+        async move { ask(desktop, LaneKind::Person { change }, &request).await }
+    };
+
+    let taken = asked("acquire").await;
+    let agent = Token::new();
+    let refused = ask(&desktop, input_lane(&agent), &acquire_for(&agent, &agents)).await;
+    let sent = asked("input").await;
+    // Another Stop meanwhile refuses none of it.
+    stopped(&served, &controlling, 2).await;
+    let kept = asked("renew").await;
+    let released = asked("release").await;
+
+    for (reply, said) in [(&taken, "taken"), (&sent, "sent"), (&kept, "kept")] {
+        let reply = reply.last().unwrap();
+        assert_eq!(reply["ok"], true, "{said}: {reply}");
+    }
+    assert_eq!(sent.last().unwrap()["performed"], 1);
+    assert_eq!(released.last().unwrap()["released"], true, "{released:?}");
+    let refused = refused.last().unwrap();
+    assert_eq!(refused["code"], "stopped", "{refused}");
+    assert!(
+        matches!(served.changes.of(&owner).unwrap(),
+            Some(crate::machine::changes::State::Done { ref reply }) if reply["released"] == true),
+        "the person's owner is kept as let go of"
+    );
+}
+
+#[tokio::test]
+async fn the_persons_mark_on_an_input_lane_is_refused_by_the_guest_and_never_lifts_its_stop() {
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::scripted_for_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    let owner = Token::new();
+    let marked = |change: &Token| {
+        json!({"op": "acquire", "owner": owner, "epoch": {"uid": 502}, "person": true,
+            "change": change})
+    };
+    let (before, stopped_change, unmarked) = (Token::new(), Token::new(), Token::new());
+
+    // As an older keeper would forward it: the mark on an ordinary lane.
+    let open = ask(&desktop, input_lane(&before), &marked(&before)).await;
+    stopped(&served, &controlling, 1).await;
+    let under_stop = ask(
+        &desktop,
+        input_lane(&stopped_change),
+        &marked(&stopped_change),
+    )
+    .await;
+    // Nor does a person's lane take a request without the mark.
+    let bare = ask(
+        &desktop,
+        LaneKind::Person {
+            change: unmarked.clone(),
+        },
+        &acquire_for(&unmarked, &Token::new()),
+    )
+    .await;
+
+    for refused in [&open, &under_stop, &bare] {
+        let refused = refused.last().unwrap();
+        assert_eq!(refused["code"], "bad-request", "{refused}");
+        assert_ne!(refused["uncertain"], true, "{refused}");
+    }
+    assert_eq!(served.changes.of(&owner).unwrap(), None, "no owner kept");
+    for change in [&before, &stopped_change, &unmarked] {
+        assert_eq!(served.changes.of(change).unwrap(), None, "nothing intended");
+    }
+}
+
 #[tokio::test]
 async fn a_read_on_an_input_lane_is_answered_by_the_input_service() {
     let (_served, _controlling, desktop, _folder, _turn) = with_input_service().await;

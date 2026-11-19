@@ -47,6 +47,11 @@ pub enum LaneKind {
     /// A request to the desktop's input service, passed to it as it is: a
     /// read names no change, and a change names its own.
     Input { change: Option<Token> },
+    /// A change to the person's own control of the desktop's input service,
+    /// naming its own: opened only for the person's own surface, and only
+    /// to a guest that serves it
+    /// ([`crate::compatibility::PERSON_INPUT`]).
+    Person { change: Token },
 }
 
 /// The first message on a lane; a field it does not know is refused.

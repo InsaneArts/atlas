@@ -337,6 +337,31 @@ pub(crate) enum Route {
     /// The guest's input service: a change to what it holds or does, named
     /// by its token, or a read, which names none.
     Input(Option<Token>),
+    /// The person's own control of the guest's input service: a change to
+    /// it, named by its token, carried only with the keeper's capability
+    /// for the person.
+    Person(Token, Capability),
+}
+
+/// The keeper's capability for what only the person does, as their own
+/// surface reads it: never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Capability(String);
+
+impl Capability {
+    pub(crate) fn new(capability: &str) -> Self {
+        Self(capability.to_owned())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Capability {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Capability(..)")
+    }
 }
 
 /// A request whose final reply has not come. Dropped so, its lane's work

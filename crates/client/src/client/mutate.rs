@@ -6,7 +6,7 @@ use super::{
     record::{NOT_RECORDED, recorded_code},
     run::RUN_MARGIN,
 };
-use crate::link::Route;
+use crate::link::{Capability, Route};
 use atlas_control::{Lease, Ownership, Pending, SharedLease, executors::Executor};
 use atlas_core::{
     actions::{Batch, Expect, Verification},
@@ -94,6 +94,9 @@ pub(crate) enum Mutation<'a> {
         /// The accounts and grants an agent's input is judged by, while the
         /// person lists any; none keeps the request as it always was.
         asking: Option<Value>,
+        /// The person's own input to a VM's guest, under the owner they
+        /// took control by: a Stop neither refuses it nor ends it there.
+        person: bool,
     },
     Run {
         argv: Vec<String>,
@@ -119,16 +122,24 @@ pub(crate) enum Mutation<'a> {
         copy: &'a Token,
         node: &'a str,
     },
-    /// Input on a VM's guest taken by `owner` for an agent, in the session
-    /// `epoch` names: the owner its input and its release name.
+    /// Input on a VM's guest taken by `owner` for an agent, or for the
+    /// `person`, in the session `epoch` names: the owner its input and its
+    /// release name.
     Acquire {
         owner: &'a str,
         epoch: InputEpoch,
+        person: bool,
+    },
+    /// The person's control of a VM's guest input, taken by `owner`, kept a
+    /// while longer.
+    Renew {
+        owner: &'a str,
     },
     /// Input on a VM's guest let go of by `owner`, and whatever it left held
-    /// released.
+    /// released: the `person`'s own, or an agent's.
     Release {
         owner: &'a str,
+        person: bool,
     },
     /// A VM's guest's own environment worker handed `packet`, in the
     /// session `pin` names, stopped after `timeout`: `apply` when it may
@@ -154,6 +165,7 @@ impl Mutation<'_> {
                 app,
                 expect,
                 asking,
+                person,
                 ..
             } => {
                 let mut request = json!({
@@ -168,6 +180,9 @@ impl Mutation<'_> {
                 }
                 if let Some(asking) = asking {
                     request["asking"] = asking.clone();
+                }
+                if *person {
+                    request["person"] = json!(true);
                 }
                 request
             }
@@ -214,10 +229,21 @@ impl Mutation<'_> {
             Self::RemoveCopy { copy, node } => {
                 json!({"op": "remove-copy", "copy": copy, "node": node})
             }
-            Self::Acquire { owner, epoch } => {
-                json!({"op": "acquire", "owner": owner, "epoch": epoch, "person": false})
+            Self::Acquire {
+                owner,
+                epoch,
+                person,
+            } => {
+                json!({"op": "acquire", "owner": owner, "epoch": epoch, "person": person})
             }
-            Self::Release { owner } => json!({"op": "release", "owner": owner}),
+            Self::Renew { owner } => json!({"op": "renew", "owner": owner, "person": true}),
+            Self::Release { owner, person } => {
+                let mut request = json!({"op": "release", "owner": owner});
+                if *person {
+                    request["person"] = json!(true);
+                }
+                request
+            }
             Self::Environment {
                 packet,
                 apply,
@@ -242,6 +268,7 @@ impl Mutation<'_> {
             | Self::Logout { .. }
             | Self::RemoveCopy { .. }
             | Self::Acquire { .. }
+            | Self::Renew { .. }
             | Self::Release { .. } => false,
         }
     }
@@ -302,7 +329,7 @@ impl Mutation<'_> {
                     && reply["copy"] == json!(copy)
                     && reply["outcome"].is_string()
             }
-            Self::Acquire { .. } => true,
+            Self::Acquire { .. } | Self::Renew { .. } => true,
             // Only a release that says so let go of what was held.
             Self::Release { .. } => reply["released"] == true,
             // Any other request of the worker's is answered by the worker's
@@ -375,6 +402,15 @@ fn job_started(uid: u32, job: &JobView) -> bool {
         }
 }
 
+/// What the person's own change to a VM's guest input carries: the
+/// keeper's capability for the person, and the lease and the frame seen at
+/// `observed_at` that authorize their input.
+pub(crate) struct ForPerson<'a> {
+    pub(crate) capability: &'a str,
+    pub(crate) lease: Option<(&'a SharedLease, &'a str)>,
+    pub(crate) observed_at: Option<Instant>,
+}
+
 /// The person's lease, locked for only the final authorization and the
 /// bounded sending of the request, once it still names `lease`'s owner and
 /// the frame seen at `observed_at` is still fresh.
@@ -436,6 +472,7 @@ impl Client {
             | Mutation::Logout { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
+            | Mutation::Renew { .. }
             | Mutation::Release { .. }
             | Mutation::Environment { .. } => (false, false),
         };
@@ -613,9 +650,11 @@ impl Client {
             // Only a VM's guest keeps copies of its own, removed through its
             // keeper, and is handed its own environment worker's requests; and
             // input on one is taken and let go of through it, where the
-            // helper's is taken under its caller's own claim.
+            // helper's is taken under its caller's own claim, and the
+            // person's kept through the viewer's own requests.
             Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
+            | Mutation::Renew { .. }
             | Mutation::Release { .. }
             | Mutation::Environment { .. } => {
                 return Err(self.unreachable());
@@ -652,6 +691,7 @@ impl Client {
             | Mutation::JobStop { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
+            | Mutation::Renew { .. }
             | Mutation::Release { .. }
             | Mutation::Environment { .. } => false,
         };
@@ -789,6 +829,7 @@ impl Client {
             | Mutation::Logout { .. }
             | Mutation::RemoveCopy { .. }
             | Mutation::Acquire { .. }
+            | Mutation::Renew { .. }
             | Mutation::Release { .. }
             | Mutation::Environment { .. } => {}
         }
@@ -907,10 +948,18 @@ impl Client {
             }
         }
 
-        if self
-            .record(request, &reply, started.elapsed())
-            .await
-            .is_err()
+        // The person's taking, keeping and giving back of control is no
+        // row of its own, on a VM as on Second Login: only their input is.
+        let control = self.actor == Actor::Viewer
+            && matches!(
+                request["op"].as_str(),
+                Some("acquire" | "renew" | "release")
+            );
+        if !control
+            && self
+                .record(request, &reply, started.elapsed())
+                .await
+                .is_err()
         {
             warnings.push(NOT_RECORDED.to_owned());
         }
@@ -934,9 +983,23 @@ impl Client {
     /// before it is claimed.
     pub(crate) async fn mutate_vm(
         &self,
+        mutation: Mutation<'_>,
+        generation: u64,
+        release: Option<Ownership>,
+    ) -> Result<Value> {
+        self.mutate_vm_as(mutation, generation, release, None).await
+    }
+
+    /// [`Client::mutate_vm`], for the person's own control of the guest's
+    /// input when `person` says so: carried with the keeper's capability
+    /// for the person, and authorized by their lease and the frame they
+    /// acted on, when it names them, right before it goes.
+    pub(crate) async fn mutate_vm_as(
+        &self,
         mut mutation: Mutation<'_>,
         generation: u64,
         release: Option<Ownership>,
+        person: Option<ForPerson<'_>>,
     ) -> Result<Value> {
         self.reachable()?;
         let within = match (self.desktop().kind(), &mutation) {
@@ -949,7 +1012,10 @@ impl Client {
             (Kind::Vm(_), Mutation::RemoveCopy { .. }) => REMOVE_COPY,
             (
                 Kind::Vm(_),
-                Mutation::Input { .. } | Mutation::Acquire { .. } | Mutation::Release { .. },
+                Mutation::Input { .. }
+                | Mutation::Acquire { .. }
+                | Mutation::Renew { .. }
+                | Mutation::Release { .. },
             ) => INPUT,
             _ => return Err(self.unreachable()),
         };
@@ -1005,14 +1071,34 @@ impl Client {
             .link
             .clone()
             .with_timeout(self.link.timeout().max(within));
-        let route = match &mutation {
-            Mutation::Input { .. } | Mutation::Acquire { .. } | Mutation::Release { .. } => {
-                Route::Input(Some(change.clone()))
-            }
+        let route = match (&mutation, &person) {
+            (
+                Mutation::Input { .. }
+                | Mutation::Acquire { .. }
+                | Mutation::Renew { .. }
+                | Mutation::Release { .. },
+                Some(person),
+            ) => Route::Person(change.clone(), Capability::new(person.capability)),
+            (
+                Mutation::Input { .. }
+                | Mutation::Acquire { .. }
+                | Mutation::Renew { .. }
+                | Mutation::Release { .. },
+                None,
+            ) => Route::Input(Some(change.clone())),
             _ => Route::Change(change.clone()),
         };
+        let authority = person
+            .as_ref()
+            .map_or((None, None), |person| (person.lease, person.observed_at));
         let sent = self
-            .send_change(&link, (&route, &request, generation), &claim, cleanup)
+            .send_change(
+                &link,
+                (&route, &request, generation),
+                &claim,
+                cleanup,
+                authority,
+            )
             .await
             .map_err(|error| self.pending_on_vm(error))?;
         // As for the helper login: control goes once the request is sent.
@@ -1094,13 +1180,16 @@ impl Client {
     /// Send `request`, the change `route` names, through `link`'s keeper in
     /// `generation`: connected first, which a signal's stop cuts; then sent,
     /// the last moment a stop refuses it, unless it is `cleanup`, which goes
-    /// whatever the stop. Its `claim` is settled whenever it is not sent.
+    /// whatever the stop. The person's lease and the frame they acted on,
+    /// when `authority` names them, authorize it at that moment too, held
+    /// while it is sent. Its `claim` is settled whenever it is not sent.
     async fn send_change(
         &self,
         link: &crate::link::Link,
         (route, request, generation): (&Route, &Value, u64),
         claim: &Pending,
         cleanup: bool,
+        (lease, observed_at): (Option<(&SharedLease, &str)>, Option<Instant>),
     ) -> Result<transport::Pending<crate::link::Stream>> {
         let interrupt = self.controller.interrupt();
         let connected = if cleanup {
@@ -1113,13 +1202,16 @@ impl Client {
             }
         };
         let sent = match connected {
-            Ok((connection, asked)) => {
-                let _sending = interrupt.sending();
-                match interrupt.check() {
-                    Err(stop) if !cleanup => Err(stop),
-                    Ok(()) | Err(_) => connection.dispatch(&asked).await,
+            Ok((connection, asked)) => match authorize(lease, observed_at).await {
+                Ok(_authorized) => {
+                    let _sending = interrupt.sending();
+                    match interrupt.check() {
+                        Err(stop) if !cleanup => Err(stop),
+                        Ok(()) | Err(_) => connection.dispatch(&asked).await,
+                    }
                 }
-            }
+                Err(refused) => Err(refused),
+            },
             Err(error) => Err(error),
         };
         if let Err(error) = &sent

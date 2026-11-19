@@ -491,6 +491,7 @@ async fn an_acquire_whose_acknowledgement_is_unknown_keeps_its_view() {
         let child = registry.locked()[0].child.clone();
         *child.held.lock().await = Some(Held {
             url: format!("http://127.0.0.1:{}/viewer/", root.port),
+            desktop: "second-login".to_owned(),
             lease: "known".into(),
             kept: Instant::now(),
         });
@@ -536,11 +537,13 @@ async fn refused_cleanup_keeps_its_lease_and_retries_without_touching_another_vi
     });
     *first.held.lock().await = Some(Held {
         url: format!("http://{address}/view/"),
+        desktop: "second-login".to_owned(),
         lease: "fixture-first".into(),
         kept: Instant::now(),
     });
     *second.held.lock().await = Some(Held {
         url: "http://127.0.0.1:1/other/".into(),
+        desktop: "second-login".to_owned(),
         lease: "fixture-second".into(),
         kept: Instant::now(),
     });

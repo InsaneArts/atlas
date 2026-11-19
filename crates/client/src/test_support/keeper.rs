@@ -142,6 +142,14 @@ pub struct ScriptedKeeper {
     /// What the keeper says it serves in its hello: every capability of
     /// this build's keepers at first.
     pub serves: Arc<Mutex<Vec<&'static str>>>,
+    /// The generation the keeper is live in: [`GENERATION`] at first. A
+    /// change proved in another is refused unsaid, as a real keeper
+    /// refuses it.
+    pub generation: Arc<std::sync::atomic::AtomicU64>,
+    /// What the keeper answers a change to the guest's input service of
+    /// each operation, in place of the guest's own answer: a refusal of the
+    /// guest's, or the keeper's own word that its reply was lost.
+    pub input_answers: Arc<Mutex<Vec<(&'static str, Value)>>>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -206,6 +214,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let holds = Arc::new(Mutex::new(true));
     let window: Window = Arc::new(Mutex::new(("closed", 0)));
     let serves = Arc::new(Mutex::new(crate::vm::keeper::CAPABILITIES.to_vec()));
+    let generation = Arc::new(std::sync::atomic::AtomicU64::new(GENERATION));
+    let input_answers: Arc<Mutex<Vec<(&'static str, Value)>>> = Arc::new(Mutex::new(Vec::new()));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
         let (asked, stop, away, held, answering, refusing_once, observing) = (
@@ -217,11 +227,13 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             refusing_once.clone(),
             observing.clone(),
         );
-        let (leftovers, holds, window, serves) = (
+        let (leftovers, holds, window, serves, generation, input_answers) = (
             leftovers.clone(),
             holds.clone(),
             window.clone(),
             serves.clone(),
+            generation.clone(),
+            input_answers.clone(),
         );
         async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -243,6 +255,11 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone();
                 let window = window.clone();
+                let generation = generation.load(std::sync::atomic::Ordering::SeqCst);
+                let input_answers = input_answers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
                     let mut line = String::new();
@@ -296,6 +313,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                             own: &own,
                             serves: &serves,
                             window: *window.lock().unwrap_or_else(PoisonError::into_inner),
+                            generation,
+                            input_answers: &input_answers,
                         };
                         let mut answer = answered(&request, &guest, job_stopped);
                         if let Some(differ) = observing.filter(|_| request["op"] == "observe") {
@@ -353,9 +372,33 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             holds,
             window,
             serves,
+            generation,
+            input_answers,
             serving,
         },
     )
+}
+
+/// Keep the capability the keeper of the VM `vm` carries the person's own
+/// requests with, in the station of the home `home`, as a keeper keeps it at
+/// its start: the capability.
+///
+/// # Panics
+///
+/// When it cannot be kept.
+#[must_use]
+pub fn kept_capability(home: &Path, vm: &atlas_core::desktop::DesktopId) -> String {
+    let folder = crate::station::Station::under(home)
+        .folder(vm)
+        .expect("the VM's station folder");
+    let capability = Token::new().to_string();
+    atlas_core::files::write_atomic(
+        &folder.join(crate::vm::keeper::RESUME_KEY),
+        capability.as_bytes(),
+        0o600,
+    )
+    .expect("the capability kept");
+    capability
 }
 
 /// Keep the VM `id` as added, named `work`, in the lifecycle in `home`.
@@ -533,6 +576,11 @@ struct Guest<'a> {
     serves: &'a [&'static str],
     /// Atlas VM's window and picture fence.
     window: (&'static str, u64),
+    /// The generation its keeper is live in.
+    generation: u64,
+    /// What its keeper answers a change to its input service of each
+    /// operation in place of its own answer.
+    input_answers: &'a [(&'static str, Value)],
 }
 
 impl Guest<'_> {
@@ -579,8 +627,8 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
                 "capabilities": atlas_session::compatibility::MACHINE, "version": "1.0.0",
                 "build": "b1"},
             "program": {"build": "b1"},
-            "generation": GENERATION, "live": true}),
-        Some("observe") => json!({"ok": true, "op": "observe", "generation": GENERATION,
+            "generation": guest.generation, "live": true}),
+        Some("observe") => json!({"ok": true, "op": "observe", "generation": guest.generation,
             "declared": {"protocol": atlas_session::compatibility::PROTOCOL,
                 "capabilities": atlas_session::compatibility::MACHINE, "version": "1.0.0"},
             "peer": guest.peer, "station": guest.own,
@@ -661,14 +709,32 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
         {
             environment_answered(&request["request"]["packet"]["request"])
         }
-        // Its input service takes, sends and lets go of whatever it is asked,
-        // and says it checked what it was to and how it acted on an element.
-        Some("change") if request["lane"] == "input" => match request["request"]["op"].as_str() {
-            Some("acquire") => json!({"ok": true}),
-            Some("input") => inputted(&request["request"]),
-            Some("release") => json!({"ok": true, "released": true}),
-            _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
-        },
+        // A change proved in a generation no longer live is refused
+        // unsaid.
+        Some("change") if request["generation"] != json!(guest.generation) => {
+            json!({"ok": false, "code": "session-changed", "uncertain": false, "sent": false,
+                "error": "The VM's session this change was proved in has ended; nothing was sent."})
+        }
+        Some("change")
+            if matches!(request["lane"].as_str(), Some("input" | "person"))
+                && let Some((_, answer)) = guest
+                    .input_answers
+                    .iter()
+                    .find(|(op, _)| request["request"]["op"] == *op) =>
+        {
+            answer.clone()
+        }
+        // Its input service takes, sends, keeps and lets go of whatever it
+        // is asked, on an input lane or the person's own, and says it
+        // checked what it was to and how it acted on an element.
+        Some("change") if matches!(request["lane"].as_str(), Some("input" | "person")) => {
+            match request["request"]["op"].as_str() {
+                Some("acquire" | "renew") => json!({"ok": true}),
+                Some("input") => inputted(&request["request"]),
+                Some("release") => json!({"ok": true, "released": true}),
+                _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
+            }
+        }
         Some("change") => json!({"ok": true, "exitCode": 0, "timedOut": false,
             "signal": null, "truncated": false,
             "events": [{"event": "started", "pid": 321}, {"event": "output", "data": "aGkK"}]}),

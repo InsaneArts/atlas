@@ -6,8 +6,9 @@
 //!
 //! Resume is the person's alone: it is taken only with the capability the
 //! keeper made at its start and keeps in its station folder, which the
-//! person's own surface reads there. What a client says of itself, that it
-//! is the viewer included, counts for nothing.
+//! person's own surface reads there. So is the person's own control of the
+//! guest's input, carried with that capability alone. What a client says of
+//! itself, that it is the viewer included, counts for nothing.
 //!
 //! An update asks `handover`, with its change: the keeper keeps the station's
 //! Stop for the update, says it, leaves its generation, answers and ends,
@@ -371,6 +372,20 @@ async fn answer(mut writing: UnixStream, keeper: &Keeper, grant: &Grant, admit: 
                 ticket: ticket.as_ref(),
             };
             carried(keeper, asked, &mut writing).await;
+        }
+        // The person's own control of the guest's input is carried only
+        // with the capability their own surface reads: no agent's command
+        // asks for it.
+        Some("change")
+            if super::change::persons(&request)
+                && !grant.admits(request["capability"].as_str()) =>
+        {
+            let refused = super::change::unsent(Error::new(
+                Code::Denied,
+                "Only the person takes control of this VM, from Atlas's own window; nothing was \
+                 sent.",
+            ));
+            let _ = say(&mut writing, &refused).await;
         }
         Some("change") => {
             if let Some(ticket) = ticket(keeper, Work::Change, &mut writing).await {

@@ -134,7 +134,17 @@ pub fn label(vm: &DesktopId) -> String {
 ///
 /// Fails when no keeper of the VM keeps one, or it is not this account's.
 pub fn resume_capability(vm: &DesktopId) -> Result<String> {
-    let path = Station::own()?.path_of(vm).join(RESUME_KEY);
+    resume_capability_in(&atlas_core::config::home()?, vm)
+}
+
+/// [`resume_capability`], of the station in the home `home`: the capability
+/// the person's own control of `vm` is carried with too.
+///
+/// # Errors
+///
+/// As [`resume_capability`].
+pub fn resume_capability_in(home: &Path, vm: &DesktopId) -> Result<String> {
+    let path = Station::under(home).path_of(vm).join(RESUME_KEY);
     let kept = atlas_core::files::read_own(&path, 256).ok_or_else(|| {
         Error::new(
             Code::Stopped,

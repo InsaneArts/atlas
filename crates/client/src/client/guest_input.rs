@@ -120,6 +120,7 @@ impl Client {
             app: self.doing.is_some(),
             expect: check.as_ref(),
             asking,
+            person: false,
         };
         let result = self.mutate_vm(mutation, generation, None).await;
         // A permit is spent by the request that took it, unless that request
@@ -236,7 +237,7 @@ impl Client {
     /// The owner `owner`, whose claim is `barrier`, let go of as its guest
     /// acknowledged: its claim cleared, then the guest told it may forget
     /// it. A claim that cannot be cleared stays for recovery.
-    async fn let_go(&self, barrier: &Pending, owner: &Token) {
+    pub(super) async fn let_go(&self, barrier: &Pending, owner: &Token) {
         if self.controller.clear_if(barrier).is_ok() {
             self.settle_guest(std::slice::from_ref(owner)).await;
         }
@@ -268,6 +269,7 @@ impl Client {
             let acquire = Mutation::Acquire {
                 owner: owner.as_str(),
                 epoch: epoch.clone(),
+                person: false,
             };
             let refused = match self.mutate_vm(acquire, generation, None).await {
                 Ok(reply) if reply["ok"] == true => return Ok((owner, barrier)),
@@ -311,7 +313,14 @@ impl Client {
     /// its answer: the owner is not known to be let go of then.
     async fn release_on_vm(&self, owner: &str, generation: u64) -> Result<Value> {
         let reply = self
-            .mutate_vm(Mutation::Release { owner }, generation, None)
+            .mutate_vm(
+                Mutation::Release {
+                    owner,
+                    person: false,
+                },
+                generation,
+                None,
+            )
             .await?;
         if reply["ok"] != true {
             return Err(native_refusal(&reply));

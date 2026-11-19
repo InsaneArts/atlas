@@ -766,8 +766,8 @@ impl Serving {
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
             ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, INSTALLED, JOBS,
-            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PICTURES, STAGE, STOP_REPORT,
-            UPDATE_BOUND, UPDATES,
+            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PERSON_INPUT, PICTURES, STAGE,
+            STOP_REPORT, UPDATE_BOUND, UPDATES,
         };
         match capability {
             // Its Applications folder and a canary folder are read by the
@@ -779,7 +779,7 @@ impl Serving {
             // An update's bundle comes as a stage, and the update is bound to
             // that stage's digest.
             STAGE | COPIES | UPDATES | UPDATE_BOUND => self.stages,
-            INPUT_LANES => self.input,
+            INPUT_LANES | PERSON_INPUT => self.input,
             MIRRORS => self.mirrors,
             JOBS => self.jobs,
             PICTURES => self.pictures,
@@ -1338,7 +1338,8 @@ impl Machine {
             | LaneKind::Stage { change }
             | LaneKind::Input {
                 change: Some(change),
-            } => Some(self.daemon.keepers.carry(change)),
+            }
+            | LaneKind::Person { change } => Some(self.daemon.keepers.carry(change)),
             _ => None,
         };
         // Only the station's reads while the guest is open to more than
@@ -1478,19 +1479,26 @@ impl Machine {
         }
         // Passed to the input service as it is, once judged here. A read, a
         // look at an app's elements, changes nothing, so a Stop never cuts
-        // it short: only its lane or its generation ending does.
-        if let LaneKind::Input { change } = &header.kind {
+        // it short: only its lane or its generation ending does. Nor does
+        // one cut the person's own control short, or refuse it, on a lane
+        // of its own: they may act on a stopped desktop.
+        let input = match &header.kind {
+            LaneKind::Input { change } => Some((change.as_ref(), false)),
+            LaneKind::Person { change } => Some((Some(change), true)),
+            _ => None,
+        };
+        if let Some((change, person)) = input {
             let gate = Gate {
                 authority,
                 lanes: lanes.clone(),
                 lane: header.lane,
                 halted: self.daemon.halted.subscribe(),
                 stops,
-                held: change.is_some(),
+                held: change.is_some() && !person,
             };
             let mut hanging_up = [0; 1];
             let reply = tokio::select! {
-                reply = self.input_lane(change.as_ref(), &line, &gate) => reply,
+                reply = self.input_lane((change, person), &line, &gate) => reply,
                 () = ended(&lanes, header.lane) => return Ok(()),
                 // The station sends nothing after its request: anything more,
                 // or its end, is its hanging up, which ends the request too.
@@ -1779,7 +1787,7 @@ impl Machine {
     /// intended before it goes and with what it came to before its reply.
     async fn input_lane(
         &self,
-        lane: Option<&atlas_core::files::Token>,
+        (lane, person): (Option<&atlas_core::files::Token>, bool),
         line: &[u8],
         gate: &Gate,
     ) -> Value {
@@ -1800,6 +1808,15 @@ impl Machine {
                 );
             }
         };
+        // The person's mark goes on a lane of their own, and only there:
+        // an input lane's Stop holds whatever it carries.
+        let mismatched = if person { !persons(line) } else { marked(line) };
+        if mismatched {
+            return failure(
+                Code::BadRequest,
+                "The request is not what its lane was opened for",
+            );
+        }
         // The owner a change to input acts for is carried out here from
         // before its record is kept until its lane is done: nothing proves
         // it let go of meanwhile.
@@ -1961,6 +1978,23 @@ async fn forward(
         return Err(unanswered());
     }
     Ok(reply)
+}
+
+/// Whether the request `line` is the person's own: their control taken,
+/// used, renewed or let go of, which goes only on a lane of their own.
+fn persons(line: &[u8]) -> bool {
+    marked(line)
+        && serde_json::from_slice::<Value>(line).is_ok_and(|request| {
+            matches!(
+                request["op"].as_str(),
+                Some("acquire" | "input" | "renew" | "release")
+            )
+        })
+}
+
+/// Whether the request `line` bears the person's mark, whatever it asks.
+fn marked(line: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(line).is_ok_and(|request| request["person"] == true)
 }
 
 /// Completes once a lane's work must end at once: the lane cancelled, or

@@ -30,10 +30,13 @@ pub(super) struct Seen {
 }
 
 /// The person's control taken from the view: the viewer's address, the
-/// lease it gave, and when it was last kept.
+/// desktop it is of, by its ID, the lease it gave, and when it was last
+/// kept. Every request for it names that desktop, which a viewer serving
+/// another refuses.
 #[derive(Clone)]
 pub(super) struct Held {
     pub(super) url: String,
+    pub(super) desktop: String,
     pub(super) lease: String,
     pub(super) kept: Instant,
 }
@@ -73,10 +76,15 @@ async fn post(url: &str, route: &'static str, body: Value) -> Result<Value> {
         })
 }
 
-/// Ask the viewer to end `held`. A release names its own lease, so it never
-/// ends anyone else's.
+/// Ask the viewer to end `held`. A release names its own lease and
+/// desktop, so it never ends anyone else's.
 async fn ask_release(held: &Held) -> Result<Value> {
-    post(&held.url, "control/release", json!({"lease": held.lease})).await
+    post(
+        &held.url,
+        "control/release",
+        json!({"lease": held.lease, "desktop": held.desktop}),
+    )
+    .await
 }
 
 /// End `held` at the viewer, as far as it still holds it. A failed
@@ -123,12 +131,20 @@ impl Server {
         Ok(self.shared_frame(url).await?.key)
     }
 
-    /// Fetch and remember the viewer's frame for subsequent renewals.
+    /// The desktop this server is bound to, by its ID: what every control
+    /// request names.
+    fn bound(&self) -> String {
+        self.client.desktop().id().as_str().to_owned()
+    }
+
+    /// Fetch and remember the viewer's frame of this server's desktop for
+    /// subsequent renewals.
     async fn shared_frame(&self, url: &str) -> Result<SharedFrame> {
-        let address = url.to_owned();
-        let frame =
-            off_runtime(move || crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT))
-                .await?;
+        let (address, desktop) = (url.to_owned(), self.bound());
+        let frame = off_runtime(move || {
+            crate::viewer::fetch_frame(&address, Some(&desktop), FRAME_DEADLINE, FRAME_LIMIT)
+        })
+        .await?;
         self.saw_frame(frame.key.clone()).await;
         Ok(frame)
     }
@@ -156,12 +172,19 @@ impl Server {
                 self.forget(&old).await;
                 release(&old).await;
             }
-            let reply = post(&url, "control/acquire", json!({"frame": frame.key})).await?;
+            let desktop = self.bound();
+            let reply = post(
+                &url,
+                "control/acquire",
+                json!({"frame": frame.key, "desktop": desktop}),
+            )
+            .await?;
             let lease = reply["lease"].as_str().ok_or_else(|| {
                 Error::new(Code::Menubar, "The menu bar gave no control").uncertain()
             })?;
             let taken = Held {
                 url,
+                desktop,
                 lease: lease.to_owned(),
                 kept: Instant::now(),
             };
@@ -196,7 +219,7 @@ impl Server {
             post(
                 &held.url,
                 "control/renew",
-                json!({"lease": held.lease, "frame": key}),
+                json!({"lease": held.lease, "frame": key, "desktop": held.desktop}),
             )
             .await
         }
@@ -227,7 +250,8 @@ impl Server {
         let key = frame
             .filter(|key| !key.is_empty())
             .ok_or_else(Error::stale_frame)?;
-        let body = json!({"lease": held.lease, "frame": key, "actions": actions});
+        let body = json!({"lease": held.lease, "frame": key, "actions": actions,
+            "desktop": held.desktop});
         let sent = post(&held.url, "input", body).await;
         self.settle(&held, &sent, LeaseRequest::Input).await;
         sent?;

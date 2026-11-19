@@ -55,7 +55,7 @@ async fn each_terminal_frame_is_captured_at_the_requested_size_with_fresh_sessio
         let mut keys = Vec::new();
         for _ in 0..2 {
             let url = service.url.clone();
-            let frame = tokio::task::spawn_blocking(move || super::super::fetch_frame(&url,Duration::from_secs(2),1<<16)).await.unwrap().unwrap();
+            let frame = tokio::task::spawn_blocking(move || super::super::fetch_frame(&url, None, Duration::from_secs(2),1<<16)).await.unwrap().unwrap();
             keys.push(frame.key);
             assert_eq!(frame.display,(100.0,100.0));
         }
@@ -100,7 +100,7 @@ async fn a_helper_session_change_is_refused_by_the_terminal_capture_pipeline() {
             async {
                 let url = service.url.clone();
                 let frame = tokio::task::spawn_blocking(move || {
-                    super::super::fetch_frame(&url, Duration::from_secs(2), 1 << 16)
+                    super::super::fetch_frame(&url, None, Duration::from_secs(2), 1 << 16)
                 })
                 .await
                 .unwrap();

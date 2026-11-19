@@ -357,8 +357,8 @@ impl Server {
         self.presented(self.run(tool, arguments).await).await
     }
 
-    /// Do what `tool` does. The person's control of a VM is not taken
-    /// through these tools yet: it is refused before anything is asked.
+    /// Do what `tool` does. The person controls a VM in Atlas.app alone:
+    /// these tools refuse its control before anything is asked.
     async fn run(&self, tool: Tool, arguments: &Value) -> Result<Value> {
         match tool {
             Tool::TakeControl | Tool::KeepControl | Tool::GiveBack | Tool::SendInput
@@ -411,7 +411,7 @@ impl Server {
         });
         // The view offers Resume and control only where this client may
         // call them, and knows whether the control shown is its own. A
-        // VM's control is not offered.
+        // VM's control is not offered: it is the person's, in their app.
         let can_control = self.can_control();
         self.name_desktop(&mut result);
         result["structuredContent"]["canResume"] = json!(can_control);

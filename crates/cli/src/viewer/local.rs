@@ -223,10 +223,33 @@ pub(crate) struct SharedFrame {
     pub(crate) display: (f64, f64),
 }
 
-/// The local viewer's newest frame at `url`, read within `deadline` and at
-/// most `limit` bytes.
-pub(crate) fn fetch_frame(url: &str, deadline: Duration, limit: usize) -> Result<SharedFrame> {
-    let reply = served(url, "frame.png", deadline, limit)?;
+/// The local viewer's newest frame at `url`, of the desktop `desktop`
+/// names by its ID when it names one, read within `deadline` and at most
+/// `limit` bytes. One the viewer gives only the person's app, a VM's, or
+/// one of a desktop it does not serve, is refused in its own words.
+pub(crate) fn fetch_frame(
+    url: &str,
+    desktop: Option<&str>,
+    deadline: Duration,
+    limit: usize,
+) -> Result<SharedFrame> {
+    let route = desktop.map_or_else(
+        || "frame.png".to_owned(),
+        |desktop| format!("frame.png?desktop={desktop}"),
+    );
+    let reply = exchange(url, "GET", &route, None, deadline, limit)?;
+    if matches!(reply.status, 403 | 409)
+        && let Ok(refused) = serde_json::from_slice::<Value>(&reply.body)
+    {
+        return Err(Error::refused(
+            Code::of_reply(&refused, Code::Menubar),
+            &refused,
+            "The menu bar's viewer refused",
+        ));
+    }
+    if reply.status != 200 {
+        return Err(unanswered());
+    }
     let named = |name: &str| reply_header(&reply.wire, name);
     let points = |name: &str| named(name).and_then(|value| value.parse::<f64>().ok());
 

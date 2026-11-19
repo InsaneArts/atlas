@@ -3,7 +3,8 @@
 //! time to the generation it took input in, as a machine guest's does:
 //! each batch taken, sent and let go of as three changes on input lanes,
 //! each under a token of its own, and the guest's looks read on its input
-//! lane.
+//! lane. The person's own control goes the same way, under one owner for
+//! as long as they hold it, whatever Stop holds agents.
 use super::tests::{admitted, live, proven, record, restarted, settled};
 use crate::{
     agent,
@@ -56,6 +57,9 @@ struct Service {
     on: Mutex<Option<Hook>>,
     /// How many acquires to come it refuses as busy with another agent.
     busy: std::sync::atomic::AtomicUsize,
+    /// Whether the grant its owner holds ran out: kept until let go of,
+    /// but neither renewed nor acted under.
+    expired: std::sync::atomic::AtomicBool,
 }
 
 impl Service {
@@ -82,9 +86,21 @@ impl Service {
         let owner = request["owner"].as_str().unwrap_or_default().to_owned();
         let mut holding = self.owner.lock().unwrap();
         let owns = holding.as_ref() == Some(&(owner.clone(), generation));
+        // The person's own lane is answered as an input lane's change, but
+        // for the Stop.
+        let person = matches!(kind, LaneKind::Person { .. });
+        let kind = match kind {
+            LaneKind::Person { change } => &LaneKind::Input {
+                change: Some(change.clone()),
+            },
+            kind => kind,
+        };
         match (kind, op.as_str()) {
-            // The guest refuses changes while its Stop holds.
-            (LaneKind::Input { change: Some(_) }, _) if standin.stops.load(SeqCst) > 0 => {
+            // The guest refuses changes while its Stop holds, but on the
+            // person's own lane.
+            (LaneKind::Input { change: Some(_) }, _)
+                if standin.stops.load(SeqCst) > 0 && !person =>
+            {
                 json!({"ok": false, "code": "stopped",
                     "error": "Agents were stopped; nothing was done"})
             }
@@ -101,6 +117,13 @@ impl Service {
                 *holding = Some((owner, generation));
                 json!({"ok": true})
             }
+            (LaneKind::Input { change: Some(_) }, "input" | "renew")
+                if owns && self.expired.load(SeqCst) =>
+            {
+                json!({"ok": false, "code": "lease-lost",
+                    "error": "Native control was released or expired"})
+            }
+            (LaneKind::Input { change: Some(_) }, "renew") if owns => json!({"ok": true}),
             (LaneKind::Input { change: Some(_) }, "input") if owns => {
                 let performed = request["actions"].as_array().map_or(0, Vec::len);
                 let mut reply =
@@ -121,7 +144,7 @@ impl Service {
                 *holding = None;
                 json!({"ok": true, "released": true})
             }
-            (LaneKind::Input { change: Some(_) }, "input" | "release") => {
+            (LaneKind::Input { change: Some(_) }, "input" | "renew" | "release") => {
                 json!({"ok": false, "code": "lease-lost",
                     "error": "This token cannot release another controller"})
             }
@@ -140,7 +163,12 @@ impl Service {
             .lock()
             .unwrap()
             .iter()
-            .filter(|heard| matches!(heard.lane, LaneKind::Input { change: Some(_) }))
+            .filter(|heard| {
+                matches!(
+                    heard.lane,
+                    LaneKind::Input { change: Some(_) } | LaneKind::Person { .. }
+                )
+            })
             .cloned()
             .collect()
     }
@@ -174,9 +202,10 @@ fn serving_input(serving: &Serving, saying: &Saying) -> Arc<Service> {
 /// The change a request heard on a lane of a change names, which must be
 /// its lane's own.
 fn change_of(heard: &Heard) -> Token {
-    let LaneKind::Input {
+    let (LaneKind::Input {
         change: Some(change),
-    } = &heard.lane
+    }
+    | LaneKind::Person { change }) = &heard.lane
     else {
         panic!("not a change: {heard:?}");
     };
@@ -1138,4 +1167,279 @@ async fn a_busy_acquire_is_tried_again_under_a_new_owner_and_the_refused_one_is_
         .await;
         assert_eq!(record(&serving, owner), None, "nothing left of it");
     }
+}
+
+/// A lease of the person's own on `client`'s controller, taken beside no
+/// agent's command as the viewer takes one, and its token.
+fn persons_lease(client: &Client) -> (atlas_control::SharedLease, String) {
+    let lease = Arc::new(tokio::sync::Mutex::new(atlas_control::Lease::new(
+        Duration::from_secs(10),
+    )));
+    let token = lease
+        .try_lock()
+        .unwrap()
+        .acquire_beside(&client.controller, atlas_control::Beside::Commands)
+        .unwrap();
+    (lease, token)
+}
+
+/// A click the person sends, as the viewer passes it on.
+fn persons_click() -> Value {
+    json!([{"type": "click", "x": 10, "y": 10}])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_persons_control_of_a_vm_goes_under_one_owner_of_their_lease_in_the_proofs_generation()
+{
+    let (serving, saying, mut client, _directory) = proven().await;
+    client.actor = crate::client::Actor::Viewer;
+    let service = serving_input(&serving, &saying);
+    let generation = live(&serving);
+    let (lease, owner) = persons_lease(&client);
+    let capability = &serving.capability;
+
+    let proof = client.person_proof_on_vm().await.unwrap();
+    let taken = client
+        .person_acquire_on_vm(&owner, &proof, capability)
+        .await
+        .unwrap();
+    let sent = client
+        .person_input_on_vm(
+            (&owner, taken.generation()),
+            (&persons_click(), proof.epoch(), std::time::Instant::now()),
+            &lease,
+            capability,
+        )
+        .await
+        .unwrap();
+    let kept = client
+        .person_renew_on_vm(&owner, taken.generation(), capability)
+        .await
+        .unwrap();
+    let held = pending(&client);
+    let released = client
+        .person_release_on_vm(taken, capability)
+        .await
+        .unwrap();
+
+    assert_eq!(sent["performed"], 1, "{sent}");
+    assert_eq!(kept["ok"], true, "{kept}");
+    assert_eq!(released["released"], true, "{released}");
+    let heard = service.changes();
+    let ops: Vec<&str> = heard
+        .iter()
+        .map(|heard| heard.request["op"].as_str().unwrap())
+        .collect();
+    assert_eq!(ops, ["acquire", "input", "renew", "release"]);
+    for heard in &heard {
+        assert_eq!(heard.request["owner"], owner, "the lease's own token");
+        assert_eq!(heard.request["person"], true, "{heard:?}");
+        assert_eq!(heard.generation, generation, "the proof's generation");
+        let change = change_of(heard);
+        let mut pending = heard.pending.clone();
+        pending.sort();
+        assert_eq!(pending, named(&[&Token::parse(&owner).unwrap(), &change]));
+    }
+    assert_eq!(
+        heard[1].request["app"], false,
+        "never checked against an app"
+    );
+    assert!(heard[1].request.get("expect").is_none());
+    assert_eq!(
+        held,
+        std::slice::from_ref(&owner),
+        "the owner's claim while held"
+    );
+    assert!(client.controller.pending().unwrap().is_empty());
+    let owner = Token::parse(&owner).unwrap();
+    until("the owner settled with the guest", || {
+        settled(&serving).contains(&owner)
+    })
+    .await;
+    assert!(service.owner.lock().unwrap().is_none(), "let go of");
+    // Taking, keeping and giving back control is no row of its own.
+    let rows =
+        std::fs::read_to_string(client.output_dir().unwrap().join(crate::activity_log::FILE))
+            .unwrap_or_default();
+    assert!(
+        !rows.contains("acquire") && !rows.contains("renew"),
+        "{rows}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_persons_control_of_a_vm_goes_on_while_agents_stay_stopped() {
+    let (serving, saying, agents, _directory) = proven().await;
+    let mut client = agents.clone();
+    client.actor = crate::client::Actor::Viewer;
+    let service = serving_input(&serving, &saying);
+    let (lease, owner) = persons_lease(&client);
+    let capability = &serving.capability;
+    // The person's Stop, kept here and held by the guest; and the guest's
+    // own after it.
+    client.controller.note_stop(true).unwrap();
+    serving.fixture.guest.standin.stops.fetch_add(1, SeqCst);
+    *saying.hello.lock().unwrap() = Some(|hello| {
+        hello["stop"] = json!({"state": "stopped", "why": "control-lost"});
+        hello["agents"]["stopped"] = json!(true);
+    });
+
+    let proof = client.person_proof_on_vm().await.unwrap();
+    let taken = client
+        .person_acquire_on_vm(&owner, &proof, capability)
+        .await
+        .unwrap();
+    let sent = client
+        .person_input_on_vm(
+            (&owner, taken.generation()),
+            (&persons_click(), proof.epoch(), std::time::Instant::now()),
+            &lease,
+            capability,
+        )
+        .await
+        .unwrap();
+    let released = client
+        .person_release_on_vm(taken, capability)
+        .await
+        .unwrap();
+    drop(lease);
+    let agents = clicked(&agents).await.unwrap_err();
+
+    assert_eq!(sent["performed"], 1, "{sent}");
+    assert_eq!(released["released"], true, "{released}");
+    assert_eq!(agents.code, Code::Stopped, "{agents:?}");
+    assert_eq!(service.changes().len(), 3, "the agent's never reached it");
+    assert!(client.controller.pending().unwrap().is_empty());
+    let revision = client.controller.stop_revision().unwrap();
+    client.controller.lift_stop(revision.as_ref()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_guest_grant_refuses_renewal_for_certain_and_is_still_let_go_of() {
+    let (serving, saying, mut client, _directory) = proven().await;
+    client.actor = crate::client::Actor::Viewer;
+    let service = serving_input(&serving, &saying);
+    let (lease, owner) = persons_lease(&client);
+    let capability = &serving.capability;
+    let proof = client.person_proof_on_vm().await.unwrap();
+    let taken = client
+        .person_acquire_on_vm(&owner, &proof, capability)
+        .await
+        .unwrap();
+    service.expired.store(true, SeqCst);
+
+    let renewed = client
+        .person_renew_on_vm(&owner, taken.generation(), capability)
+        .await
+        .unwrap_err();
+    let sent = client
+        .person_input_on_vm(
+            (&owner, taken.generation()),
+            (&persons_click(), proof.epoch(), std::time::Instant::now()),
+            &lease,
+            capability,
+        )
+        .await
+        .unwrap();
+    let held = pending(&client);
+    let released = client.person_release_on_vm(taken, capability).await;
+
+    assert_eq!(renewed.code, Code::LeaseLost, "{renewed:?}");
+    assert!(!renewed.uncertain, "{renewed:?}");
+    assert_eq!(sent["ok"], false, "{sent}");
+    assert_eq!(sent["code"], "lease-lost", "{sent}");
+    assert_eq!(
+        held,
+        [owner],
+        "only the owner's claim, the refusals settled"
+    );
+    assert_eq!(released.unwrap()["released"], true);
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_generation_refuses_the_persons_control_unsaid_and_leaves_its_owner_pending() {
+    let (serving, saying, mut client, _directory) = proven().await;
+    client.actor = crate::client::Actor::Viewer;
+    let service = serving_input(&serving, &saying);
+    let capability = &serving.capability;
+    let (_lease, owner) = persons_lease(&client);
+    let proof = client.person_proof_on_vm().await.unwrap();
+    let taken = client
+        .person_acquire_on_vm(&owner, &proof, capability)
+        .await
+        .unwrap();
+    restarted(&serving).await;
+
+    let renewed = client
+        .person_renew_on_vm(&owner, taken.generation(), capability)
+        .await
+        .unwrap_err();
+    let released = client
+        .person_release_on_vm(taken, capability)
+        .await
+        .unwrap_err();
+
+    for refused in [&renewed, &released] {
+        assert_eq!(refused.code, Code::SessionChanged, "{refused:?}");
+        assert!(!refused.uncertain, "{refused:?}");
+    }
+    assert_eq!(service.changes().len(), 1, "only its acquire was heard");
+    assert_eq!(
+        pending(&client),
+        [owner],
+        "the owner, for the keeper's recovery to prove let go of"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_persons_control_is_carried_only_with_the_keepers_capability_and_never_for_an_agent() {
+    let (serving, saying, client, _directory) = proven().await;
+    let service = serving_input(&serving, &saying);
+    let generation = live(&serving);
+    let change = Token::new();
+    let asking = |lane: &str, capability: Option<&str>| {
+        let mut asked = json!({"op": "change", "lane": lane, "change": change,
+            "generation": generation, "request": {"op": "acquire", "owner": Token::new(),
+                "epoch": {"uid": 502}, "person": true, "change": change}});
+        if let Some(capability) = capability {
+            asked["capability"] = json!(capability);
+        }
+        asked
+    };
+    let wrong = "0".repeat(serving.capability.len());
+
+    let mut refused = Vec::new();
+    for capability in [None, Some(wrong.as_str())] {
+        refused.extend(asked(&serving.socket, &asking("person", capability)).await);
+    }
+    // The mark on an ordinary input lane is never carried, capability or
+    // not.
+    let mut unlaned = Vec::new();
+    for capability in [None, Some(serving.capability.as_str())] {
+        unlaned.extend(asked(&serving.socket, &asking("input", capability)).await);
+    }
+    let agents = [
+        client.person_proof_on_vm().await.unwrap_err(),
+        client
+            .person_renew_on_vm(change.as_str(), generation, &serving.capability)
+            .await
+            .unwrap_err(),
+    ];
+
+    for refused in &refused {
+        assert_eq!(refused["code"], "denied", "{refused}");
+        assert_eq!(refused["sent"], false, "{refused}");
+        assert!(!refused.to_string().contains("helper"), "{refused}");
+    }
+    for refused in &unlaned {
+        assert_eq!(refused["code"], "bad-request", "{refused}");
+        assert_eq!(refused["sent"], false, "{refused}");
+    }
+    for refused in &agents {
+        assert_eq!(refused.code, Code::Denied, "{refused:?}");
+        assert!(!refused.error.contains("helper"), "{refused:?}");
+    }
+    assert!(service.changes().is_empty(), "nothing reached the guest");
+    assert!(client.controller.pending().unwrap().is_empty());
 }

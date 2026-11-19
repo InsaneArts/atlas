@@ -214,6 +214,7 @@ fn a_machine_guest_declares_exactly_these_names_in_this_order() {
             "stage-v1",
             "copies-v1",
             "input-lanes-v1",
+            "person-input-v1",
             "mirrors-v1",
             "jobs-v1",
             "updates-v1",

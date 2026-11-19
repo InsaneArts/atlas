@@ -1006,6 +1006,7 @@ fn held(lease: &str, kept: Instant) -> Held {
     // Nothing listens here, so releasing it fails at once.
     Held {
         url: "http://127.0.0.1:9/viewer/".to_owned(),
+        desktop: "second-login".to_owned(),
         lease: lease.to_owned(),
         kept,
     }
@@ -1818,6 +1819,85 @@ async fn mcp_control_tools_on_a_vm_are_refused_in_the_one_wording() {
     assert!(vm.held.lock().await.is_none());
     assert!(keeper.asked_for("input").is_empty());
     assert!(keeper.asked_for("hold").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vm_bound_take_control_beside_a_viewer_of_second_login_is_refused_and_its_lease_untouched()
+ {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let main = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let (mut vm, keeper) = on_the_vm(dir.path());
+    vm.several = true;
+    vm.views.store(true, Ordering::Relaxed);
+    // The one service, showing Second Login, found from the VM's folder.
+    let viewer = crate::viewer::ServedForTest::new(
+        atlas_client::test_support::client_in(main.path()),
+        home.path(),
+        vm.client.output_dir().unwrap(),
+    )
+    .await;
+    vm.port = viewer.port;
+    let lease = viewer.leased().await;
+
+    let refused = vm.run(Tool::TakeControl, &json!({})).await.unwrap_err();
+
+    assert_eq!(refused.error, vm.client.unreachable().error, "{refused:?}");
+    assert!(viewer.holds(&lease).await, "Second Login's lease untouched");
+    assert!(vm.held.lock().await.is_none());
+    assert!(
+        keeper.asked.lock().unwrap().is_empty(),
+        "nothing asked of the VM"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_control_names_its_desktop_and_a_viewer_serving_another_refuses_it() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let main = tempfile::tempdir().unwrap();
+    let (work, keeper) = atlas_client::test_support::vm_through_keeper(dir.path());
+    let mut second_login = server(main.path());
+    second_login.several = true;
+    second_login.views.store(true, Ordering::Relaxed);
+    // The one service, showing the VM, found from Second Login's folder.
+    let viewer = crate::viewer::ServedForTest::new(
+        work,
+        home.path(),
+        second_login.client.output_dir().unwrap(),
+    )
+    .await;
+    second_login.port = viewer.port;
+    let output = second_login.client.output_dir().unwrap().to_owned();
+    let url = crate::viewer::local_checked(&output, viewer.port)
+        .unwrap()
+        .unwrap();
+    let ours = second_login.client.desktop().id().as_str().to_owned();
+
+    let taken = second_login
+        .run(Tool::TakeControl, &json!({}))
+        .await
+        .unwrap_err();
+    *second_login.held.lock().await = Some(super::control::Held {
+        url,
+        desktop: ours,
+        lease: "lease".to_owned(),
+        kept: std::time::Instant::now(),
+    });
+    let input = json!({"frame": "shown", "actions": [{"type": "key", "key": "a"}]});
+    let sent = second_login.run(Tool::SendInput, &input).await.unwrap_err();
+
+    for refused in [&taken, &sent] {
+        assert_eq!(refused.code, Code::ConfigInvalid, "{refused:?}");
+        assert_eq!(
+            refused.error,
+            "This Atlas serves another desktop than the one asked for"
+        );
+    }
+    assert!(
+        keeper.asked.lock().unwrap().is_empty(),
+        "nothing asked of the VM"
+    );
 }
 
 /// A menu bar viewer recorded in `output`, saying it serves the desktop

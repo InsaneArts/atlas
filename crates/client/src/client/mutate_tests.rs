@@ -170,6 +170,7 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
             app: false,
             expect: None,
             asking: None,
+            person: false,
         }
         .validate(&json!({"ok":true,"performed":0}))
         .unwrap_err()
@@ -190,6 +191,7 @@ fn an_element_action_is_confirmed_only_with_its_verification() {
         app: false,
         expect: None,
         asking: None,
+        person: false,
     };
     input()
         .validate(&json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "matched"}))
@@ -272,6 +274,7 @@ fn each_mutation_sends_its_exact_request() {
         app: true,
         expect,
         asking: None,
+        person: false,
     };
     let epoch_wire = r#"{"displayId":3,"height":982.0,"processId":41,"securitySessionId":7,"uid":502,"width":1512.0}"#;
     let cases = [
@@ -376,6 +379,7 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
             app: false,
             expect,
             asking: None,
+            person: false,
         }
         .validate(&reply);
         assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
@@ -731,6 +735,7 @@ fn a_check_before_typing_is_confirmed_only_as_judged_with_nothing_performed() {
         app: false,
         expect: None,
         asking: Some(json!({"accounts": [], "dry": true})),
+        person: false,
     };
     checking
         .validate(&json!({"ok": true, "performed": 0, "dry": true}))

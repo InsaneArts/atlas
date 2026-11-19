@@ -615,7 +615,7 @@ async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen>
             if served.as_deref() != Some(key.as_str()) {
                 return None;
             }
-            Some(crate::viewer::fetch_frame(&url, VIEWER_DEADLINE, FRAME_LIMIT).ok())
+            Some(crate::viewer::fetch_frame(&url, None, VIEWER_DEADLINE, FRAME_LIMIT).ok())
         })
         .await
         .ok()

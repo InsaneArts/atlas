@@ -18,6 +18,7 @@
   "viewerRequest": {
     "lease": "synthetic-lease",
     "frame": "synthetic-frame",
+    "desktop": "second-login",
     "actions": [
       {
         "type": "type",

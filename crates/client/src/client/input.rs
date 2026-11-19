@@ -563,6 +563,7 @@ impl Client {
             app: self.doing.is_some(),
             expect: expect.as_ref(),
             asking,
+            person: false,
         };
         let result = self
             .mutate(mutation, lease, expected.map(|(_, at)| at), None)

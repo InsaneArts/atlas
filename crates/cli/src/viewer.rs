@@ -103,6 +103,9 @@ struct Viewer {
     /// The helper the lease was taken on. Control ends there, and input
     /// goes there, even once the settings name another helper.
     lease_client: std::sync::Mutex<Option<Arc<Client>>>,
+    /// The owner of a VM's guest input the person's lease holds, while
+    /// they control a VM: let go of when their control ends.
+    guest_owner: std::sync::Mutex<Option<atlas_client::client::GuestOwner>>,
     /// Held from before native input begins until its activity recording
     /// ends. Release cancels ownership first, then waits here to flush.
     input_recording: Mutex<()>,
@@ -229,6 +232,61 @@ fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// The local viewer could not be reached, or its reply not read.
 fn unanswered() -> Error {
     Error::new(Code::Menubar, "The menu bar's viewer did not answer")
+}
+
+/// A viewer of `client`'s desktop answering on a free port, its station in
+/// `home`, its record in the output folder `recorded_in` as the running
+/// menu bar keeps it there.
+#[cfg(test)]
+pub(crate) struct ServedForTest {
+    pub(crate) port: u16,
+    viewer: Arc<Viewer>,
+}
+
+#[cfg(test)]
+impl ServedForTest {
+    pub(crate) async fn new(
+        client: Client,
+        home: &std::path::Path,
+        recorded_in: &std::path::Path,
+    ) -> Self {
+        let (listener, viewer) = http::bind(client, 0, None).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        *unpoisoned(&viewer.station_home) = Some(home.to_owned());
+        std::fs::create_dir_all(recorded_in).unwrap();
+        std::fs::write(
+            recorded_in.join(MENUBAR_RECORD),
+            serde_json::json!({"url": viewer.url, "pid": std::process::id()}).to_string(),
+        )
+        .unwrap();
+        tokio::spawn(http::accept(
+            listener,
+            viewer.clone(),
+            http::CONNECTIONS,
+            std::future::pending(),
+        ));
+        Self { port, viewer }
+    }
+
+    /// A lease of the person's taken on its desktop, as the app takes one:
+    /// its token.
+    pub(crate) async fn leased(&self) -> String {
+        let client = self.viewer.client();
+        let token = self
+            .viewer
+            .lease
+            .lock()
+            .await
+            .acquire_beside(&client.controller, atlas_control::Beside::Commands)
+            .unwrap();
+        *unpoisoned(&self.viewer.lease_client) = Some(client);
+        token
+    }
+
+    /// Whether the lease `token` still holds control.
+    pub(crate) async fn holds(&self, token: &str) -> bool {
+        self.viewer.lease.lock().await.require(token).is_ok()
+    }
 }
 
 #[cfg(test)]

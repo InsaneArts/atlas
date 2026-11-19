@@ -215,7 +215,7 @@ fn fragmented_plain_and_chunked_frames_keep_their_headers_and_body() {
             .map(|part| (Duration::from_millis(2), part.to_vec()))
             .collect();
         let server = LocalReply::serving(fragments, false);
-        let frame = fetch_frame(&server.url, Duration::from_secs(2), wire.len()).unwrap();
+        let frame = fetch_frame(&server.url, None, Duration::from_secs(2), wire.len()).unwrap();
         assert_eq!(frame.png, b"png");
         assert_eq!(frame.key, "key");
         assert_eq!(frame.display, (1440.0, 900.0));
@@ -328,7 +328,7 @@ fn frame_metadata_keeps_its_existing_missing_and_numeric_rules() {
     ] {
         let wire = format!("HTTP/1.1 200 OK\r\n{headers}\r\nContent-Length: 1\r\n\r\nx");
         let server = LocalReply::whole(wire.as_bytes());
-        let frame = fetch_frame(&server.url, Duration::from_secs(1), 1024);
+        let frame = fetch_frame(&server.url, None, Duration::from_secs(1), 1024);
         if accepted {
             let frame = frame.unwrap();
             assert_eq!(frame.png, b"x");

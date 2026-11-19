@@ -215,7 +215,8 @@ impl Viewer {
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment. Only a look this read made
         // ends it: a shared one may be older than the control taken since.
-        if viewed && looked && !doctor.diagnosis.ready {
+        // A VM's Stop leaves the person's control of it as it is.
+        if viewed && looked && !doctor.controllable() {
             self.release_shortly().await;
         }
 

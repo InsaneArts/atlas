@@ -1166,6 +1166,17 @@ pub(crate) fn readiness_of(status: &Value) -> std::result::Result<(), String> {
     )
 }
 
+/// [`readiness_of`] for the person's own control of the VM: a Stop, the
+/// person's or the guest's, holds agents alone, so it is not judged.
+pub(crate) fn person_readiness_of(status: &Value) -> std::result::Result<(), String> {
+    let declared = declared_of(status);
+    let facts = Facts::new(status, &declared, &status["station"]["unresolved"]);
+    Rule::ALL
+        .into_iter()
+        .filter(|rule| *rule != Rule::Clear)
+        .try_for_each(|rule| rule.judged(&facts))
+}
+
 /// Doctor's check of each [`Rule`] of the VM whose status is `status`, in
 /// order: whether it holds, and why not; not known while one it comes after
 /// does not hold.

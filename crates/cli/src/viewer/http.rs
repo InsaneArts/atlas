@@ -99,6 +99,7 @@ pub(super) fn configured(
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
         lease_client: std::sync::Mutex::new(None),
+        guest_owner: std::sync::Mutex::new(None),
         input_recording: Mutex::new(()),
         closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
@@ -395,7 +396,8 @@ impl Route {
     /// menu bar's emergency stop, which ends a sign-in, viewing another
     /// desktop and a VM's power. Taking,
     /// renewing, giving back and using control, and Stop, stay open to the
-    /// terminal viewer too; Resume is the app's alone, by its body.
+    /// terminal viewer too, but for a VM's control ([`Route::persons_on_vm`]);
+    /// Resume is the app's alone, by its body.
     fn app_only(self) -> bool {
         match self {
             Self::Read(Read::Asks) => true,
@@ -428,6 +430,45 @@ impl Route {
                 | Change::Acquire
                 | Change::Renew
                 | Change::Release,
+            ) => false,
+        }
+    }
+
+    /// Whether it is the person's alone, which on a VM only the Atlas app
+    /// may ask for: taking, renewing, using and giving back control, and
+    /// recovery and cleanup. A VM is never controlled from a terminal, nor
+    /// by anything an agent runs.
+    fn persons_on_vm(self) -> bool {
+        match self {
+            Self::Change(
+                Change::Input
+                | Change::Acquire
+                | Change::Renew
+                | Change::Release
+                | Change::Recover
+                | Change::Cleanup,
+            ) => true,
+            Self::Service
+            | Self::Events
+            | Self::Read(_)
+            | Self::OpenViewer
+            | Self::Change(
+                Change::Hold
+                | Change::Revoke
+                | Change::AddAccount
+                | Change::RemoveAccount
+                | Change::SetLevel
+                | Change::Answer
+                | Change::EndAllowed
+                | Change::SignInStart
+                | Change::ForgetStart
+                | Change::ResetStart
+                | Change::SignInRenew
+                | Change::SignInDone
+                | Change::SignInCancel
+                | Change::SignInInterrupted
+                | Change::View
+                | Change::Power,
             ) => false,
         }
     }
@@ -617,6 +658,22 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
                     None => json_response(409, json!(another_desktop())),
                 }
             }
+            // A person's own route holds the desktop it is for, named or
+            // not, from before it is judged to its end: a VM's is the
+            // person's, in their app alone, whichever desktop is viewed or
+            // holds the control taken.
+            Ok(body) if Route::Change(change).persons_on_vm() => {
+                let Some(_pinned) = viewer.pin_held(body.get("desktop")).await else {
+                    return json_response(409, json!(another_desktop()));
+                };
+                if !app
+                    && let Some(refused) =
+                        persons_vm(&viewer.client()).or_else(|| persons_vm(&viewer.holder()))
+                {
+                    return json_response(403, json!(refused));
+                }
+                apply(&viewer, change, &body).await
+            }
             // Anything else is for the one viewed.
             Ok(body) => {
                 let Some(_pinned) = viewer.pin(body.get("desktop")).await else {
@@ -694,6 +751,15 @@ impl Viewer {
         self.follow_settings().await;
         let pinned = self.pinned.read().await;
         self.serves(Some(named)).then_some(Some(pinned))
+    }
+
+    /// [`Viewer::pin`], holding the desktop served for as long as the
+    /// request runs even when it names none.
+    async fn pin_held(self: &Arc<Self>, named: Option<&Value>) -> Option<RwLockReadGuard<'_, ()>> {
+        match named {
+            Some(_) => self.pin(named).await.flatten(),
+            None => Some(self.pinned.read().await),
+        }
     }
 
     /// Whether an app request that names no desktop is refused: once more
@@ -1012,6 +1078,21 @@ fn app_only(client: &Client) -> Option<Error> {
                 ),
             )
         })
+}
+
+/// Why the person's own request for `client`'s desktop is refused to anyone
+/// but the app: a VM's control, recovery and cleanup are theirs, in the
+/// Atlas app alone. None for Second Login's.
+fn persons_vm(client: &Client) -> Option<Error> {
+    matches!(client.desktop().kind(), atlas_core::desktop::Kind::Vm(_)).then(|| {
+        Error::new(
+            Code::Permission,
+            format!(
+                "Only the Atlas app can do this on {}.",
+                client.selected.name
+            ),
+        )
+    })
 }
 
 /// A read's reply: what it found, or why the helper could not be read.

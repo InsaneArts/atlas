@@ -11,6 +11,7 @@ mod install;
 mod keeper;
 pub mod live;
 mod mutate;
+mod person_input_vm;
 mod picture;
 mod record;
 mod run;
@@ -29,8 +30,11 @@ pub use apps::{AppList, AppRow};
 pub(crate) use capture::prune_captures;
 pub(crate) use input::require_looks;
 pub use keeper::Leftovers;
-pub(crate) use keeper::{guest_update, readiness_checks, readiness_of, under_way};
+pub(crate) use keeper::{
+    guest_update, person_readiness_of, readiness_checks, readiness_of, under_way,
+};
 pub(crate) use mutate::Mutation;
+pub use person_input_vm::{GuestOwner, PersonProof};
 pub use record::PersonInput;
 pub(crate) use record::{NOT_RECORDED, logged_at};
 pub(crate) use run::{Finished, Run};

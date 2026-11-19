@@ -54,6 +54,16 @@ pub(crate) enum VmMode {
 }
 
 impl Doctor {
+    /// Whether the person may go on controlling the desktop this reports:
+    /// Second Login whenever it is ready, and a VM whenever it is ready but
+    /// for a Stop, as the person may act on a stopped VM.
+    #[must_use]
+    pub fn controllable(&self) -> bool {
+        self.diagnosis.ready
+            || (self.vm.is_some()
+                && crate::client::person_readiness_of(&self.diagnosis.value).is_ok())
+    }
+
     /// The report of a desktop this build cannot reach: `reply`, never
     /// ready, with `refusal` for its first step and nothing checked.
     pub(crate) fn unreached(reply: Value, refusal: atlas_core::error::Error) -> Self {

@@ -153,7 +153,8 @@ where
         LaneKind::Change { change }
         | LaneKind::Input {
             change: Some(change),
-        } => match stand_in.ask(change) {
+        }
+        | LaneKind::Person { change } => match stand_in.ask(change) {
             Asked::Begun => {
                 let Some(reply) = carried_out(stand_in, lanes, &header, request, answer).await
                 else {
@@ -244,12 +245,15 @@ async fn carried_out(
         LaneKind::Change { change } => (change, false),
         LaneKind::Input {
             change: Some(change),
-        } => (change, true),
+        }
+        | LaneKind::Person { change } => (change, true),
         _ => return Some(answer(header, request)),
     };
+    // The person's own control is never cut short by a Stop.
+    let stoppable = input && !matches!(header.kind, LaneKind::Person { .. });
     let stops = stand_in.stops.load(SeqCst);
     while stand_in.holding.load(SeqCst) {
-        if input && stand_in.stops.load(SeqCst) != stops {
+        if stoppable && stand_in.stops.load(SeqCst) != stops {
             let stopped = serde_json::json!({"ok": false, "code": "stopped",
                 "error": "Agents were stopped while the change ran", "uncertain": true});
             stand_in.done(change, &stopped);

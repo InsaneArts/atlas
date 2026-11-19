@@ -491,6 +491,9 @@ impl Keeper {
             Route::Input(Some(change)) => json!({"op": "change", "lane": "input",
                 "change": change, "generation": generation, "request": request,
                 "deadline_ms": deadline}),
+            Route::Person(change, capability) => json!({"op": "change", "lane": "person",
+                "change": change, "generation": generation, "request": request,
+                "capability": capability.as_str(), "deadline_ms": deadline}),
             Route::Input(None) => {
                 if !crate::vm::keeper::carries(&LaneKind::Input { change: None }, request) {
                     return Err(self.selected.unreachable());

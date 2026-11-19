@@ -6,7 +6,7 @@
 //! this daemon no longer carries out, whose every supervisor is done with,
 //! has nothing of it running, whether it ran or not. A job's stop is
 //! bound to its target, the job's own supervisor: its work is gone only
-//! once that supervisor is done with. Input taken, sent or let go of, and
+//! once that supervisor is done with. Input taken, sent, kept or let go of, and
 //! the owner it was taken for, are gone only once the input service itself
 //! said, after the change was no longer carried out here, that no owner
 //! holds input and nothing is held: its owner's cleanup acknowledged,
@@ -36,9 +36,9 @@ const JOB: &str = "job";
 /// An owner of the input service, kept before it takes input and until
 /// the service acknowledges it let go.
 pub(crate) const OWNER: &str = "owner";
-/// Input taken, sent or let go of on the input service's own lanes, and
-/// the owner it was for.
-pub(crate) const INPUT: [&str; 4] = ["acquire", "input", "release", OWNER];
+/// Input taken, sent, kept or let go of on the input service's own lanes,
+/// and the owner it was for.
+pub(crate) const INPUT: [&str; 5] = ["acquire", "input", "renew", "release", OWNER];
 
 /// What a change's work is judged by.
 pub(crate) struct Evidence<'a> {

@@ -171,12 +171,27 @@ impl Asked {
         if !asked.is_object() || asked["change"] != json!(change) {
             return None;
         }
+        // The person's mark goes only on a lane of their own, which carries
+        // nothing else: a change to their control of input.
+        let person = request["lane"] == "person";
+        if (asked["person"] == true) != person
+            || (person
+                && !matches!(
+                    asked["op"].as_str(),
+                    Some("acquire" | "input" | "renew" | "release")
+                ))
+        {
+            return None;
+        }
         let kind = match request["lane"].as_str()? {
             "change" => LaneKind::Change {
                 change: change.clone(),
             },
             "input" => LaneKind::Input {
                 change: Some(change.clone()),
+            },
+            "person" => LaneKind::Person {
+                change: change.clone(),
             },
             _ => return None,
         };
@@ -191,12 +206,19 @@ impl Asked {
     /// The owner an acquire on an input lane takes input for, when it names
     /// one by a token.
     fn owner(&self) -> Option<Token> {
-        let acquire =
-            matches!(self.kind, LaneKind::Input { .. }) && self.request["op"] == "acquire";
+        let acquire = matches!(self.kind, LaneKind::Input { .. } | LaneKind::Person { .. })
+            && self.request["op"] == "acquire";
         acquire
             .then(|| self.request["owner"].as_str().and_then(Token::parse))
             .flatten()
     }
+}
+
+/// Whether the change a client's `request` asks be carried is the
+/// person's own, on a lane of their own: their control of the guest's
+/// input, which the guest admits under either Stop.
+pub(super) fn persons(request: &Value) -> bool {
+    request["lane"] == "person"
 }
 
 /// How a change's carrying ended.

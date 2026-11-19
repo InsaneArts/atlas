@@ -29,6 +29,12 @@ pub const STAGE: &str = "stage-v1";
 pub const COPIES: &str = "copies-v1";
 /// Input lanes to the guest's input service.
 pub const INPUT_LANES: &str = "input-lanes-v1";
+/// The person's own control of the guest's input: taken, used, renewed and
+/// let go of on lanes of their own kind (`person`), which neither Stop
+/// refuses or ends, opened only for the person's own surface on the
+/// station. A guest declaring it refuses the person's mark on any other
+/// lane.
+pub const PERSON_INPUT: &str = "person-input-v1";
 /// The station's loopback endpoints mirrored in the guest.
 pub const MIRRORS: &str = "mirrors-v1";
 /// Background jobs, run as supervised work.
@@ -73,7 +79,7 @@ pub const NATIVE_CHECK: &str = "native-check-v1";
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 17] = [
+pub const MACHINE: [&str; 18] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
@@ -83,6 +89,7 @@ pub const MACHINE: [&str; 17] = [
     STAGE,
     COPIES,
     INPUT_LANES,
+    PERSON_INPUT,
     MIRRORS,
     JOBS,
     UPDATES,
