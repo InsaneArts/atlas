@@ -4363,7 +4363,8 @@ async fn an_update_asked_while_agents_may_act_is_refused_and_kept_refused() {
     let served = Served::start().await;
     let (_controlling, desktop) = served.control().await;
     let change = Token::new();
-    let request = json!({"op": "update", "staged": "/tmp/Atlas.app", "change": change});
+    let request = json!({"op": "update", "staged": "/tmp/Atlas.app", "expect": "ab".repeat(32),
+        "change": change});
 
     let first = ask(
         &desktop,
@@ -4391,6 +4392,194 @@ async fn an_update_asked_while_agents_may_act_is_refused_and_kept_refused() {
         "{first:?}"
     );
     assert_eq!(again.last(), first.last(), "answered from what it came to");
+}
+
+/// A served guest with agents stopped, a tree staged for an update and then
+/// swapped for another where it was placed, as code an agent started in the
+/// guest could; the station's own tree set aside, to be put back.
+struct Swapped {
+    served: Served,
+    _controlling: Controlling,
+    desktop: Desktop,
+    change: Token,
+    /// The update of the station's stage, by the digest it was staged with.
+    request: Value,
+    placed: std::path::PathBuf,
+    aside: (tempfile::TempDir, std::path::PathBuf),
+}
+
+impl Swapped {
+    async fn new() -> Self {
+        use crate::machine::stop::{Kept, Why};
+        let served = Served::start().await;
+        let (controlling, desktop) = served.control().await;
+        controlling
+            .outbox
+            .say(atlas_session::control::Said::Stop)
+            .unwrap();
+        kept_as(&served, Kept::Stopped { why: Why::Person }).await;
+        let (_source, tree) = tree_to_stage();
+        let staged = stage_for(
+            &desktop,
+            &controlling.credit,
+            &Token::new(),
+            &tree,
+            Sending::Whole,
+            Some("update"),
+        )
+        .await;
+        let staged = staged.last().unwrap().clone();
+        assert_eq!(staged["ok"], true, "{staged}");
+        let placed = std::path::PathBuf::from(staged["path"].as_str().unwrap());
+        let folder = tempfile::tempdir().unwrap();
+        let aside = folder.path().join("Tool.app");
+        std::fs::rename(&placed, &aside).unwrap();
+        let (_other, other) = tree_to_stage();
+        std::fs::write(
+            other.join("Contents/MacOS/tool"),
+            b"#!/bin/sh\necho another build\n",
+        )
+        .unwrap();
+        std::fs::rename(&other, &placed).unwrap();
+        let change = Token::new();
+        let request = json!({"op": "update", "staged": placed, "expect": staged["digest"],
+            "change": change});
+        Self {
+            served,
+            _controlling: controlling,
+            desktop,
+            change,
+            request,
+            placed,
+            aside: (folder, aside),
+        }
+    }
+
+    /// Ask the update on its change's lane: every line the guest said.
+    async fn asked(&self) -> Vec<Value> {
+        ask(
+            &self.desktop,
+            LaneKind::Change {
+                change: self.change.clone(),
+            },
+            &self.request,
+        )
+        .await
+    }
+
+    /// Put the station's own tree back where it was placed.
+    fn put_back(&self) {
+        std::fs::remove_dir_all(&self.placed).unwrap();
+        std::fs::rename(&self.aside.1, &self.placed).unwrap();
+    }
+
+    /// Whether nothing was kept for the installer, and what the change came
+    /// to is kept as `reply`.
+    fn never_installed_and_kept_as(&self, reply: &Value) {
+        assert!(
+            self.served.machine.paired.updates.all().unwrap().is_empty(),
+            "nothing was kept for the installer"
+        );
+        assert!(
+            matches!(
+                self.served.changes.of(&self.change).unwrap(),
+                Some(State::Done { reply: ref kept }) if kept == reply
+            ),
+            "{reply}"
+        );
+    }
+}
+
+/// Whether `reply` is the certain refusal of an update whose staged bundle
+/// changed.
+fn refused_changed(reply: &Value) -> bool {
+    reply["ok"] == false && reply["update"] == "changed" && reply["uncertain"] != true
+}
+
+#[tokio::test]
+async fn an_update_whose_staged_bundle_was_swapped_is_refused_changed_with_nothing_installed() {
+    let swapped = Swapped::new().await;
+
+    let first = swapped.asked().await;
+    let again = swapped.asked().await;
+
+    let refused = first.last().unwrap();
+    assert!(refused_changed(refused), "{first:?}");
+    assert_eq!(again.last(), first.last(), "answered from what it came to");
+    swapped.never_installed_and_kept_as(refused);
+}
+
+#[tokio::test]
+async fn an_asking_that_overlapped_a_changed_update_never_installs_the_bundle_put_back_after() {
+    let swapped = Swapped::new().await;
+    let pause = super::update::pauses::hold(&swapped.change);
+    let first_answered = tokio::sync::Notify::new();
+    let second_may_ask = tokio::sync::Notify::new();
+
+    let (first, second, ()) = tokio::join!(
+        async {
+            let first = swapped.asked().await;
+            first_answered.notify_one();
+            first
+        },
+        async {
+            second_may_ask.notified().await;
+            swapped.asked().await
+        },
+        async {
+            // The first has kept the change as asked and waits before the
+            // admission; the second reads it only asked, and waits there too.
+            pause.arrived.acquire().await.unwrap().forget();
+            second_may_ask.notify_one();
+            pause.arrived.acquire().await.unwrap().forget();
+            pause.going.add_permits(1);
+            first_answered.notified().await;
+            // The station's own bundle back in place before the second goes.
+            swapped.put_back();
+            pause.going.add_permits(1);
+        },
+    );
+
+    let refused = first.last().unwrap();
+    assert!(refused_changed(refused), "{first:?}");
+    assert_eq!(
+        second.last(),
+        first.last(),
+        "the overlapping asking: {second:?}"
+    );
+    swapped.never_installed_and_kept_as(refused);
+}
+
+#[tokio::test]
+async fn a_changed_refusal_that_could_not_be_kept_is_said_uncertain_and_a_retry_never_installs() {
+    use std::os::unix::fs::PermissionsExt;
+    let swapped = Swapped::new().await;
+    let records = swapped.served.records.path().to_owned();
+    let pause = super::update::pauses::hold(&swapped.change);
+
+    let (first, ()) = tokio::join!(swapped.asked(), async {
+        // Kept as asked; from here nothing more is written to the records.
+        pause.arrived.acquire().await.unwrap().forget();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap();
+        pause.going.add_permits(1);
+    });
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+    swapped.put_back();
+    pause.going.add_permits(2);
+    let retried = swapped.asked().await;
+    let again = swapped.asked().await;
+
+    let unkept = first.last().unwrap();
+    assert_eq!(unkept["ok"], false, "{first:?}");
+    assert_eq!(unkept["uncertain"], true, "{first:?}");
+    let refused = retried.last().unwrap();
+    assert!(refused_changed(refused), "{retried:?}");
+    assert_eq!(
+        again.last(),
+        retried.last(),
+        "answered from what it came to"
+    );
+    swapped.never_installed_and_kept_as(refused);
 }
 
 #[tokio::test]
@@ -4474,7 +4663,8 @@ async fn live_a_real_guest_updates_its_atlas_and_settles_the_change() {
         LaneKind::Change {
             change: change.clone(),
         },
-        &json!({"op": "update", "staged": staged["path"], "change": change}),
+        &json!({"op": "update", "staged": staged["path"], "expect": staged["digest"],
+            "change": change}),
     )
     .await;
     println!("change: {change}");

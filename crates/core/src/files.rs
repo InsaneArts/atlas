@@ -180,6 +180,32 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
 /// the file may then be in place, or not.
 pub fn write_durable(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     write_atomic(path, bytes, mode)?;
+    sync_folder_of(path)
+}
+
+/// Remove the file at `path`, never through a link, then sync the folder
+/// that held it, so the removal outlives a crash: a record [`write_durable`]
+/// kept never comes back once this returned. A file already gone counts as
+/// removed, and its folder is still synced, so a removal whose sync failed
+/// is made durable by asking again.
+///
+/// # Errors
+///
+/// Returns the failure to remove the file, as an I/O error naming the
+/// removal and its cause, or to sync its folder; the file may then be gone,
+/// or not.
+pub fn remove_durable(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(context("Remove", path)(error));
+        }
+        _ => {}
+    }
+    sync_folder_of(path)
+}
+
+/// Sync the folder that holds `path`, so a name made or removed there lasts.
+fn sync_folder_of(path: &Path) -> Result<()> {
     let folder = path
         .parent()
         .filter(|folder| !folder.as_os_str().is_empty())

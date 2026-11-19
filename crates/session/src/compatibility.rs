@@ -9,9 +9,9 @@
 //! which protocol each speaks.
 //!
 //! A protocol change never strands a guest: every later protocol keeps
-//! speaking `hello`, `stage`, `update` and `outcome` to a protocol 1 guest,
-//! as protocol 1 speaks them, so a station of any later build can always
-//! bring that guest to its own.
+//! speaking `hello`, `stage`, `update` and `outcome` to a protocol 1 guest
+//! that declares [`UPDATE_BOUND`], as protocol 1 speaks them, so a station
+//! of any later build can always bring that guest to its own.
 use atlas_core::error::{Code, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,6 +35,11 @@ pub const MIRRORS: &str = "mirrors-v1";
 pub const JOBS: &str = "jobs-v1";
 /// Updates of the guest's own Atlas, their bundle staged for one.
 pub const UPDATES: &str = "updates-v1";
+/// An update names the digest of the bundle staged for it, and the guest
+/// installs only a bundle whose snapshot has that digest, refusing it as
+/// `changed` before anything is installed otherwise. A station asks no
+/// update of a guest that does not declare it.
+pub const UPDATE_BOUND: &str = "update-bound-v1";
 /// The guest's read hello says its kept Stop and the work it may still run.
 pub const STOP_REPORT: &str = "stop-report-v1";
 /// Stops and Resumes numbered by the station, each answered once carried
@@ -66,7 +71,7 @@ pub const NATIVE_CHECK: &str = "native-check-v1";
 /// Every capability a machine guest declares when it serves all it can, in
 /// the order it declares them: what it serves is named from this list
 /// alone, and the station reads these names, never a helper's.
-pub const MACHINE: [&str; 16] = [
+pub const MACHINE: [&str; 17] = [
     CHANGES,
     STOP_REPORT,
     ACKNOWLEDGED,
@@ -79,6 +84,7 @@ pub const MACHINE: [&str; 16] = [
     MIRRORS,
     JOBS,
     UPDATES,
+    UPDATE_BOUND,
     ENVIRONMENT,
     PICTURES,
     INSTALLED,

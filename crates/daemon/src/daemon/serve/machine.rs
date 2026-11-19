@@ -764,7 +764,8 @@ impl Serving {
     fn serves(self, capability: &str) -> bool {
         use atlas_session::compatibility::{
             ACKNOWLEDGED, CHANGES, COPIES, ENDED, ENVIRONMENT, INPUT_LANES, INSTALLED, JOBS,
-            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PICTURES, STAGE, STOP_REPORT, UPDATES,
+            LEFTOVERS, MACHINE_PROOF, MIRRORS, NATIVE_CHECK, PICTURES, STAGE, STOP_REPORT,
+            UPDATE_BOUND, UPDATES,
         };
         match capability {
             // Its Applications folder and a canary folder are read by the
@@ -773,8 +774,9 @@ impl Serving {
             // What a change whose outcome is unknown came to is proven by its
             // supervisors, and the environment worker runs under one.
             LEFTOVERS | ENDED | ENVIRONMENT => self.supervising,
-            // An update's bundle comes as a stage.
-            STAGE | COPIES | UPDATES => self.stages,
+            // An update's bundle comes as a stage, and the update is bound to
+            // that stage's digest.
+            STAGE | COPIES | UPDATES | UPDATE_BOUND => self.stages,
             INPUT_LANES => self.input,
             MIRRORS => self.mirrors,
             JOBS => self.jobs,
@@ -831,6 +833,8 @@ pub struct Machine {
     gate: Arc<crate::machine::update::Gate>,
     /// What carries each update to its end.
     reconciler: Arc<crate::machine::update::Reconciler<Arc<dyn Vault>>>,
+    /// The updates refused as `changed` whose refusal is not kept yet.
+    unkept: update::Unkept,
     /// Set once it serves its station: started, recovered, taking lanes.
     serving: Arc<std::sync::atomic::AtomicBool>,
     /// The digest of the executable it started from, read once at its start,
@@ -968,6 +972,7 @@ impl Machine {
             posture,
             gate,
             reconciler,
+            unkept: update::Unkept::default(),
             serving,
             blocking,
             build: atlas_native::native::service::own_build(),
@@ -1534,7 +1539,7 @@ impl Machine {
         // from its record: it outlives the daemon that asked the installer.
         if let LaneKind::Change { change } = &header.kind
             && let Ok(protocol::Asked {
-                request: Request::Update { staged },
+                request: Request::Update { staged, expect },
                 ..
             }) = protocol::parse(&line)
             && let Ok(request) = serde_json::from_slice::<Value>(&line)
@@ -1544,7 +1549,9 @@ impl Machine {
                 lanes: lanes.clone(),
                 lane: header.lane,
             };
-            let reply = self.update(change.clone(), staged, request, holding).await;
+            let reply = self
+                .update(change.clone(), staged, expect, request, holding)
+                .await;
             return write(&mut writer, &reply).await;
         }
         // A change is kept as intended before it runs; one asked before is

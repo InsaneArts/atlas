@@ -123,3 +123,111 @@ fn a_durable_write_into_a_missing_folder_is_refused() {
     assert!(super::write_durable(&path, b"kept", 0o600).is_err());
     assert!(!path.exists());
 }
+
+/// Run `then` with `folder` writable and searchable but not readable, so
+/// names can be made and removed in it while the folder itself cannot be
+/// opened to be synced; its mode put back after.
+fn unsyncable<T>(folder: &std::path::Path, then: impl FnOnce() -> T) -> T {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let done = then();
+    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    done
+}
+
+#[test]
+fn a_durable_write_whose_folder_cannot_be_synced_fails_though_the_file_may_be_in_place() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("record.json");
+
+    let written = unsyncable(folder.path(), || {
+        super::write_durable(&path, b"kept", 0o600)
+    });
+
+    let failure = written.unwrap_err();
+    assert!(failure.error.contains("Sync the folder of"), "{failure:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"kept");
+}
+
+#[test]
+fn a_durable_removal_takes_the_file_away_and_syncs_its_folder() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("record.json");
+    std::fs::write(&path, b"kept").unwrap();
+
+    super::remove_durable(&path).unwrap();
+
+    assert!(!path.exists());
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+    super::remove_durable(&path).expect("a file already gone counts as removed");
+}
+
+#[test]
+fn a_durable_removal_whose_folder_cannot_be_synced_fails_and_succeeds_once_asked_again() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("record.json");
+    std::fs::write(&path, b"kept").unwrap();
+
+    let removed = unsyncable(folder.path(), || super::remove_durable(&path));
+
+    let failure = removed.unwrap_err();
+    assert!(failure.error.contains("Sync the folder of"), "{failure:?}");
+    assert!(!path.exists(), "removed, its removal not yet made durable");
+    super::remove_durable(&path).expect("synced once its folder can be opened");
+}
+
+#[test]
+fn a_durable_removal_takes_away_a_link_never_what_it_names_and_never_a_folder() {
+    let folder = tempfile::tempdir().unwrap();
+    let target = folder.path().join("target.json");
+    std::fs::write(&target, b"kept").unwrap();
+    let link = folder.path().join("record.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let inner = folder.path().join("inner");
+    std::fs::create_dir(&inner).unwrap();
+
+    super::remove_durable(&link).unwrap();
+    let refused = super::remove_durable(&inner);
+
+    assert!(std::fs::symlink_metadata(&link).is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), b"kept");
+    assert!(refused.is_err());
+    assert!(inner.is_dir());
+}
+
+#[test]
+fn a_durable_removal_the_system_does_not_permit_says_it_was_a_removal_and_why() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("record.json");
+    std::fs::write(&path, b"kept").unwrap();
+    let flag = |flag: &str| {
+        crate::spawn::status(
+            std::process::Command::new("/usr/bin/chflags")
+                .arg(flag)
+                .arg(&path),
+        )
+        .unwrap()
+        .success()
+    };
+    assert!(flag("uchg"), "the file made immutable");
+
+    let removed = super::remove_durable(&path);
+    let kept = path.exists();
+    assert!(flag("nouchg"), "the file made mutable again");
+
+    let failure = removed.unwrap_err();
+    assert_eq!(failure.code, crate::error::Code::Io, "{failure:?}");
+    assert!(
+        failure
+            .error
+            .starts_with(&format!("Remove {}: ", path.display())),
+        "{failure:?}"
+    );
+    assert!(failure.error.contains("not permitted"), "{failure:?}");
+    assert!(!failure.error.contains("sandbox"), "{failure:?}");
+    assert!(
+        std::error::Error::source(&failure).is_some(),
+        "its cause kept"
+    );
+    assert!(kept, "an immutable file stays");
+}

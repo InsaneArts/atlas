@@ -809,7 +809,8 @@ async fn a_stand_in_declares_what_a_machine_guest_serving_everything_does_native
         controlling.declared.capabilities,
         crate::compatibility::MACHINE
     );
-    let last: Vec<&str> = controlling.declared.capabilities[13..]
+    let declared = &controlling.declared.capabilities;
+    let last: Vec<&str> = declared[declared.len() - 3..]
         .iter()
         .map(String::as_str)
         .collect();

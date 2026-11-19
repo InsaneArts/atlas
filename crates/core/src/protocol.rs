@@ -414,12 +414,18 @@ requests! { request =>
             .to_owned(),
     }),
     /// Update a machine desktop's Atlas to the bundle staged in it at
-    /// `staged`.
-    "update" Update { staged: String } = Ok(Request::Update {
+    /// `staged`, only while that bundle is still the one whose manifest
+    /// digest is `expect`.
+    "update" Update { staged: String, expect: String } = Ok(Request::Update {
         staged: request["staged"]
             .as_str()
             .filter(|staged| staged.starts_with('/') && staged.len() <= 1024)
             .ok_or_else(|| bad("update requires the \"staged\" bundle's path"))?
+            .to_owned(),
+        expect: request["expect"]
+            .as_str()
+            .filter(|expect| sha256_hex(expect))
+            .ok_or_else(|| bad("update requires the \"expect\" digest of its staged bundle"))?
             .to_owned(),
     }),
 }
@@ -631,6 +637,15 @@ fn token(request: &Value, field: &str) -> Result<Option<Token>, Value> {
             .and_then(Token::parse)
             .ok_or_else(|| bad(format!("\"{field}\" must be 48 lowercase hex digits")))
     })
+}
+
+/// Whether `said` is a SHA-256 digest as a snapshot names one: 64 lowercase
+/// hex digits.
+fn sha256_hex(said: &str) -> bool {
+    said.len() == 64
+        && said
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// A request's `change`, the name it gives the change it asks for.

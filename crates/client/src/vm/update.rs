@@ -7,7 +7,7 @@
 //!
 //! A guest is only ever brought to this Mac's build, never taken back to an
 //! older one: a guest newer than this Mac has this Mac updated instead.
-use atlas_session::compatibility::UPDATES;
+use atlas_session::compatibility::{UPDATE_BOUND, UPDATES};
 use serde_json::{Value, json};
 
 /// What a guest newer than this Mac is told.
@@ -106,9 +106,13 @@ impl Facts {
         }
     }
 
-    /// Whether the guest declared it takes updates of its own Atlas.
+    /// Whether the guest declared it takes updates of its own Atlas, each
+    /// bound to the bundle its station staged: only such a guest is ever
+    /// asked one.
     fn updatable(&self) -> bool {
-        self.declared.iter().any(|declared| declared == UPDATES)
+        [UPDATES, UPDATE_BOUND]
+            .iter()
+            .all(|needed| self.declared.iter().any(|declared| declared == needed))
     }
 }
 

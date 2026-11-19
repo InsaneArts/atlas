@@ -1,5 +1,5 @@
 use super::*;
-use atlas_session::compatibility::{CHANGES, MACHINE, MIRRORS, STAGE};
+use atlas_session::compatibility::{CHANGES, MACHINE, MIRRORS, STAGE, UPDATE_BOUND};
 
 /// A guest of `digest` and `version`, declaring every capability a machine
 /// guest declares, beside this Mac at build `ours` of version 0.2.0.
@@ -13,7 +13,7 @@ fn facts(digest: Option<&str>, version: Option<&str>, ours: Option<&str>) -> Fac
 
 #[test]
 fn every_capability_the_update_and_mirror_paths_check_is_named_in_machine() {
-    for checked in [STAGE, UPDATES, CHANGES, MIRRORS] {
+    for checked in [STAGE, UPDATES, UPDATE_BOUND, CHANGES, MIRRORS] {
         assert!(MACHINE.contains(&checked), "{checked}");
     }
 }
@@ -72,6 +72,27 @@ fn a_guest_that_takes_no_update_is_told_to_be_added_again_unless_it_is_newer_or_
     assert_eq!(advice("work", &newer), "Update Atlas on this Mac.");
     let current = without(facts(Some("b"), Some("0.2.0"), Some("b")));
     assert_eq!(advice("work", &current), "Run atlas doctor --desktop work.");
+}
+
+#[test]
+fn a_guest_whose_updates_are_not_bound_to_their_stage_is_never_offered_one() {
+    let unbound = |mut facts: Facts| {
+        facts.declared.retain(|name| name != UPDATE_BOUND);
+        facts
+    };
+    let remove = "work's Atlas cannot be updated from this Mac. Remove the VM and add it again.";
+
+    let older = unbound(facts(Some("a"), Some("0.1.0"), Some("b")));
+    assert_eq!(advice("work", &older), remove);
+    assert_eq!(said("work", &older)["next"], remove);
+    let unknown = unbound(facts(None, None, Some("b")));
+    assert_eq!(advice("work", &unknown), remove);
+    assert_eq!(remedy("work", &unknown), remove);
+    let bound = facts(Some("a"), Some("0.1.0"), Some("b"));
+    assert_eq!(
+        advice("work", &bound),
+        "Run atlas update to bring work's Atlas to this Mac's build."
+    );
 }
 
 #[test]

@@ -1029,3 +1029,45 @@ fn a_copy_contents_read_names_the_one_copy_it_reads() {
         ConnectionPhase::Read("copy-contents")
     );
 }
+
+#[test]
+fn an_update_names_its_staged_bundle_and_the_digest_that_bundle_must_still_have() {
+    let expect = "ab".repeat(32);
+
+    let asked = parse(
+        json!({"op": "update", "staged": "/Users/Shared/Atlas.app", "expect": expect})
+            .to_string()
+            .as_bytes(),
+    );
+
+    assert_eq!(
+        asked,
+        Ok(Request::Update {
+            staged: "/Users/Shared/Atlas.app".to_owned(),
+            expect: expect.clone(),
+        })
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        asked.unwrap().policy().phase,
+        ConnectionPhase::Mutation("update")
+    );
+    for unbound in [
+        json!({"op": "update", "staged": "/Users/Shared/Atlas.app"}),
+        json!({"op": "update", "staged": "/Users/Shared/Atlas.app", "expect": "AB".repeat(32)}),
+        json!({"op": "update", "staged": "/Users/Shared/Atlas.app", "expect": "ab".repeat(31)}),
+        json!({"op": "update", "staged": "/Users/Shared/Atlas.app", "expect": 7}),
+    ] {
+        let refused = parse(unbound.to_string().as_bytes()).unwrap_err();
+        assert_eq!(refused["code"], "bad-request", "{unbound}: {refused}");
+    }
+    assert_eq!(
+        parse(
+            json!({"op": "update", "expect": expect})
+                .to_string()
+                .as_bytes()
+        )
+        .unwrap_err()["error"],
+        "update requires the \"staged\" bundle's path"
+    );
+}
