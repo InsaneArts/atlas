@@ -112,6 +112,19 @@ fn a_command_cut_after_its_supervisor_or_its_spawn_is_gone_only_once_its_supervi
 }
 
 #[test]
+fn a_page_opened_for_the_person_whose_reply_was_lost_is_gone_once_its_supervisor_is_done_with() {
+    let guest = guest();
+    let change = Token::new();
+    let kept = supervisor(11, Some(&change));
+    guest.kept.add(kept.clone()).unwrap();
+    let asked = || vec![intended(&change, "person-open")];
+
+    assert!(gone(&guest, asked(), &[kept.supervisor]).is_empty());
+    proof::leave(&guest.proofs, &kept.supervisor, DONE).unwrap();
+    assert_eq!(gone(&guest, asked(), &[]), [change]);
+}
+
+#[test]
 fn a_command_whose_supervisor_is_from_another_boot_is_proven_gone() {
     let guest = guest();
     let change = Token::new();

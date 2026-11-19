@@ -239,14 +239,21 @@ impl Client {
     /// # Errors
     ///
     /// Refuses a VM that does not prove, is open to more than Atlas, or is
-    /// being handed over by an update.
+    /// being handed over by an update, and an agent while the person's
+    /// sign-in there keeps its screen private.
     pub(crate) async fn verify_vm_reading(&self) -> Result<Verified> {
         self.vm_looking(false).await
     }
 
     /// [`Client::verify_vm_reading`], and the guest allowed to record its
-    /// screen when `capture`.
+    /// screen when `capture`. An agent looks at nothing while the person
+    /// signs the VM in to an account, nor until their input there is let go
+    /// of once they finish.
     async fn vm_looking(&self, capture: bool) -> Result<Verified> {
+        let visible = match self.actor {
+            Actor::Agent => Some(self.controller.screen_visible()?),
+            Actor::Viewer => None,
+        };
         if let Some(why) = self.handover_unfinished() {
             return Err(Error::new(Code::Busy, why));
         }
@@ -261,19 +268,40 @@ impl Client {
         if capture && !machine.capture {
             return Err(crate::capability::vm_capture_held(status));
         }
-        Ok(verified_vm(machine, &proved.observed))
+        let mut verified = verified_vm(machine, &proved.observed);
+        if let Some(pinned) = verified.machine.as_mut() {
+            pinned.visible = visible;
+        }
+        Ok(verified)
+    }
+
+    /// Refuse what an agent's look proved as `pinned` read, once the
+    /// screen's privacy changed since it was admitted: the person began or
+    /// ended a sign-in there meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// `busy`, held by the person, in the VM's words.
+    pub(crate) fn still_visible_since(&self, pinned: &Pinned) -> Result<()> {
+        match pinned.visible {
+            Some(admitted) => self.controller.still_visible(admitted),
+            None => Ok(()),
+        }
     }
 
     /// Prove the VM again once a picture was taken on the proof `before`:
     /// refused unless this proof shows the same epoch, the same generation
     /// and Atlas VM's same run and picture fence, its window closed again,
-    /// so no opening of the window came between the two.
+    /// so no opening of the window came between the two, nor, for an
+    /// agent's look, a sign-in's privacy begun or ended, before or after.
     ///
     /// # Errors
     ///
     /// The proof's own refusal; `session-changed` when anything named above
-    /// differs, or Atlas VM keeps no fence.
+    /// differs, or Atlas VM keeps no fence; `busy`, held by the person, when
+    /// the screen's privacy changed.
     pub(crate) async fn reproved(&self, before: &Pinned) -> Result<()> {
+        self.still_visible_since(before)?;
         let keeper = self.keeper().await?;
         let proved = self.verify_machine(&keeper).await?;
         let machine = proved.session?;
@@ -285,7 +313,7 @@ impl Client {
         if !same {
             return Err(self.vm_changed());
         }
-        Ok(())
+        self.still_visible_since(before)
     }
 
     /// Refuse a look at this VM, proved as `pinned`, while Atlas VM keeps
@@ -840,6 +868,7 @@ fn verified_vm(machine: MachineSession, observed: &Observed) -> Verified {
             generation: observed.generation,
             input_held,
             fence: observed.runner.fence(),
+            visible: None,
         }),
         keeper: observed.keeper.clone(),
     }

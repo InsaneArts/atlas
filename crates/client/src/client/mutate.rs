@@ -44,6 +44,9 @@ const REMOVE_COPY: Duration = Duration::from_secs(60);
 /// How long a VM's guest is given to take input, send one batch of it, or
 /// let it go, and say so: longer than its input service gives one batch.
 const INPUT: Duration = Duration::from_secs(30);
+/// How long a VM's guest is given to open a page for the person and say
+/// how it went: longer than it lets `open` run.
+const PERSON_OPEN: Duration = Duration::from_secs(45);
 
 /// Whether the input service proved it sent nothing for a request: only
 /// checked it before a command types, or refused it before its first event
@@ -86,8 +89,9 @@ pub(crate) enum Mutation<'a> {
         actions: Batch<'a>,
         owner: &'a str,
         epoch: InputEpoch,
-        /// The picture before it, being taken since its session was known.
-        picture: Option<picture::Taking>,
+        /// The picture before it, being taken since its session was known:
+        /// kept apart, so the change it goes with stays small.
+        picture: Option<Box<picture::Taking>>,
         /// An agent's command names the app it acted in.
         app: bool,
         expect: Option<&'a Expect>,
@@ -140,6 +144,14 @@ pub(crate) enum Mutation<'a> {
     Release {
         owner: &'a str,
         person: bool,
+    },
+    /// A page opened in a browser on a VM's guest for the person, under
+    /// `lease`, the owner their control holds there: `url` in the app named
+    /// `app`.
+    PersonOpen {
+        app: &'a str,
+        url: &'a str,
+        lease: &'a str,
     },
     /// A VM's guest's own environment worker handed `packet`, in the
     /// session `pin` names, stopped after `timeout`: `apply` when it may
@@ -244,6 +256,10 @@ impl Mutation<'_> {
                 }
                 request
             }
+            Self::PersonOpen { app, url, lease } => {
+                json!({"op": "person-open", "app": app, "url": url, "lease": lease,
+                    "person": true})
+            }
             Self::Environment {
                 packet,
                 apply,
@@ -269,7 +285,8 @@ impl Mutation<'_> {
             | Self::RemoveCopy { .. }
             | Self::Acquire { .. }
             | Self::Renew { .. }
-            | Self::Release { .. } => false,
+            | Self::Release { .. }
+            | Self::PersonOpen { .. } => false,
         }
     }
 
@@ -320,7 +337,9 @@ impl Mutation<'_> {
                 }
                 _ => false,
             },
-            Self::Run { .. } => ended_as_command(reply),
+            // The guest opens a page as it runs a command: how it ended says
+            // whether it opened.
+            Self::Run { .. } | Self::PersonOpen { .. } => ended_as_command(reply),
             Self::Environment { .. } if self.command() => ended_as_command(reply),
             Self::Restart | Self::Logout { .. } => true,
             // What a removal came to names the copy it was asked for.
@@ -474,6 +493,7 @@ impl Client {
             | Mutation::Acquire { .. }
             | Mutation::Renew { .. }
             | Mutation::Release { .. }
+            | Mutation::PersonOpen { .. }
             | Mutation::Environment { .. } => (false, false),
         };
         if stop_before && self.stop_marked() {
@@ -484,7 +504,7 @@ impl Client {
         // and kept only when it is in hand before the input is sent: the
         // input waits for it until its deadline at most, and goes either way.
         let picture = match &mut mutation {
-            Mutation::Input { picture, .. } => picture.take(),
+            Mutation::Input { picture, .. } => picture.take().map(|taking| *taking),
             _ => None,
         };
         // Connect without holding the lease. Release can cancel slow preflight.
@@ -656,6 +676,7 @@ impl Client {
             | Mutation::Acquire { .. }
             | Mutation::Renew { .. }
             | Mutation::Release { .. }
+            | Mutation::PersonOpen { .. }
             | Mutation::Environment { .. } => {
                 return Err(self.unreachable());
             }
@@ -693,6 +714,7 @@ impl Client {
             | Mutation::Acquire { .. }
             | Mutation::Renew { .. }
             | Mutation::Release { .. }
+            | Mutation::PersonOpen { .. }
             | Mutation::Environment { .. } => false,
         };
         if callers {
@@ -831,6 +853,7 @@ impl Client {
             | Mutation::Acquire { .. }
             | Mutation::Renew { .. }
             | Mutation::Release { .. }
+            | Mutation::PersonOpen { .. }
             | Mutation::Environment { .. } => {}
         }
         let mut transport = self.transport_for(mutation).ok()?;
@@ -950,10 +973,11 @@ impl Client {
 
         // The person's taking, keeping and giving back of control is no
         // row of its own, on a VM as on Second Login: only their input is.
+        // Nor is the page a sign-in opens on a VM: it names the site.
         let control = self.actor == Actor::Viewer
             && matches!(
                 request["op"].as_str(),
-                Some("acquire" | "renew" | "release")
+                Some("acquire" | "renew" | "release" | "person-open")
             );
         if !control
             && self
@@ -1017,6 +1041,8 @@ impl Client {
                 | Mutation::Renew { .. }
                 | Mutation::Release { .. },
             ) => INPUT,
+            // Only the person opens a page, on their own lane.
+            (Kind::Vm(_), Mutation::PersonOpen { .. }) if person.is_some() => PERSON_OPEN,
             _ => return Err(self.unreachable()),
         };
         debug_assert!(
@@ -1052,7 +1078,7 @@ impl Client {
             Mutation::Input { picture, .. } => match picture.take() {
                 Some(taking) => {
                     let proved = taking.proved().cloned();
-                    (taking.taken().await, proved)
+                    ((*taking).taken().await, proved)
                 }
                 None => (None, None),
             },
@@ -1076,7 +1102,8 @@ impl Client {
                 Mutation::Input { .. }
                 | Mutation::Acquire { .. }
                 | Mutation::Renew { .. }
-                | Mutation::Release { .. },
+                | Mutation::Release { .. }
+                | Mutation::PersonOpen { .. },
                 Some(person),
             ) => Route::Person(change.clone(), Capability::new(person.capability)),
             (

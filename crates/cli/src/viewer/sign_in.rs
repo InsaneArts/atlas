@@ -6,14 +6,18 @@
 //! that fails undoes those before it. Done and Cancel end the hold and the
 //! lease together, and so does anything else that ends the lease: the
 //! viewer's release, its lease running out, the menu bar's emergency stop or
-//! the viewer itself ending. The person's Stop is never touched.
-use super::{LEASE_SECONDS, Viewer};
+//! the viewer itself ending. The person's Stop is never touched. On a VM
+//! the screen stays hidden from agents past the lease, until the guest let
+//! go of the person's input there.
+use super::{LEASE_SECONDS, Viewer, control::on_vm, unpoisoned};
 use crate::menubar::Line;
 use atlas_client::{agent, app_selection, client::Client, jobs};
 use atlas_control::{ActionPermit, Beside, HoldKind, PrivateHold};
 use atlas_core::error::{Code, Error, Holder, Result};
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+mod vm;
 
 /// What the person hears when an agent's command keeps them from signing in.
 pub(super) const COMMAND_RUNNING: &str =
@@ -104,9 +108,15 @@ impl Viewer {
         body: &Value,
     ) -> Result<Value> {
         let (address, site) = site_of(&body["site"])?;
+        let client = self.client();
+        if on_vm(&client) {
+            return self
+                .sign_in_start_on_vm(client, kind, (address, site), body)
+                .await;
+        }
         // A desktop this build cannot reach is refused before any browser is
         // looked for on it.
-        self.client().second_login_only()?;
+        client.second_login_only()?;
         let browser = match body["browser"].as_str() {
             Some(bundle) => Browser::of(bundle).ok_or_else(|| {
                 Error::new(Code::Input, "Atlas opens Google Chrome or Firefox for this")
@@ -245,7 +255,11 @@ impl Viewer {
             lease.renew(owner)?;
             self.holder()
         };
-        client.native_control("renew", owner).await?;
+        if on_vm(&client) {
+            self.renew_on_vm(&client, owner).await?;
+        } else {
+            client.native_control("renew", owner).await?;
+        }
         Ok(json!({"ok": true}))
     }
 
@@ -254,11 +268,14 @@ impl Viewer {
     /// nothing is removed here: the app asks whether to remove the account.
     pub(super) async fn sign_in_done(&self, owner: &str) -> Result<Value> {
         let signing = self.signing(owner).await?;
+        // Listed on the desktop the sign-in's control was taken on.
+        let desktop = super::accounts::signed_in_on(&self.holder());
         let added = match signing.hold.kind {
             HoldKind::SignIn => Some(super::accounts::add_signed_in(
                 &self.accounts_home(),
                 &signing.hold.site,
                 signing.browser.bundle(),
+                desktop,
             )),
             HoldKind::Forget | HoldKind::Reset => None,
         };
@@ -297,7 +314,9 @@ impl Viewer {
     }
 
     /// End the sign-in under the lease `released`, which is ending: the
-    /// screen is shown to agents again. Whether one was under way.
+    /// screen is shown to agents again, on a VM once the guest let go of the
+    /// person's input ([`Viewer::settle_privacy`]). Whether one was under
+    /// way.
     pub(super) async fn end_sign_in(&self, client: &Client, released: &str) -> bool {
         let mut signing = self.sign_in.lock().await;
         if signing
@@ -309,8 +328,28 @@ impl Viewer {
         *signing = None;
         // A hold that can't be ended is honoured no longer than the lease
         // it names, which ends now.
-        let _ = client.controller.end_private();
+        if !on_vm(client) {
+            let _ = client.controller.end_private();
+        }
         true
+    }
+
+    /// Show `client`'s VM screen to agents again once nothing the person did
+    /// there is pending, when a sign-in kept it hidden past its lease: the
+    /// guest let go of their input for certain, or the keeper's recovery
+    /// proved it. Never while control taken there is still held, an input
+    /// sent under it in flight, and no sign-in begins meanwhile: under the
+    /// lease's lock. One that cannot be shown yet is looked at again by the
+    /// next status read.
+    pub(super) async fn settle_privacy(&self, client: &Client) {
+        let mut lease = self.lease.lock().await;
+        let held_there = unpoisoned(&self.lease_client)
+            .as_ref()
+            .is_some_and(|held| held.desktop() == client.desktop());
+        if held_there && lease.active() {
+            return;
+        }
+        let _ = client.controller.end_private_once_let_go();
     }
 }
 

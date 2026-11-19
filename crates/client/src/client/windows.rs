@@ -79,6 +79,11 @@ impl Client {
             let request = json!({"op": "windows", "dock": dock, "session": verified.pin()?});
             let link = self.link.clone().with_timeout(limit);
             let reply = link.call_in(&request, generation).await?;
+            // An agent's read of a VM is kept only while no sign-in began
+            // or ended there since it was admitted.
+            if let Some(pinned) = verified.machine() {
+                self.still_visible_since(pinned)?;
+            }
             if matches!(self.desktop().kind(), atlas_core::desktop::Kind::Vm(_)) {
                 listed_by(reply, Some(&self.selected.name))
             } else {
@@ -109,11 +114,19 @@ impl Client {
         need: bool,
         look: impl std::future::Future<Output = Result<T>>,
     ) -> Result<(T, Seen)> {
+        // An agent's look at a VM is kept only while no sign-in began or
+        // ended there since it was admitted.
+        let kept = |result| {
+            if let Some(pinned) = verified.machine() {
+                self.still_visible_since(pinned)?;
+            }
+            Ok::<_, Error>(result)
+        };
         if self.host_session.is_none() && !need {
-            return Ok((look.await?, Seen::Unread));
+            return Ok((kept(look.await?)?, Seen::Unread));
         }
         let before = self.windows_in(Some(verified), true, WINDOW_LOOKUP).await?;
-        let result = look.await?;
+        let result = kept(look.await?)?;
         let after = self
             .windows_in(Some(verified), false, WINDOW_LOOKUP)
             .await?;

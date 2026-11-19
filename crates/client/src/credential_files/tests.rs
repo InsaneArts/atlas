@@ -456,6 +456,27 @@ fn nothing_is_refused_while_the_person_lets_agents_copy_sign_ins_in() {
     );
 }
 
+#[test]
+fn a_vm_takes_no_sign_in_whatever_the_person_lets_agents_copy() {
+    let (_directory, home) = atlas_home();
+    let key = home.join(".ssh/id_ed25519");
+    assert!(crate::sign_in_copies::set_in(&home, true, true).unwrap());
+
+    let error = refuse_into_vm_at(&[key.as_path()], &home, "work").unwrap_err();
+
+    assert_eq!(error.code, Code::Credentials);
+    assert!(error.error.contains(" into work: "), "{}", error.error);
+    assert!(
+        error
+            .error
+            .ends_with(". Copying your sign-ins works only with Second Login."),
+        "{}",
+        error.error
+    );
+    assert!(!error.error.contains("helper"), "{}", error.error);
+    refuse_at(&[key.as_path()], &home).unwrap();
+}
+
 /// A home of its own, by its real path, with Atlas's own folder in it.
 fn atlas_home() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();

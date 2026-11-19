@@ -448,7 +448,8 @@ pub(in crate::vm::keeper) fn client_of(
 /// [`client_of`], each exchange with the keeper within `timeout`.
 fn client_within(serving: &Serving, directory: &Path, timeout: Duration) -> crate::client::Client {
     let mut client = crate::test_support::vm_client(directory, None);
-    client.controller = serving.fixture.keeper.stop.clone();
+    // The keeper's own state, called by the VM's name as a client's is.
+    client.controller = serving.fixture.keeper.stop.clone().called("work");
     client.link = crate::link::Link::Keeper(
         crate::link::Keeper::at(
             Arc::new(client.selected.clone()),

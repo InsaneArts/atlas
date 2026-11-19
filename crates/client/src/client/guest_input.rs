@@ -116,7 +116,7 @@ impl Client {
             actions,
             owner: owner.as_str(),
             epoch,
-            picture,
+            picture: picture.map(Box::new),
             app: self.doing.is_some(),
             expect: check.as_ref(),
             asking,

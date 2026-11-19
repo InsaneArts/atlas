@@ -1,6 +1,6 @@
 //! Whether the work of a change whose outcome is unknown is proven gone,
-//! by evidence of the change's own kind. A command, the environment worker
-//! and a job's start leave
+//! by evidence of the change's own kind. A command, the environment worker,
+//! a page opened for the person and a job's start leave
 //! a durable link before any effect: the change's intent, then the record
 //! of the supervisor started for it, and only then its program. So one
 //! this daemon no longer carries out, whose every supervisor is done with,
@@ -29,8 +29,10 @@ const RUN: &str = "run";
 /// The environment worker, run as a command is: its supervisor, kept naming
 /// the change before the worker starts, is what proves it gone.
 const ENVIRONMENT: &str = "environment";
+/// A page opened for the person, run as a command is.
+const PERSON_OPEN: &str = "person-open";
 /// What is judged as a command is.
-const RUN_LIKE: [&str; 2] = [RUN, ENVIRONMENT];
+const RUN_LIKE: [&str; 3] = [RUN, ENVIRONMENT, PERSON_OPEN];
 /// A job's start or stop: only a start leaves a supervisor naming it.
 const JOB: &str = "job";
 /// An owner of the input service, kept before it takes input and until

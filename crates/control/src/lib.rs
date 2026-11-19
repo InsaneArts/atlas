@@ -227,6 +227,9 @@ pub struct Controller {
     /// The desktop this controller is for.
     desktop: Desktop,
     name: String,
+    /// The name a VM desktop is called by in what agents hear of it; none
+    /// for Second Login, which is "the helper".
+    called: Option<String>,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
     /// answers at once.
@@ -321,6 +324,7 @@ impl Controller {
             unrecorded_runs: directory.join(format!("{name}.run-unrecorded.json")),
             desktop: desktop.clone(),
             name: name.to_owned(),
+            called: None,
             wait: Duration::ZERO,
             until: None,
             heeds_stop: false,
@@ -392,6 +396,14 @@ impl Controller {
     #[must_use]
     pub fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
         self.on_wait = Some(std::sync::Arc::new(hook));
+        self
+    }
+
+    /// This controller of a VM desktop, which what agents hear of it calls
+    /// by its name `name`.
+    #[must_use]
+    pub fn called(mut self, name: &str) -> Self {
+        self.called = Some(name.to_owned());
         self
     }
 

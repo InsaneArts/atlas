@@ -1443,3 +1443,43 @@ async fn the_persons_control_is_carried_only_with_the_keepers_capability_and_nev
     assert!(service.changes().is_empty(), "nothing reached the guest");
     assert!(client.controller.pending().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn the_persons_page_is_carried_only_on_their_lane_with_the_keepers_capability() {
+    let (serving, saying, _client, _directory) = proven().await;
+    let service = serving_input(&serving, &saying);
+    let generation = live(&serving);
+    let asking = |lane: &str, capability: Option<&str>| {
+        let change = Token::new();
+        let mut asked = json!({"op": "change", "lane": lane, "change": change,
+            "generation": generation, "request": {"op": "person-open",
+                "app": "Google Chrome", "url": "https://github.com", "lease": Token::new(),
+                "person": true, "change": change}});
+        if let Some(capability) = capability {
+            asked["capability"] = json!(capability);
+        }
+        asked
+    };
+    let capability = serving.capability.as_str();
+
+    let unheld = asked(&serving.socket, &asking("person", None)).await;
+    let elsewhere = [
+        asked(&serving.socket, &asking("input", Some(capability))).await,
+        asked(&serving.socket, &asking("change", Some(capability))).await,
+    ];
+    let carried = asked(&serving.socket, &asking("person", Some(capability))).await;
+
+    for refused in &unheld {
+        assert_eq!(refused["code"], "denied", "{refused}");
+        assert_eq!(refused["sent"], false, "{refused}");
+    }
+    for refused in elsewhere.iter().flatten() {
+        assert_eq!(refused["code"], "bad-request", "{refused}");
+        assert_eq!(refused["sent"], false, "{refused}");
+    }
+    assert!(!carried.is_empty());
+    let heard = service.changes();
+    assert_eq!(heard.len(), 1, "only the one carried reached the guest");
+    assert!(matches!(heard[0].lane, LaneKind::Person { .. }));
+    assert_eq!(heard[0].request["op"], "person-open");
+}

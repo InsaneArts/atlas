@@ -9,7 +9,8 @@
 //! and its claim goes only once the guest acknowledges it let go: a release
 //! refused or unanswered leaves it pending, and agents wait until the
 //! keeper's recovery proves the guest let it go. A change whose answer is
-//! lost stays pending in the same way.
+//! lost stays pending in the same way. A page the person signs in on opens
+//! the same way, under the owner their control holds.
 use super::{Actor, Client, Mutation, input::native_refusal, mutate::ForPerson};
 use atlas_control::{Pending, SharedLease, executors::Executor};
 use atlas_core::{
@@ -221,6 +222,50 @@ impl Client {
             return Err(native_refusal(&reply));
         }
         Ok(reply)
+    }
+
+    /// Open `url` in the browser named `app` on the guest for the person,
+    /// under `owner`, the lease's token their control holds there, in
+    /// `generation`: authorized by `lease` still naming `owner` right before
+    /// it goes, and cancelled unsent once it does not. Whether the page
+    /// opened.
+    ///
+    /// # Errors
+    ///
+    /// `lease-lost` once the lease ended, unsent; the guest's refusal, as
+    /// when the person's control there ended; `spawn-failed` when the guest
+    /// could not open it; the failure to hear it, its outcome then
+    /// uncertain and kept pending until the guest answers.
+    pub async fn person_open_on_vm(
+        &self,
+        (lease, owner): (&SharedLease, &str),
+        generation: u64,
+        (app, url): (&str, &str),
+        capability: &str,
+    ) -> Result<Value> {
+        self.persons_alone()?;
+        let open = Mutation::PersonOpen {
+            app,
+            url,
+            lease: owner,
+        };
+        let person = ForPerson {
+            lease: Some((lease, owner)),
+            ..carried(capability)
+        };
+        let reply = self
+            .mutate_vm_as(open, generation, None, Some(person))
+            .await?;
+        if reply["ok"] != true {
+            return Err(native_refusal(&reply));
+        }
+        if reply["exitCode"] != 0 {
+            return Err(Error::new(
+                Code::SpawnFailed,
+                format!("{} could not open {app}.", self.selected.name),
+            ));
+        }
+        Ok(serde_json::json!({"ok": true, "opened": true}))
     }
 
     /// Let go of the person's `owner` on the guest, and whatever it left

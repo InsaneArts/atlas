@@ -100,6 +100,10 @@ pub(crate) struct Pinned {
     /// Atlas VM's picture fence as the proof read it, its window closed;
     /// none from an Atlas VM that keeps none.
     pub(crate) fence: Option<crate::vm::proof::Fence>,
+    /// The screen's privacy an agent's look was admitted under: what it
+    /// reads is kept only while it is unchanged. None for the person's own
+    /// looks, and for changes.
+    pub(crate) visible: Option<atlas_control::Visible>,
 }
 
 impl Verified {
@@ -246,8 +250,13 @@ impl Client {
                 (link, Some(selected.desktop.records()), lifecycle)
             }
         };
+        // What agents hear of a VM's controller calls the VM by its name.
+        let mut controller = Controller::new(&desktop)?;
+        if let Chosen::Vm(_) = &selected.desktop {
+            controller = controller.called(&selected.name);
+        }
         let client = Self {
-            controller: Controller::new(&desktop)?,
+            controller,
             link,
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,

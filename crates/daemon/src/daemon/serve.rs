@@ -909,8 +909,11 @@ pub(super) struct Gate {
     pub(super) stops: u64,
     /// Whether a Stop holds what it admitted: always, but for the stage of
     /// an update, which only writes into the daemon's own folder and must
-    /// reach a guest whose agents stay stopped.
+    /// reach a guest whose agents stay stopped, and the person's own.
     pub(super) held: bool,
+    /// The person's control a change of theirs goes under, checked live
+    /// right before it starts; none for anything else.
+    pub(super) person: Option<machine::PersonLease>,
 }
 
 impl Gate {
@@ -923,6 +926,9 @@ impl Gate {
         }
         if self.lanes.cancelled(self.lane) {
             return Some(failure(Code::Cancelled, "The change was cancelled"));
+        }
+        if let Some(refused) = self.person.as_ref().and_then(machine::PersonLease::refused) {
+            return Some(refused);
         }
         self.authority.check().err().map(refused)
     }
@@ -939,6 +945,9 @@ impl Gate {
         }
         if self.lanes.cancelled(self.lane) {
             return Some(failure(Code::Cancelled, "The change was cancelled"));
+        }
+        if let Some(refused) = self.person.as_ref().and_then(machine::PersonLease::refused) {
+            return Some(refused);
         }
         match self.authority.if_live(|| Ok(then())) {
             Ok(true) => None,
@@ -1735,11 +1744,13 @@ async fn run_registered(
         Some(_) | None => queue,
     };
     let mut delivery = tokio::spawn(deliver(queue, writer, || Ok(())));
-    // A Stop since it was admitted ends it, a Resume after or not.
+    // A Stop since it was admitted ends it, a Resume after or not; never
+    // the person's own.
     let stops = asker
         .gate
         .as_ref()
         .map_or_else(|| daemon.halted.borrow().stops, |gate| gate.stops);
+    let heeds_stops = asker.gate.as_ref().is_none_or(|gate| gate.held);
     // The client never sends after its request. Losing either
     // the client or its handler cancels the owned command.
     let cancel = async {
@@ -1749,7 +1760,7 @@ async fn run_registered(
             () = handler.closed() => run::Cancel::Left,
             () = daemon.stopped() => run::Cancel::Stopping,
             () = daemon.moved_away() => run::Cancel::Away(daemon.screen.console),
-            () = daemon.stopped_since(stops) => run::Cancel::Halted,
+            () = daemon.stopped_since(stops), if heeds_stops => run::Cancel::Halted,
         }
     };
     // Cancelled or retired during any wait before it starts, it never does.

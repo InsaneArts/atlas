@@ -924,6 +924,7 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
         OnboardingCommand::Finish => atlas_cli::user::onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
         OnboardingCommand::Files { change } => {
+            onboarding::second_login_only(config)?;
             let change = change.map(|change| match change {
                 HomeFiles::Private => atlas_cli::user::onboarding::HomeChange::Private,
                 HomeFiles::Open => atlas_cli::user::onboarding::HomeChange::Open,
@@ -937,10 +938,13 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
             .await
             .map_err(|error| Error::new(Code::Io, error.to_string()))?
         }
-        OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
-            choice.map(|choice| choice == SignInCopies::Allow),
-            actor() == Actor::Viewer,
-        ),
+        OnboardingCommand::SignIns { choice } => {
+            onboarding::second_login_only(config)?;
+            onboarding::sign_ins(
+                choice.map(|choice| choice == SignInCopies::Allow),
+                actor() == Actor::Viewer,
+            )
+        }
     }
 }
 

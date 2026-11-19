@@ -9,12 +9,15 @@
 //! cancels it in Atlas, and taking control again never clears it. A
 //! generation counter beside it goes up each time a hold begins or ends and
 //! is never removed: a read of the screen admitted before either is never
-//! kept.
+//! kept. On a VM the hold outlives its lease: its guest may still hold the
+//! person's input once the lease ends, so it is kept, *owed*, until its
+//! holder sees nothing the person did there left pending, and ends it.
 use super::{
     Controller, Ownership,
     busy::{busy_interrupted, busy_private},
 };
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     files::{read_own, write_atomic},
     process::Instance,
@@ -86,6 +89,10 @@ struct Marker {
     lease: String,
     /// When it began, in milliseconds since 1970.
     since: u64,
+    /// Whether it outlives its lease until the person's input there is let
+    /// go of: a VM's, whose guest may hold that input after the lease ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    let_go: bool,
 }
 
 /// The screen's privacy generation when a read of it was admitted: the read
@@ -97,6 +104,9 @@ pub struct Visible(u64);
 enum Found {
     Nothing,
     Live(PrivateHold),
+    /// Its lease ended while the person's input it was for may not be let
+    /// go of yet; its holder still runs.
+    Owed,
     /// Its holder died, or it can't be read (no hold).
     Interrupted(Option<PrivateHold>),
 }
@@ -109,7 +119,7 @@ impl Controller {
     pub fn private_hold(&self) -> Option<PrivateHold> {
         match self.found() {
             Found::Live(hold) => Some(hold),
-            Found::Nothing | Found::Interrupted(_) => None,
+            Found::Nothing | Found::Owed | Found::Interrupted(_) => None,
         }
     }
 
@@ -117,7 +127,7 @@ impl Controller {
     pub fn interrupted_hold(&self) -> Option<Interrupted> {
         match self.found() {
             Found::Interrupted(hold) => Some(Interrupted { hold }),
-            Found::Nothing | Found::Live(_) => None,
+            Found::Nothing | Found::Live(_) | Found::Owed => None,
         }
     }
 
@@ -128,8 +138,8 @@ impl Controller {
     /// Returns `busy`, held by the person, while one is.
     pub(crate) fn require_not_interrupted(&self) -> Result<()> {
         match self.found() {
-            Found::Interrupted(_) => Err(busy_interrupted()),
-            Found::Nothing | Found::Live(_) => Ok(()),
+            Found::Interrupted(_) => Err(busy_interrupted(self.called.as_deref())),
+            Found::Nothing | Found::Live(_) | Found::Owed => Ok(()),
         }
     }
 
@@ -187,8 +197,8 @@ impl Controller {
     /// and `state` when the generation can't be read.
     pub fn screen_visible(&self) -> Result<Visible> {
         match self.found() {
-            Found::Live(_) => Err(busy_private()),
-            Found::Interrupted(_) => Err(busy_interrupted()),
+            Found::Live(_) | Found::Owed => Err(busy_private(self.called.as_deref())),
+            Found::Interrupted(_) => Err(busy_interrupted(self.called.as_deref())),
             Found::Nothing => self.generation().map(Visible),
         }
     }
@@ -204,7 +214,7 @@ impl Controller {
         if self.screen_visible()? == admitted {
             Ok(())
         } else {
-            Err(busy_private())
+            Err(busy_private(self.called.as_deref()))
         }
     }
 
@@ -234,6 +244,7 @@ impl Controller {
             holder,
             lease: lease.to_owned(),
             since: now_ms(),
+            let_go: matches!(self.desktop.kind(), Kind::Vm(_)),
         };
         // Whole or not at all: a holder killed while writing leaves no torn
         // marker for a later lease to meet.
@@ -253,8 +264,33 @@ impl Controller {
         }
         match self.found() {
             Found::Interrupted(_) => Ok(()),
-            Found::Nothing | Found::Live(_) => self.end_private(),
+            Found::Nothing | Found::Live(_) | Found::Owed => self.end_private(),
         }
+    }
+
+    /// End a hold its lease outlived, once nothing the person did on the
+    /// desktop is left pending: their input let go of for certain, or proven
+    /// let go of by recovery, and none of it in flight. Only the process
+    /// holding the hold ends it, and only one whose lease ended; its caller
+    /// begins no hold meanwhile. Whether it ended.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure to read what is pending, or to end the hold: it
+    /// is kept then, as when anything is pending.
+    pub fn end_private_once_let_go(&self) -> Result<bool> {
+        if !matches!(self.found(), Found::Owed) {
+            return Ok(false);
+        }
+        let held_here = read_own(&self.private, LIMIT)
+            .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok())
+            .zip(Instance::current())
+            .is_some_and(|(marker, current)| marker.holder == current);
+        if !held_here || !self.pending()?.is_empty() {
+            return Ok(false);
+        }
+        self.end_private()?;
+        Ok(true)
     }
 
     /// End the private hold: the generation goes up, then the marker goes,
@@ -297,6 +333,7 @@ impl Controller {
             holder: gone(),
             lease: atlas_core::files::token(),
             since: now_ms(),
+            let_go: matches!(self.desktop.kind(), Kind::Vm(_)),
         };
         write_atomic(&self.private, &serde_json::to_vec(&marker).unwrap(), 0o600).unwrap();
     }
@@ -320,7 +357,8 @@ impl Controller {
         match read_own(&self.person, LIMIT) {
             Some(person) if marker.lease.as_bytes() == person => Found::Live(marker.hold),
             // Its holder runs under another lease, or none: a hold that
-            // lease ended.
+            // lease ended, unless it outlives its lease.
+            _ if marker.let_go => Found::Owed,
             _ => Found::Nothing,
         }
     }
@@ -328,9 +366,13 @@ impl Controller {
     /// The generation now: none written yet is 0.
     fn generation(&self) -> Result<u64> {
         read_generation(&self.private_generation)?.ok_or_else(|| {
+            let whose = self
+                .called
+                .as_ref()
+                .map_or_else(|| "the helper's".to_owned(), |name| format!("{name}'s"));
             Error::new(
                 Code::State,
-                "Atlas couldn't read whether the helper's screen is private. Try again.",
+                format!("Atlas couldn't read whether {whose} screen is private. Try again."),
             )
         })
     }

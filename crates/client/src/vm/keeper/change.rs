@@ -172,13 +172,14 @@ impl Asked {
             return None;
         }
         // The person's mark goes only on a lane of their own, which carries
-        // nothing else: a change to their control of input.
+        // nothing else: a change to their control of input, or a page opened
+        // under it.
         let person = request["lane"] == "person";
         if (asked["person"] == true) != person
             || (person
                 && !matches!(
                     asked["op"].as_str(),
-                    Some("acquire" | "input" | "renew" | "release")
+                    Some("acquire" | "input" | "renew" | "release" | "person-open")
                 ))
         {
             return None;
@@ -216,7 +217,8 @@ impl Asked {
 
 /// Whether the change a client's `request` asks be carried is the
 /// person's own, on a lane of their own: their control of the guest's
-/// input, which the guest admits under either Stop.
+/// input, or a page opened under it, which the guest admits under either
+/// Stop.
 pub(super) fn persons(request: &Value) -> bool {
     request["lane"] == "person"
 }

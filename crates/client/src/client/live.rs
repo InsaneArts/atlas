@@ -658,10 +658,13 @@ impl LiveStream {
         progress.enter(Stage::AfterProof);
         let proving = Instant::now();
         // A VM's frame is held to its header's proof and its keeper's fence;
-        // the VM itself is proved before frames, at most every REPROVE.
+        // the VM itself is proved before frames, at most every REPROVE. An
+        // agent's frame goes only while no sign-in began or ended there.
         let after = match &self.socket {
             Socket::Unix(_) => client.identity().await.map(|session| session.epoch),
-            Socket::Keeper(_) => Ok(before.clone()),
+            Socket::Keeper(vm) => client
+                .still_visible_since(&vm.pinned)
+                .map(|()| before.clone()),
         };
         progress.done();
         let after = after?;
@@ -824,13 +827,15 @@ struct OnVm {
 impl OnVm {
     /// Prove the VM again in full once [`REPROVE`] passed since it last was:
     /// the same epoch, generation, and Atlas VM's same run and picture
-    /// fence as when its picture was opened, its window closed.
+    /// fence as when its picture was opened, its window closed; and, for an
+    /// agent's picture, before every frame, no sign-in begun or ended there.
     ///
     /// # Errors
     ///
-    /// The proof's own refusal, or `session-changed` when anything named
-    /// above differs.
+    /// The proof's own refusal, `session-changed` when anything named above
+    /// differs, or `busy`, held by the person, once the privacy changed.
     async fn bracket(&mut self, client: &Client) -> Result<()> {
+        client.still_visible_since(&self.pinned)?;
         if self.proved.elapsed() < REPROVE {
             return Ok(());
         }

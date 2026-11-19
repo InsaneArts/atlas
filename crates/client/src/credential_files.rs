@@ -153,11 +153,50 @@ fn refuse_at(paths: &[&Path], home: &Path) -> Result<()> {
     refuse_in(paths.iter().copied(), Some(home))
 }
 
+/// [`refuse`] for what goes into the VM named `vm`: whatever the person
+/// chose, none of their sign-ins or secrets goes there, as copying them
+/// works only with Second Login, nor does Atlas's own folder.
+///
+/// # Errors
+///
+/// As [`refuse`], said of the VM.
+pub(crate) fn refuse_into_vm<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    vm: &str,
+) -> Result<()> {
+    let paths: Vec<&Path> = paths.into_iter().collect();
+    refuse_into_vm_at(&paths, &atlas_core::config::home()?, vm)
+}
+
+/// [`refuse_into_vm`] for the person whose home folder is `home`.
+fn refuse_into_vm_at(paths: &[&Path], home: &Path, vm: &str) -> Result<()> {
+    refuse_own_folder(paths, home)?;
+    refused(paths.iter().copied(), Some(home), Destination::Vm(vm))
+}
+
+/// Where a selection would be copied, as its refusal says it.
+#[derive(Clone, Copy)]
+enum Destination<'a> {
+    Helper,
+    /// The VM of this name.
+    Vm(&'a str),
+}
+
 /// [`refuse`] with `home` as the home folder; with none, only the store
 /// files known by name anywhere are recognized.
 pub(crate) fn refuse_in<'a>(
     paths: impl IntoIterator<Item = &'a Path>,
     home: Option<&Path>,
+) -> Result<()> {
+    refused(paths, home, Destination::Helper)
+}
+
+/// [`refuse_in`], its refusal said of what the selection would be copied
+/// `into`.
+fn refused<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    home: Option<&Path>,
+    into: Destination<'_>,
 ) -> Result<()> {
     let moved = home.map(relocated).unwrap_or_default();
     let homes = home.map(homes).unwrap_or_default();
@@ -207,7 +246,7 @@ pub(crate) fn refuse_in<'a>(
             .or_else(link)
             .or_else(|| holding.into_iter().next());
         if let Some(found) = found {
-            return Err(refusal(path, &found));
+            return Err(refusal(path, &found, into));
         }
     }
     Ok(())
@@ -542,30 +581,38 @@ fn matches(parts: &[String], wanted: &[&str]) -> bool {
         })
 }
 
-/// The refusal for `path`, which is or holds `found`.
-fn refusal(path: &Path, found: &Store) -> Error {
+/// The refusal for `path`, which is or holds `found`, to be copied `into`
+/// the helper or a VM.
+fn refusal(path: &Path, found: &Store, into: Destination<'_>) -> Error {
     let name = path.file_name().map_or_else(
         || "that folder".to_owned(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let message = match (found.holds, found.within) {
+    let place = match into {
+        Destination::Helper => "the helper",
+        Destination::Vm(vm) => vm,
+    };
+    let mut message = match (found.holds, found.within) {
         (Holds::Secrets, _) => format!(
-            "Atlas won't copy {} into the helper: it often holds passwords and tokens",
+            "Atlas won't copy {} into {place}: it often holds passwords and tokens",
             found.what
         ),
         (Holds::SignIns, true) => format!(
-            "Atlas won't copy {name} into the helper: it holds {}, with your sign-ins",
+            "Atlas won't copy {name} into {place}: it holds {}, with your sign-ins",
             found.what
         ),
         (Holds::SignIns, false) if found.what.ends_with(&name) => format!(
-            "Atlas won't copy {} into the helper: it holds your sign-ins",
+            "Atlas won't copy {} into {place}: it holds your sign-ins",
             found.what
         ),
         (Holds::SignIns, false) => format!(
-            "Atlas won't copy {name} into the helper: it is part of {}, which holds your sign-ins",
+            "Atlas won't copy {name} into {place}: it is part of {}, which holds your sign-ins",
             found.what
         ),
     };
+    if let Destination::Vm(_) = into {
+        message.push_str(". Copying your sign-ins works only with Second Login.");
+    }
     Error::new(Code::Credentials, message)
 }
 

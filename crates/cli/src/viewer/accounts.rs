@@ -2,8 +2,14 @@
 //! list for the status, and adding an app or removing an account from
 //! Settings. Agents have no way in here: the viewer serves only the app.
 use super::{Viewer, unpoisoned};
-use atlas_client::sign_ins::{self, Entry, How, Kind, Level, Listed};
-use atlas_core::error::{Code, Error, Result};
+use atlas_client::{
+    client::Client,
+    sign_ins::{self, Entry, How, Kind, Level, Listed},
+};
+use atlas_core::{
+    desktop::RecordKey,
+    error::{Code, Error, Result},
+};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -56,9 +62,25 @@ pub(super) fn add(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
     Ok(json!({"ok": true, "added": added}))
 }
 
-/// Add `site`, seen in the browser of bundle identifier `browser`: the
-/// person signed the helper in to it and said Done. Their word is the proof.
-pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -> Result<bool> {
+/// The desktop an account signed in on `client`'s desktop names: a VM's
+/// record key, and none for Second Login, as every account Atlas added
+/// before desktops names none.
+pub(super) fn signed_in_on(client: &Client) -> Option<RecordKey> {
+    match client.desktop().kind() {
+        atlas_core::desktop::Kind::Vm(vm) => Some(vm.record_key()),
+        _ => None,
+    }
+}
+
+/// Add `site`, seen in the browser of bundle identifier `browser` on the
+/// desktop `desktop` names: the person signed it in to the site and said
+/// Done. Their word is the proof.
+pub(super) fn add_signed_in(
+    home: &Option<PathBuf>,
+    site: &str,
+    browser: &str,
+    desktop: Option<RecordKey>,
+) -> Result<bool> {
     let entry = Entry {
         kind: Kind::Site,
         id: site.to_owned(),
@@ -67,7 +89,7 @@ pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -
         added: atlas_core::time::now_ms(),
         how: How::ByHand,
         level: Level::default(),
-        desktop: None,
+        desktop,
     };
     sign_ins::add_in(known(home)?, entry)
 }
@@ -173,16 +195,20 @@ pub(super) fn end_allowed(client: &atlas_client::client::Client, body: &Value) -
 }
 
 /// Add the account the person signed in to while they had control, as the
-/// helper saw it (`seen`): the app, and the page's host. A record that
-/// can't be written leaves it out; giving control back never fails for it.
-pub(super) fn note_sign_in(home: &Option<PathBuf>, seen: &Value) {
+/// desktop `desktop` names saw it (`seen`): the app, and the page's host. A
+/// record that can't be written leaves it out; giving control back never
+/// fails for it.
+pub(super) fn note_sign_in(home: &Option<PathBuf>, seen: &Value, desktop: Option<RecordKey>) {
     let (Ok(home), Ok(seen)) = (
         known(home),
         serde_json::from_value::<sign_ins::Seen>(seen.clone()),
     ) else {
         return;
     };
-    let entry = sign_ins::account_of(&seen, atlas_core::time::now_ms());
+    let entry = Entry {
+        desktop,
+        ..sign_ins::account_of(&seen, atlas_core::time::now_ms())
+    };
     // The person's lease proved it: only their typing is looked at.
     let _ = sign_ins::add_in(home, entry);
 }

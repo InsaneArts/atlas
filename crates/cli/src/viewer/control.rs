@@ -5,7 +5,7 @@
 //! neither Stop refuses or ends there, and which a new generation of its
 //! session ends.
 use super::{LEASE_SECONDS, Viewer, frames::Observation, unpoisoned};
-use atlas_client::client::{Client, GuestOwner};
+use atlas_client::client::{Client, GuestOwner, PersonProof};
 use atlas_control::{ActionPermit, Beside};
 use atlas_core::{
     desktop::Kind,
@@ -124,10 +124,12 @@ impl Viewer {
             (Some(_) | None, _) => Ok(None),
         };
         // A password the person typed while they had control names the
-        // account they signed in to: Atlas lists it. Never after a guided
-        // sign-in: Done adds its site itself, and Cancel adds nothing.
+        // account they signed in to: Atlas lists it, on the desktop it was
+        // typed on. Never after a guided sign-in: Done adds its site itself,
+        // and Cancel adds nothing.
         if !guided && let Ok(Some(seen)) = &completion {
-            super::accounts::note_sign_in(&self.accounts_home(), seen);
+            let desktop = super::accounts::signed_in_on(&client);
+            super::accounts::note_sign_in(&self.accounts_home(), seen, desktop);
         }
 
         // Native execution can end before its background recording does.
@@ -141,6 +143,11 @@ impl Viewer {
             if !lease.active() {
                 *unpoisoned(&self.lease_client) = None;
             }
+        }
+        // A sign-in's screen on a VM is shown to agents again only now, and
+        // only once the guest let go of the person's input for certain.
+        if on_vm(&client) {
+            self.settle_privacy(&client).await;
         }
 
         completion?;
@@ -266,16 +273,26 @@ impl Viewer {
         if *proof.epoch() != frame.epoch {
             return Err(Error::session_changed());
         }
+        self.take_vm_control_proved(client, &proof).await
+    }
+
+    /// [`Viewer::take_vm_control`] in the session `proof` showed: the
+    /// lease's token.
+    pub(super) async fn take_vm_control_proved(
+        &self,
+        client: &Arc<Client>,
+        proof: &PersonProof,
+    ) -> Result<String> {
         let capability = self.persons_capability(client)?;
         let token = self
-            .lease_beside(client, &frame.epoch, Beside::Nothing)
+            .lease_beside(client, proof.epoch(), Beside::Nothing)
             .await?;
 
         // Nothing was asked of the guest yet, so a lease ended this soon
         // just fails here.
         let _acquiring = ActionPermit::begin(self.lease.clone(), &token).await?;
         let acquired = client
-            .person_acquire_on_vm(&token, &proof, &capability)
+            .person_acquire_on_vm(&token, proof, &capability)
             .await;
         let mut lease = self.lease.lock().await;
 
@@ -401,27 +418,34 @@ impl Viewer {
         };
 
         if on_vm(&client) {
-            let renewed = async {
-                let generation = self.guest_generation()?;
-                let capability = self.persons_capability(&client)?;
-                client
-                    .person_renew_on_vm(owner, generation, &capability)
-                    .await
-            };
-            if let Err(error) = renewed.await {
-                let _ = self.release(Some(owner)).await;
-                return Err(error);
-            }
+            self.renew_on_vm(&client, owner).await?;
             return Ok(json!({"ok": true}));
         }
         client.native_control("renew", owner).await?;
         Ok(json!({"ok": true}))
     }
 
+    /// Ask `client`'s VM guest to keep `owner`'s control a while longer:
+    /// when it does not, or its answer is lost, their control ends.
+    pub(super) async fn renew_on_vm(&self, client: &Client, owner: &str) -> Result<()> {
+        let renewed = async {
+            let generation = self.guest_generation()?;
+            let capability = self.persons_capability(client)?;
+            client
+                .person_renew_on_vm(owner, generation, &capability)
+                .await
+        };
+        if let Err(error) = renewed.await {
+            let _ = self.release(Some(owner)).await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// The capability `client`'s VM keeper carries the person's own control
     /// with, read in this service's station, as their own surface reads it;
     /// none in a service that keeps no station.
-    fn persons_capability(&self, client: &Client) -> Result<String> {
+    pub(super) fn persons_capability(&self, client: &Client) -> Result<String> {
         let desktop = client.desktop();
         let Kind::Vm(vm) = desktop.kind() else {
             return Err(client.unreachable());
@@ -440,7 +464,7 @@ impl Viewer {
 
     /// The generation of the VM's session the person's control of it was
     /// taken in.
-    fn guest_generation(&self) -> Result<u64> {
+    pub(super) fn guest_generation(&self) -> Result<u64> {
         unpoisoned(&self.guest_owner)
             .as_ref()
             .map(GuestOwner::generation)
@@ -526,10 +550,10 @@ pub(super) async fn release_native(
     }
 }
 
-/// Let go of the person's `owner` of `client`'s VM guest input. Its claim
-/// stays pending, for the keeper's recovery, until the guest acknowledges
-/// it let go. No account the person typed a password for meanwhile is
-/// listed from it: the accounts listed are Second Login's.
+/// Let go of the person's `owner` of `client`'s VM guest input: the
+/// account the person typed a password for meanwhile, as the guest saw it,
+/// when they typed one. Its claim stays pending, for the keeper's recovery,
+/// until the guest acknowledges it let go.
 async fn release_guest(
     client: &Client,
     owner: GuestOwner,
@@ -539,17 +563,19 @@ async fn release_guest(
         Ok(capability) => client.person_release_on_vm(owner, &capability).await,
         Err(error) => Err(error),
     };
-    released.map(|_| None).map_err(|error| {
-        let message = format!(
-            "Control stopped accepting input, but {} did not confirm it let go: {error}",
-            client.selected.name
-        );
-        Error::new(Code::Uncertain, message).uncertain()
-    })
+    released
+        .map(|mut reply| reply.get_mut("signedIn").map(Value::take))
+        .map_err(|error| {
+            let message = format!(
+                "Control stopped accepting input, but {} did not confirm it let go: {error}",
+                client.selected.name
+            );
+            Error::new(Code::Uncertain, message).uncertain()
+        })
 }
 
 /// Whether `client`'s desktop is a VM.
-fn on_vm(client: &Client) -> bool {
+pub(super) fn on_vm(client: &Client) -> bool {
     matches!(client.desktop().kind(), Kind::Vm(_))
 }
 

@@ -490,6 +490,7 @@ async fn a_change_whose_lane_was_cancelled_after_admission_never_runs() {
             halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
             stops: 0,
             held: true,
+            person: None,
         }),
     };
     assert!(asker.refused_now().is_none());
@@ -1740,6 +1741,7 @@ async fn a_command_on_a_machine_lane_with_nothing_to_supervise_it_is_refused() {
             halted: tokio::sync::watch::Sender::new(super::super::Halt::default()).subscribe(),
             stops: 0,
             held: true,
+            person: None,
         }),
     };
     let unsupervised = Daemon::new("Aqua".into(), synthetic, || true, own_session);
@@ -2339,6 +2341,183 @@ async fn the_persons_mark_on_an_input_lane_is_refused_by_the_guest_and_never_lif
     for change in [&before, &stopped_change, &unmarked] {
         assert_eq!(served.changes.of(change).unwrap(), None, "nothing intended");
     }
+}
+
+#[tokio::test]
+async fn a_page_for_the_person_opens_under_a_stop_only_on_their_lane_while_their_owner_holds_input()
+{
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::scripted_for_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    stopped(&served, &controlling, 1).await;
+    let owner = Token::new();
+    let persons = |op: &str, change: &Token| {
+        json!({"op": op, "owner": owner, "epoch": {"uid": 502}, "person": true,
+            "change": change})
+    };
+    let page = |change: &Token, lease: &Token| {
+        json!({"op": "person-open", "app": "Google Chrome", "url": "https://github.com",
+            "lease": lease, "person": true, "change": change})
+    };
+    let on_their_lane = |change: &Token| LaneKind::Person {
+        change: change.clone(),
+    };
+    let taking = Token::new();
+    let taken = ask(
+        &desktop,
+        on_their_lane(&taking),
+        &persons("acquire", &taking),
+    )
+    .await;
+    assert_eq!(taken.last().unwrap()["ok"], true, "{taken:?}");
+
+    let (opening, stranger, unlaned, after) =
+        (Token::new(), Token::new(), Token::new(), Token::new());
+    let opened = ask(&desktop, on_their_lane(&opening), &page(&opening, &owner)).await;
+    let again = ask(&desktop, on_their_lane(&opening), &page(&opening, &owner)).await;
+    let not_theirs = ask(
+        &desktop,
+        on_their_lane(&stranger),
+        &page(&stranger, &Token::new()),
+    )
+    .await;
+    let on_a_change_lane = ask(
+        &desktop,
+        LaneKind::Change {
+            change: unlaned.clone(),
+        },
+        &page(&unlaned, &owner),
+    )
+    .await;
+    let misnamed = Token::new();
+    let another = ask(
+        &desktop,
+        on_their_lane(&misnamed),
+        &page(&Token::new(), &owner),
+    )
+    .await;
+    let releasing = Token::new();
+    ask(
+        &desktop,
+        on_their_lane(&releasing),
+        &persons("release", &releasing),
+    )
+    .await;
+    let let_go = ask(&desktop, on_their_lane(&after), &page(&after, &owner)).await;
+
+    let opened = opened.last().unwrap();
+    assert_eq!(opened["ok"], true, "{opened}");
+    assert_eq!(opened["exitCode"], 0, "{opened}");
+    let again = again.last().unwrap();
+    assert_eq!(again["exitCode"], 0, "{again}");
+    assert_eq!(
+        again["durationMs"], opened["durationMs"],
+        "answered from what it came to, never opened again: {again}"
+    );
+    assert!(
+        matches!(served.changes.of(&opening).unwrap(),
+            Some(crate::machine::changes::State::Done { ref reply }) if reply["exitCode"] == 0),
+        "kept as what it came to"
+    );
+    for refused in [&not_theirs, &let_go] {
+        let refused = refused.last().unwrap();
+        assert_eq!(refused["code"], "lease-lost", "{refused}");
+        assert_ne!(refused["uncertain"], true, "{refused}");
+    }
+    for refused in [&on_a_change_lane, &another] {
+        let refused = refused.last().unwrap();
+        assert_eq!(refused["code"], "bad-request", "{refused}");
+    }
+    for change in [&unlaned, &misnamed] {
+        assert_eq!(served.changes.of(change).unwrap(), None, "nothing intended");
+    }
+}
+
+#[tokio::test]
+async fn a_page_whose_persons_control_ends_before_its_program_starts_never_opens() {
+    let _turn = crate::machine::input::tests::ONE_AT_A_TIME.lock().await;
+    let folder = tempfile::tempdir().unwrap();
+    let input = crate::machine::input::Input::start(
+        crate::machine::input::Starter::scripted_for_these_tests(folder.path()),
+        folder.path().to_owned(),
+    );
+    let served = Served::with_input(records(), Some(input)).await;
+    let (_controlling, desktop) = served.control().await;
+    let standing = served.machine.daemon.input.as_ref().unwrap().standing();
+    for _ in 0..200 {
+        if *standing.borrow() == crate::machine::input::Standing::Ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(*standing.borrow(), crate::machine::input::Standing::Ready);
+    let owner = Token::new();
+    let persons = |op: &str, change: &Token| {
+        json!({"op": op, "owner": owner, "epoch": {"uid": 502}, "person": true,
+            "change": change})
+    };
+    let on_their_lane = |change: &Token| LaneKind::Person {
+        change: change.clone(),
+    };
+    let taking = Token::new();
+    let taken = ask(
+        &desktop,
+        on_their_lane(&taking),
+        &persons("acquire", &taking),
+    )
+    .await;
+    assert_eq!(taken.last().unwrap()["ok"], true, "{taken:?}");
+    // Commands wait to be registered while this is held: the page passes
+    // its first check, then waits before its supervisor starts.
+    let registering = served.machine.daemon.runs.lock().await;
+    let (opening, releasing) = (Token::new(), Token::new());
+    let page = json!({"op": "person-open", "app": "Google Chrome", "url": "https://github.com",
+        "lease": owner, "person": true, "change": opening});
+
+    let (opened, released) = tokio::join!(ask(&desktop, on_their_lane(&opening), &page), async {
+        for _ in 0..500 {
+            if matches!(
+                served.changes.of(&opening),
+                Ok(Some(crate::machine::changes::State::Intended))
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let released = ask(
+            &desktop,
+            on_their_lane(&releasing),
+            &persons("release", &releasing),
+        )
+        .await;
+        drop(registering);
+        released
+    });
+
+    assert_eq!(released.last().unwrap()["released"], true, "{released:?}");
+    let opened = opened.last().unwrap();
+    assert_eq!(opened["code"], "lease-lost", "{opened}");
+    assert_ne!(opened["uncertain"], true, "{opened}");
+    assert!(opened.get("exitCode").is_none(), "never started: {opened}");
+    assert!(
+        matches!(served.changes.of(&opening).unwrap(),
+            Some(crate::machine::changes::State::Done { ref reply }) if reply["code"] == "lease-lost"),
+        "kept as refused"
+    );
 }
 
 #[tokio::test]

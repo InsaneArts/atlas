@@ -222,6 +222,12 @@ impl Viewer {
 
         let active = viewed && self.lease.lock().await.active();
 
+        // A VM a sign-in left hidden from agents is shown to them again once
+        // the guest let go of the person's input there.
+        if super::control::on_vm(client) {
+            self.settle_privacy(client).await;
+        }
+
         let (pending, total) = atlas_client::overview::pending(&client.controller);
 
         // The status never waits for input to start; shutdown does.

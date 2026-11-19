@@ -79,18 +79,33 @@ pub(super) fn busy_command(purpose: Purpose) -> Error {
 pub(super) const SCREEN_HIDDEN: &str =
     "The person is managing an account in the helper; the screen is hidden until they finish.";
 
-/// Busy because the person is managing an account in the helper, so its
-/// screen is hidden from agents: held by the person, as their control is.
-pub(super) fn busy_private() -> Error {
-    Error::new(Code::Busy, SCREEN_HIDDEN).held_by(Holder::Person)
+/// Busy because the person is managing an account on the desktop a VM's
+/// name `called` names, else in the helper, so its screen is hidden from
+/// agents: held by the person, as their control is.
+pub(super) fn busy_private(called: Option<&str>) -> Error {
+    let words = match called {
+        Some(name) => format!(
+            "The person is managing an account in {name}; the screen is hidden until they finish."
+        ),
+        None => SCREEN_HIDDEN.to_owned(),
+    };
+    Error::new(Code::Busy, words).held_by(Holder::Person)
 }
 
-/// The words of [`busy_interrupted`].
+/// The words of [`busy_interrupted`] for the helper.
 pub(super) const SIGN_IN_INTERRUPTED: &str = "A sign-in in the helper was interrupted; the screen \
      stays hidden and changes wait until the person finishes or cancels it in Atlas.";
 
-/// Busy because a sign-in was interrupted and the person has not finished
-/// or cancelled it yet.
-pub(super) fn busy_interrupted() -> Error {
-    Error::new(Code::Busy, SIGN_IN_INTERRUPTED).held_by(Holder::Person)
+/// Busy because a sign-in on the desktop a VM's name `called` names, else
+/// in the helper, was interrupted and the person has not finished or
+/// cancelled it yet.
+pub(super) fn busy_interrupted(called: Option<&str>) -> Error {
+    let words = match called {
+        Some(name) => format!(
+            "A sign-in in {name} was interrupted; the screen stays hidden and changes wait \
+             until the person finishes or cancels it in Atlas."
+        ),
+        None => SIGN_IN_INTERRUPTED.to_owned(),
+    };
+    Error::new(Code::Busy, words).held_by(Holder::Person)
 }

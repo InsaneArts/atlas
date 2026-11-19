@@ -1146,3 +1146,72 @@ async fn a_vms_screenshot_and_collect_refusals_and_their_next_steps_name_the_vm_
         assert!(!shown.contains("helper"), "{shown}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_collection_admitted_before_a_sign_in_publishes_nothing_read_during_it() {
+    let looking = looking("collect").await;
+    let home = Home::new();
+    home.file("atlas-work/one.txt", b"one");
+    home.file("atlas-work/two.txt", b"two");
+    let controller = looking.client.controller.clone();
+    let signing: Arc<Mutex<Option<atlas_control::Lease>>> = Arc::default();
+    let held = signing.clone();
+    // The person starts signing in while the first file is read.
+    home.serving_then(&looking, move || {
+        let mut held = held.lock().unwrap();
+        if held.is_none() {
+            let mut lease = atlas_control::Lease::new(Duration::from_secs(10));
+            let token = lease
+                .acquire_beside(&controller, atlas_control::Beside::Nothing)
+                .unwrap();
+            let hold = atlas_control::PrivateHold {
+                site: "github.com".to_owned(),
+                kind: atlas_control::HoldKind::SignIn,
+                browser: Some("com.google.Chrome".to_owned()),
+            };
+            lease.hide_screen(&controller, &token, &hold).unwrap();
+            *held = Some(lease);
+        }
+    });
+
+    let collected = crate::collect::collect(
+        &looking.client,
+        &["atlas-work/one.txt".into(), "atlas-work/two.txt".into()],
+        1024,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(collected["ok"], false, "{collected}");
+    assert_eq!(collected["collected"], json!([]), "nothing published");
+    assert!(collected["receipt"].is_null(), "{collected}");
+    let failed = collected["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2, "{collected}");
+    for failure in failed {
+        let error = failure["error"].as_str().unwrap();
+        assert!(error.contains("managing an account in work"), "{error}");
+        assert!(!error.contains("helper"), "{error}");
+    }
+    let kept = looking.client.records().join("collected");
+    let copies: Vec<_> = walk(&kept);
+    assert!(copies.is_empty(), "no copy left: {copies:?}");
+    drop(signing);
+}
+
+/// Every file under `folder`, none when it is missing.
+fn walk(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
+}

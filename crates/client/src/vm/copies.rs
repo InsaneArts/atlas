@@ -184,7 +184,7 @@ pub(crate) async fn hand_over_to(
         placed.push(match target {
             Target::Name(name) => Placed::Given(name),
             Target::Path(path) => {
-                let (source, held) = snapshot(&path).await?;
+                let (source, held) = snapshot(&path, &client.selected.name).await?;
                 Placed::Staged {
                     path,
                     source,
@@ -400,16 +400,16 @@ impl Placed {
 /// The snapshot of `path`, taken off the runtime at its real path, which
 /// no other account can change, its files held open to be sent from; and
 /// that real path. Every entry is checked against the person's sign-ins and
-/// secrets and Atlas's own folder (a folder goes whole), and the check is
-/// bound to what was held: each path checked must still name the very file
-/// read.
-async fn snapshot(path: &Path) -> Result<(PathBuf, Arc<Held>)> {
-    let named = path.to_owned();
+/// secrets, which never go into the VM named `vm`, and Atlas's own folder (a
+/// folder goes whole), and the check is bound to what was held: each path
+/// checked must still name the very file read.
+async fn snapshot(path: &Path, vm: &str) -> Result<(PathBuf, Arc<Held>)> {
+    let (named, vm) = (path.to_owned(), vm.to_owned());
     tokio::task::spawn_blocking(move || {
         let source = atlas_core::checked::handover_path(&named)?;
         let held = Snapshot::held(&source)?;
         let paths = held.paths(&source);
-        crate::credential_files::refuse(paths.iter().map(PathBuf::as_path))?;
+        crate::credential_files::refuse_into_vm(paths.iter().map(PathBuf::as_path), &vm)?;
         held.still(&source)?;
         Ok((source, Arc::new(held)))
     })

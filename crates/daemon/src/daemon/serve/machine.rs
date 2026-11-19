@@ -846,6 +846,9 @@ pub struct Machine {
     /// without progress.
     progress: Held<Duration>,
     pub said: Arc<Said>,
+    /// The person's control of its input as their own lane carried it: what
+    /// a page opened for them goes under, checked right before it starts.
+    persons: Arc<PersonGrants>,
 }
 
 /// How long a reading of how closed the guest is holds before an agent's
@@ -980,6 +983,7 @@ impl Machine {
             build: atlas_native::native::service::own_build(),
             progress: Held::new(paced::BULK_PROGRESS),
             said: Arc::default(),
+            persons: Arc::default(),
         })
     }
 
@@ -1477,6 +1481,24 @@ impl Machine {
                 () = ended(&lanes, header.lane) => return Ok(()),
             }
         }
+        // A page the person signs in on opens on their own lane too, run as
+        // a command is, and no Stop refuses or ends it either.
+        if let LaneKind::Person { change } = &header.kind
+            && person_open::PersonOpen::asked(&line)
+        {
+            let gate = Gate {
+                authority,
+                lanes: lanes.clone(),
+                lane: header.lane,
+                halted: self.daemon.halted.subscribe(),
+                stops,
+                held: false,
+                person: None,
+            };
+            return self
+                .person_open_lane((change.clone(), &line), gate, Box::new(reader), writer)
+                .await;
+        }
         // Passed to the input service as it is, once judged here. A read, a
         // look at an app's elements, changes nothing, so a Stop never cuts
         // it short: only its lane or its generation ending does. Nor does
@@ -1495,6 +1517,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: change.is_some() && !person,
+                person: None,
             };
             let mut hanging_up = [0; 1];
             let reply = tokio::select! {
@@ -1515,6 +1538,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: true,
+                person: None,
             };
             let staged = stage::Lane {
                 change: change.clone(),
@@ -1540,6 +1564,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: true,
+                person: None,
             };
             return self
                 .bulk_lane(asked.as_ref(), reader, writer, gate, credit)
@@ -1597,6 +1622,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: true,
+                person: None,
             };
             return self
                 .remove_copy_lane(change.clone(), copy, node, gate, reader, writer)
@@ -1616,6 +1642,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: true,
+                person: None,
             };
             return self.job_lane(&header.kind, job, gate, writer).await;
         }
@@ -1631,6 +1658,7 @@ impl Machine {
                 halted: self.daemon.halted.subscribe(),
                 stops,
                 held: true,
+                person: None,
             }),
         };
         let phase = watch::channel(ConnectionPhase::Refusal).0;
@@ -1848,10 +1876,17 @@ impl Machine {
                 return self.came_to(change.clone(), refusal).await;
             }
         }
+        // The person's release lets go of what their own pages go under
+        // before it is asked; what they take or keep counts only once said.
+        let (generation, sent) = (gate.authority.generation().0, std::time::Instant::now());
+        let persons = person.then_some((operation.as_deref(), owner.as_ref()));
+        if let Some((Some(operation), Some(owner))) = persons {
+            self.persons.asking(operation, owner);
+        }
         // A Stop, or the generation ending, while a change runs ends it too;
         // a read ends only with its generation.
         let reply = tokio::select! {
-            reply = forward(input, gate.authority.generation().0, line) => reply,
+            reply = forward(input, generation, line) => reply,
             () = gate.over() => Err(if change.is_some() {
                 Error::new(Code::Stopped, "Agents were stopped while the change ran").uncertain()
             } else {
@@ -1863,6 +1898,10 @@ impl Machine {
         };
         // Sent: what it came to is unknown unless the service said.
         let reply = reply.unwrap_or_else(|error| serde_json::json!(error.uncertain()));
+        if let Some((Some(operation), Some(owner))) = persons {
+            self.persons
+                .answered((operation, owner, generation), sent, &reply);
+        }
         // The service acknowledged its owner's cleanup, or refused it input
         // for certain, before any was given: its record says so, and the
         // station's settlement then removes it.
@@ -2063,7 +2102,11 @@ pub mod entry;
 mod jobs;
 mod listen;
 mod paced;
+mod person_open;
 mod recording;
+
+use person_open::PersonGrants;
+pub(in crate::daemon) use person_open::PersonLease;
 mod stage;
 mod update;
 

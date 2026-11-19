@@ -376,6 +376,15 @@ impl Collection {
                 ));
                 continue;
             }
+            // Nothing more is read once a sign-in began or ended there since
+            // the collection was admitted.
+            if let Some((client, pinned)) = &self.proof
+                && let Err(refused) = client.still_visible_since(pinned)
+            {
+                changed = true;
+                failed.push((source.clone(), changed_while_read(client, source, &refused)));
+                continue;
+            }
             let names: Vec<&str> = kept
                 .iter()
                 .filter_map(|kept| kept.path.file_name()?.to_str())
@@ -596,6 +605,13 @@ enum Got {
 /// proof after its read, `refused`, showed the VM changed or its window
 /// opened since, or the window open still.
 fn changed_while_read(client: &Client, source: &str, refused: &Error) -> Failure {
+    // A sign-in there: the person's words, and nothing read kept.
+    if refused.code == Code::Busy {
+        return Failure {
+            reason: ReadRefusal::SessionChanged,
+            error: format!("{source}: {} Nothing read was kept.", refused.error),
+        };
+    }
     if refused.code == Code::OnConsole {
         return Failure {
             reason: ReadRefusal::OnConsole,

@@ -17,9 +17,9 @@ pub use executor::{
 };
 pub use helper::{Helper, Pictures, completed, exited};
 pub use keeper::{
-    FINDER, FINDER_WINDOW, GENERATION, JOB, Observing, ScriptedKeeper, TAKEN_OPEN, Window,
-    input_hello, kept_capability, lifecycle_record, machine_hello, screen, under_maintenance,
-    vm_through_keeper,
+    Connecting, FINDER, FINDER_WINDOW, GENERATION, JOB, Observing, ScriptedKeeper, TAKEN_OPEN,
+    Window, input_hello, kept_capability, lifecycle_record, machine_hello, screen,
+    under_maintenance, vm_through_keeper,
 };
 pub use requester::{Requester, WATCHDOG};
 pub use runner::{FIRST_RUN, StandInRunner};
@@ -113,7 +113,8 @@ pub fn vm_client(directory: &Path, user_entry: Option<&str>) -> Client {
         adding: atlas_core::config::desktops::Adding::default(),
     };
     let mut client = Client::new(selected).unwrap();
-    client.controller = Controller::of_at(&client.desktop(), &directory.join("state"));
+    client.controller =
+        Controller::of_at(&client.desktop(), &directory.join("state")).called("work");
     // Its lifecycle is the test's own, never the account's.
     client.lifecycle = Some(crate::vm::lifecycle::Lifecycle::under(directory));
     client.admission();

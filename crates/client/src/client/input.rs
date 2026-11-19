@@ -559,7 +559,7 @@ impl Client {
             actions,
             owner,
             epoch: session.epoch.input_epoch(),
-            picture,
+            picture: picture.map(Box::new),
             app: self.doing.is_some(),
             expect: expect.as_ref(),
             asking,

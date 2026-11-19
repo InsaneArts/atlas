@@ -83,8 +83,13 @@ impl StationRecords for Remembered {
     }
 }
 
-/// A keeper trusted whoever listens.
-struct Trusting;
+/// What a test does once, while the next connection to a scripted keeper
+/// is being made: before the client says anything on it.
+pub type Connecting = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+
+/// A keeper trusted whoever listens, doing what a test asks while the next
+/// connection is made.
+struct Trusting(Connecting);
 
 impl crate::link::Trust for Trusting {
     fn trusts(
@@ -93,6 +98,10 @@ impl crate::link::Trust for Trusting {
         _: &Path,
         _: &std::os::unix::net::UnixStream,
     ) -> Result<()> {
+        let connecting = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(connecting) = connecting {
+            connecting();
+        }
         Ok(())
     }
 }
@@ -150,6 +159,10 @@ pub struct ScriptedKeeper {
     /// each operation, in place of the guest's own answer: a refusal of the
     /// guest's, or the keeper's own word that its reply was lost.
     pub input_answers: Arc<Mutex<Vec<(&'static str, Value)>>>,
+    /// The apps installed in the guest, by name: none at first.
+    pub installed: Arc<Mutex<Vec<&'static str>>>,
+    /// What the test does while the next connection to the keeper is made.
+    pub connecting: Connecting,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -179,8 +192,10 @@ pub const GENERATION: u64 = 7;
 /// A VM client of a keeper this scripts on a socket in `directory`: its
 /// guest proves itself, runs every command as one that printed `hi`, keeps
 /// one background job ([`JOB`]) that any start starts and any stop ends,
-/// runs no app, has none of the apps asked after installed, reads a native
-/// check's folder as a machine guest does and keeps no copy, gives a picture of its whole display for a screenshot, settles
+/// runs no app, has only the apps a test installs
+/// ([`ScriptedKeeper::installed`]), opens any page it is asked to for the
+/// person, reads a native check's folder as a machine guest does and keeps
+/// no copy, gives a picture of its whole display for a screenshot, settles
 /// whatever it is asked to, and cannot say whether work agents started runs
 /// there; its keeper holds and releases agents' lanes whenever it is asked,
 /// and recovers nothing when asked to. A live picture comes frame by frame
@@ -216,6 +231,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
     let serves = Arc::new(Mutex::new(crate::vm::keeper::CAPABILITIES.to_vec()));
     let generation = Arc::new(std::sync::atomic::AtomicU64::new(GENERATION));
     let input_answers: Arc<Mutex<Vec<(&'static str, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let installed: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let connecting: Connecting = Arc::new(Mutex::new(None));
     let (peer, own) = (json!(guest.public()), json!(station.public()));
     let serving = tokio::spawn({
         let (asked, stop, away, held, answering, refusing_once, observing) = (
@@ -235,6 +252,7 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             generation.clone(),
             input_answers.clone(),
         );
+        let installed = installed.clone();
         async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let observing = *observing.lock().unwrap_or_else(PoisonError::into_inner);
@@ -257,6 +275,10 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                 let window = window.clone();
                 let generation = generation.load(std::sync::atomic::Ordering::SeqCst);
                 let input_answers = input_answers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                let installed = installed
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone();
@@ -315,6 +337,7 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
                             window: *window.lock().unwrap_or_else(PoisonError::into_inner),
                             generation,
                             input_answers: &input_answers,
+                            installed: &installed,
                         };
                         let mut answer = answered(&request, &guest, job_stopped);
                         if let Some(differ) = observing.filter(|_| request["op"] == "observe") {
@@ -352,7 +375,7 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             client.desktop().id(),
             socket,
             Duration::from_secs(10),
-            Arc::new(Trusting),
+            Arc::new(Trusting(connecting.clone())),
         )
         .with_pairing(records)
         .with_lifecycle(client.lifecycle.clone()),
@@ -374,6 +397,8 @@ pub fn vm_through_keeper(directory: &Path) -> (Client, ScriptedKeeper) {
             serves,
             generation,
             input_answers,
+            installed,
+            connecting,
             serving,
         },
     )
@@ -581,6 +606,8 @@ struct Guest<'a> {
     /// What its keeper answers a change to its input service of each
     /// operation in place of its own answer.
     input_answers: &'a [(&'static str, Value)],
+    /// The apps installed, by name.
+    installed: &'a [&'static str],
 }
 
 impl Guest<'_> {
@@ -673,14 +700,14 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
         Some("read") if request["request"]["op"] == "copies" => {
             json!({"ok": true, "op": "copies", "copies": [], "next": null, "unknown": []})
         }
-        // A fresh VM: none of the apps asked after is installed.
+        // A fresh VM has none of the apps asked after installed.
         Some("read") if request["request"]["op"] == "installed" => {
             let installed: serde_json::Map<String, Value> = request["request"]["names"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(Value::as_str)
-                .map(|name| (name.to_owned(), json!(false)))
+                .map(|name| (name.to_owned(), json!(guest.installed.contains(&name))))
                 .collect();
             json!({"ok": true, "op": "installed", "installed": installed})
         }
@@ -732,6 +759,10 @@ fn answered(request: &Value, guest: &Guest<'_>, job_stopped: bool) -> Value {
                 Some("acquire" | "renew") => json!({"ok": true}),
                 Some("input") => inputted(&request["request"]),
                 Some("release") => json!({"ok": true, "released": true}),
+                // A page opens as a command runs, and ends as one.
+                Some("person-open") => json!({"ok": true, "exitCode": 0, "timedOut": false,
+                    "signal": null, "truncated": false, "events": [{"event": "started",
+                        "pid": 654}]}),
                 _ => json!({"ok": false, "code": "bad-request", "error": "Not scripted."}),
             }
         }

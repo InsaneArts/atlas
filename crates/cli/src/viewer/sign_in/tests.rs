@@ -366,7 +366,7 @@ async fn forgetting_opens_the_sites_data_in_settings_and_removes_nothing_on_done
     let (viewer, helper) = viewer_of(directory.path());
     let steps = Mutex::new(Vec::new());
     let home = Some(directory.path().join("home"));
-    super::super::accounts::add_signed_in(&home, "github.com", "com.google.Chrome").unwrap();
+    super::super::accounts::add_signed_in(&home, "github.com", "com.google.Chrome", None).unwrap();
 
     let reply = started(&viewer, &helper, &steps, HoldKind::Forget, Fails::Nothing)
         .await
@@ -817,25 +817,4 @@ async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_se
     assert_eq!(&*frame.png, b"the first helper");
     moved.controller.end_private().unwrap();
     lease.release();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sign_in_on_a_vm_is_still_refused_before_any_app_is_looked_for() {
-    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let (client, keeper) = atlas_client::test_support::vm_through_keeper(directory.path());
-    let unreachable = client.unreachable();
-    let viewer = http::configured(client, "127.0.0.1:1".to_owned(), None);
-
-    let refused = viewer
-        .sign_in_start(HoldKind::SignIn, &json!({"site": "github.com"}))
-        .await
-        .unwrap_err();
-
-    assert_eq!(refused.code, unreachable.code, "{refused:?}");
-    assert_eq!(refused.error, unreachable.error);
-    assert!(
-        keeper.asked.lock().unwrap().is_empty(),
-        "nothing is asked of it"
-    );
-    nothing_left(&viewer).await;
 }

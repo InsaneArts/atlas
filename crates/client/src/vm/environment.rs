@@ -201,7 +201,7 @@ async fn freeze(client: &Client, chosen: Vec<Chosen>, apply_now: bool) -> Result
             Source::Made(_) => None,
         })
         .collect();
-    crate::credential_files::refuse(given.iter().copied())?;
+    crate::credential_files::refuse_into_vm(given.iter().copied(), &client.selected.name)?;
     for path in given {
         atlas_core::own_folder::refuse(path)?;
     }
@@ -243,7 +243,7 @@ async fn previewing(
     for (index, file) in chosen.into_iter().enumerate() {
         let bytes = match file.source {
             Source::Made(bytes) => bytes,
-            Source::Path(given) => read_source(&given)?,
+            Source::Path(given) => read_source(&given, &client.selected.name)?,
         };
         total += bytes.len() as u64;
         if total > MAX_FILE {
@@ -300,11 +300,11 @@ async fn previewing(
 }
 
 /// The bytes of the file given at `given`, read once more as given and
-/// where it leads: a link changed, or a file made, since the first check
-/// counts too.
-fn read_source(given: &Path) -> Result<Vec<u8>> {
+/// where it leads, for the VM named `vm`: a link changed, or a file made,
+/// since the first check counts too.
+fn read_source(given: &Path, vm: &str) -> Result<Vec<u8>> {
     let source = fs::canonicalize(given)?;
-    crate::credential_files::refuse([given, source.as_path()])?;
+    crate::credential_files::refuse_into_vm([given, source.as_path()], vm)?;
     atlas_core::own_folder::refuse(&source)?;
     read_limited(&source, MAX_FILE)
 }

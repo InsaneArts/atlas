@@ -7,6 +7,7 @@ use super::{Viewer, unpoisoned};
 use atlas_client::client::Client;
 use atlas_control::{Adopted, HoldKind, PrivateHold};
 use atlas_core::{
+    desktop::Kind,
     error::{Code, Error, Result},
     session::Observation,
 };
@@ -144,6 +145,7 @@ impl Viewer {
                     &self.accounts_home(),
                     &hold.site,
                     browser,
+                    super::accounts::signed_in_on(&client),
                 )?),
                 _ => None,
             },
@@ -197,13 +199,27 @@ fn finishable(hold: Option<&PrivateHold>) -> bool {
 /// answers. When it does not answer so, its input is started again (reset,
 /// or started anew), under the exclusion this service holds for the hold,
 /// and looked at once more. An unknown outcome is never settled here: it
-/// stays pending, and the next control waits for its recovery.
+/// stays pending, and the next control waits for its recovery. On a VM,
+/// nothing the person did there may be left pending: the keeper's recovery
+/// settles what the dead service left, as the guest says it came to.
 ///
 /// # Errors
 ///
-/// Refuses while the helper still does not answer settled, and returns the
-/// failure to start its input.
+/// Refuses while the helper still does not answer settled, or anything is
+/// pending on a VM, and returns the failure to start its input.
 async fn settled(viewer: &Viewer, client: &Client) -> Result<()> {
+    if matches!(client.desktop().kind(), Kind::Vm(_)) {
+        if client.controller.pending()?.is_empty() {
+            return Ok(());
+        }
+        return Err(Error::new(
+            Code::Busy,
+            format!(
+                "{} is still letting go of the sign-in's control; try again in a moment",
+                client.selected.name
+            ),
+        ));
+    }
     if answers_settled(client).await {
         return Ok(());
     }

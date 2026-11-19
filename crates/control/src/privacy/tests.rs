@@ -36,6 +36,7 @@ fn marker_of(controller: &Controller, holder: Instance) {
         holder,
         lease,
         since: now_ms(),
+        let_go: false,
     };
     fs::write(&controller.private, serde_json::to_vec(&marker).unwrap()).unwrap();
 }
@@ -399,4 +400,86 @@ fn a_lease_for_a_sign_in_is_refused_beside_a_running_command() {
     );
     lease.release();
     controller.clear_if(&command).unwrap();
+}
+
+/// The controller of the VM `work`, with its state in `directory`.
+fn of_vm(directory: &Path) -> Controller {
+    let vm = atlas_core::vm::Vm {
+        id: atlas_core::desktop::DesktopId::parse("0123456789abcdef01234567").unwrap(),
+    };
+    Controller::of_at(&atlas_core::desktop::Desktop::from(vm), directory).called("work")
+}
+
+#[test]
+fn a_vms_hold_outlives_its_lease_until_nothing_the_person_did_is_pending() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = of_vm(directory.path());
+    let mut lease = Lease::new(Duration::from_secs(10));
+    let token = lease.acquire_beside(&controller, Beside::Nothing).unwrap();
+    lease.hide_screen(&controller, &token, &github()).unwrap();
+    let release = controller.quarantine().unwrap();
+    assert!(
+        !controller.end_private_once_let_go().unwrap(),
+        "never while its lease lives"
+    );
+
+    lease.release();
+    let hidden_still = controller.screen_visible().unwrap_err();
+    assert!(
+        !controller.end_private_once_let_go().unwrap(),
+        "never while the person's release is pending"
+    );
+    let still = controller.screen_visible().unwrap_err();
+    controller.clear_if(&release).unwrap();
+    drop(release);
+    let ended = controller.end_private_once_let_go().unwrap();
+
+    for refused in [&hidden_still, &still] {
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(Holder::Person));
+        assert_eq!(
+            refused.error,
+            "The person is managing an account in work; the screen is hidden until they finish."
+        );
+    }
+    assert_eq!(controller.private_hold(), None, "no sign-in under way");
+    assert_eq!(controller.interrupted_hold(), None);
+    assert!(ended);
+    assert!(controller.screen_visible().is_ok());
+}
+
+#[test]
+fn a_vms_hold_whose_holder_died_is_interrupted_in_the_vms_words() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = of_vm(directory.path());
+
+    controller.interrupt_for_test(&github());
+
+    let refused = controller.screen_visible().unwrap_err();
+    assert_eq!(
+        refused.error,
+        "A sign-in in work was interrupted; the screen stays hidden and changes wait until the \
+         person finishes or cancels it in Atlas."
+    );
+    assert!(
+        !controller.end_private_once_let_go().unwrap(),
+        "only the person ends an interrupted one"
+    );
+    assert!(controller.interrupted_hold().is_some());
+}
+
+#[test]
+fn second_logins_hold_never_outlives_its_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let mut lease = Lease::new(Duration::from_secs(10));
+    let token = lease.acquire(&controller).unwrap();
+    lease.hide_screen(&controller, &token, &github()).unwrap();
+
+    let marker = fs::read_to_string(&controller.private).unwrap();
+    lease.release();
+
+    assert!(!marker.contains("letGo"), "{marker}");
+    assert!(controller.screen_visible().is_ok());
+    assert!(!controller.end_private_once_let_go().unwrap());
 }

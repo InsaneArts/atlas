@@ -435,9 +435,10 @@ impl Route {
     }
 
     /// Whether it is the person's alone, which on a VM only the Atlas app
-    /// may ask for: taking, renewing, using and giving back control, and
-    /// recovery and cleanup. A VM is never controlled from a terminal, nor
-    /// by anything an agent runs.
+    /// may ask for, the desktop it is for held from before it is judged:
+    /// taking, renewing, using and giving back control, recovery and
+    /// cleanup, and every step of a sign-in. A VM is never controlled from
+    /// a terminal, nor by anything an agent runs.
     fn persons_on_vm(self) -> bool {
         match self {
             Self::Change(
@@ -446,7 +447,14 @@ impl Route {
                 | Change::Renew
                 | Change::Release
                 | Change::Recover
-                | Change::Cleanup,
+                | Change::Cleanup
+                | Change::SignInStart
+                | Change::ForgetStart
+                | Change::ResetStart
+                | Change::SignInRenew
+                | Change::SignInDone
+                | Change::SignInCancel
+                | Change::SignInInterrupted,
             ) => true,
             Self::Service
             | Self::Events
@@ -460,13 +468,6 @@ impl Route {
                 | Change::SetLevel
                 | Change::Answer
                 | Change::EndAllowed
-                | Change::SignInStart
-                | Change::ForgetStart
-                | Change::ResetStart
-                | Change::SignInRenew
-                | Change::SignInDone
-                | Change::SignInCancel
-                | Change::SignInInterrupted
                 | Change::View
                 | Change::Power,
             ) => false,

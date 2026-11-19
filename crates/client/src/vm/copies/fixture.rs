@@ -81,7 +81,7 @@ pub(crate) async fn fixture_copy(
     })?;
     let records = client.output_dir()?.to_owned();
     let owners = Owners::in_records(&records);
-    let (source, held) = snapshot(source).await?;
+    let (source, held) = snapshot(source, name).await?;
     let digest = held.snapshot().digest.clone();
     if let Some(kept) = read(&records) {
         match listed(client, &kept.copy).await? {
