@@ -140,7 +140,7 @@ extension ViewerPresenter {
       return ViewerControlButton(
         title: ViewerWords.recoverButton,
         isEnabled: !session.recovering && !snapshot.running.contains(.recovery),
-        help: ViewerWords.recoverHelp,
+        help: snapshot.noun.recoverHelp,
         event: .askRecover,
         labels: mainLabels
       )

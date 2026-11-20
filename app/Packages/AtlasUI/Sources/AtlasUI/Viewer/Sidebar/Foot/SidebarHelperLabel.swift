@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The helper row's label, laid out as a session's: Atlas's mark with its dot and the title over the line, which takes
 /// the attention colour while it says what the person must do. The words take the row's whole room, so "The helper is
-/// logged out" is never cut; the row lights under the pointer and opens Settings on a click.
+/// logged out" is never cut, but for a small chevron at its end while a click picks the desktop shown; the row lights
+/// under the pointer and opens Settings, or the desktops, on a click.
 struct SidebarHelperLabel: View {
   /// The helper's health.
   let helper: ViewerHelperLine
@@ -13,6 +14,12 @@ struct SidebarHelperLabel: View {
       HelperMark(tone: helper.tone)
         .frame(width: ViewerLayout.sidebarIcon, height: ViewerLayout.sidebarIcon)
       lines
+      if helper.picksDesktop {
+        Image(systemName: SymbolName.popup.rawValue)
+          .font(Typography.font(.footnote, weight: .semibold))
+          .foregroundStyle(Color.textSecondary)
+          .accessibilityHidden(true)
+      }
     }
   }
 

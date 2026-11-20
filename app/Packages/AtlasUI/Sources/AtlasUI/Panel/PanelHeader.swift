@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The panel's header, which leads with the status: its mark and word as the heading, in the word's colour, the line
-/// under them, and ⋯ at the trailing edge. A new word, with its mark, or a new line swaps in place of the old with no
+/// under them, and ⋯ at the trailing edge, with the desktop popup before it while more than one desktop is set up. A new word, with its mark, or a new line swaps in place of the old with no
 /// overlap (``LineSwap``), the old fading out before the new fades in, the same under Reduce Motion. VoiceOver reads the status as one, then the line.
 struct PanelHeader: View {
   /// The helper's status, with its line.
@@ -10,12 +10,14 @@ struct PanelHeader: View {
   let notice: String?
   /// Whether the ⋯ menu is open, which draws its button pressed.
   let isMoreOpen: Bool
+  /// The popup that picks the desktop shown; nil while one desktop is set up.
+  var desktop: PanelDesktopPicker?
   /// Receives what the person does.
   let send: @MainActor (PanelEvent) -> Void
   /// Where ⋯ is in the panel, so its menu opens under it.
   @State private var moreFrame = CGRect.zero
 
-  /// The status's word and line on the leading edge, ⋯ on the trailing one.
+  /// The status's word and line on the leading edge, the desktop popup and ⋯ on the trailing one.
   var body: some View {
     HStack(alignment: .top, spacing: Spacing.sPlus) {
       VStack(alignment: .leading, spacing: Spacing.half) {
@@ -25,6 +27,9 @@ struct PanelHeader: View {
           .animation(PanelLayout.change, value: line)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
+      if let desktop {
+        PanelDesktopButton(picker: desktop, send: send)
+      }
       Button {
         send(.showMore(below: moreFrame))
       } label: {

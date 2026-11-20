@@ -16,10 +16,16 @@ enum PanelPresenter {
   static func state(_ snapshot: PanelSnapshot) -> PanelState {
     let mode = mode(snapshot)
     let reading = StatusReading(snapshot.status)
-    var status = mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting)
-    if let line = sessionLine(reading, mode: mode) { status.line = line }
+    let noun = snapshot.noun
+    var status = mode.panelSummary(
+      reading,
+      paused: snapshot.session.paused,
+      reconnecting: snapshot.reconnecting,
+      noun: noun
+    )
+    if let line = sessionLine(reading, mode: mode, noun: noun) { status.line = line }
     if waitsForYou(snapshot, mode: mode) { status = waitingSummary }
-    let sessions = sessions(reading, mode: mode, now: snapshot.date)
+    let sessions = sessions(reading, mode: mode, now: snapshot.date, noun: noun)
     return PanelState(
       status: status,
       notice: snapshot.session.notice,
@@ -28,6 +34,7 @@ enum PanelPresenter {
       wrongAccount: WrongAccountNote.name(snapshot.status, dismissed: snapshot.wrongAccountDismissed),
       interruptedSignIn: interruptedSignIn(snapshot),
       isMoreOpen: snapshot.session.moreOpen,
+      desktop: desktopPicker(snapshot, mode: mode),
       ask: mode.kind == .connecting
         ? nil
         : AskCards.card(
@@ -96,7 +103,8 @@ enum PanelPresenter {
       // Recover is offered only where it fixes something (``helperMenu``), and the stage says so only then.
       case .notReady:
         .empty(
-          message: snapshot.status.overview.recoveryHelps ? PanelWords.notReadyPicture : PanelWords.notReadyWaitPicture
+          message: snapshot.status.overview.recoveryHelps
+            ? snapshot.noun.notReadyPicture : snapshot.noun.notReadyWaitPicture
         )
       case .connecting: .connecting
       case .control: .control

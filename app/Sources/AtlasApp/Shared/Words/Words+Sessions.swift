@@ -24,16 +24,17 @@ extension Words {
   /// - Parameters:
   ///   - line: What the line says, as AtlasStatus decides it.
   ///   - now: The time now, which an ended session's age counts to.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: "Clicking Show Center in Opie", "Waiting for the helper · 8 s", "Waits until you recover", "A click may
   ///   not have finished", "Last: opened Opie · 4 min ago", "Ended 20 min ago", "Last seen 2 h ago", or empty.
-  static func sessionLine(_ line: SessionLine, now: Date) -> String {
+  static func sessionLine(_ line: SessionLine, now: Date, noun: DesktopNoun = .helper) -> String {
     switch line {
     case .acting(let says):
-      guard let says, !says.isEmpty else { return "Has the helper" }
+      guard let says, !says.isEmpty else { return noun.hasLine }
       return leadingCapital(says)
     case .waitingForHelper(let seconds):
-      guard let seconds, seconds >= 1 else { return "Waiting for the helper" }
-      return "Waiting for the helper · \(shortAgo(seconds))"
+      guard let seconds, seconds >= 1 else { return noun.waitingLine }
+      return "\(noun.waitingLine) · \(shortAgo(seconds))"
     case .waitingForRecovery:
       return "Waits until you recover"
     case .mayNotHaveFinished(let verb):

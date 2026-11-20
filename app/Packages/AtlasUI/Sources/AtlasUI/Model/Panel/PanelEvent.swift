@@ -62,4 +62,12 @@ public enum PanelEvent: Equatable, Sendable {
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.
   case showMore(below: CGRect)
+  /// The desktop popup beside ⋯: open the desktops in a menu under it.
+  ///
+  /// - Parameter below: The popup's frame in the panel, top left first, so the menu opens under it.
+  case showDesktops(below: CGRect)
+  /// A desktop picked from that menu: Atlas shows it from now on.
+  ///
+  /// - Parameter desktop: The desktop's ID.
+  case view(desktop: String)
 }

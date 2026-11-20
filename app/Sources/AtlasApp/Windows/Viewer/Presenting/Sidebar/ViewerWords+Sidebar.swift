@@ -13,9 +13,15 @@ extension ViewerWords {
   ///   - session: The session, as the status lists it.
   ///   - line: Its line, as AtlasStatus decides it.
   ///   - now: The time now.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: "Clicking Show Center in Opie", "Waiting for the helper · 8 s", "A click may not have finished",
   ///   "Opened Opie · 4 min ago" or "Idle · 4 min ago".
-  static func sessionRowLine(_ session: ViewerStatus.HostSession, line: SessionLine, now: Date) -> String {
+  static func sessionRowLine(
+    _ session: ViewerStatus.HostSession,
+    line: SessionLine,
+    now: Date,
+    noun: DesktopNoun = .helper
+  ) -> String {
     switch line {
     case .last(let says, let age):
       let did = Words.leadingCapital(says)
@@ -23,7 +29,7 @@ extension ViewerWords {
     case .none:
       return idle(session.lastSeenAt.map { now.timeIntervalSince($0) })
     case .acting, .waitingForHelper, .waitingForRecovery, .mayNotHaveFinished, .ended, .lastSeen:
-      return Words.sessionLine(line, now: now)
+      return Words.sessionLine(line, now: now, noun: noun)
     }
   }
 

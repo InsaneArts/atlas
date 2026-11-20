@@ -14,7 +14,7 @@ extension ViewerPresenter {
     let reading = snapshot.reading.statusReading
     let facts = reading.facts
     return [
-      Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status)),
+      accountFact(snapshot),
       Fact(name: ViewerWords.stateRow, value: facts.input.word),
       Fact(name: Words.displayFact, value: Words.size(facts.display) ?? Words.unknown),
     ] + readyFacts(reading.readinessItems)
@@ -23,6 +23,17 @@ extension ViewerPresenter {
         Fact(name: ViewerWords.updatesRow, value: updates(snapshot)),
         Fact(name: ViewerWords.newestRow, value: newest(snapshot)),
       ] + login(snapshot)
+  }
+
+  /// Whose desktop it is: the helper's account, or, while a VM is shown, the desktop by its title.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The fact.
+  static func accountFact(_ snapshot: ViewerSnapshot) -> Fact {
+    switch snapshot.noun {
+    case .helper: Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status))
+    case .vm(let title): Fact(name: ViewerWords.desktopRow, value: title)
+    }
   }
 
   /// Whether the helper is ready to act: one fact, "Ready to act" with "All checks pass", while every check passes;

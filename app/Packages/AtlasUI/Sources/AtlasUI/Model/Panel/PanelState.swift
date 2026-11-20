@@ -18,6 +18,8 @@ public struct PanelState: Equatable, Sendable {
   public var interruptedSignIn: PanelInterruptedSignIn?
   /// Whether the ⋯ menu is open, which draws its button in the header pressed.
   public var isMoreOpen: Bool
+  /// The popup beside ⋯ that picks the desktop the panel shows, while more than one is set up; nil hides it.
+  public var desktop: PanelDesktopPicker?
   /// The question Atlas asks the person now, at the top of the panel's content, oldest first; nil for none.
   public var ask: AskCardState?
   /// What the person allowed for a task, while it holds.
@@ -54,6 +56,7 @@ public struct PanelState: Equatable, Sendable {
   ///   - wrongAccount: The other account macOS names at the screen; nil hides the note.
   ///   - interruptedSignIn: A sign-in Atlas was holding when it stopped; nil hides the note.
   ///   - isMoreOpen: Whether the ⋯ menu is open.
+  ///   - desktop: The popup that picks the desktop shown; none by default.
   ///   - ask: The question Atlas asks the person now; none by default.
   ///   - allowed: What the person allowed for a task; nothing by default.
   ///   - picture: The helper's screen and how it looks, or why there is none.
@@ -71,6 +74,7 @@ public struct PanelState: Equatable, Sendable {
     wrongAccount: String? = nil,
     interruptedSignIn: PanelInterruptedSignIn? = nil,
     isMoreOpen: Bool = false,
+    desktop: PanelDesktopPicker? = nil,
     ask: AskCardState? = nil,
     allowed: [AllowedRowState] = [],
     picture: PanelPictureState,
@@ -88,6 +92,7 @@ public struct PanelState: Equatable, Sendable {
     self.wrongAccount = wrongAccount
     self.interruptedSignIn = interruptedSignIn
     self.isMoreOpen = isMoreOpen
+    self.desktop = desktop
     self.ask = ask
     self.allowed = allowed
     self.picture = picture

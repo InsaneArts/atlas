@@ -50,19 +50,6 @@ extension SettingsWords {
   /// What a maintenance or a removal waits on while it runs.
   static let approving = "Allow it in the approval window to go on."
 
-  /// The title of `entry`: "Second Login", "VM" for `vm`, "VM 2" for `vm-2`, else its name.
-  ///
-  /// - Parameter entry: A desktop the service serves.
-  /// - Returns: Its title.
-  static func title(of entry: DesktopList.Entry) -> String {
-    switch DesktopTitle.of(entry) {
-    case .secondLogin: "Second Login"
-    case .numberedVM(1): "VM"
-    case .numberedVM(let number): "VM \(number)"
-    case .named(let name): name
-    }
-  }
-
   /// What a desktop is, with how it stands after it when there is a word for it.
   ///
   /// - Parameters:
@@ -71,25 +58,9 @@ extension SettingsWords {
   /// - Returns: "A virtual Mac on this Mac · Running", or "A hidden second login on this Mac".
   static func detail(of entry: DesktopList.Entry, standing: DesktopStanding) -> String {
     guard entry.kind == .vm else { return secondLoginDetail }
-    return [vmDetail, word(standing)]
+    return [vmDetail, Words.standing(standing)]
       .compactMap { $0 }
       .joined(separator: " · ")
-  }
-
-  /// How a VM stands, in a word, after what it is; nil while there is nothing to say.
-  ///
-  /// - Parameter standing: How it stands.
-  /// - Returns: "Running", "Starting…", "Stopping…", "Stopped", "In maintenance", "Needs setup", or nil.
-  static func word(_ standing: DesktopStanding) -> String? {
-    switch standing {
-    case .running: "Running"
-    case .starting: "Starting…"
-    case .stopping: "Stopping…"
-    case .stopped: "Stopped"
-    case .maintenance: "In maintenance"
-    case .needsSetup: helperNeedsSetup
-    case .ready, .unknown: nil
-    }
   }
 
   /// A VM's power, as its power row's title.

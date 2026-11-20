@@ -114,7 +114,7 @@ enum PanelRender {
     canvas.addSubview(fill(strip, .underPageBackgroundColor))
     // The menu bar item at its own size, centred in the strip as the menu bar does.
     let item = MenuBarRender.item(
-      PanelPresenter.mode(snapshot).kind,
+      PanelPresenter.urgent(snapshot).kind,
       icon: .orbit,
       appearance: appearance ?? NSAppearance.currentDrawing()
     )

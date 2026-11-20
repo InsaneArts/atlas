@@ -40,6 +40,7 @@
       }
       return [
         "Sessions": shown(working),
+        "Two desktops": shown(working) { snapshot in snapshot.desktops = DesktopLists.two(shown: "work") },
         "Sessions, one ended": shown(working) { snapshot in
           snapshot.date = Self.activityReadAt
           snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])

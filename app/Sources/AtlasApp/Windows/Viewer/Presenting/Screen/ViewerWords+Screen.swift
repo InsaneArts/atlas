@@ -26,10 +26,12 @@ extension ViewerWords {
 
   /// Why the helper is not ready, falling back to the unanswered helper when no reason is given.
   ///
-  /// - Parameter reason: The service's reason, if any.
+  /// - Parameters:
+  ///   - reason: The service's reason, if any.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The reason, or the default headline.
-  static func notReadyLine(_ reason: String?) -> String {
-    guard let reason, !reason.isEmpty else { return notReadyHeadline }
+  static func notReadyLine(_ reason: String?, noun: DesktopNoun = .helper) -> String {
+    guard let reason, !reason.isEmpty else { return noun.notReadyHeadline }
     return reason
   }
 }

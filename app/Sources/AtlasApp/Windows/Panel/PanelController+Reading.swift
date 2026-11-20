@@ -113,16 +113,21 @@ extension PanelController {
     listedHelper = accounts.helper
   }
 
-  /// Reads the status. A reading that was cancelled, or overtaken by a newer one, shows nothing, and so does a status
-  /// the service refused to give (it was busy, say): the last one stands rather than reading as unavailable.
+  /// Reads the desktops, then the status. A reading that was cancelled, or overtaken by a newer one, shows nothing, and
+  /// so does a status the service refused to give (it was busy, say), or one of the desktop shown before another was:
+  /// the last one stands rather than reading as unavailable.
   func readStatus() async {
     statusReading += 1
     let number = statusReading
+    await readDesktops()
+    guard number == statusReading, !Task.isCancelled else { return }
     let latest: ViewerStatus?
     let soundAsked = actions.sound.generation
     do {
       latest = try await service.status()
     } catch is StatusRefused {
+      return
+    } catch let error as ServiceError where error.isOtherDesktop {
       return
     } catch {
       latest = nil

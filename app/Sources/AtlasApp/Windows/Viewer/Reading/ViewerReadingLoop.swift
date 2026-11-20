@@ -173,7 +173,8 @@ final class ViewerReadingLoop {
 
   /// The status, then a picture unless paused. A reading overtaken by a newer one, or by
   /// a pause or close, has no effect at all, failures included, and so has a
-  /// status the service refused to give (it was busy, say): what shows stays.
+  /// status the service refused to give (it was busy, say), or a reply of the
+  /// desktop shown before another was: what shows stays.
   ///
   /// - Parameters:
   ///   - number: The loop's generation.
@@ -214,6 +215,8 @@ final class ViewerReadingLoop {
       guard let decoded else { throw ServiceError.unknownScreenSize }
       show(next, decoded: decoded, ready: reply.ready)
     } catch is StatusRefused {
+      return
+    } catch let error as ServiceError where error.isOtherDesktop {
       return
     } catch {
       if current() && !paused { lost(error) }
@@ -397,6 +400,21 @@ final class ViewerReadingLoop {
     waiting?.cancel()
     waiting = nil
     if shown.waitedLong { shown.waitedLong = false }
+  }
+
+  /// Another desktop is shown now: a reading under way is overtaken, the picture, its frame and the last one drawn go,
+  /// as they are the desktop's shown before, control is suspended, and the window waits for the new one's picture.
+  func forgetDesktop() {
+    statusReading += 1
+    setFrame(nil)
+    newestPicture = nil
+    newestSize = nil
+    newestAt = nil
+    if shown.picture != nil { shown.picture = nil }
+    if shown.lastPicture != nil { shown.lastPicture = nil }
+    if shown.ready { shown.ready = false }
+    viewer?.control.suspend()
+    awaitPicture()
   }
 
   /// Resuming the picture reads afresh: the last picture is not one to aim at, nor is the helper known to take input,

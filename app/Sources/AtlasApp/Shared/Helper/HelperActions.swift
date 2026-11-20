@@ -20,6 +20,8 @@ final class HelperActions {
     case switchToHelper
     /// Log the helper out.
     case logOut
+    /// Show another desktop: this app's control there ends first.
+    case view
   }
 
   /// The commands running now, from the moment they are asked until their command ends.
@@ -35,6 +37,8 @@ final class HelperActions {
   let sound: HelperSoundSwitch
   /// The questions Atlas asks the person before an agent sends, and what they allowed, as every window shows them.
   let asks: AskStore
+  /// The desktops the service serves and the one shown, as every window lists them.
+  let desktops: DesktopStore
   /// The `atlas` command line each command runs.
   @ObservationIgnored private let commands: any CommandRunning
   /// The viewer service, which ends every viewer's control before a log-out from a controlled helper.
@@ -71,6 +75,7 @@ final class HelperActions {
     self.endControl = endControl
     sound = HelperSoundSwitch(commands: commands)
     self.asks = asks ?? AskStore(service: service)
+    desktops = DesktopStore(service: service)
   }
 
   /// Whether a command runs now, from any window: control is not taken meanwhile.
@@ -164,6 +169,24 @@ final class HelperActions {
       }
     }
     return await commands.run(.logOut(force: force))
+  }
+
+  /// Shows another desktop in every window: once this app's control is given back and every release answered, the
+  /// service shows it from then on, and the desktops are read again. One at a time, whichever window asked.
+  ///
+  /// - Parameter desktop: The desktop's ID.
+  /// - Returns: Why it is not shown, a refused release included; nil once it is, or while another pick runs.
+  func view(_ desktop: String) async -> String? {
+    guard begin(.view) else { return nil }
+    defer { running.remove(.view) }
+    if let refused = await freeHelper(.view) { return refused }
+    do {
+      try await service.view(desktop)
+    } catch {
+      return error.localizedDescription
+    }
+    await desktops.read()
+    return nil
   }
 
   /// Stops agents, ending an agent's input under way, or lets them go on, counted from any window until the service

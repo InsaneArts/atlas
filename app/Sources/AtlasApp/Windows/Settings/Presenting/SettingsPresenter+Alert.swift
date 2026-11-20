@@ -121,6 +121,6 @@ extension SettingsPresenter {
   static func vmTitle(_ id: String, _ snapshot: SettingsSnapshot) -> String {
     snapshot.desktops?.desktops
       .first { $0.id == id }
-      .map(SettingsWords.title(of:)) ?? "this VM"
+      .map(Words.title(of:)) ?? "this VM"
   }
 }

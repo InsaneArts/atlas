@@ -79,6 +79,8 @@ final class PanelController {
   @ObservationIgnored var statusReading = 0
   /// Numbers each picture reading, under the same rule.
   @ObservationIgnored var frameReading = 0
+  /// How many moves of the desktop shown the panel has followed (``DesktopStore/moves``).
+  @ObservationIgnored var desktopMoves = 0
   /// The newest Open at Login the person asked for and no change has taken up yet.
   @ObservationIgnored var wantedAtLogin: Bool?
   /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
@@ -124,7 +126,8 @@ final class PanelController {
       idleNoteDismissed: idleNoteDismissed,
       wrongAccountDismissed: wrongAccountDismissed,
       asks: actions.asks.list,
-      askPictures: actions.asks.pictures
+      askPictures: actions.asks.pictures,
+      desktops: actions.desktops.list
     )
   }
 
@@ -160,8 +163,9 @@ final class PanelController {
     )
   }
 
-  /// What the menu bar glyph shows: the helper's mode, or, while a question waits, Needs you's badge saying Waiting
-  /// for you, so the question is not missed whether or not a notification told of it.
+  /// What the menu bar glyph shows: the most urgent state of every desktop, the helper's mode alone while one is set
+  /// up, or, while a question waits, Needs you's badge saying Waiting for you, so the question is not missed whether
+  /// or not a notification told of it.
   var glyph: PanelGlyph {
     let mode = mode
     let store = actions.asks
@@ -169,10 +173,19 @@ final class PanelController {
       PanelSnapshot(status: status, date: wallClock(), asks: store.list),
       mode: mode
     )
-    return waits ? PanelGlyph(kind: .needsYou, word: AskWords.waiting) : PanelGlyph(kind: mode.kind, word: mode.word)
+    guard !waits else { return PanelGlyph(kind: .needsYou, word: AskWords.waiting) }
+    let urgent = PanelPresenter.urgent(
+      PanelSnapshot(
+        status: status,
+        connecting: connecting,
+        holdingControl: links.holdingControl(),
+        desktops: actions.desktops.list
+      )
+    )
+    return PanelGlyph(kind: urgent.kind, word: urgent.word)
   }
 
-  /// Applies one of the panel's events. ⋯ is opened by the panel's shell, which builds its menu.
+  /// Applies one of the panel's events. ⋯ and the desktops' menu are opened by the panel's shell, which builds them.
   ///
   /// - Parameter event: What the person did.
   func send(_ event: PanelEvent) {
@@ -203,7 +216,8 @@ final class PanelController {
     case .lockForWrongAccount: Task { await lockForWrongAccount() }
     case .finishInterruptedSignIn(let id): Task { await settleInterruptedSignIn(id: id, done: true) }
     case .cancelInterruptedSignIn(let id): Task { await settleInterruptedSignIn(id: id, done: false) }
-    case .showMore: break
+    case .view(let desktop): Task { await view(desktop) }
+    case .showMore, .showDesktops: break
     }
   }
 

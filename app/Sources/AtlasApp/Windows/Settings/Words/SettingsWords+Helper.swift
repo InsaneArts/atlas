@@ -10,7 +10,7 @@ extension SettingsWords {
   /// The Helper row's line while the helper needs recovering.
   static let helperNeedsYou = "Needs you"
   /// The Helper row's line while a readiness check fails.
-  static let helperNeedsSetup = "Needs setup"
+  static let helperNeedsSetup = Words.needsSetup
   /// The Helper row's line while the helper can act.
   static let helperReady = "Ready"
 

@@ -45,6 +45,7 @@ enum AtlasApp {
         drawPreviews(dark: dark) { appearance in
           ViewerRender.draw(to: folder, appearance: appearance)
             && ComponentRender.draw(to: folder + "/components", appearance: appearance)
+            && PanelRender.drawDesktops(to: folder, appearance: appearance)
         }
       case .renderSettings(let folder, let dark):
         drawPreviews(dark: dark) { appearance in SettingsRender.draw(to: folder, appearance: appearance) }

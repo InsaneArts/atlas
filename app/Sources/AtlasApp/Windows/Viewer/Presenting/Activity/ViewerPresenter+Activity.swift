@@ -54,7 +54,7 @@ extension ViewerPresenter {
       filters: activityFilters(facts.filter, counts: counts),
       days: days,
       empty: days.isEmpty && readForScope
-        ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
+        ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil, noun: snapshot.noun) : nil,
       query: query,
       showsFilters: !moments.moments.isEmpty,
       sheet: pictureSheet(moments, snapshot),
@@ -125,22 +125,24 @@ extension ViewerPresenter {
   ///   - facts: The pane's filter.
   ///   - query: The sidebar's search.
   ///   - chosen: Whether one session is chosen.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The message.
   static func activityEmpty(
     _ log: ActivityLog,
     _ moments: ActivityMoments,
     _ facts: ViewerActivityFacts,
     query: String,
-    chosen: Bool
+    chosen: Bool,
+    noun: DesktopNoun = .helper
   ) -> EmptyMessageState {
     if moments.moments.isEmpty, chosen {
       if log.cleared {
         return EmptyMessageState(headline: ViewerWords.stepsCleared, message: ViewerWords.stepsClearedMessage)
       }
-      return EmptyMessageState(headline: ViewerWords.noActivity, message: ViewerWords.noSessionActivityMessage)
+      return EmptyMessageState(headline: ViewerWords.noActivity, message: noun.noSessionActivityMessage)
     }
     if log.entries.isEmpty {
-      return EmptyMessageState(headline: ViewerWords.noActivity, message: ViewerWords.noActivityMessage)
+      return EmptyMessageState(headline: ViewerWords.noActivity, message: noun.noActivityMessage)
     }
     if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return EmptyMessageState(

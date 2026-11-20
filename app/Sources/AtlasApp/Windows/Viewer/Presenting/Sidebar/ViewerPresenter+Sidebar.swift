@@ -133,7 +133,12 @@ extension ViewerPresenter {
     let (_, agent, project, _) = sessionHead(.session(session.key), snapshot)
     let line =
       isBusy(session)
-      ? ViewerWords.sessionRowLine(session, line: snapshot.reading.statusReading.line(of: session), now: snapshot.date)
+      ? ViewerWords.sessionRowLine(
+        session,
+        line: snapshot.reading.statusReading.line(of: session),
+        now: snapshot.date,
+        noun: snapshot.noun
+      )
       : quietLine(agent: agent, project: project, started: session.startedAt, snapshot)
     let record = snapshot.panes.sessions.record(session.key)
     return row(

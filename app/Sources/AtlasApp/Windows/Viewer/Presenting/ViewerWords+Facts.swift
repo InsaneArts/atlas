@@ -5,6 +5,8 @@ import AtlasUI
 extension ViewerWords {
   /// The account fact's name.
   static let accountRow = "Account"
+  /// The desktop's fact while a VM is shown.
+  static let desktopRow = "Desktop"
   /// The state fact's name.
   static let stateRow = "State"
   /// How often the picture updates, as its fact's name.

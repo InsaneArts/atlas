@@ -72,6 +72,7 @@
         sample("79-activity-allowed", PreviewStates.viewerActivityAllowed),
         sample("80-activity-allowed-mixed", PreviewStates.viewerActivityAllowedMixed),
         sample("81-sidebar-ended-rows", PreviewStates.viewerSidebarEndedRows),
+        sample("82-two-desktops", PreviewStates.viewerTwoDesktops),
       ]
     }
 

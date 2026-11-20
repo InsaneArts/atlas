@@ -40,6 +40,8 @@ final class ViewerController {
   @ObservationIgnored private let announcer = StatusAnnouncer()
   /// The window's state as its view last drew it (``drawnState()``), which a tick of the clock is compared with.
   @ObservationIgnored private var drawn: ViewerState?
+  /// How many moves of the desktop shown the window has followed (``DesktopStore/moves``).
+  @ObservationIgnored var desktopMoves: Int
   /// Counts the ticks of the clock that changed what the window shows. Observed, and read as the window draws, so
   /// only such a tick presents it again (``clockMoved()``).
   private var clockTurns = 0
@@ -49,6 +51,8 @@ final class ViewerController {
   /// - Parameter dependencies: What it reaches outside itself; a saved rate the window does not offer reads as Live.
   init(dependencies: ViewerDependencies) {
     self.dependencies = dependencies
+    // A window follows only the moves made once it is open.
+    desktopMoves = dependencies.actions.desktops.moves
     // Made now, so the saved rate is read as the window is made.
     _ = readingLoop
     session.sidebarHidden = dependencies.preferences.loadSidebarHidden()
@@ -77,7 +81,8 @@ final class ViewerController {
       loggedInAt: helperFacts.loggedInAt,
       panes: panesModel.panes,
       date: dependencies.wallClock(),
-      asks: actions.asks.list
+      asks: actions.asks.list,
+      desktops: actions.desktops.list
     )
   }
 
@@ -158,6 +163,9 @@ final class ViewerController {
     case .search(let query): search(query)
     case .closeSearch: closeSearch()
     case .openSettings: dependencies.openSettings()
+    case .view(let desktop): Task { await view(desktop) }
+    // The window's shell opens the desktops' menu over the row.
+    case .showDesktops: break
     case .askRecover: ask(.helper(.recover))
     case .askSwitch: ask(.helper(.switchToHelper))
     case .askLogOut: ask(.helper(.logOut))
@@ -263,7 +271,11 @@ final class ViewerController {
   func setStopped(_ stopped: Bool) async {
     do {
       let outcome = try await actions.setStopped(stopped)
-      say(stopped ? HelperWords.stopped(outcome) : ViewerWords.agentResumed)
+      say(
+        stopped
+          ? HelperWords.stopped(outcome, titles: actions.desktops.titles, noun: snapshot.noun)
+          : ViewerWords.agentResumed
+      )
     } catch {
       say(error.localizedDescription)
     }

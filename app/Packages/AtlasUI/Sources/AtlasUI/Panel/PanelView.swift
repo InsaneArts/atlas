@@ -27,7 +27,13 @@ public struct PanelView: View {
   /// Atlas lists any, then the buttons. A question comes and goes in one move (``AskMotion``).
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
-      PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
+      PanelHeader(
+        status: state.status,
+        notice: state.notice,
+        isMoreOpen: state.isMoreOpen,
+        desktop: state.desktop,
+        send: send
+      )
       if state.showsServiceNote {
         PanelServiceNote(send: send)
       }

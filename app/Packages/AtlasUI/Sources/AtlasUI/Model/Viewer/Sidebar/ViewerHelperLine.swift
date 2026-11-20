@@ -1,6 +1,7 @@
 /// The helper's health at the sidebar's foot, drawn as one of its rows: Atlas's mark with a dot in its tone, a title
 /// over a line, such as "Atlas is ready" over "Helper atlas · 1440 × 900", and the menu a click opens, every fact
-/// about the helper and then its commands.
+/// about the helper and then its commands. While more than one desktop is set up it ends with a chevron, and a click
+/// opens the desktops to pick the one Atlas shows instead.
 public struct ViewerHelperLine: Equatable, Sendable {
   /// The dot's tone: ready while the helper can act, attention while it needs the person or setup, quiet while the
   /// window connects, which also dims the mark.
@@ -14,6 +15,12 @@ public struct ViewerHelperLine: Equatable, Sendable {
   /// The menu a click opens: the helper's facts, then Check Again, Open Settings on Helper…, Recover…, Switch… and
   /// Log Out…; none opens no menu.
   public var menu: [ViewerMenuSection]
+  /// The desktops a click picks between, the one shown checked; none while one desktop is set up, when a click opens
+  /// Settings as it always has.
+  public var desktops: [DesktopItem]
+
+  /// Whether a click opens the desktops, which the chevron at its end says.
+  public var picksDesktop: Bool { !desktops.isEmpty }
 
   /// Creates the helper's row.
   ///
@@ -22,18 +29,21 @@ public struct ViewerHelperLine: Equatable, Sendable {
   ///   - title: The title.
   ///   - line: The line under it.
   ///   - lineTone: The line's tone; quiet by default.
-  ///   - menu: The menu a click opens; none by default.
+  ///   - menu: The menu a right-click opens; none by default.
+  ///   - desktops: The desktops a click picks between; none by default.
   public init(
     tone: StatusTone,
     title: String,
     line: String,
     lineTone: StatusTone = .quiet,
-    menu: [ViewerMenuSection] = []
+    menu: [ViewerMenuSection] = [],
+    desktops: [DesktopItem] = []
   ) {
     self.tone = tone
     self.title = title
     self.line = line
     self.lineTone = lineTone
     self.menu = menu
+    self.desktops = desktops
   }
 }

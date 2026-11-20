@@ -34,7 +34,7 @@ extension SettingsPresenter {
       }
     return SettingsVMState(
       id: entry.id,
-      title: SettingsWords.title(of: entry),
+      title: Words.title(of: entry),
       line: SettingsWords.vmLine(display: Words.size(entry.facts?.display)),
       tone: tone(DesktopStanding.of(entry)),
       sections: sections,

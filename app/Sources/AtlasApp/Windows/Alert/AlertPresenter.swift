@@ -14,7 +14,8 @@ enum AlertPresenter {
       overview: snapshot.overview,
       progress: .of(running: snapshot.running, failure: snapshot.failure, done: snapshot.done),
       askedByPerson: true,
-      onConsole: snapshot.isOnConsole
+      onConsole: snapshot.isOnConsole,
+      noun: snapshot.noun
     )
   }
 }

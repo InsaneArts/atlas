@@ -67,18 +67,19 @@ extension ViewerPresenter {
     }
     if snapshot.session.paused {
       return ViewerEmpty(
-        message: EmptyMessageState(headline: ViewerWords.pausedHeadline, message: ViewerWords.pausedMessage)
+        message: EmptyMessageState(headline: ViewerWords.pausedHeadline, message: snapshot.noun.pausedMessage)
       )
     }
     if snapshot.mode.kind == .connecting {
-      return connecting(snapshot.reading)
+      return connecting(snapshot.reading, noun: snapshot.noun)
     }
     let recoveryHelps = snapshot.reading.status.overview.recoveryHelps
     return ViewerEmpty(
       message: EmptyMessageState(
         headline: recoveryHelps
-          ? ViewerWords.notReadyHeadline : ViewerWords.notReadyLine(snapshot.reading.status.overview.reason),
-        message: recoveryHelps ? ViewerWords.notReadyMessage : ViewerWords.notReadyWaitMessage,
+          ? snapshot.noun.notReadyHeadline
+          : ViewerWords.notReadyLine(snapshot.reading.status.overview.reason, noun: snapshot.noun),
+        message: recoveryHelps ? snapshot.noun.notReadyMessage : snapshot.noun.notReadyWaitMessage,
         action: EmptyMessageAction(
           title: recoveryHelps ? ViewerWords.recoverButton : ViewerWords.openSettings,
           isPrimary: true
@@ -93,13 +94,15 @@ extension ViewerPresenter {
   /// kept behind the words with Reconnecting…. The ring round the mark shows once the window has waited a
   /// moment.
   ///
-  /// - Parameter reading: What the last reading showed.
+  /// - Parameters:
+  ///   - reading: What the last reading showed.
+  ///   - noun: How the desktop shown is named.
   /// - Returns: The message, the last picture and the ring.
-  static func connecting(_ reading: ViewerReading) -> ViewerEmpty {
+  static func connecting(_ reading: ViewerReading, noun: DesktopNoun) -> ViewerEmpty {
     let again = reading.lastPicture != nil
     return ViewerEmpty(
       message: EmptyMessageState(
-        headline: again ? ViewerWords.reconnectingHeadline : ViewerWords.connectingHeadline,
+        headline: again ? ViewerWords.reconnectingHeadline : noun.connectingHeadline,
         message: again ? "" : ViewerWords.connectingMessage
       ),
       lastPicture: reading.lastPicture,

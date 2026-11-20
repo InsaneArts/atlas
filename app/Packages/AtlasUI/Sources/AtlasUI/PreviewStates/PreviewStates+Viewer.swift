@@ -61,6 +61,7 @@
         PreviewState(name: "Sidebar, Ended folded", value: viewerSidebarEndedFolded),
         PreviewState(name: "Sidebar, search open", value: viewerSidebarSearch),
         PreviewState(name: "Sidebar hidden", value: viewerSidebarHidden),
+        PreviewState(name: "Two desktops", value: viewerTwoDesktops),
       ]
     }
 
@@ -210,6 +211,7 @@
         PreviewState(name: "Needs you", value: viewerHelperNeedsYou(alertUp: false)),
         PreviewState(name: "Logged out", value: viewerLoggedOut.sidebar.helper),
         PreviewState(name: "Connecting", value: viewerConnecting.sidebar.helper),
+        PreviewState(name: "Two desktops", value: viewerTwoDesktops.sidebar.helper),
       ]
     }
 

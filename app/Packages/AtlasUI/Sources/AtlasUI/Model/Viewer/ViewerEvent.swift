@@ -1,3 +1,5 @@
+import CoreGraphics
+
 /// What the person did in the main window.
 public enum ViewerEvent: Equatable, Sendable {
   /// A place picked, from the View menu, or the mini screen pressed for the Screen.
@@ -38,6 +40,14 @@ public enum ViewerEvent: Equatable, Sendable {
   case closeSearch
   /// Open Settings on Helper to see what the helper needs.
   case openSettings
+  /// The sidebar's foot row clicked while more than one desktop is set up: the desktops open in a menu over it.
+  ///
+  /// - Parameter from: The row's frame in the window, top left first, so the menu opens over it.
+  case showDesktops(from: CGRect)
+  /// A desktop picked from that menu: Atlas shows it from now on.
+  ///
+  /// - Parameter desktop: The desktop's ID.
+  case view(desktop: String)
   /// Recover…: ask before recovering the helper.
   case askRecover
   /// Switch to the Helper…: ask before switching this Mac's screen to the helper.

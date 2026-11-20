@@ -44,16 +44,22 @@ extension ViewerPresenter {
     let overview = snapshot.reading.status.overview
     return switch kind {
     case .helper(let alert):
-      alert.state(overview: overview, progress: progress, askedByPerson: askedByPerson, onConsole: snapshot.isOnConsole)
+      alert.state(
+        overview: overview,
+        progress: progress,
+        askedByPerson: askedByPerson,
+        onConsole: snapshot.isOnConsole,
+        noun: snapshot.noun
+      )
     case .restart:
       HelperAlert.destructive(
-        ViewerWords.restartTitle,
-        ViewerWords.restartMessage,
+        snapshot.noun.restartTitle,
+        snapshot.noun.restartMessage,
         ViewerWords.restartButton,
         phase: progress.phase(
           running: ViewerWords.restarting,
-          done: ViewerWords.restartTitle,
-          doneMessage: ViewerWords.restartMessage
+          done: snapshot.noun.restartTitle,
+          doneMessage: snapshot.noun.restartMessage
         )
       )
     case .signedIn(let site, let browser, let added):

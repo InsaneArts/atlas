@@ -23,21 +23,7 @@ struct PopupButton<Value: Hashable & Sendable>: View {
       .pickerStyle(.inline)
       .labelsHidden()
     } label: {
-      HStack(spacing: Spacing.xsPlus) {
-        Text(options.title(of: selection))
-          .font(Typography.font(.callout))
-        Image(systemName: SymbolName.popup.rawValue)
-          .font(Typography.font(.footnote, weight: .semibold))
-          .accessibilityHidden(true)
-      }
-      .foregroundStyle(Color.textPrimary)
-      .padding(.horizontal, Spacing.sPlus)
-      .frame(height: ControlHeight.xs)
-      .background(
-        Capsule()
-          .fill(Color.fillControl)
-      )
-      .contentShape(Capsule())
+      PopupButtonLabel(title: options.title(of: selection))
     }
     .menuStyle(.button)
     .buttonStyle(.plain)

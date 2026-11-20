@@ -12,7 +12,12 @@ extension PanelController {
     let mode = mode
     switch mode.kind {
     case .needsYou, .stopped, .control, .loggedOut, .notReady:
-      let status = mode.panelSummary(StatusReading(status), paused: session.paused, reconnecting: answered == false)
+      let status = mode.panelSummary(
+        StatusReading(status),
+        paused: session.paused,
+        reconnecting: answered == false,
+        noun: DesktopNoun.shown(actions.desktops.list)
+      )
       return status.line.isEmpty ? status.label : "\(status.label), \(status.line)"
     case .idle, .working, .inUseElsewhere, .connecting:
       return nil

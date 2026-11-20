@@ -2,10 +2,11 @@ import SwiftUI
 
 /// The helper's health, last in the sidebar, as one of its rows: the same height, insets, capsule and hover as a
 /// session's, with Atlas's mark and its dot and a title over a line, such as "Atlas is ready" over "Helper atlas ·
-/// 1440 × 900". A click anywhere on it opens Settings on Helper (``click``); a right-click opens the helper's menu:
-/// every fact about the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log Out….
-/// In a short window the mark and its dot stand alone in a circle that does the same. VoiceOver reads the title and the
-/// line, and hears that the row opens Settings.
+/// 1440 × 900". A click anywhere on it opens Settings on Helper (``click``), or, while more than one desktop is set up,
+/// the desktops in a menu over it, to pick the one Atlas shows; a right-click opens the helper's menu: every fact about
+/// the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log Out…. In a short window
+/// the mark and its dot stand alone in a circle that does the same. VoiceOver reads the title and the line, and hears
+/// what a click opens.
 struct SidebarHelperLine: View {
   /// What a click sends: open Settings on Helper.
   static let click = ViewerEvent.menu(.openSettings)
@@ -16,6 +17,8 @@ struct SidebarHelperLine: View {
   var isCompact = false
   /// Receives the click, or the command chosen from the menu.
   let send: @MainActor (ViewerEvent) -> Void
+  /// Where the row is in the window, so the desktops' menu opens over it.
+  @State private var frame = CGRect.zero
 
   /// The row, or the circle, opening Settings when clicked and the helper's menu on a right-click.
   @ViewBuilder var body: some View {
@@ -45,23 +48,38 @@ struct SidebarHelperLine: View {
     helper.menu
   }
 
-  /// `label` as a button that opens Settings, with the helper's menu as its context menu.
+  /// What a click sends: the desktops over the row while it picks one, else Settings on Helper.
   ///
-  /// - Parameter label: What a click opens Settings from.
+  /// - Parameters:
+  ///   - helper: The helper's health.
+  ///   - frame: The row's frame in the window.
+  /// - Returns: The event.
+  static func clicked(_ helper: ViewerHelperLine, frame: CGRect) -> ViewerEvent {
+    helper.picksDesktop ? .showDesktops(from: frame) : click
+  }
+
+  /// `label` as a button that opens Settings or the desktops, with the helper's menu as its context menu.
+  ///
+  /// - Parameter label: What a click opens Settings or the desktops from.
   /// - Returns: The button.
   private func button(@ViewBuilder label: () -> some View) -> some View {
     Button {
-      send(Self.click)
+      send(Self.clicked(helper, frame: frame))
     } label: {
       label()
     }
     .buttonStyle(.pill)
+    .onGeometryChange(for: CGRect.self) {
+      $0.frame(in: .global)
+    } action: {
+      frame = $0
+    }
     .contextMenu {
       CommandMenu(sections: Self.contextMenu(helper)) { send(.menu($0)) }
     }
-    .help(Text(verbatim: "Open Settings on Helper"))
+    .help(Text(verbatim: helper.picksDesktop ? "Choose a desktop" : "Open Settings on Helper"))
     .accessibilityLabel(Text(verbatim: helper.line.isEmpty ? helper.title : "\(helper.title), \(helper.line)"))
-    .accessibilityHint(Text(verbatim: "Opens Settings"))
+    .accessibilityHint(Text(verbatim: helper.picksDesktop ? "Opens a menu" : "Opens Settings"))
   }
 }
 

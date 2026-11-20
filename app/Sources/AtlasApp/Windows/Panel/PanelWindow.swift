@@ -87,6 +87,11 @@ final class PanelWindow: NSPanel {
       },
       apply: { [weak controller] (text: String?) in controller?.announceSoon(text) }
     )
+    // Follows a desktop picked in another window at once.
+    StateTracking.follow(
+      { [weak controller] in controller?.actions.desktops.moves },
+      apply: { [weak controller] _ in controller?.followDesktops() }
+    )
     controller.watch(open: false)
   }
 
@@ -101,12 +106,14 @@ final class PanelWindow: NSPanel {
     closePanel()
   }
 
-  /// What the person did in the panel: ⋯ opens its menu here, everything else goes to the controller.
+  /// What the person did in the panel: ⋯ and the desktop popup open their menus here, everything else goes to the
+  /// controller.
   ///
   /// - Parameter event: The event.
   func handle(_ event: PanelEvent) {
     switch event {
     case .showMore(let frame): openMore(below: frame)
+    case .showDesktops(let frame): openDesktops(below: frame)
     default: controller.send(event)
     }
   }
@@ -215,6 +222,23 @@ final class PanelWindow: NSPanel {
     )
     menu.popUp(positioning: nil, at: point, in: content)
     controller.setMoreOpen(false)
+  }
+
+  /// Opens the desktops' menu under the popup, its trailing edge on the popup's, the popup pressed until the menu
+  /// closes. A desktop picked is shown from then on.
+  ///
+  /// - Parameter frame: The popup's frame in the window, top left first.
+  private func openDesktops(below frame: CGRect) {
+    guard let content = contentView, let picker = controller.state.desktop else { return }
+    let menu = DesktopMenu.menu(picker.items) { [weak self] desktop in self?.controller.send(.view(desktop: desktop)) }
+    controller.setDesktopsOpen(true)
+    let below = frame.maxY + Self.menuGap
+    let point = NSPoint(
+      x: frame.maxX - menu.size.width,
+      y: content.isFlipped ? below : content.bounds.height - below
+    )
+    menu.popUp(positioning: nil, at: point, in: content)
+    controller.setDesktopsOpen(false)
   }
 
   /// Answers the panel's keys while the panel shows and its ⋯ menu is closed: Escape closes it, as it closes a menu,

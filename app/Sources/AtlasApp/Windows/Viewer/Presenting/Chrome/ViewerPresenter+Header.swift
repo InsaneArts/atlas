@@ -3,16 +3,22 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The card's header, who has the helper: "You have control of the helper" while this window holds control; the
+  /// The card's header, who has the helper: "You have control of the helper" while this window holds control, or of
+  /// the desktop shown by its title while more than one is set up; the
   /// helper's state alone while it asks something of the person or cannot be used, such as Needs you, Stopped or Not
   /// ready, in its tone; while the picture is paused, "Paused picture from 10:31", when the newest picture was read,
-  /// or "Picture paused" before any was; the session that has the helper and "has the helper" while sessions show;
+  /// or "Picture paused" before any was; the session that has the helper and "has the helper", or "has work" while more
+  /// than one desktop is set up, while sessions show;
   /// else the helper's state.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The header.
   static func header(_ snapshot: ViewerSnapshot) -> ViewerHeaderState {
-    if snapshot.holdingControl { return ViewerHeaderState(who: ViewerWords.you, what: ViewerWords.haveControl) }
+    let shown = DesktopItems.shownTitle(snapshot.desktops)
+    if snapshot.holdingControl {
+      let what = shown.map(ViewerWords.haveControl(of:)) ?? ViewerWords.haveControl
+      return ViewerHeaderState(who: ViewerWords.you, what: what)
+    }
     let mode = snapshot.mode
     let word = ViewerHeaderState(who: mode.summary(line: "").label, tone: mode.summary(line: "").tone)
     switch mode.kind {
@@ -21,7 +27,7 @@ extension ViewerPresenter {
     }
     if snapshot.session.paused {
       guard let taken = pictureTaken(snapshot) else {
-        return ViewerHeaderState(who: ViewerWords.picturePaused, what: ViewerWords.workGoesOn)
+        return ViewerHeaderState(who: ViewerWords.picturePaused, what: snapshot.noun.workGoesOn)
       }
       return ViewerHeaderState(who: ViewerWords.paused, what: ViewerWords.pictureFrom(minute(taken, snapshot)))
     }
@@ -46,8 +52,18 @@ extension ViewerPresenter {
     let (_, agent, project, _) = sessionHead(.session(key), snapshot)
     return ViewerHeaderState(
       who: sessionTitle(agent: agent, project: project),
-      what: ViewerWords.dotted([project.isEmpty ? "" : agent, holds ? ViewerWords.hasTheHelper : ""])
+      what: ViewerWords.dotted([project.isEmpty ? "" : agent, holds ? holderWords(snapshot) : ""])
     )
+  }
+
+  /// What the session that has the desktop shown does with it: "has the helper", or, while more than one desktop is set
+  /// up, "has" and the desktop's title, such as "has work".
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The words.
+  static func holderWords(_ snapshot: ViewerSnapshot) -> String {
+    DesktopItems.shownTitle(snapshot.desktops)
+      .map(ViewerWords.has) ?? ViewerWords.hasTheHelper
   }
 
   /// When the newest picture was read, on the wall clock: as long before now as the picture is old.
@@ -67,7 +83,11 @@ extension ViewerPresenter {
   /// - Returns: The status.
   static func status(_ snapshot: ViewerSnapshot) -> StatusSummary {
     let reading = snapshot.reading.statusReading
-    var summary = snapshot.mode.windowSummary(reading, reconnecting: snapshot.reading.lastPicture != nil)
+    var summary = snapshot.mode.windowSummary(
+      reading,
+      reconnecting: snapshot.reading.lastPicture != nil,
+      noun: snapshot.noun
+    )
     if snapshot.mode.kind == .needsYou, let line = reading.causerLine { summary.line = line }
     return summary
   }

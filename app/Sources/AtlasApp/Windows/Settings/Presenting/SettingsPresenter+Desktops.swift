@@ -17,13 +17,13 @@ extension SettingsPresenter {
       let word =
         switch standing {
         case .needsSetup: SettingsWords.helperNeedsSetup
-        case .maintenance: SettingsWords.word(.maintenance) ?? SettingsWords.helperReady
+        case .maintenance: Words.standing(.maintenance) ?? SettingsWords.helperReady
         case .unknown: SettingsWords.helperConnecting
         case .ready, .running, .starting, .stopping, .stopped: SettingsWords.helperReady
         }
       return SettingsSidebarRow(
         page: .helper,
-        title: SettingsWords.title(of: first),
+        title: Words.title(of: first),
         subtitle: word,
         tone: tone(standing)
       )
@@ -32,7 +32,7 @@ extension SettingsPresenter {
     return SettingsSidebarRow(
       page: .helper,
       title: SettingsWords.desktops,
-      subtitle: needing.map { SettingsWords.needsSetup(SettingsWords.title(of: $0)) } ?? SettingsWords.helperReady,
+      subtitle: needing.map { SettingsWords.needsSetup(Words.title(of: $0)) } ?? SettingsWords.helperReady,
       tone: needing == nil ? .ready : .attention
     )
   }
@@ -48,7 +48,7 @@ extension SettingsPresenter {
       rows: listed.map { entry in
         SettingsDesktopRow(
           id: entry.id,
-          title: SettingsWords.title(of: entry),
+          title: Words.title(of: entry),
           detail: SettingsWords.detail(of: entry, standing: DesktopStanding.of(entry)),
           isDefault: entry.isDefault,
           isVM: entry.kind == .vm

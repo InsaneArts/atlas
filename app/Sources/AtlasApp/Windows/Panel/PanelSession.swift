@@ -1,5 +1,5 @@
 /// What the panel is doing, apart from what the service reports: its picture paused, what the last action said
-/// when it did not work, its ⋯ menu open, and what VoiceOver should say.
+/// when it did not work, its ⋯ menu or its desktops' menu open, and what VoiceOver should say.
 struct PanelSession: Equatable {
   /// Whether the person paused the panel's picture, so it reads none until resumed.
   var paused = false
@@ -7,6 +7,8 @@ struct PanelSession: Equatable {
   var notice: String?
   /// Whether the ⋯ menu is open, so its button draws pressed.
   var moreOpen = false
+  /// Whether the desktops' menu is open, so the popup draws pressed.
+  var desktopsOpen = false
   /// What VoiceOver should say: a state that asks something of the person, once it has held for
   /// ``StatusAnnouncer/after``; nil for nothing.
   var announcement: String?

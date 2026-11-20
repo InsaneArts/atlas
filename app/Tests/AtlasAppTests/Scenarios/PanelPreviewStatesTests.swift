@@ -18,9 +18,15 @@
     ///   - mode: The helper's mode, as the service names it.
     ///   - state: The state the service shows for it.
     ///   - holdingControl: Whether Atlas's main window holds control.
+    ///   - desktops: The desktops the service lists; none read by default.
     /// - Returns: The snapshot.
     /// - Throws: A decoding error, which a fixed reply never gives.
-    func snapshot(_ mode: String, state: String, holdingControl: Bool = false) throws -> PanelSnapshot {
+    func snapshot(
+      _ mode: String,
+      state: String,
+      holdingControl: Bool = false,
+      desktops: DesktopList? = nil
+    ) throws -> PanelSnapshot {
       let working = mode == "agent"
       let ages = working ? [2, 9, 31] : [120, 129, 151]
       let activity: [[String: Any]] = [
@@ -44,7 +50,8 @@
         picture: SampleDesktop.picture,
         holdingControl: holdingControl,
         isOnConsole: true,
-        icons: icons
+        icons: icons,
+        desktops: desktops
       )
     }
 
@@ -216,6 +223,7 @@
         "Waiting, a password": try asking(Self.ask("a4", kind: .password, account: "github.com", typed: 12)),
         "Waiting, for this task or not": try asking(Self.ask("a5", kind: .sendKey, message: message, once: false)),
         "Allowed for a task": grant,
+        "Two desktops": try snapshot("agent", state: "working", desktops: DesktopLists.two(shown: "work")),
         "One session": try SessionReplies.snapshot([SessionReplies.claudeActing]),
         "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
         "Sessions waiting": try SessionReplies.snapshot([

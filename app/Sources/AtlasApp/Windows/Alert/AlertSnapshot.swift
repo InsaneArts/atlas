@@ -14,4 +14,6 @@ struct AlertSnapshot {
   var done = false
   /// The service's latest overview, which says why Recover helps.
   var overview = ViewerStatus.Overview()
+  /// How the desktop shown is named, which Recover names.
+  var noun = DesktopNoun.helper
 }

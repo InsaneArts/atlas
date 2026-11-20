@@ -49,7 +49,9 @@
         .askSwitch,
         .openSettings,
         .openAccounts,
-        .showMore:
+        .showMore,
+        .showDesktops,
+        .view:
         return state
       }
     }

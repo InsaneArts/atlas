@@ -16,23 +16,25 @@ extension HelperAlert {
   ///   - askedByPerson: Whether the person asked for it, so its way out is Cancel; false for the Recover alert Atlas
   ///     raises by itself, whose way out is Not Now.
   ///   - onConsole: Whether this process's graphical session currently owns the console.
+  ///   - noun: How the desktop shown is named, which Recover names; the helper by default.
   /// - Returns: The alert.
   func state(
     overview: ViewerStatus.Overview,
     progress: AlertProgress,
     askedByPerson: Bool = false,
-    onConsole: Bool = false
+    onConsole: Bool = false,
+    noun: DesktopNoun = .helper
   ) -> AlertCardState<AlertChoice> {
     switch self {
     case .recover:
       Self.plain(
-        HelperWords.recoverTitle,
-        progress.note ?? Self.recoverMessage(overview),
+        noun.recoverTitle,
+        progress.note ?? Self.recoverMessage(overview, noun: noun),
         HelperWords.recover,
         cancel: askedByPerson ? HelperWords.cancel : HelperWords.notNow,
         phase: progress.phase(
           running: HelperWords.recovering,
-          done: HelperWords.recovered,
+          done: noun.recovered,
           doneMessage: HelperWords.recoveredMessage
         )
       )
@@ -85,13 +87,15 @@ extension HelperAlert {
 
   /// Why recovery helps now: an unfinished action, the helper's input stopped, or, asked for otherwise, what it does.
   ///
-  /// - Parameter overview: The service's latest overview.
+  /// - Parameters:
+  ///   - overview: The service's latest overview.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The alert's sentence.
-  static func recoverMessage(_ overview: ViewerStatus.Overview) -> String {
+  static func recoverMessage(_ overview: ViewerStatus.Overview, noun: DesktopNoun = .helper) -> String {
     switch overview.mode {
-    case .recovering: HelperWords.recoverUnfinished
-    case .blocked where overview.recoverable: HelperWords.recoverInput
-    default: HelperWords.recoverAsked
+    case .recovering: noun.recoverUnfinished
+    case .blocked where overview.recoverable: noun.recoverInput
+    default: noun.recoverAsked
     }
   }
 

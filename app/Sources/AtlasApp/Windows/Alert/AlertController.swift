@@ -55,7 +55,8 @@ final class AlertController {
         running: running,
         failure: failure,
         done: done,
-        overview: links.overview()
+        overview: links.overview(),
+        noun: DesktopNoun.shown(actions.desktops.list)
       )
     )
   }

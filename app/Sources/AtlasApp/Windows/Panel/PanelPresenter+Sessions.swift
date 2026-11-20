@@ -11,13 +11,19 @@ extension PanelPresenter {
   ///   - reading: The status, read.
   ///   - mode: The helper's mode.
   ///   - now: The time the snapshot was taken, which an ended session's age counts to.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The rows.
-  static func sessions(_ reading: StatusReading, mode: Mode, now: Date) -> [PanelSessionEntry] {
+  static func sessions(
+    _ reading: StatusReading,
+    mode: Mode,
+    now: Date,
+    noun: DesktopNoun = .helper
+  ) -> [PanelSessionEntry] {
     guard reading.listsSessions, !hidesRecent(mode) else { return [] }
     return reading.relevantSessions
       .prefix(PanelState.mostSessions)
       .map { session in
-        let line = Words.sessionLine(reading.line(of: session), now: now)
+        let line = Words.sessionLine(reading.line(of: session), now: now, noun: noun)
         let state = Words.sessionState(session.state)
         return PanelSessionEntry(
           id: session.key,
@@ -52,10 +58,11 @@ extension PanelPresenter {
   /// - Parameters:
   ///   - reading: The status, read.
   ///   - mode: The helper's mode.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The line, or nil.
-  static func sessionLine(_ reading: StatusReading, mode: Mode) -> String? {
+  static func sessionLine(_ reading: StatusReading, mode: Mode, noun: DesktopNoun = .helper) -> String? {
     guard !hidesRecent(mode) else { return nil }
     if mode.kind == .needsYou { return reading.showsSessions ? reading.causerLine : nil }
-    return reading.helperHolder.map { Words.holderLine($0.name) }
+    return reading.helperHolder.map { noun.holderLine($0.name) }
   }
 }

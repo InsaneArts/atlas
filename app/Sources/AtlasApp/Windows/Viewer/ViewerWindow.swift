@@ -18,6 +18,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   static let firstSize = NSSize(width: 1200, height: 800)
   /// 0.9: the share of a small display's room the window takes the first time, at most.
   static let firstShare: CGFloat = 0.9
+  /// 6: between the sidebar's foot row and the desktops' menu over it, as between ⋯ and its menu in the panel.
+  static let menuGap: CGFloat = 6
 
   /// The window's controller.
   let controller: ViewerController
@@ -64,10 +66,10 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     delegate = self
     let fieldReport = fieldFocus.report
     let feed = controller.readingLoop.feed
-    WindowShell.host(in: self) {
+    WindowShell.host(in: self) { [weak self] in
       ViewerView(
         state: controller.drawnState(),
-        send: { controller.send($0) },
+        send: { self?.handle($0) },
         input: { DesktopInput(controller: controller) },
         livePicture: { LayerPictureView(live: $0, feed: feed) }
       )
@@ -75,6 +77,53 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     }
     followTitle()
     followAnnouncements()
+    followDesktops()
+  }
+
+  /// What the person did in the window: the sidebar's foot row opens the desktops' menu here, everything else goes to
+  /// the controller.
+  ///
+  /// - Parameter event: The event.
+  func handle(_ event: ViewerEvent) {
+    switch event {
+    case .showDesktops(let frame): openDesktops(over: frame)
+    default: controller.send(event)
+    }
+  }
+
+  /// Opens the desktops' menu over the sidebar's foot row, its leading edge on the row's, then Desktop Settings…,
+  /// which opens Settings on the desktops. A desktop picked is shown from then on.
+  ///
+  /// - Parameter frame: The row's frame in the window, top left first.
+  private func openDesktops(over frame: CGRect) {
+    let helper = controller.state.sidebar.helper
+    guard let content = contentView, helper.picksDesktop else { return }
+    let menu = DesktopMenu.menu(
+      helper.desktops,
+      view: { [weak self] desktop in self?.controller.send(.view(desktop: desktop)) },
+      openSettings: { [weak self] in self?.controller.send(.openSettings) }
+    )
+    // The menu's top left, so its foot sits just over the row; SwiftUI's frames run down from the top, and a view
+    // that is not flipped runs up from the bottom.
+    let top = frame.minY - Self.menuGap - menu.size.height
+    let point = NSPoint(x: frame.minX, y: content.isFlipped ? top : content.bounds.height - top)
+    menu.popUp(positioning: nil, at: point, in: content)
+  }
+
+  /// Follows each move of the desktop shown, from this window, the panel or anywhere else
+  /// (``ViewerController/followDesktops()``).
+  private func followDesktops() {
+    StateTracking.follow { [weak self] in
+      self.map { $0.controller.actions.desktops.moves }
+    } apply: { [weak self] _ in
+      self?.controller.followDesktops()
+    }
+    // The main menu's Helper menu reads Desktop while a VM is shown.
+    StateTracking.follow { [weak self] in
+      self.map { DesktopNoun.shown($0.controller.actions.desktops.list) }
+    } apply: { noun in
+      MainMenu.name(noun, in: NSApp.mainMenu)
+    }
   }
 
   /// Titles the window with the helper's name once it is known, so the Window menu tells it from the setup window.

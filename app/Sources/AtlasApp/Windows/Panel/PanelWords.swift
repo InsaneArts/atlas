@@ -48,12 +48,24 @@ enum PanelWords {
     "Atlas — \(mode)"
   }
 
+  /// Another desktop's state, as the menu bar item names it while it is the most urgent.
+  ///
+  /// - Parameters:
+  ///   - word: The state's word.
+  ///   - desktop: The desktop's title.
+  /// - Returns: "Needs you on work"
+  static func onDesktop(_ word: String, _ desktop: String) -> String {
+    "\(word) on \(desktop)"
+  }
+
   /// Why agents can't use the helper yet, beside Not ready: the service's reason, else that it isn't answering.
   ///
-  /// - Parameter reason: The service's reason; nil before it gives one, or empty, for none.
+  /// - Parameters:
+  ///   - reason: The service's reason; nil before it gives one, or empty, for none.
+  ///   - noun: How the desktop shown is named; the helper by default.
   /// - Returns: The reason, or "Atlas isn't answering in the helper".
-  static func notReadyLine(_ reason: String?) -> String {
-    guard let reason, !reason.isEmpty else { return notAnswering }
+  static func notReadyLine(_ reason: String?, noun: DesktopNoun = .helper) -> String {
+    guard let reason, !reason.isEmpty else { return noun.notAnswering }
     return reason
   }
 

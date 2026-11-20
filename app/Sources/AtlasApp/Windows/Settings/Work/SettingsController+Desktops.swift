@@ -55,7 +55,7 @@ extension SettingsController {
   /// - Parameter id: The VM's ID.
   func start(_ id: String) async {
     guard let vm = listedVM(id) else { return }
-    let title = SettingsWords.title(of: vm)
+    let title = Words.title(of: vm)
     await working(on: id, waiting: SettingsWords.starting(title)) {
       do {
         try await dependencies.links.setPower(id, true)
@@ -75,7 +75,7 @@ extension SettingsController {
   /// - Parameter id: The VM's ID.
   func stop(_ id: String) async {
     guard let vm = listedVM(id) else { return }
-    let title = SettingsWords.title(of: vm)
+    let title = Words.title(of: vm)
     await working(on: id, waiting: nil) {
       do {
         try await dependencies.links.setPower(id, false)
@@ -109,7 +109,7 @@ extension SettingsController {
   /// - Parameter id: The VM's ID.
   func remove(_ id: String) async {
     guard let vm = listedVM(id) else { return }
-    let title = SettingsWords.title(of: vm)
+    let title = Words.title(of: vm)
     await working(on: id, waiting: SettingsWords.approving) {
       let outcome = await dependencies.commands.run(.removeVM(vm.name))
       guard outcome.ok else { return say(outcome.message, on: route(ofVM: id), kind: .problem) }

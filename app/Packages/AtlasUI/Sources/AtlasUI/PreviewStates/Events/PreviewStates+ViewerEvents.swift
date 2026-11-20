@@ -60,7 +60,7 @@
       case .askRestart:
         return viewerRestart
       case .copyPicture, .showPictureInFinder, .previousPicture, .nextPicture, .thumbnailNeeded, .moveCorner,
-        .openSettings, .showDaySessions:
+        .openSettings, .showDaySessions, .showDesktops, .view:
         return state
       case .toggleSidebar, .dismissSidebarOverlay, .toggleEnded, .openSearch, .search, .closeSearch:
         return viewerSidebar(state, applying: event)

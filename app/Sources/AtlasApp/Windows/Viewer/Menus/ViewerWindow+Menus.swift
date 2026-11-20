@@ -192,6 +192,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     case #selector(ViewerMenuActions.checkAgain(_:)):
       return !snapshot.session.checkingAgain
     case #selector(ViewerMenuActions.openHelperSettings(_:)):
+      item.title = snapshot.noun.settingsItem
       return true
     default:
       return validateSession(item, snapshot: snapshot) ?? validateHelper(item, snapshot: snapshot)
@@ -238,6 +239,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   }
 
   /// The helper's commands, as the window offers them, with the helper's name in Switch and Log Out once it is known.
+  /// While a VM is shown, Restart names it, and Switch and Log Out, Second Login's alone, are hidden.
   ///
   /// - Parameters:
   ///   - item: The item.
@@ -249,13 +251,17 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     let alertUp = ViewerPresenter.alert(snapshot) != nil
     switch item.action {
     case #selector(HelperMenuActions.askRecover(_:)): return helper.canRecover && !alertUp
-    case #selector(HelperMenuActions.askRestart(_:)): return helper.canRestart && !alertUp
+    case #selector(HelperMenuActions.askRestart(_:)):
+      item.title = snapshot.noun.restartItem
+      return helper.canRestart && !alertUp
     case #selector(HelperMenuActions.askSwitch(_:)):
       item.title = MenuWords.switchTo(name)
-      return helper.canSwitch && !alertUp
+      item.isHidden = snapshot.noun.isVM
+      return helper.canSwitch && !alertUp && !snapshot.noun.isVM
     case #selector(HelperMenuActions.askLogOut(_:)):
       item.title = MenuWords.logOut(name)
-      return helper.canLogOut && !alertUp
+      item.isHidden = snapshot.noun.isVM
+      return helper.canLogOut && !alertUp && !snapshot.noun.isVM
     default: return nil
     }
   }

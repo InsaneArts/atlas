@@ -42,4 +42,9 @@ struct PanelSnapshot {
   var asks: AskList?
   /// The questions' pictures, by their file name.
   var askPictures: [String: DesktopPicture] = [:]
+  /// The desktops the service serves and the one shown, as last read; nil before it was read.
+  var desktops: DesktopList?
+
+  /// How the panel names the desktop it shows.
+  var noun: DesktopNoun { DesktopNoun.shown(desktops) }
 }

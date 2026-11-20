@@ -36,6 +36,7 @@
         PreviewState(name: "Waiting, a password", value: panelAskPassword),
         PreviewState(name: "Waiting, for this task or not", value: panelAskTaskOnly),
         PreviewState(name: "Allowed for a task", value: panelAllowed),
+        PreviewState(name: "Two desktops", value: panelTwoDesktops),
       ]
     }
 

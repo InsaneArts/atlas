@@ -51,9 +51,13 @@ extension PanelPresenter {
       return PanelMainButton(title: PanelWords.openAtlas, help: PanelWords.openAtlasHelp, event: .openAtlas)
     case .needsYou, .notReady:
       guard snapshot.status.overview.recoveryHelps else {
-        return PanelMainButton(title: PanelWords.openSettings, help: PanelWords.openSettingsHelp, event: .openSettings)
+        return PanelMainButton(
+          title: PanelWords.openSettings,
+          help: snapshot.noun.openSettingsHelp,
+          event: .openSettings
+        )
       }
-      return PanelMainButton(title: HelperWords.recoverItem, help: PanelWords.recoverHelp, event: .askRecover)
+      return PanelMainButton(title: HelperWords.recoverItem, help: snapshot.noun.recoverHelp, event: .askRecover)
     case .loggedOut:
       return PanelMainButton(
         title: HelperWords.switchItem,

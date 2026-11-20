@@ -45,9 +45,14 @@ struct ViewerSnapshot {
   var calendar = Calendar(identifier: .gregorian)
   /// The questions Atlas asks the person and what they allowed, as `asks.json` last said; nil before it was read.
   var asks: AskList?
+  /// The desktops the service serves and the one shown, as last read; nil before it was read.
+  var desktops: DesktopList?
 
   /// Whether this window holds control.
   var holdingControl: Bool { lease != nil }
+
+  /// How the window names the desktop it shows.
+  var noun: DesktopNoun { DesktopNoun.shown(desktops) }
 
   /// ``calendar`` in ``timeZone``.
   var zonedCalendar: Calendar {
