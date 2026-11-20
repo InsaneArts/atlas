@@ -36,6 +36,20 @@ pub(super) struct Desk {
     pub(super) default: bool,
 }
 
+impl Desk {
+    /// The desktop as what is on it names it: its ID, record key, settings
+    /// name and kind.
+    pub(super) fn named(&self) -> Value {
+        let desktop = self.client.desktop();
+        json!({
+            "id": desktop.id().as_str(),
+            "key": desktop.record_key().as_str(),
+            "name": self.name,
+            "kind": crate::ui::desktop::of(&self.name, &desktop)["kind"],
+        })
+    }
+}
+
 /// The desktops the service serves, and what each one's newest status read
 /// said, by its ID.
 #[derive(Default)]

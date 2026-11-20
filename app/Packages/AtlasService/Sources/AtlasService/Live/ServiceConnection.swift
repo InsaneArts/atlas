@@ -255,6 +255,11 @@ public final class ServiceConnection: ViewerService {
     try await sendTyped { (client) async throws(ServiceError) in try await client.activity(of: session) }
   }
 
+  /// One session's activity on another desktop.
+  public func activity(of session: String, on desktop: String) async throws(ServiceError) -> ActivityLog {
+    try await sendTyped { (client) async throws(ServiceError) in try await client.activity(of: session, on: desktop) }
+  }
+
   /// The screenshots kept.
   public func screenshots() async throws(ServiceError) -> ScreenshotList {
     try await sendTyped { (client) async throws(ServiceError) in try await client.screenshots() }

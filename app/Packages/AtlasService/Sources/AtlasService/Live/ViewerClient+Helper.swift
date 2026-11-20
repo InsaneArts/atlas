@@ -39,17 +39,41 @@ extension ViewerClient {
     return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
   }
 
-  /// A GET of `activity.json` for `session`, the key percent-encoded.
+  /// Reads `activity.json` for one session on a desktop other than the one viewed.
   ///
-  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Parameters:
+  ///   - session: The session's key; empty for Terminal.
+  ///   - desktop: The ID of the desktop it acts on.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` with the service's error, such as for a desktop it does not serve, or when it cannot
+  ///   be read.
+  public func activity(of session: String, on desktop: String) async throws(ServiceError) -> ActivityLog {
+    let request = try activityRequest(session: session, desktop: desktop)
+    let (data, response) = try await fetched(request, limit: Self.listLimit)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
+  }
+
+  /// A GET of `activity.json` for `session`, on `desktop` when one is given, else on the one viewed, each
+  /// percent-encoded.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key; empty for Terminal.
+  ///   - desktop: The ID of the desktop it acts on; nil for the one viewed.
   /// - Returns: The request.
-  /// - Throws: ``ServiceError`` when the key cannot be put in a URL.
-  func activityRequest(session: String) throws(ServiceError) -> URLRequest {
+  /// - Throws: ``ServiceError`` when the key or the desktop cannot be put in a URL.
+  func activityRequest(session: String, desktop: String? = nil) throws(ServiceError) -> URLRequest {
     let route = base.appendingPathComponent("activity.json")
     guard let encoded = session.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
       var components = URLComponents(url: route, resolvingAgainstBaseURL: false)
     else { throw ServiceError("No such session") }
-    components.percentEncodedQuery = "session=\(encoded)"
+    var query = ["session=\(encoded)"]
+    if let desktop {
+      guard let named = desktop.addingPercentEncoding(withAllowedCharacters: Self.unreserved) else {
+        throw ServiceError("No such desktop")
+      }
+      query.append("desktop=\(named)")
+    }
+    components.percentEncodedQuery = query.joined(separator: "&")
     guard let url = components.url else { throw ServiceError("No such session") }
     return request(to: url)
   }

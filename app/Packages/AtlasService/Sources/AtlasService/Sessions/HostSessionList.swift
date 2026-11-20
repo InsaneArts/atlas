@@ -5,17 +5,34 @@ public struct HostSessionList: Decodable, Equatable, Sendable {
   public var sessions: [HostSessionRecord]
   /// The wire list named `live` holds relevant sessions, including ended recovery attention or proven work;
   /// each entry's lifetime flags remain independent. Sessions on their first command may have no record;
-  /// none from an older service, which does not send them.
+  /// none from an older service, which does not send them. Once the service serves more than one desktop, each names
+  /// the desktop it acts on, the viewed desktop's first, then every other desktop's.
   public var live: [ViewerStatus.HostSession]
+  /// The ID of the desktop viewed when it was listed, once the service serves more than one; nil otherwise.
+  public var viewed: String?
 
   /// Creates a list.
   ///
   /// - Parameters:
   ///   - sessions: The sessions, newest last seen first.
   ///   - live: Every relevant session, in the status's order; none by default.
-  public init(sessions: [HostSessionRecord] = [], live: [ViewerStatus.HostSession] = []) {
+  ///   - viewed: The ID of the desktop viewed, once there is more than one; none by default.
+  public init(sessions: [HostSessionRecord] = [], live: [ViewerStatus.HostSession] = [], viewed: String? = nil) {
     self.sessions = sessions
     self.live = live
+    self.viewed = viewed
+  }
+
+  /// The relevant sessions on the desktop viewed, in the list's order: every one while one desktop is served.
+  public var onViewed: [ViewerStatus.HostSession] {
+    guard let viewed else { return live }
+    return live.filter { $0.desktop.map { $0.id == viewed } ?? true }
+  }
+
+  /// The relevant sessions on a desktop other than the one viewed, in the list's order; none while one is served.
+  public var elsewhere: [ViewerStatus.HostSession] {
+    guard let viewed else { return [] }
+    return live.filter { $0.desktop.map { $0.id != viewed } ?? false }
   }
 
   /// The body's fields this app reads.
@@ -24,6 +41,8 @@ public struct HostSessionList: Decodable, Equatable, Sendable {
     case sessions
     /// Every relevant session.
     case live
+    /// The desktop viewed.
+    case viewed
   }
 
   /// Decodes the body, each session on its own, so one odd entry is dropped and the rest are kept.
@@ -34,5 +53,6 @@ public struct HostSessionList: Decodable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     sessions = container.lenientList(HostSessionRecord.self, forKey: .sessions)
     live = container.lenientList(ViewerStatus.HostSession.self, forKey: .live)
+    viewed = container.lenientText(.viewed)
   }
 }

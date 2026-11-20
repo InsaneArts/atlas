@@ -40,7 +40,10 @@
       }
       return [
         "Sessions": shown(working),
-        "Two desktops": shown(working) { snapshot in snapshot.desktops = DesktopLists.two(shown: "work") },
+        "Two desktops": shown(working) { snapshot in
+          snapshot.desktops = DesktopLists.two(shown: "work")
+          snapshot.panes.sessions.list = Self.secondLoginSessions
+        },
         "Sessions, one ended": shown(working) { snapshot in
           snapshot.date = Self.activityReadAt
           snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])
@@ -357,6 +360,24 @@
       endedAt: activityReadAt.addingTimeInterval(-20 * 60),
       state: .ended,
       actions: 12
+    )
+
+    /// What `sessions.json` lists while work is shown beside Second Login: Codex typing in Notes in notes-sync on
+    /// Second Login.
+    static let secondLoginSessions = HostSessionList(
+      live: [
+        ViewerStatus.HostSession(
+          key: "c0de5ec0dd02",
+          name: "Codex · notes-sync",
+          host: .codex,
+          hostLabel: "Codex",
+          folder: "notes-sync",
+          state: .acting,
+          latest: ViewerStatus.Activity(operation: "type", ok: true, says: "typing in Notes"),
+          desktop: HostSessionDesktop(id: "second-login", key: "user", name: "second-login", kind: .user)
+        )
+      ],
+      viewed: "work"
     )
 
     /// Claude Code's session as `sessions.json` lists it: started at 09:12, seen two seconds ago, with Opie opened

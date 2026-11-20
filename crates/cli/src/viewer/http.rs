@@ -89,6 +89,7 @@ pub(super) fn configured(
         settings: settings.map(Path::to_path_buf),
         settings_text: std::sync::Mutex::new(None),
         desks: super::desks::Desks::default(),
+        elsewhere: super::elsewhere::Elsewhere::default(),
         viewed: std::sync::Mutex::new(None),
         station_home: std::sync::Mutex::new(None),
         discovery: std::sync::Mutex::new(None),
@@ -608,6 +609,19 @@ async fn reply_to(viewer: Arc<Viewer>, request: Request) -> Response {
                 && let Some(status) = viewer.status_named(named, app).await
             {
                 return json_response(200, status);
+            }
+            // What was done on any other desktop served, from its records.
+            if read == Read::Activity
+                && let Some(named) = named
+                && let Some(desk) = viewer.named_other(Some(&json!(named))).await.flatten()
+            {
+                return match viewer
+                    .activity_elsewhere(&desk, request.uri().query(), app)
+                    .await
+                {
+                    Err(error) if error.code == Code::Input => json_response(400, json!(error)),
+                    outcome => read_reply(outcome),
+                };
             }
             let named = named.map(|named| json!(named));
             let Some(_pinned) = viewer.pin(named.as_ref()).await else {

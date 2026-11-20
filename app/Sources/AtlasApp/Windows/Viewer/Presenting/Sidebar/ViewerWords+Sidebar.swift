@@ -33,6 +33,16 @@ extension ViewerWords {
     }
   }
 
+  /// A session's line in the sidebar while it acts on another desktop than the one shown: that desktop first.
+  ///
+  /// - Parameters:
+  ///   - title: The desktop's title.
+  ///   - doing: What the session's line says otherwise.
+  /// - Returns: "On Second Login · Typing in Notes".
+  static func onDesktop(_ title: String, doing: String) -> String {
+    dotted(["On \(title)", doing])
+  }
+
   /// The helper's row while it can act.
   static let helperReadyTitle = "Atlas is ready"
   /// The helper's row while some of its checks do not pass, or it is not ready.

@@ -8,18 +8,30 @@
       DesktopItem(id: "work", title: "work", word: "Working", tone: .active, mark: .pulsing, isViewed: true),
     ]
 
+    /// The session on Second Login while work is shown: Codex typing in Notes in notes-sync.
+    static let secondLoginRow = viewerSessionRow(
+      "c0de5ec0dd02",
+      icon: SessionSamples.codexIcon,
+      name: "notes-sync",
+      line: "On Second Login · Typing in Notes",
+      badge: .acting,
+      facts: ["Host: Codex", "Folder: notes-sync", "Desktop: Second Login"]
+    )
+
     /// The main window with two desktops, showing work: the foot row names the VM with its chevron, the header says
-    /// the session has work, a session waits for work, and the row's right-click menu names the desktop, with no
-    /// Switch or Log Out, which are Second Login's.
+    /// the session has work, a session waits for work, a session on Second Login says so under Working, and the row's
+    /// right-click menu names the desktop, with no Switch or Log Out, which are Second Login's.
     @MainActor public static let viewerTwoDesktops: ViewerState = {
       var state = viewerSessions
       state.header = ViewerHeaderState(who: SessionSamples.claudeTitle, what: "Claude Code · has work")
       state.sidebar.helper.line = "VM work · 1440 × 900"
       state.sidebar.helper.desktops = desktopItems
       state.sidebar.helper.menu = vmHelperMenu(state.sidebar.helper.menu)
+      state.sidebar.sessions.liveCount += 1
       state.sidebar.sessions.groups = state.sidebar.sessions.groups.map { group in
         var waiting = group
         waiting.rows = group.rows.map(waitingForWork)
+        if group.section == .working { waiting.rows.append(secondLoginRow) }
         return waiting
       }
       return state

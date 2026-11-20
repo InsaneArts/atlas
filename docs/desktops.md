@@ -39,7 +39,7 @@ id = "0123456789abcdef01234567"
 
 `atlas desktop add vm` writes a VM's entry, with the identifier Atlas VM gave it. Change `default` to make another desktop the default. Settings that name one helper at the top, as setup writes them, are one Second Login called `second-login`. [Configuration](configuration.md#desktops) has the rules.
 
-Atlas.app shows one desktop at a time, the default until you pick another. With more than one set up, click the row at the foot of the main window's sidebar, or the desktop's name beside **⋯** in the menu bar panel, and pick one: each is listed with its state. The live picture, **Take Control**, **Resume** and **Sign In to a Site…** are for the desktop shown. **Stop** stops agents on every desktop, and the menu bar shows the most urgent state of them all. Picking a desktop changes only what Atlas.app shows, never the default or the desktop an agent's command acts on.
+Atlas.app shows one desktop at a time, the default until you pick another. With more than one set up, click the row at the foot of the main window's sidebar, or the desktop's name beside **⋯** in the menu bar panel, and pick one: each is listed with its state. The live picture, **Take Control**, **Resume** and **Sign In to a Site…** are for the desktop shown. The sidebar lists the sessions working on every desktop; one on another desktop says which, as "On Second Login · Typing in Notes", and choosing it shows its Activity while the desktop shown stays. **Stop** stops agents on every desktop, and the menu bar shows the most urgent state of them all. Picking a desktop changes only what Atlas.app shows, never the default or the desktop an agent's command acts on.
 
 ## What a VM needs
 

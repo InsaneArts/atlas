@@ -23,6 +23,8 @@ extension ViewerWords {
   static let hostFact = "Host"
   /// The folder fact's name.
   static let folderFact = "Folder"
+  /// The fact's name that says which desktop a session on another one acts on.
+  static let desktopFact = "Desktop"
   /// The start fact's name.
   static let startedFact = "Started"
   /// The last seen fact's name.

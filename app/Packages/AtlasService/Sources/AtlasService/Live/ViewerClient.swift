@@ -67,7 +67,8 @@ public struct ViewerClient: ViewerService {
     return request
   }
 
-  /// `url` naming the desktop the app views, once the service named one, as `desktop=` its ID.
+  /// `url` naming the desktop the app views, once the service named one, as `desktop=` its ID; a URL that names a
+  /// desktop already, as a read of another desktop's session does, keeps it.
   ///
   /// - Parameter url: The route's full URL, query included.
   /// - Returns: The URL, its query naming the desktop.
@@ -76,6 +77,9 @@ public struct ViewerClient: ViewerService {
       let encoded = id.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
       var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else { return url }
+    let asked = components.percentEncodedQuery ?? ""
+    let given = asked.split(separator: "&")
+    guard !given.contains(where: { $0.hasPrefix("desktop=") }) else { return url }
     let query = [components.percentEncodedQuery, "desktop=\(encoded)"]
       .compactMap { $0 }
     components.percentEncodedQuery = query.joined(separator: "&")

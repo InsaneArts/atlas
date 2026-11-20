@@ -322,6 +322,8 @@ async fn write(
     if kinds.is_empty() {
         return Vec::new();
     }
+    // The readers it wakes list the other desktops' sessions afresh.
+    viewer.forget_elsewhere();
     let count = kinds.len();
     let (viewer, desktop) = (viewer.clone(), desktop.to_owned());
     tokio::task::spawn_blocking(move || {

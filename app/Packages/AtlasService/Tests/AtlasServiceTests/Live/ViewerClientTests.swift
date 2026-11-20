@@ -73,6 +73,15 @@ struct ViewerClientTests {
     #expect(try client.activityRequest(session: "a&b").url?.query == "session=a%26b")
   }
 
+  @Test("a session's activity on another desktop names that desktop alone, never the one viewed beside it")
+  func sessionActivityOnAnotherDesktop() throws {
+    let client = try #require(ViewerClient("http://127.0.0.1:8765/abc/"))
+    client.viewed.view("work")
+    let other = try client.activityRequest(session: "b2", desktop: "second login")
+    #expect(other.url?.query == "session=b2&desktop=second%20login")
+    #expect(try client.activityRequest(session: "a1").url?.query == "session=a1&desktop=work")
+  }
+
   @Test("a session's activity says its steps were cleared only when the service says so")
   func activityCleared() throws {
     let cleared = Data(#"{"ok": true, "activity": [], "sessions": {}, "cleared": true}"#.utf8)

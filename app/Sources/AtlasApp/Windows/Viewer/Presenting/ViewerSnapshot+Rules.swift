@@ -51,11 +51,13 @@ extension ViewerSnapshot {
     return .setAside
   }
 
-  /// Whose work the window shows: the session chosen while the status or the sessions' list still names it, or before
-  /// either was read; every session's once it is gone from both.
+  /// Whose work the window shows: the session chosen while the status or the sessions' list still names it, as it names
+  /// a session on another desktop, or before either was read; every session's once it is gone from both.
   var shownSessions: ViewerSessionChoice {
     guard case .one(let key) = session.chosenSession else { return .all }
-    let named = reading.statusReading.session(key) != nil || panes.sessions.record(key) != nil
+    let elsewhere = panes.sessions.list?.elsewhere
+      .contains { $0.key == key }
+    let named = reading.statusReading.session(key) != nil || panes.sessions.record(key) != nil || elsewhere == true
     return named || !reading.hasStatus ? .one(key) : .all
   }
 

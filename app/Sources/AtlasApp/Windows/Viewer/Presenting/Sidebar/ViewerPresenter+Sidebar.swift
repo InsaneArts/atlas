@@ -123,7 +123,8 @@ extension ViewerPresenter {
 
   /// A live session's row: its icon and badge, its title from its project or agent, what it does now while it works,
   /// or its agent and start while it is quiet, its tooltip and its menu; while its work is cleaned up, "Cleaning up…"
-  /// with a spinner in the badge's place.
+  /// with a spinner in the badge's place. A session on another desktop than the one shown says which first, and its
+  /// facts and menu are its own: nothing of the shown desktop's records, recovery or cleanup.
   ///
   /// - Parameters:
   ///   - session: The session, as the status or the list has it.
@@ -131,23 +132,27 @@ extension ViewerPresenter {
   /// - Returns: The row.
   private static func sessionRow(_ session: ViewerStatus.HostSession, _ snapshot: ViewerSnapshot) -> ViewerSessionRow {
     let (_, agent, project, _) = sessionHead(.session(session.key), snapshot)
-    let line =
+    let desktop = elsewhere(session, snapshot)
+    let doing =
       isBusy(session)
       ? ViewerWords.sessionRowLine(
         session,
         line: snapshot.reading.statusReading.line(of: session),
         now: snapshot.date,
-        noun: snapshot.noun
+        noun: desktop.map(DesktopNoun.of) ?? snapshot.noun
       )
       : quietLine(agent: agent, project: project, started: session.startedAt, snapshot)
-    let record = snapshot.panes.sessions.record(session.key)
+    let line = desktop.map { ViewerWords.onDesktop(Words.title(of: $0), doing: doing) } ?? doing
+    let record = desktop == nil ? snapshot.panes.sessions.record(session.key) : nil
+    let place = desktop.map { [Fact(name: ViewerWords.desktopFact, value: Words.title(of: $0))] } ?? []
     return row(
       session.key,
       icon: session.host.icon,
       name: sessionTitle(agent: agent, project: project),
       line: line,
       badge: badge(of: session.state),
-      facts: sessionFacts(session, record: record, snapshot),
+      facts: sessionFacts(session, record: record, snapshot) + place,
+      onShown: desktop == nil,
       snapshot
     )
   }
@@ -186,6 +191,7 @@ extension ViewerPresenter {
   ///   - started: An ended session's agent and the day and time it started; nil for a live one.
   ///   - badge: What it does now.
   ///   - facts: Every fact about it.
+  ///   - onShown: Whether it acts on the desktop shown, whose recovery and cleanup its menu offers; it does by default.
   ///   - snapshot: What the controller holds.
   /// - Returns: The row.
   private static func row(
@@ -196,6 +202,7 @@ extension ViewerPresenter {
     started: String? = nil,
     badge: SessionBadge?,
     facts: [Fact],
+    onShown: Bool = true,
     _ snapshot: ViewerSnapshot
   ) -> ViewerSessionRow {
     // Terminal's session has no key a cleanup can name.
@@ -213,7 +220,7 @@ extension ViewerPresenter {
       badge: cleaning ? nil : badge,
       isCleaningUp: cleaning,
       help: sessionHelp(name: name, lines: told, facts: facts, receipt: receipt),
-      menu: sessionMenu(key: key, needsYou: badge == .needsYou, facts: facts, snapshot),
+      menu: sessionMenu(key: key, needsYou: badge == .needsYou, onShown: onShown, facts: facts, snapshot),
       accessibilityLabel: ([name] + told)
         .filter { !$0.isEmpty }
         .joined(separator: ", ")

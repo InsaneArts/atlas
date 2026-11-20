@@ -34,14 +34,15 @@ extension ViewerPresenter {
   }
 
   /// Cleaning up the chosen session's work, as the Session menu offers it: the chosen session's cleanup while the
-  /// sessions' list names it; none while every session's work shows.
+  /// sessions' list names it on the desktop shown; none while every session's work shows, or for a session on another
+  /// desktop.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The cleanup, or nil.
   static func chosenCleanup(_ snapshot: ViewerSnapshot) -> ViewerSessionCleanup? {
-    guard case .one(let key) = snapshot.shownSessions, let record = snapshot.panes.sessions.record(key) else {
-      return nil
-    }
+    guard case .one(let key) = snapshot.shownSessions, elsewhere(key, snapshot) == nil,
+      let record = snapshot.panes.sessions.record(key)
+    else { return nil }
     return cleanup(record, snapshot)
   }
 

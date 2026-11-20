@@ -5,23 +5,30 @@ extension ViewerPresenter {
   /// What a right click on a session's row offers: Show Activity for its work; Recover… while it needs the person, as
   /// the Helper menu offers it; Send Key, whose keys go to the helper while this window holds control; Clean Up This
   /// Session's Work… while the session left something to clean up, which asks first; and every fact about it under
-  /// Details.
+  /// Details. A session on another desktop than the one shown is offered neither Recover… nor Clean Up, which act on
+  /// the one shown.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.
   ///   - needsYou: Whether the session needs the person.
+  ///   - onShown: Whether it acts on the desktop shown; it does by default.
   ///   - facts: Every fact about it (``sessionFacts(_:record:_:)``).
   ///   - snapshot: What the controller holds.
   /// - Returns: The menu's sections.
-  static func sessionMenu(key: String, needsYou: Bool, facts: [Fact], _ snapshot: ViewerSnapshot) -> [ViewerMenuSection]
-  {
+  static func sessionMenu(
+    key: String,
+    needsYou: Bool,
+    onShown: Bool = true,
+    facts: [Fact],
+    _ snapshot: ViewerSnapshot
+  ) -> [ViewerMenuSection] {
     let alertUp = alert(snapshot) != nil
     var sections = [
       ViewerMenuSection([
         ViewerMenuItem(ViewerWords.showActivity, command: .showActivity(session: key))
       ])
     ]
-    if needsYou {
+    if needsYou, onShown {
       sections.append(
         ViewerMenuSection([
           ViewerMenuItem(
@@ -33,7 +40,7 @@ extension ViewerPresenter {
       )
     }
     sections.append(ViewerMenuSection([sendKeys(snapshot)]))
-    if let record = snapshot.panes.sessions.record(key), let cleanup = cleanup(record, snapshot) {
+    if onShown, let record = snapshot.panes.sessions.record(key), let cleanup = cleanup(record, snapshot) {
       sections.append(
         ViewerMenuSection([
           ViewerMenuItem(

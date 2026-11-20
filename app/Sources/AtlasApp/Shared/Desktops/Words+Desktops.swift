@@ -12,7 +12,23 @@ extension Words {
   /// - Parameter entry: A desktop the service serves.
   /// - Returns: Its title.
   static func title(of entry: DesktopList.Entry) -> String {
-    switch DesktopTitle.of(entry) {
+    title(DesktopTitle.of(entry))
+  }
+
+  /// The title of the desktop a session acts on, by the same rule as a listed desktop's.
+  ///
+  /// - Parameter desktop: The desktop, as the session names it.
+  /// - Returns: Its title.
+  static func title(of desktop: HostSessionDesktop) -> String {
+    title(DesktopTitle.of(name: desktop.name, kind: desktop.kind))
+  }
+
+  /// A desktop's title in words.
+  ///
+  /// - Parameter title: What the app calls it.
+  /// - Returns: "Second Login", "VM", "VM 2", or its name.
+  private static func title(_ title: DesktopTitle) -> String {
+    switch title {
     case .secondLogin: "Second Login"
     case .numberedVM(1): "VM"
     case .numberedVM(let number): "VM \(number)"

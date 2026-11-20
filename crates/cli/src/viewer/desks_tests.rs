@@ -65,14 +65,44 @@ async fn with_one_desktop_every_reply_of_the_service_is_unchanged_byte_for_byte(
     now.follow_settings().await;
     assert!(!now.several());
 
+    // A session that acted there, as its records and log keep it.
+    let session =
+        atlas_core::host::HostSession::new(atlas_core::host::Host::Claude, "landing").unwrap();
+    atlas_client::host_session::store::note(
+        &before.client(),
+        &session,
+        atlas_client::host_session::store::Kind::Open,
+        Some(&atlas_client::doing::Doing::new("open").app(Some("Notes"))),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    let row = json!({"at": atlas_core::time::timestamp().to_string(), "operation": "open",
+        "ok": true, "actor": "agent", "verb": "open", "app": "Notes", "command": "000000000001",
+        "session": session.key()});
+    let output = before.client().output_dir().unwrap().to_path_buf();
+    std::fs::write(
+        output.join(atlas_client::activity_log::FILE),
+        format!("{row}\n"),
+    )
+    .unwrap();
+
     let id = before.client().desktop().id().as_str().to_owned();
     let named = format!("status.json?desktop={id}");
+    let key = session.key().as_str();
+    let sessions_named = format!("sessions.json?desktop={id}");
+    let activity_of = format!("activity.json?session={key}");
+    let activity_named = format!("activity.json?session={key}&desktop={id}");
+    let activity_elsewhere = format!("activity.json?desktop=elsewhere&session={key}");
     let reads = [
         "",
         "status.json",
         named.as_str(),
         "activity.json",
         "sessions.json",
+        sessions_named.as_str(),
+        activity_of.as_str(),
+        activity_named.as_str(),
+        activity_elsewhere.as_str(),
         "screenshots.json",
         "asks.json",
         "pipe.json",
@@ -98,6 +128,9 @@ async fn with_one_desktop_every_reply_of_the_service_is_unchanged_byte_for_byte(
             );
         }
     }
+    let (_, listed) = read(&now, "sessions.json", true).await;
+    assert_eq!(listed["live"][0]["key"], key, "{listed}");
+    assert!(listed["live"][0].get("desktop").is_none(), "{listed}");
     let changes = [
         ("control/release", json!({"lease": "none"})),
         ("control/renew", json!({"lease": "none"})),

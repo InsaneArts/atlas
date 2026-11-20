@@ -45,6 +45,32 @@ struct HostSessionListTests {
     #expect(record.cleanup == .incomplete)
   }
 
+  @Test("with more than one desktop each live session names its own, and those on another one are kept apart")
+  func eachLiveSessionNamesItsDesktop() throws {
+    let reading = try list(
+      """
+      {"ok": true, "viewed": "work", "sessions": [], "live": [
+        {"key": "a1", "name": "Claude Code · atlas-landing", "host": "claude", "state": "acting",
+         "desktop": {"id": "work", "key": "vm-work", "name": "work", "kind": "vm"}},
+        {"key": "b2", "name": "Codex · notes-sync", "host": "codex", "state": "acting",
+         "desktop": {"id": "second-login", "key": "user", "name": "second-login", "kind": "user"}},
+        {"key": "c3", "name": "Pi · odd", "host": "pi", "desktop": {"key": "user"}}
+      ]}
+      """
+    )
+    #expect(reading.viewed == "work")
+    #expect(reading.live.map(\.key) == ["a1", "b2", "c3"], "a desktop without an ID drops the desktop alone")
+    let secondLogin = HostSessionDesktop(id: "second-login", key: "user", name: "second-login", kind: .user)
+    #expect(reading.live[1].desktop == secondLogin)
+    #expect(reading.live[2].desktop == nil)
+    #expect(reading.elsewhere.map(\.key) == ["b2"])
+    #expect(reading.onViewed.map(\.key) == ["a1", "c3"])
+
+    let one = try list(#"{"ok": true, "live": [{"key": "a1", "name": "Pi · notes", "host": "pi"}]}"#)
+    #expect(one.viewed == nil && one.elsewhere.isEmpty)
+    #expect(one.onViewed.map(\.key) == ["a1"])
+  }
+
   @Test("a session from an older service has nothing installed and no unfinished cleanup")
   func anOlderSessionHasNoInstalls() throws {
     let reading = try list(#"{"ok": true, "sessions": [{"key": "a1", "name": "Pi · notes-sync", "cleanup": null}]}"#)

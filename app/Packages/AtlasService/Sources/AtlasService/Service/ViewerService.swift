@@ -189,6 +189,17 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
   func activity(of session: String) async throws(ServiceError) -> ActivityLog
 
+  /// Reads what one host session did on a desktop the service serves other than the one viewed, from the records
+  /// Atlas keeps of it there: its rows as ``activity(of:)`` gives them, naming no picture, which stays with that
+  /// desktop's own Screen. Reading it records nothing, and views nothing else.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key; empty for Terminal.
+  ///   - desktop: The ID of the desktop it acts on.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
+  func activity(of session: String, on desktop: String) async throws(ServiceError) -> ActivityLog
+
   /// Reads the screenshots agents took in the helper, and the folder they are kept in.
   ///
   /// - Returns: The screenshots, newest first, and their folder, every missing field at its safe default.

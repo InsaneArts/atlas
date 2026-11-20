@@ -7,6 +7,7 @@ mod app;
 mod attach;
 mod control;
 mod desks;
+mod elsewhere;
 mod events;
 mod feed;
 mod frames;
@@ -79,6 +80,8 @@ struct Viewer {
     settings_text: std::sync::Mutex<Option<(Vec<u8>, Option<RecordKey>)>>,
     /// Every desktop the settings list, the one viewed among them.
     desks: desks::Desks,
+    /// What is shown of the desktops served but not viewed.
+    elsewhere: elsewhere::Elsewhere,
     /// The desktop the person chose to view, by its record key; none views
     /// the default.
     viewed: std::sync::Mutex<Option<RecordKey>>,

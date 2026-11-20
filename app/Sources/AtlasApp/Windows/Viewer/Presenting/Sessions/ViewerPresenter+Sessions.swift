@@ -4,15 +4,18 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The status's sessions, supplemented by the cached list only while the status is truncated or not yet read.
+  /// The status's sessions, supplemented by the cached list only while the status is truncated or not yet read, then
+  /// the list's sessions on every other desktop the service serves, which the shown desktop's status never lists.
   /// A complete status omitting a key supersedes its cached work and lifetime without inferring an end.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The current entries, once per key, with the status's facts first.
+  /// - Returns: The current entries, once per key, with the status's facts first and the shown desktop's before any
+  ///   other's.
   static func currentSessions(_ snapshot: ViewerSnapshot) -> [ViewerStatus.HostSession] {
-    let cached = snapshot.panes.sessions.list?.live ?? []
+    let list = snapshot.panes.sessions.list
+    let cached = list?.onViewed ?? []
     let overview = snapshot.reading.status.overview
-    let entries =
+    let shown =
       if !snapshot.reading.hasStatus {
         cached
       } else if overview.moreSessions > 0 {
@@ -21,6 +24,7 @@ extension ViewerPresenter {
         overview.hostSessions
       }
     var keys = Set<String>()
+    let entries = shown + (list?.elsewhere ?? [])
     return entries.filter { keys.insert($0.key).inserted }
   }
 

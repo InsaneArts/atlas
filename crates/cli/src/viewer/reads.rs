@@ -342,9 +342,13 @@ impl Viewer {
     /// The host sessions of the last days, live and ended, newest first:
     /// who each is and what it made, for the app's session menu and
     /// details; and every live session as the status would list it, with
-    /// no limit. Reading it records nothing and takes no control.
+    /// no limit. Reading it records nothing and takes no control. Once more
+    /// than one desktop is served, each live session names the desktop it
+    /// acts on, and every other desktop's follow
+    /// ([`Viewer::list_elsewhere`]).
     pub(super) async fn sessions(&self) -> Result<Value> {
         let client = self.client();
+        let viewed = client.clone();
         // A folder that can't be read is said, never shown as no sessions.
         client.output_dir()?;
         let now = atlas_core::time::timestamp();
@@ -413,7 +417,11 @@ impl Viewer {
         .await
         .unwrap_or_default();
 
-        Ok(json!({"ok": true, "sessions": history, "live": live}))
+        let mut reply = json!({"ok": true, "sessions": history, "live": live});
+        if self.several() {
+            self.list_elsewhere(&mut reply, &viewed).await;
+        }
+        Ok(reply)
     }
 
     /// The screenshots agents took, newest first: each one's name, when it
@@ -591,7 +599,7 @@ impl Viewer {
 /// # Errors
 ///
 /// Returns an input error for a key that is not one.
-fn activity_session(query: Option<&str>) -> Result<Option<Whose>> {
+pub(super) fn activity_session(query: Option<&str>) -> Result<Option<Whose>> {
     let Some(given) = query
         .unwrap_or_default()
         .split('&')

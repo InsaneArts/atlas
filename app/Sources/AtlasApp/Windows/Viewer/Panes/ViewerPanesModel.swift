@@ -143,21 +143,28 @@ final class ViewerPanesModel {
     }
   }
 
-  /// Reads the log, the chosen session's own while one shows, and the screenshots while the log has a screenshot's
-  /// row. A reply overtaken by a newer start or stop has no effect; a failure is kept until a reading succeeds, and a
-  /// cancelled request says nothing. A later reading of the same log, while the pane shows, changes nothing
-  /// (``unchanged(_:readAt:number:)``). The screenshots are listed again only with a changed log, while the picture
-  /// sheet shows (its Show in Finder acts on their folder), or until a listing has worked and found every screenshot
-  /// row's capture (``shotsFound(readAt:)``).
+  /// Reads the log, the chosen session's own while one shows, on the desktop it acts on, and the screenshots while the
+  /// log has a screenshot's row. A reply overtaken by a newer start or stop has no effect; a failure is kept until a
+  /// reading succeeds, and a cancelled request says nothing. A later reading of the same log, while the pane shows,
+  /// changes nothing (``unchanged(_:readAt:number:)``). The screenshots are listed again only with a changed log, while
+  /// the picture sheet shows (its Show in Finder acts on their folder), or until a listing has worked and found every
+  /// screenshot row's capture (``shotsFound(readAt:)``).
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {
-    let scope = ActivityScope(viewer?.snapshot.shownSessions ?? .all)
+    let snapshot = viewer?.snapshot
+    let scope = ActivityScope(snapshot?.shownSessions ?? .all)
     do {
       let log =
         switch scope {
         case .all: try await service.activity()
-        case .session(let key): try await service.activity(of: key)
+        case .session(let key):
+          // A session on another desktop is read there, from its records; the desktop shown stays.
+          if let desktop = snapshot.flatMap({ ViewerPresenter.elsewhere(key, $0) }) {
+            try await service.activity(of: key, on: desktop.id)
+          } else {
+            try await service.activity(of: key)
+          }
         }
       // Each row's age counts back from the moment the log arrived, never from after the screenshots' reply.
       let readAt = wallClock()

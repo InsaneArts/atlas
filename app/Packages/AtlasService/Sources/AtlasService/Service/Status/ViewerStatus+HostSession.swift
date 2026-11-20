@@ -38,6 +38,9 @@ extension ViewerStatus {
     public var uncertainRow: String?
     /// That action's verb, such as `click` or `type`.
     public var uncertainVerb: String?
+    /// The desktop it acts on, once the service serves more than one; nil from a service that serves one, and in a
+    /// status, which lists the desktop viewed alone.
+    public var desktop: HostSessionDesktop?
 
     /// The session's identity: its key.
     public var id: String { key }
@@ -62,6 +65,7 @@ extension ViewerStatus {
     ///   - latest: Its newest action.
     ///   - uncertainRow: The row id of its newest action whose outcome is unknown.
     ///   - uncertainVerb: That action's verb.
+    ///   - desktop: The desktop it acts on; none by default.
     public init(
       key: String,
       name: String,
@@ -79,7 +83,8 @@ extension ViewerStatus {
       holdsHelper: Bool = false,
       latest: Activity? = nil,
       uncertainRow: String? = nil,
-      uncertainVerb: String? = nil
+      uncertainVerb: String? = nil,
+      desktop: HostSessionDesktop? = nil
     ) {
       self.key = key
       self.name = name
@@ -98,6 +103,7 @@ extension ViewerStatus {
       self.latest = latest
       self.uncertainRow = uncertainRow
       self.uncertainVerb = uncertainVerb
+      self.desktop = desktop
       normalizeLifetime()
     }
 
@@ -105,7 +111,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case key, host, hostLabel, name, folder, started, lastSeen, ended, live, state, waitingFor, waitingSeconds,
-        holdsHelper, latest, uncertainRow, uncertainVerb, workInProgress
+        holdsHelper, latest, uncertainRow, uncertainVerb, workInProgress, desktop
     }
 
     /// Decodes a session, keeping the default of anything missing or of the wrong type. Times are read as
@@ -142,6 +148,7 @@ extension ViewerStatus {
       latest = try? container.decodeIfPresent(Activity.self, forKey: .latest)
       uncertainRow = container.lenientText(.uncertainRow)
       uncertainVerb = container.lenientText(.uncertainVerb)
+      desktop = try? container.decodeIfPresent(HostSessionDesktop.self, forKey: .desktop)
       normalizeLifetime()
     }
     /// Normalize older replies using only service facts, never local process guesses.

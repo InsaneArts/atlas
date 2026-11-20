@@ -19,6 +19,14 @@ enum DesktopNoun: Equatable {
     return .vm(Words.title(of: shown))
   }
 
+  /// The noun of the desktop a session acts on: a VM by its title, else the helper.
+  ///
+  /// - Parameter desktop: The desktop, as the session names it.
+  /// - Returns: The noun.
+  static func of(_ desktop: HostSessionDesktop) -> DesktopNoun {
+    desktop.kind == .vm ? .vm(Words.title(of: desktop)) : .helper
+  }
+
   /// Whether it is a VM.
   var isVM: Bool { self != .helper }
 

@@ -60,6 +60,8 @@ public final class ScriptedService: ViewerService {
   public var sessionLogs: [String: ActivityLog] = [:]
   /// The sessions whose activity was asked for, in order.
   public var activitySessions: [String] = []
+  /// The desktop each of ``activitySessions`` was asked for on, in order: nil for the one viewed.
+  public var activityDesktops: [String?] = []
   /// The screenshots agents took, newest first.
   public var shots: [Screenshot] = []
   /// The folder the screenshots are kept in; nil names none.
@@ -487,8 +489,33 @@ public final class ScriptedService: ViewerService {
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
   public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    try await sessionActivity(session, on: nil)
+  }
+
+  /// Answers as ``activity(of:)`` does, noting the desktop it was asked for on.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key; empty for Terminal.
+  ///   - desktop: The ID of the desktop it acts on.
+  /// - Returns: The session's activity log.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func activity(of session: String, on desktop: String) async throws(ServiceError) -> ActivityLog {
+    try await sessionActivity(session, on: desktop)
+  }
+
+  /// One session's activity, on `desktop` or the one viewed, as both reads answer it.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key; empty for Terminal.
+  ///   - desktop: The ID of the desktop it acts on; nil for the one viewed.
+  /// - Returns: The session's activity log.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  private func sessionActivity(_ session: String, on desktop: String?) async throws(ServiceError) -> ActivityLog {
     activityCalls += 1
     activitySessions.append(session)
+    activityDesktops.append(desktop)
     try await pause("activity")
     if let log = sessionLogs[session] { return log }
     var narrowed = activityLog
